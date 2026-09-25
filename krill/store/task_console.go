@@ -95,7 +95,7 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 			tc.created_by_on_behalf_of_iss, tc.created_by_on_behalf_of_sub, tc.created_by_on_behalf_of_kind,
 			task.current_lane, task.lease_expires_at, task.attempt_count
 		FROM task
-		JOIN milestone_ref ON milestone_ref.id = task.milestone_id
+		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
 		JOIN task_claim tc ON tc.id = task.current_claim_id
 		WHERE task.scope_id = $1 AND task.current_claim_id IS NOT NULL
 	`
@@ -223,7 +223,7 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 			ev.created_by_on_behalf_of_iss, ev.created_by_on_behalf_of_sub, ev.created_by_on_behalf_of_kind,
 			ev.created_at
 		FROM task
-		JOIN milestone_ref ON milestone_ref.id = task.milestone_id
+		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
 		JOIN task_intervention_event ev ON ev.task_id = task.id AND ev.action = 'cancel'
 		WHERE task.scope_id = $1 AND task.cancelled_at IS NOT NULL
 	`
@@ -391,7 +391,7 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 			task.current_lane, task.attempt_count, task.thrash_count,
 			(SELECT COUNT(*) FROM task_note WHERE task_note.task_id = task.id)
 		FROM task
-		JOIN milestone_ref ON milestone_ref.id = task.milestone_id
+		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
 		JOIN task_escalation_event ev ON ev.id = task.current_escalation_id
 		WHERE task.scope_id = $1 AND task.current_escalation_id IS NOT NULL
 	`

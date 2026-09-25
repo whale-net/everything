@@ -207,22 +207,32 @@ const (
 
 // MilestoneRef is one row of `milestone_ref` (migration 004, issue #2492,
 // FR17, LB6; authoring fields added by migration 010, issue #2683, FR1/
-// FR2; ParentMilestoneID added by migration 011, issue #2684, FR3).
+// FR2; ParentMilestoneID added by migration 011, issue #2684, FR3; SCD2
+// added by migration 020, FR 39373553/8b2e87d1).
 // Originally a bare reference to an `M<n>` identifier a source document
 // names -- Kind/Outcome/FRBudget/Position/CreatedByActing/
 // CreatedByOnBehalfOf/ParentMilestoneID are additions since. Single
 // parent: Product.ID (always) plus, for a milepebble, a second parent
 // naming the milestone it was cut from (ParentMilestoneID) -- see this
 // field's own doc comment for why that is a second FK, not a
-// `milestone_id` column on a different table. Not SCD2 (LB3) -- see
-// 004_milestone_assoc.up.sql's, 010_milestone_authoring.up.sql's, and
-// 011_milepebble.up.sql's comments for why.
+// `milestone_id` column on a different table.
+//
+// SCD2 (LB2/LB3) as of migration 020, which is what makes a milestone's
+// authoring fields amendable: RevisionID is the per-row key, and
+// ValidTo == nil marks the current revision. The delivery axis is not
+// part of this row at all -- status history, shipments, the
+// Delivers/Must-not-foreclose associations, and deferrals each live in
+// their own append-only table keyed on the immutable ID below, so an
+// amend supersedes this row alone (FR 39373553).
 type MilestoneRef struct {
-	ID        uuid.UUID
-	ScopeID   uuid.UUID
-	ProductID uuid.UUID
-	Name      string // the bare "M<n>" identifier, e.g. "M1"
-	CreatedAt time.Time
+	RevisionID uuid.UUID
+	ID         uuid.UUID
+	ScopeID    uuid.UUID
+	ProductID  uuid.UUID
+	Name       string // the bare "M<n>" identifier, e.g. "M1"
+	CreatedAt  time.Time
+	ValidFrom  time.Time
+	ValidTo    *time.Time
 
 	// Kind discriminates this row's own shape (migration 010) -- see
 	// MilestoneKind's doc comment. Every row from before migration 010
@@ -273,9 +283,11 @@ const (
 
 // MilestoneDeferral is one row of `milestone_deferral` (migration 010,
 // issue #2683, FR1) -- one deliberately-deferred item cited under a
-// milestone's authoring content. Single parent: MilestoneRef.ID (a real
-// DB-enforced REFERENCES -- milestone_ref is not SCD2, so its id is
-// table-wide unique). Not SCD2 (LB3): a deferral is a fact, not a value
+// milestone's authoring content. Single parent: MilestoneRef.ID -- a
+// plain UUID column since migration 020, because milestone_ref is SCD2
+// now and its immutable `id` is no longer table-wide unique for a FK to
+// target (same boundary migration 002 draws for every spec-axis parent
+// link). Not SCD2 (LB3): a deferral is a fact, not a value
 // that changes over time -- see migration 010's comment. Destination is
 // never empty: FR1 requires every deferred entry to cite where it went.
 type MilestoneDeferral struct {
@@ -339,12 +351,14 @@ const (
 
 // MilestoneStatusEvent is one row of `milestone_status_event` (migration
 // 012, issue #2685, FR8, FR9, FR12). Single parent: MilestoneRef.ID (a
-// real DB-enforced REFERENCES -- milestone_ref is not SCD2, so its id is
-// table-wide unique), covering both a milestone and a milepebble row
+// plain UUID column since migration 020, for the same reason
+// MilestoneDeferral.MilestoneID above is), covering both a milestone and
+// a milepebble row
 // (FR9) since both share the one `milestone_ref` table. Append-only, NOT
 // SCD2 (LB3, NFR2) -- see migration 012's boundary comment for why this
-// table draws that line even though milestone_ref itself is plain
-// mutable: a transition is an addition to history, never an overwrite,
+// table draws that line even though milestone_ref's own authoring fields
+// became SCD2 in migration 020: a transition is an addition to history,
+// never an overwrite,
 // so this struct carries no ValidFrom/ValidTo pair and there is no store
 // method that updates or deletes a row of this shape. CreatedByActing/
 // CreatedByOnBehalfOf are always populated (NFR4) -- the only write path

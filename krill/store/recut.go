@@ -172,7 +172,8 @@ func getOrCreateBacklogTx(ctx context.Context, tx pgx.Tx, scopeID, productID uui
 
 	// ON CONFLICT targets migration 014's partial unique index
 	// (milestone_ref_backlog_product_idx: (scope_id, product_id) WHERE
-	// kind = 'backlog') -- the same insert-then-fallback-SELECT shape
+	// kind = 'backlog' AND valid_to IS NULL, migration 020) -- the same
+	// insert-then-fallback-SELECT shape
 	// MilestoneStore.GetOrCreateRef uses against its own (differently
 	// scoped) partial index.
 	ref, err := scanMilestoneRef(tx.QueryRow(ctx, `
@@ -181,7 +182,7 @@ func getOrCreateBacklogTx(ctx context.Context, tx pgx.Tx, scopeID, productID uui
 			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
 			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (scope_id, product_id) WHERE kind = 'backlog' DO NOTHING
+		ON CONFLICT (scope_id, product_id) WHERE kind = 'backlog' AND valid_to IS NULL DO NOTHING
 		RETURNING `+milestoneRefColumns,
 		scopeID, productID, backlogName, string(MilestoneKindBacklog),
 		acting.Iss, acting.Sub, string(acting.Kind),
@@ -192,7 +193,7 @@ func getOrCreateBacklogTx(ctx context.Context, tx pgx.Tx, scopeID, productID uui
 		ref, err = scanMilestoneRef(tx.QueryRow(ctx, `
 			SELECT `+milestoneRefColumns+`
 			FROM milestone_ref
-			WHERE scope_id = $1 AND product_id = $2 AND kind = $3
+			WHERE scope_id = $1 AND product_id = $2 AND kind = $3 AND valid_to IS NULL
 		`, scopeID, productID, string(MilestoneKindBacklog)))
 	}
 	if err != nil {
@@ -204,7 +205,7 @@ func getOrCreateBacklogTx(ctx context.Context, tx pgx.Tx, scopeID, productID uui
 func (s recutStore) ListBacklog(ctx context.Context, scopeID, productID uuid.UUID) ([]uuid.UUID, error) {
 	var backlogID uuid.UUID
 	err := s.pool.QueryRow(ctx, `
-		SELECT id FROM milestone_ref WHERE scope_id = $1 AND product_id = $2 AND kind = $3
+		SELECT id FROM milestone_ref WHERE scope_id = $1 AND product_id = $2 AND kind = $3 AND valid_to IS NULL
 	`, scopeID, productID, string(MilestoneKindBacklog)).Scan(&backlogID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// No backlog bucket has ever been created for this product --
@@ -245,7 +246,7 @@ func milestoneRefKindAndParent(ctx context.Context, q txQuerier, scopeID, id uui
 	var kind string
 	var parentMilestoneID uuid.NullUUID
 	err := q.QueryRow(ctx, `
-		SELECT kind, parent_milestone_id FROM milestone_ref WHERE id = $1 AND scope_id = $2
+		SELECT kind, parent_milestone_id FROM milestone_ref WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL
 	`, id, scopeID).Scan(&kind, &parentMilestoneID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil, errParentNotFound("milestone_ref", id)
@@ -368,7 +369,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 			if _, err := tx.Exec(ctx, `
 				DELETE FROM entity_milestone
 				WHERE entity_id = $1 AND relation = $2
-				  AND milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $3)
+				  AND milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $3 AND valid_to IS NULL)
 			`, entityID, string(MilestoneRelationDelivers), fromContainerID); err != nil {
 				return fmt.Errorf("drop milepebble associations: %w", err)
 			}

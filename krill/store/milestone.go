@@ -14,10 +14,10 @@ import (
 // MilestoneStore covers `milestone_ref` and `entity_milestone` (migration
 // 004, issue #2492, FR17, LB6) -- the bare delivery-axis reference and its
 // association, and the only store surface the importer (FR16) writes on
-// the delivery axis. Neither table is SCD2 (see migration
-// 004_milestone_assoc.up.sql's LB3 note), so unlike every store in this
-// package built over migration 002, there is no "current row" distinction
-// here -- a row simply exists or does not.
+// the delivery axis. `milestone_ref` became SCD2 in migration 020 (so a
+// milestone's authoring fields are amendable, FR 39373553) while
+// `entity_milestone` remains an append-only association, exactly as
+// migration 004's LB3 note describes.
 type MilestoneStore interface {
 	// GetOrCreateRef resolves the `milestone_ref` row for (scopeID,
 	// productID, name) -- name is the bare "M<n>" identifier the source
@@ -72,14 +72,17 @@ type milestoneStore struct{ pool *pgxpool.Pool }
 var _ MilestoneStore = milestoneStore{}
 
 // milestoneRefColumns covers the bare migration-004 columns, the
-// authoring columns migration 010 added (issue #2683), and
-// parent_milestone_id migration 011 added (issue #2684): Kind/Outcome/
-// FRBudget/Position/ParentMilestoneID plus the nullable LB4 subject pair
-// -- see scanMilestoneRef and MilestoneRef's doc comment (models.go) for
-// why the subject-pair and parent columns may be NULL.
-const milestoneRefColumns = `id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id, ` +
+// authoring columns migration 010 added (issue #2683),
+// parent_milestone_id migration 011 added (issue #2684), and the SCD2
+// triple migration 020 added: Kind/Outcome/FRBudget/Position/
+// ParentMilestoneID plus the nullable LB4 subject pair, RevisionID and
+// ValidFrom/ValidTo -- see scanMilestoneRef and MilestoneRef's doc
+// comment (models.go) for why the subject-pair and parent columns may be
+// NULL.
+const milestoneRefColumns = `revision_id, id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
-	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
+	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at, ` +
+	`valid_from, valid_to`
 
 func scanMilestoneRef(row pgx.Row) (MilestoneRef, error) {
 	var m MilestoneRef
@@ -88,10 +91,10 @@ func scanMilestoneRef(row pgx.Row) (MilestoneRef, error) {
 	var actingIss, actingSub, actingKind sql.NullString
 	var onBehalfOfIss, onBehalfOfSub, onBehalfOfKind sql.NullString
 	err := row.Scan(
-		&m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position, &parentMilestoneID,
+		&m.RevisionID, &m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position, &parentMilestoneID,
 		&actingIss, &actingSub, &actingKind,
 		&onBehalfOfIss, &onBehalfOfSub, &onBehalfOfKind,
-		&m.CreatedAt,
+		&m.CreatedAt, &m.ValidFrom, &m.ValidTo,
 	)
 	if err != nil {
 		return MilestoneRef{}, err
@@ -132,18 +135,19 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 	// row (kind defaults to 'milestone', parent_milestone_id stays NULL --
 	// the importer has no notion of milepebbles). Both the ON CONFLICT
 	// inference and the fallback SELECT below are scoped to
-	// `parent_milestone_id IS NULL` -- migration 011 (issue #2684) widened
-	// milestone_ref_scope_product_name_idx into a partial index over
-	// exactly that predicate (a milepebble may share a name with a
-	// milestone under the same product, since its own uniqueness is
-	// scoped per-parent instead), so a plain `ON CONFLICT (scope_id,
-	// product_id, name)` no longer matches any index and the WHERE clause
-	// on the SELECT is what keeps this method from ever resolving onto a
-	// same-named milepebble row.
+	// `parent_milestone_id IS NULL AND valid_to IS NULL` -- migration 011
+	// (issue #2684) widened milestone_ref_scope_product_name_idx into a
+	// partial index over the first predicate (a milepebble may share a
+	// name with a milestone under the same product, since its own
+	// uniqueness is scoped per-parent instead), and migration 020 added
+	// the second, so a plain `ON CONFLICT (scope_id, product_id, name)`
+	// matches no index at all and the WHERE clauses below are what keep
+	// this method from ever resolving onto a same-named milepebble row or
+	// a superseded revision.
 	ref, err := scanMilestoneRef(tx.QueryRow(ctx, `
 		INSERT INTO milestone_ref (scope_id, product_id, name)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (scope_id, product_id, name) WHERE parent_milestone_id IS NULL DO NOTHING
+		ON CONFLICT (scope_id, product_id, name) WHERE parent_milestone_id IS NULL AND valid_to IS NULL DO NOTHING
 		RETURNING `+milestoneRefColumns,
 		scopeID, productID, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -153,7 +157,8 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 		ref, err = scanMilestoneRef(tx.QueryRow(ctx, `
 			SELECT `+milestoneRefColumns+`
 			FROM milestone_ref
-			WHERE scope_id = $1 AND product_id = $2 AND name = $3 AND parent_milestone_id IS NULL
+			WHERE scope_id = $1 AND product_id = $2 AND name = $3
+			  AND parent_milestone_id IS NULL AND valid_to IS NULL
 		`, scopeID, productID, name))
 	}
 	if err != nil {
@@ -216,7 +221,7 @@ func (s milestoneStore) ListRefsByProduct(ctx context.Context, scopeID, productI
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+milestoneRefColumns+`
 		FROM milestone_ref
-		WHERE scope_id = $1 AND product_id = $2 AND kind = $3
+		WHERE scope_id = $1 AND product_id = $2 AND kind = $3 AND valid_to IS NULL
 		ORDER BY name
 	`, scopeID, productID, string(MilestoneKindMilestone))
 	if err != nil {

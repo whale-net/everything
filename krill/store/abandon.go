@@ -234,7 +234,7 @@ func getMilestoneRefTx(ctx context.Context, tx pgx.Tx, scopeID, id uuid.UUID) (M
 	ref, err := scanMilestoneRef(tx.QueryRow(ctx, `
 		SELECT `+milestoneRefColumns+`
 		FROM milestone_ref
-		WHERE id = $1 AND scope_id = $2
+		WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL
 	`, id, scopeID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MilestoneRef{}, errParentNotFound("milestone_ref", id)

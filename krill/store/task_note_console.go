@@ -108,7 +108,7 @@ func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams
 			COALESCE(p.name, fs.name, f.name, r.name, lbd.name)
 		FROM task_note tn
 		LEFT JOIN task t ON tn.task_id = t.id
-		LEFT JOIN milestone_ref mr ON t.milestone_id = mr.id
+		LEFT JOIN milestone_ref mr ON t.milestone_id = mr.id AND mr.valid_to IS NULL
 		LEFT JOIN product p ON tn.entity_kind = 'product' AND tn.entity_id = p.id AND p.valid_to IS NULL
 		LEFT JOIN feature_set fs ON tn.entity_kind = 'feature_set' AND tn.entity_id = fs.id AND fs.valid_to IS NULL
 		LEFT JOIN feature f ON tn.entity_kind = 'feature' AND tn.entity_id = f.id AND f.valid_to IS NULL

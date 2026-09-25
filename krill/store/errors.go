@@ -68,13 +68,11 @@ func errParentNotFound(table string, parentID uuid.UUID) error {
 }
 
 // plainRowExists is currentRowExists' counterpart for a parent table with
-// no `valid_to` column at all -- `milestone_ref` (004_milestone_assoc.
-// up.sql) is not SCD2 (LB3), so every row simply exists or does not; there
-// is no "current row" distinction to filter on. Every
-// MilestoneAuthoringStore method that takes a milestoneID
-// (milestone_authoring.go, migration 010, issue #2683) checks parentage
-// this way rather than via currentRowExists, which would fail outright
-// against a table with no `valid_to` column to reference.
+// no `valid_to` column at all -- the work-axis tables (`task`,
+// `task_note`, migration 015) are append-or-claimed, not SCD2 (LB3), so
+// every row simply exists or does not; there is no "current row"
+// distinction to filter on. `milestone_ref` used to need this too, until
+// migration 020 made it SCD2.
 func plainRowExists(ctx context.Context, q txQuerier, table string, id, scopeID uuid.UUID) (bool, error) {
 	var exists bool
 	err := q.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s WHERE id = $1 AND scope_id = $2)`, table), id, scopeID).Scan(&exists)
