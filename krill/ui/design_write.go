@@ -134,18 +134,59 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 	return nil
 }
 
-// renderWriteFailure renders a failed form write. An api rejection is relayed
-// as-is (its status and named message), because the browser should see exactly
-// the rejection a direct api call would produce. Anything else -- no resolved
-// operator, unresolvable scope, unreachable api -- never reached krill, so
-// writeWriteError reports it without attributing anything.
-func (app *App) renderWriteFailure(w http.ResponseWriter, err error) {
+// renderOpenFormFailure re-renders a product's session list in-shell after a
+// rejected "open a session" write, with the operator's opening text preserved
+// so a rejection is never a data-loss event. A *writeRejection is shown inline
+// as the api's status + named message; anything else (no resolved operator,
+// unresolvable scope, unreachable api) never reached krill and falls back to
+// writeWriteError's 502. If the page's own read fails to re-render, fall back
+// to a plain status page.
+func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, productID uuid.UUID, opening string, err error) {
 	var rejection *writeRejection
-	if errors.As(err, &rejection) {
+	if !errors.As(err, &rejection) {
+		writeWriteError(w, err)
+		return
+	}
+	sessions, listErr := app.listDesignSessions(r.Context(), productID)
+	if listErr != nil {
+		logger.Error("failed to re-render open-session form after rejection", "product_id", productID, "error", listErr)
 		http.Error(w, rejection.message, rejection.status)
 		return
 	}
-	writeWriteError(w, err)
+	renderShell(w, r, "Design sessions", designPath, renderPage(designSessionListTemplate, designSessionListPage{
+		ProductID:         productID.String(),
+		Sessions:          sessions,
+		Error:             fmt.Sprintf("%d: %s", rejection.status, rejection.message),
+		OpeningSubmission: opening,
+	}))
+}
+
+// renderAnswerFormFailure re-renders a session's detail page in-shell after a
+// rejected "submit follow-up" write, preserving the follow-up text and which
+// resolve boxes were ticked. A *writeRejection is shown inline as the api's
+// status + named message; anything else never reached krill and falls back to
+// writeWriteError's 502. If the page's own read fails to re-render, fall back
+// to a plain status page.
+func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, id uuid.UUID, err error, followUp string, resolved []string) {
+	var rejection *writeRejection
+	if !errors.As(err, &rejection) {
+		writeWriteError(w, err)
+		return
+	}
+	detail, detailErr := app.buildDesignSessionDetail(r.Context(), id)
+	if detailErr != nil {
+		logger.Error("failed to re-render answer form after rejection", "design_session_id", id, "error", detailErr)
+		http.Error(w, rejection.message, rejection.status)
+		return
+	}
+	checked := make(map[string]bool, len(resolved))
+	for _, qid := range resolved {
+		checked[qid] = true
+	}
+	detail.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+	detail.FollowUp = followUp
+	detail.CheckedResolve = checked
+	renderShell(w, r, "Design session", designPath, renderPage(designSessionDetailTemplate, detail))
 }
 
 // ── handlers ─────────────────────────────────────────────────────────────────
@@ -154,7 +195,8 @@ func (app *App) renderWriteFailure(w http.ResponseWriter, err error) {
 // session list's "open a session" form. productID is the path value; the
 // form's only field is opening_submission. On success it redirects
 // (POST/Redirect/Get) to the new session's detail page, so a refresh cannot
-// re-open the session.
+// re-open the session. A rejected write re-renders the list in-shell with the
+// operator's text preserved (renderOpenFormFailure).
 func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Request) {
 	productID, err := parseUUIDPathValue(w, r, "productID", "product")
 	if err != nil {
@@ -166,7 +208,13 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 	}
 	opening := strings.TrimSpace(r.PostFormValue("opening_submission"))
 	if opening == "" {
-		http.Error(w, "opening_submission is required", http.StatusBadRequest)
+		// Client-side `required` catches the empty case, but a whitespace-only
+		// submission slips past it; re-render the form with the message rather
+		// than a bare 400 so the operator stays in context.
+		app.renderOpenFormFailure(w, r, productID, "", &writeRejection{
+			status:  http.StatusBadRequest,
+			message: "Describe your idea in plain language before opening the session.",
+		})
 		return
 	}
 
@@ -176,7 +224,7 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 			openDesignSessionRequest{ProductID: productID.String(), OpeningSubmission: opening}, &created)
 	})
 	if err != nil {
-		app.renderWriteFailure(w, err)
+		app.renderOpenFormFailure(w, r, productID, opening, err)
 		return
 	}
 
@@ -190,18 +238,9 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 // handleDesignSessionAnswerForm is the browser form action behind a session
 // detail page's "submit follow-up" form. It appends one `answer` revision
 // round via api's AppendRevisionEventHandler, then redirects back to the
-// session's detail page (POST/Redirect/Get).
-//
-// The revision_event schema (migration 008) has no free-text prose column, and
-// this FR forbids the answer from proposing or amending a Feature/Requirement
-// entity -- which rules out entity_deltas[].summary_line, the only other text
-// carrier -- as a home for the contributor's words. The durable record of a
-// plain-language follow-up is therefore carried by open_questions_delta: the
-// contributor's follow-up text opens a tracked, non-blocking question in this
-// same answer round, and any open question(s) the answer closes are listed in
-// resolved. entity_deltas is always empty: this write touches no spec entity.
-// This encoding is the schema-faithful one; Implementation refines the form's
-// presentation and wording, not the wire call.
+// session's detail page (POST/Redirect/Get). A rejected write re-renders the
+// detail page in-shell with the operator's text and ticks preserved
+// (renderAnswerFormFailure).
 func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUIDPathValue(w, r, "id", "design session")
 	if err != nil {
@@ -213,21 +252,30 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 	}
 
 	followUp := strings.TrimSpace(r.PostFormValue("follow_up"))
-	if followUp == "" {
-		http.Error(w, "follow_up is required", http.StatusBadRequest)
+	resolved := nonEmptyValues(r.PostForm["resolve"])
+	if followUp == "" && len(resolved) == 0 {
+		// An answer round with no follow-up text and nothing resolved records
+		// nothing meaningful; reject rather than append an empty `answer`.
+		app.renderAnswerFormFailure(w, r, id, &writeRejection{
+			status:  http.StatusBadRequest,
+			message: "Write a follow-up, or tick an open question your answer closes.",
+		}, followUp, resolved)
 		return
 	}
-	resolved := nonEmptyValues(r.PostForm["resolve"])
 
+	// The revision_event schema (migration 008) has no free-text prose column,
+	// and FR 1ff1c1e9 forbids the answer from proposing or amending a
+	// Feature/Requirement entity -- which rules out entity_deltas[].summary_line,
+	// the only other text carrier. So non-empty follow-up text is recorded as a
+	// non-blocking opened question in this same answer round; a resolve-only
+	// round sends no opened question. entity_deltas is always empty: the UI
+	// touches no spec entity, and the mediated propose_entities path stays the
+	// only thing that turns a submission into one.
 	body := answerRevisionEventRequest{
 		EventType:    string(store.EventTypeAnswer),
 		EntityDeltas: []answerEntityDelta{}, // the UI never proposes/amends an entity
 		OpenQuestionsDelta: answerQuestionsDelta{
-			Opened: []answerOpenedQuestion{{
-				QuestionID: newAnswerQuestionID(),
-				Blocking:   false,
-				Text:       followUp,
-			}},
+			Opened:   []answerOpenedQuestion{},
 			Resolved: resolved,
 		},
 		// An `answer` round must leave both nil: FR3 requires verified_against
@@ -236,6 +284,13 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		VerifiedAgainst: nil,
 		SignoffStatus:   nil,
 	}
+	if followUp != "" {
+		body.OpenQuestionsDelta.Opened = append(body.OpenQuestionsDelta.Opened, answerOpenedQuestion{
+			QuestionID: newAnswerQuestionID(),
+			Blocking:   false,
+			Text:       followUp,
+		})
+	}
 
 	var appended createdRevisionEvent
 	err = app.withKrillSession(r.Context(), func(ctx context.Context, sessionID store.SessionID) error {
@@ -243,7 +298,7 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 			"design-sessions/"+id.String()+"/revision-events", body, &appended)
 	})
 	if err != nil {
-		app.renderWriteFailure(w, err)
+		app.renderAnswerFormFailure(w, r, id, err, followUp, resolved)
 		return
 	}
 
