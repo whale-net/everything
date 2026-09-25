@@ -30,10 +30,11 @@ the new path.
    └─────────┴────────────┴────────────┘
         ▲            ▲            ▲
         │            │            │
-        │            │       external-api: barebones Keycloak sign-in
-        │            │       shell; mounts auth's /authorize, /token,
-        │            │       /register, and discovery -- the SignInURL
-        │            │       mcp's auth front door redirects to
+        │            │       external-api: Keycloak sign-in plus the
+        │            │       operator nav shell behind it; mounts auth's
+        │            │       /authorize, /token, /register, and
+        │            │       discovery -- the SignInURL mcp's auth front
+        │            │       door redirects to
         │            │
         │       external-api: the FR10/NFR1 spec surface -- /mcp/spec,
         │       the same FR5-FR9 slice query as `api`'s /slices/...

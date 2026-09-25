@@ -17,7 +17,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491), the pointer-artifact create endpoint (`POST /pointer-artifacts`, FR20, issue #2496), and (M3, issues #2683-#2689) the delivery-axis surface -- milestone/milepebble authoring, status, shipment, re-cut, backlog, and abandon. See "Delivery-axis endpoints" below. |
 | `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Records a one-time, one-way `import_completion` marker after a successful run and refuses a second import for the same path before parsing (FR12, NFR3, issue #2548). Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid> --source-revision <sha>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
 | `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design` (issue #2547), the work axis's task-lifecycle tool set at `/mcp/work` (M4, `init_session`/`get_task`/`list_tasks`/`abandon_task` also on `/mcp/design`), and (M5, issues #2867-#2876) the Swarm Operator-only console-query and operator-verb tool set at `/mcp/ops` -- all four behind the auth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", "Operator MCP surface", and "Delivery-axis endpoints" below. |
-| `ui` | `//krill/ui` | external-api | Barebones Keycloak sign-in shell: gives auth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end. No session list, no spec browsing -- a real web UI is deferred (`PRODUCT.md`'s C19, "Later"). See "The auth sign-in shell" below. |
+| `ui` | `//krill/ui` | external-api | Keycloak sign-in plus the operator nav shell behind it: gives auth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end, and serves a persistent nav (ops console, design-session browser, spec+delivery browser, credential widget) once signed in. See "The sign-in flow and the operator nav shell" below. |
 
 ## Endpoints
 
@@ -380,7 +380,7 @@ concept at all.
 See `krill/mcp/server/transport.go`'s `opsMountPath` doc comment for the
 full reasoning.
 
-## The auth sign-in shell (`ui`)
+## The sign-in flow and the operator nav shell (`ui`)
 
 `ui` mounts auth's OAuth2 authorization-server endpoints (`/authorize`,
 `/token`, `/register`, and both discovery metadata documents) and the
@@ -388,9 +388,14 @@ Keycloak sign-in flow (`/login`, `/auth/callback`, `/logout`) they redirect
 an unresolved caller to. This is what makes the auth (human) front door
 on `mcp` actually usable end to end -- before `ui` existed, `/authorize`
 had no `SignInURL` configured and any unresolved caller just got a 401
-(see `ARCHITECTURE.md` "krill/ui and the auth front door"). The one
-authenticated page it serves (`GET /`) is a bare "signed in as ..." shell,
-not a real operator UI.
+(see `ARCHITECTURE.md` "krill/ui and the auth front door").
+
+Behind that sign-in, `ui` serves the persistent nav shell: a home page
+plus one root per top-level area -- the ops console (`/ops`), the
+design-session browser (`/design`), the spec+delivery browser (`/spec`) --
+plus the credential widget at `/account/credentials`, all rendered inside
+one shared chrome (`krill/ui/nav.go`). Each area's real read surface is
+its own task; today each root renders the shell with a placeholder body.
 
 ```sh
 PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \
