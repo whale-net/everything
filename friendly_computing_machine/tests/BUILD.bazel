@@ -77,3 +77,14 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# Slack -> Keycloak identity mapping / link token DAL (SQLite-backed)
+py_test(
+    name = "test_identity",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "identity/test_identity_dal.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)

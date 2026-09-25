@@ -2,7 +2,8 @@ import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from sqlalchemy import Column, DateTime, UniqueConstraint, func
+import sqlalchemy as sa
+from sqlalchemy import Boolean, Column, DateTime, UniqueConstraint, func
 from sqlmodel import Field, Relationship
 
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
@@ -311,3 +312,86 @@ class SlackThreadSession(SlackThreadSessionBase, table=True):
 
 class SlackThreadSessionCreate(SlackThreadSessionBase):
     pass
+
+
+# ------
+# slack identity -> keycloak identity
+#
+# one row per Slack user, holding only the keycloak (iss, sub) pair that user
+# linked. Slack ids are the native Slack strings, not fcm slackteam/slackuser
+# row ids, so linking works for a user the periodic sync hasn't seen yet.
+
+
+class SlackKeycloakIdentityBase(Base):
+    # slack's native team id (T...) and user id (U...) strings
+    slack_team_id: str = Field(index=True)
+    slack_user_id: str = Field(index=True)
+
+    # keycloak token issuer + subject. no keycloak tokens are ever stored.
+    keycloak_iss: str
+    keycloak_sub: str
+
+
+class SlackKeycloakIdentity(SlackKeycloakIdentityBase, table=True):
+    # re-linking a user overwrites their mapping rather than stacking rows
+    __table_args__ = (
+        UniqueConstraint(
+            "slack_team_id", "slack_user_id", name="uq_slackkeycloakidentity_slack_user"
+        ),
+    )
+
+    id: int = Field(default=None, nullable=False, primary_key=True)
+
+    created_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.current_timestamp(),
+        ),
+    )
+    updated_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.current_timestamp(),
+            onupdate=func.current_timestamp(),
+        ),
+    )
+
+
+# ------
+# one-time slack -> keycloak link token
+#
+# short-lived opaque token minted in Slack, redeemed once the user comes back
+# from keycloak with a matching (iss, sub).
+
+
+class SlackLinkTokenBase(Base):
+    # opaque secrets.token_urlsafe(32); unguessable, single use
+    token: str = Field(index=True, unique=True)
+    slack_team_id: str = Field(index=True)
+    slack_user_id: str = Field(index=True)
+    expires_at: datetime.datetime
+
+
+class SlackLinkToken(SlackLinkTokenBase, table=True):
+    id: int = Field(default=None, nullable=False, primary_key=True)
+
+    consumed: bool = Field(
+        default=False,
+        sa_column=Column(
+            Boolean,
+            nullable=False,
+            server_default=sa.false(),
+        ),
+    )
+    consumed_at: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    created_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.current_timestamp(),
+        ),
+    )
