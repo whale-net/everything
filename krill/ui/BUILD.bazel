@@ -3,7 +3,7 @@
 it -- ops console, design-session browser, spec+delivery browser, and the
 credential widget. See main.go's package doc."""
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -46,4 +46,11 @@ release_app(
     app_type = "external-api",
     port = 8080,
     replicas = 1,
+)
+
+go_test(
+    name = "ui_lib_test",
+    srcs = ["nav_test.go"],
+    embed = [":ui_lib"],
+    deps = ["//libs/go/htmxauth"],
 )

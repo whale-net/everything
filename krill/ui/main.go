@@ -311,6 +311,14 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// nav area, every one of them wrapped in the same chrome by
 	// renderShell. Each area's sub-pages register under its prefix
 	// alongside its root.
+	app.mountShellRoutes(mux)
+}
+
+// mountShellRoutes registers the persistent nav shell's pages, each behind
+// the sign-in gate. Split out of setupRoutes so the shell's tests mount
+// the same registrations production does, rather than a copy that could
+// drift from it.
+func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/{$}", app.auth.RequireAuthFunc(app.handleShellHome))
 	mux.HandleFunc(opsPath, app.auth.RequireAuthFunc(app.handleOps))
 	mux.HandleFunc(designPath, app.auth.RequireAuthFunc(app.handleDesign))
