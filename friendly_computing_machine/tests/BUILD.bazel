@@ -81,6 +81,18 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Music poll pickup chain, bot config, and window/eligibility query (SQLite-backed)
+py_test(
+    name = "test_music_poll",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "poll/test_music_poll_bot_config.py",
+        "poll/test_music_poll_pickup.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Slack -> Keycloak identity mapping / link token DAL (SQLite-backed)
 py_test(
     name = "test_identity",
