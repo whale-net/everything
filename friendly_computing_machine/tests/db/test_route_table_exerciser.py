@@ -45,6 +45,12 @@ EXERCISED_MODELS = (SlackChannel, SlackSpecialChannelType, SlackSpecialChannel)
 
 _VERSIONS_REL = "friendly_computing_machine/src/migrations/versions"
 
+# The revision that creates the route tables, and the file it lives in. Both
+# are pinned: an applied migration is never renamed, so a mismatch means the
+# chain was reworked out from under a load-bearing table.
+LB1_REVISION = "71e2c8de4b19"
+LB1_MIGRATION_NAME = "2025_05_28_0131-71e2c8de4b19_.py"
+
 
 def _versions_dir() -> Path:
     """The alembic versions/ directory holding the migration chain.
@@ -94,6 +100,18 @@ def _tables_op(migration: Path, func_name: str, op_name: str) -> set[str]:
     return names
 
 
+def _revision_id(migration: Path) -> str | None:
+    """The `revision` id a migration module declares at module level."""
+    for node in ast.parse(migration.read_text(), filename=str(migration)).body:
+        if not isinstance(node, ast.AnnAssign):
+            continue
+        if getattr(node.target, "id", None) != "revision":
+            continue
+        if isinstance(node.value, ast.Constant):
+            return node.value.value
+    return None
+
+
 @pytest.fixture(scope="module")
 def migrated_tables() -> set[str]:
     """Table names the whole versioned migration chain leaves in the schema.
@@ -131,15 +149,39 @@ def session():
         yield s
 
 
-# --- check 1: the migration chain still declares the route tables -----------
+# --- check 1: the LB1 migration is still here and still declares the tables -
 
 
-def test_migration_chain_still_creates_both_route_tables(migrated_tables):
-    missing = sorted(ROUTE_TABLES - migrated_tables)
+@pytest.fixture(scope="module")
+def lb1_migration() -> Path:
+    """The one revision that creates the route tables, pinned by revision id.
+
+    Pinning the id and the exact filename is the point: a migration that is
+    deleted, renamed, or emptied stops matching here even if some other
+    revision still happens to create a table of the same name.
+    """
+    versions = _versions_dir()
+    matches = sorted(versions.glob(f"*{LB1_REVISION}*.py"))
+    expected = versions / LB1_MIGRATION_NAME
+    assert matches == [expected], (
+        f"expected exactly one migration for revision {LB1_REVISION} at "
+        f"{expected}, found {[m.name for m in matches]}; the route tables are "
+        "retained for the next milestone's routing work, and the revision that "
+        "creates them must not be deleted, renamed, or emptied"
+    )
+    return matches[0]
+
+
+def test_lb1_migration_still_creates_both_route_tables(lb1_migration):
+    assert _revision_id(lb1_migration) == LB1_REVISION, (
+        f"{lb1_migration.name} no longer declares revision {LB1_REVISION}"
+    )
+    created = _tables_op(lb1_migration, "upgrade", "create_table")
+    missing = sorted(ROUTE_TABLES - created)
     assert not missing, (
-        f"the versioned migration chain no longer creates {missing}; the route "
-        f"tables are retained for the next milestone's routing work. Tables the "
-        f"chain does create: {sorted(migrated_tables)}"
+        f"{lb1_migration.name} no longer creates {missing}; it still creates "
+        f"{sorted(created)}. The route tables are retained for the next "
+        "milestone's routing work"
     )
 
 
