@@ -56,10 +56,16 @@ a request body carries the action's own arguments (`reason`,
 identity, scope, or session field on the wire to tamper with. The two
 routes it serves are `POST /tasks/{id}/escalate` (a Swarm Operator's manual
 task intervention) and `POST /design-sessions` (a Requirement Contributor's
-submission); both are mounted behind `RequireAuth` + `requireOperator` in
-`setupRoutes`. `api`'s own verdict on a write — an unknown task, a
-cross-scope product — is relayed to the browser unchanged, so a rejected
-write is visibly rejected rather than silently dropped.
+submission); both are mounted through `App.operatorRoute` — `RequireAuth`
+first, then `requireOperator` — so a handler reached that way can always
+read a Subject and can never be reached without one. `api`'s own verdict on
+a write — an unknown task, a cross-scope product — is relayed to the
+browser unchanged, so a rejected write is visibly rejected rather than
+silently dropped. `writes_test.go` covers both halves: a write with no real
+identity resolved (dev mode, no session, forged session, or a body carrying
+an identity) reaches neither `api` nor a krill session, and a write by a
+genuinely signed-in operator is minted under, and carried by, that
+operator's real `(iss, sub)`.
 
 A session is minted per write rather than cached: each `krill_session` row
 is the durable record of which real identity performed which mutation, and

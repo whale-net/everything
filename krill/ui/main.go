@@ -342,13 +342,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	}
 
 	// The mutating actions this binary's own app pages perform. Each is
-	// wrapped in requireOperator, which resolves the signed-in operator's
-	// real (iss, sub) Subject onto the request context (identity.go);
-	// writes.go's withKrillSession is then the only way any of them can
-	// reach krill, so the session it mints is always attributed to that
-	// operator (LB4).
-	mux.HandleFunc("POST /tasks/{id}/escalate", app.auth.RequireAuthFunc(app.requireOperator(app.handleEscalateTask)))
-	mux.HandleFunc("POST /design-sessions", app.auth.RequireAuthFunc(app.requireOperator(app.handleOpenDesignSession)))
+	// mounted through operatorRoute, so a request without a signed-in
+	// operator never reaches the handler at all; writes.go's
+	// withKrillSession is then the only way any of them can reach krill,
+	// and it attributes what it does to the operator requireOperator
+	// resolved (LB4).
+	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
+	mux.HandleFunc("POST /design-sessions", app.operatorRoute(app.handleOpenDesignSession))
 
 	// The signed-in shell (FR 85a8b33c): a home page plus one root per
 	// nav area, every one of them wrapped in the same chrome by
@@ -367,6 +367,16 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(designPath, app.auth.RequireAuthFunc(app.handleDesign))
 	mux.HandleFunc(specPath, app.auth.RequireAuthFunc(app.handleSpec))
 	mux.HandleFunc(credentialsPath, app.auth.RequireAuthFunc(app.handleCredentials))
+}
+
+// operatorRoute is the wrapper every signed-in-operator route in this
+// binary wears: RequireAuth first (an unauthenticated browser is sent to
+// the Keycloak sign-in flow), then requireOperator, which resolves the
+// operator's real (iss, sub) Subject onto the request context and rejects
+// the request when it does not resolve. A handler mounted this way can
+// always read a Subject, and can never be reached without one.
+func (app *App) operatorRoute(next http.HandlerFunc) http.HandlerFunc {
+	return app.auth.RequireAuthFunc(app.requireOperator(next))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
