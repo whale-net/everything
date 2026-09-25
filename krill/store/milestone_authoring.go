@@ -45,8 +45,26 @@ type MilestoneAuthoringStore interface {
 	// LoadBearingDecision.ID) is delivered by milestoneID -- an
 	// `entity_milestone` row with Relation=MilestoneRelationDelivers.
 	// Idempotent: re-adding the same (entityID, milestoneID) pair is a
-	// no-op, mirroring MilestoneStore.AddAssociation.
+	// no-op, mirroring MilestoneStore.AddAssociation. Equivalent to
+	// AddDeliversMany over a one-element batch; prefer AddDeliversMany
+	// whenever the caller already holds the whole list.
 	AddDelivers(ctx context.Context, scopeID, milestoneID, entityID uuid.UUID, acting, onBehalfOf Subject) error
+
+	// AddDeliversMany is AddDelivers over a batch: one invocation
+	// associates milestoneID's Delivers with every entity in entityIDs,
+	// all-or-nothing. The batch is not scoped to a single FeatureSet --
+	// a milestone whose scope spans several FeatureSets is delivered in
+	// one call, because the delivery axis hangs off the entity, never off
+	// the FeatureSet that happens to parent it.
+	//
+	// Rejects, writing nothing, with ErrEntityDeliveredByCompetingMilestone
+	// if any entityID is already delivered by a different `kind='milestone'`
+	// row of the same product. Re-cutting first
+	// (RecutStore.MoveScope -- the `move_delivery_scope` verb) is the only
+	// way to hand an already-delivered entity to a competing milestone.
+	// Re-adding an entity milestoneID already delivers is not a
+	// conflict: that stays an idempotent no-op.
+	AddDeliversMany(ctx context.Context, scopeID, milestoneID uuid.UUID, entityIDs []uuid.UUID, acting, onBehalfOf Subject) error
 
 	// AddMustNotForeclose records that milestoneID must not foreclose
 	// entityID (to date, always a LoadBearingDecision.ID) -- an
@@ -277,7 +295,48 @@ func (s milestoneAuthoringStore) addRelation(ctx context.Context, scopeID, miles
 }
 
 func (s milestoneAuthoringStore) AddDelivers(ctx context.Context, scopeID, milestoneID, entityID uuid.UUID, acting, onBehalfOf Subject) error {
-	return s.addRelation(ctx, scopeID, milestoneID, entityID, MilestoneRelationDelivers, acting, onBehalfOf)
+	return s.AddDeliversMany(ctx, scopeID, milestoneID, []uuid.UUID{entityID}, acting, onBehalfOf)
+}
+
+func (s milestoneAuthoringStore) AddDeliversMany(ctx context.Context, scopeID, milestoneID uuid.UUID, entityIDs []uuid.UUID, acting, onBehalfOf Subject) error {
+	if len(entityIDs) == 0 {
+		return fmt.Errorf("entity_ids: at least one entity id is required")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if err := addDeliversTx(ctx, tx, scopeID, milestoneID, entityIDs); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// addDeliversTx is AddDeliversMany's transaction-scoped core: every
+// entityID is validated before any row is written, so a batch that trips
+// any rule writes nothing at all rather than half of its scope.
+func addDeliversTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUID, entityIDs []uuid.UUID) error {
+	if exists, err := plainRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID); err != nil {
+		return err
+	} else if !exists {
+		return errParentNotFound("milestone_ref", milestoneID)
+	}
+
+	for _, entityID := range entityIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers)); err != nil {
+			return fmt.Errorf("insert entity_milestone: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s milestoneAuthoringStore) AddMustNotForeclose(ctx context.Context, scopeID, milestoneID, entityID uuid.UUID, acting, onBehalfOf Subject) error {

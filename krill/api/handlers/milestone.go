@@ -36,9 +36,13 @@ type setFRBudgetRequest struct {
 	FRBudget int `json:"fr_budget"`
 }
 
-// addDeliversRequest is AddDeliversHandler's request body (LB6).
+// addDeliversRequest is AddDeliversHandler's request body (LB6). A
+// milestone's scope routinely spans more than one FeatureSet, so
+// `entity_ids` delivers a whole slice in one request; `entity_id` stays
+// for the single-entity call and at least one of the two is required.
 type addDeliversRequest struct {
-	EntityID string `json:"entity_id"`
+	EntityID  string   `json:"entity_id"`
+	EntityIDs []string `json:"entity_ids"`
 }
 
 // addMustNotForecloseRequest is AddMustNotForecloseHandler's request body
@@ -210,13 +214,25 @@ func AddDeliversHandler(milestones store.MilestoneAuthoringStore) http.HandlerFu
 			return
 		}
 
-		entityID, err := ParseUUIDField("entity_id", req.EntityID)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+		raw := req.EntityIDs
+		if len(raw) == 0 && req.EntityID != "" {
+			raw = []string{req.EntityID}
+		}
+		if len(raw) == 0 {
+			writeJSONError(w, http.StatusBadRequest, "entity_id or entity_ids: at least one delivered entity id is required")
 			return
 		}
+		entityIDs := make([]uuid.UUID, len(raw))
+		for i, idStr := range raw {
+			entityID, err := ParseUUIDField("entity_ids", idStr)
+			if err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			entityIDs[i] = entityID
+		}
 
-		if err := milestones.AddDelivers(r.Context(), sess.ScopeID, id, entityID, sess.Acting, sess.OnBehalfOf); err != nil {
+		if err := milestones.AddDeliversMany(r.Context(), sess.ScopeID, id, entityIDs, sess.Acting, sess.OnBehalfOf); err != nil {
 			writeStoreError(w, err)
 			return
 		}
