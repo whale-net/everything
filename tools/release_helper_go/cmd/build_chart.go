@@ -29,6 +29,17 @@ type BuildChartParams struct {
 	Bazel         BazelRunner
 	FS            FileSystem
 	WorkspaceRoot string
+	// OnProgress, when non-nil, is called with "building" and the chart
+	// about to be built, immediately before its Bazel build starts. It
+	// takes the chart because one batch covers many charts, each with its
+	// own release-run target key. Charts report no later states -- there
+	// is no local-then-remote split like an app image's, since
+	// FinalizePublish writes a chart's PUBLISHING and RECORDING
+	// transitions as it does the real work (see the worker's
+	// finalize.go). Reporting "building" per chart is what keeps a chart
+	// batch showing only the in-flight chart as BUILDING. Best-effort;
+	// never fails the build.
+	OnProgress func(state string, chart HelmChartMetadata)
 }
 
 // BuildChartResult is one chart's build-chart outcome.
@@ -151,6 +162,11 @@ func ExecuteBuildCharts(p BuildChartParams) ([]BuildChartResult, error) {
 	results := make([]BuildChartResult, 0, len(selected))
 	for _, chart := range selected {
 		chartTarget, chartDir := chartOutputPaths(workspaceRoot, chart)
+		// Report before the build, so only the chart actually being
+		// built shows as BUILDING.
+		if p.OnProgress != nil {
+			p.OnProgress("building", chart)
+		}
 		fmt.Printf("Building bazel target: %s\n", chartTarget)
 		chartStart := time.Now()
 		if _, err := bazel.Run("build", chartTarget); err != nil {

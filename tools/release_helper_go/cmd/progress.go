@@ -7,13 +7,19 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
-// targetProgressReporter builds BuildAppParams.OnProgress for one app
-// target: a best-effort call to App Registry's builder-
+// targetProgressReporter builds an OnProgress callback for one release
+// run target: a best-effort call to App Registry's builder-
 // authenticated ReportTargetProgress RPC, which signals the release run's
-// Temporal ReleaseWorkflow with this target's "built"/"pushed" intra-build
-// state -- ahead of the batch-wide NotifyBuildComplete terminal signal (see
-// worker/release/workflow.go's awaitBuildCompletion and
+// Temporal ReleaseWorkflow with this target's "building"/"built"/"pushed"
+// intra-build state -- ahead of the batch-wide NotifyBuildComplete terminal
+// signal (see worker/release/workflow.go's awaitBuildCompletion and
 // server/handlers/release.go's ReportTargetProgress).
+//
+// Because the caller fires "building" at the top of each target's own
+// iteration, the release run shows only the target actually being built as
+// BUILDING rather than the whole batch. The target is identified by
+// ownerFullName plus kind, so this covers every kind a release run target
+// can be (image or chart) -- not just apps.
 //
 // releaseRunID empty (manual/bot fallback dispatch with no Temporal
 // release run behind it) returns a no-op callback -- same skip
@@ -25,14 +31,15 @@ import (
 // as a WARNING and swallowed -- a progress-reporting hiccup must not break
 // a real image build/push (AGENTS.md logging levels: an optional
 // dependency was skipped, the operation still completed).
-func targetProgressReporter(ctx context.Context, releaseRunID string, githubRunID int64, client pb.ReleaseRegistryClient, domain, app string) func(state string) {
+func targetProgressReporter(ctx context.Context, releaseRunID string, githubRunID int64, client pb.ReleaseRegistryClient, kind pb.ArtifactKind, ownerFullName string) func(state string) {
 	if releaseRunID == "" || client == nil {
 		return func(string) {}
 	}
-	ownerFullName := domain + "-" + app
 	return func(state string) {
 		var pbState pb.ReleaseRunTargetState
 		switch state {
+		case "building":
+			pbState = pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILDING
 		case "built":
 			pbState = pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILT
 		case "pushed":
@@ -46,7 +53,7 @@ func targetProgressReporter(ctx context.Context, releaseRunID string, githubRunI
 			ReleaseRunId:  releaseRunID,
 			GithubRunId:   githubRunID,
 			OwnerFullName: ownerFullName,
-			Kind:          pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+			Kind:          kind,
 			State:         pbState,
 		})
 		if err != nil {

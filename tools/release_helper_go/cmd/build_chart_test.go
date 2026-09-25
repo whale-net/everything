@@ -41,12 +41,18 @@ func TestExecuteBuildChartsFullNameNotDoubleDomainPrefixed(t *testing.T) {
 	})
 
 	outputDir := t.TempDir()
+	var progressStates []string
+	var progressCharts []string
 	results, err := ExecuteBuildCharts(BuildChartParams{
 		Charts:        "manmanv2-control-services",
 		OutputDir:     outputDir,
 		Bazel:         bazel,
 		FS:            newFakeFS(),
 		WorkspaceRoot: workspaceRoot,
+		OnProgress: func(state string, chart HelmChartMetadata) {
+			progressStates = append(progressStates, state)
+			progressCharts = append(progressCharts, chart.FullName())
+		},
 	})
 	if err != nil {
 		t.Fatalf("ExecuteBuildCharts: %v", err)
@@ -56,5 +62,13 @@ func TestExecuteBuildChartsFullNameNotDoubleDomainPrefixed(t *testing.T) {
 	}
 	if got, want := results[0].FullName, "manmanv2-control-services"; got != want {
 		t.Errorf("FullName = %q, want %q", got, want)
+	}
+	// A chart is reported "building" with its own full name, so a chart
+	// batch marks only the in-flight chart rather than the whole batch.
+	if len(progressStates) != 1 || progressStates[0] != "building" {
+		t.Errorf("progress states = %v, want [building]", progressStates)
+	}
+	if len(progressCharts) != 1 || progressCharts[0] != "manmanv2-control-services" {
+		t.Errorf("progress charts = %v, want [manmanv2-control-services]", progressCharts)
 	}
 }

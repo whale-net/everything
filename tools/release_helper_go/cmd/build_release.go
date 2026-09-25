@@ -250,31 +250,38 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 	fmt.Printf("build-release: %d app(s), %d chart(s), has_specs=%t, dry_run=%t, git_sha=%s, registry=%s\n",
 		len(matrixItems), len(p.Plan.Charts), p.Plan.HasSpecs, p.DryRun, p.GitSHA, p.Registry)
 
+	// Progress-reporting client: dialed once for the whole batch, not per
+	// target/state -- shared across every targetProgressReporter closure
+	// below, for app images and charts alike. Skipped entirely when there
+	// is no release run to report against (p.ReleaseRunID empty); a dial
+	// failure is a WARNING, not a build failure, same best-effort stance
+	// as ExecuteNotifyBuild. Hoisted above the per-artifact-type blocks
+	// so the chart loop can report against it too.
+	progressClient := p.ProgressClient
+	if progressClient == nil && p.ReleaseRunID != "" {
+		dialed, cleanup, err := NewReleaseRegistryClient(p.Ctx)
+		if err != nil {
+			fmt.Printf("target progress: dial app registry failed; skipping progress reporting for this batch: %v\n", err)
+		} else {
+			progressClient = dialed
+			if cleanup != nil {
+				defer func() { _ = cleanup() }()
+			}
+		}
+	}
+
 	// App images (push by digest) -- mirrors the former "Build app images"
 	// step's `if: dry_run == 'false' && release-matrix != ''`.
 	if !p.DryRun && len(matrixItems) > 0 {
 		appsStart := time.Now()
 
-		// Progress-reporting client: dialed once for the
-		// whole batch, not per app/state -- shared across every
-		// targetProgressReporter closure below. Skipped entirely when
-		// there is no release run to report against (p.ReleaseRunID
-		// empty); a dial failure is a WARNING, not a build failure, same
-		// best-effort stance as ExecuteNotifyBuild.
-		progressClient := p.ProgressClient
-		if progressClient == nil && p.ReleaseRunID != "" {
-			dialed, cleanup, err := NewReleaseRegistryClient(p.Ctx)
-			if err != nil {
-				fmt.Printf("target progress: dial app registry failed; skipping progress reporting for this batch: %v\n", err)
-			} else {
-				progressClient = dialed
-				if cleanup != nil {
-					defer func() { _ = cleanup() }()
-				}
-			}
-		}
-
 		for _, item := range matrixItems {
+			onProgress := targetProgressReporter(p.Ctx, p.ReleaseRunID, p.GitHubRunID, progressClient, pb.ArtifactKind_ARTIFACT_KIND_IMAGE, item.Domain+"-"+item.App)
+			// Report before the build, not after: the point of the
+			// per-target report is that this target -- and not the
+			// rest of the batch -- is BUILDING for as long as it is
+			// the one being built.
+			onProgress("building")
 			manifest, err := ExecuteBuildApp(BuildAppParams{
 				Ctx:           p.Ctx,
 				Domain:        item.Domain,
@@ -285,7 +292,7 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 				Bazel:         bazel,
 				Docker:        docker,
 				WorkspaceRoot: workspaceRoot,
-				OnProgress:    targetProgressReporter(p.Ctx, p.ReleaseRunID, p.GitHubRunID, progressClient, item.Domain, item.App),
+				OnProgress:    onProgress,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("build app %s-%s: %w", item.Domain, item.App, err)
@@ -310,6 +317,14 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 			Bazel:         bazel,
 			FS:            fs,
 			WorkspaceRoot: workspaceRoot,
+			// A chart's release-run target key is its published full
+			// name, not a domain+"-"+name concat -- release_helm_chart
+			// always composes ChartName as "helm-{domain}-{chart_name}",
+			// so a naive concat would double-count the domain (see
+			// BuildChartResult.FullName's doc comment / PR #1076).
+			OnProgress: func(state string, chart HelmChartMetadata) {
+				targetProgressReporter(p.Ctx, p.ReleaseRunID, p.GitHubRunID, progressClient, pb.ArtifactKind_ARTIFACT_KIND_CHART, chart.FullName())(state)
+			},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("build charts: %w", err)
