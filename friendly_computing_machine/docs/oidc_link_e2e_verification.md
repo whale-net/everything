@@ -72,6 +72,24 @@ never be mistaken for a pass, so check them explicitly rather than assuming.
 | P11 | You have DB read access to **both** databases — fcm's (`POSTGRES_URL`) and whagent-net's (`PG_DATABASE_URL`) | `psql "$POSTGRES_URL" -c '\conninfo'` | — |
 | P12 | You have shell/log access to the `bot`, `web`, and whagent-net `api` processes | — | — |
 
+### Pointing whagent-net `api` at the realm
+
+This runbook does not provision the realm. It does assume `api` is already
+talking to the same realm `fcm web` does, because otherwise fcm's
+service-account token cannot be verified and step 6 cannot start a session at
+all. Confirm on the `api` deployment:
+
+| Variable | Expected | Notes |
+|---|---|---|
+| `GRPC_AUTH_MODE` | `oidc` | default is `none`, which verifies nothing |
+| `WHAGENT_OIDC_ISSUER` | **identical to** `FCM_OIDC_ISSUER_URL` | the realm both sides share; also stamped as the persona `SubjectIssuer` |
+| `WHAGENT_JWKS_ADDR` | `:8090` | where `api` serves `/.well-known/jwks.json` |
+| `WHAGENT_SIGNING_KEY` / `WHAGENT_SIGNING_KEY_ID` | set | the Ed25519 pair `api` mints persona claims with |
+
+A realm mismatch between `FCM_OIDC_ISSUER_URL` and `WHAGENT_OIDC_ISSUER` is the
+single most likely cause of "the login worked but the session will not start":
+the link is written, then the delegated `StartSession` is refused.
+
 ### Values you will need to fill in
 
 Record these before starting. Do not guess them mid-run.
@@ -98,6 +116,28 @@ CHANNEL_SLACK_ID=            # C… , from P9
 `FCM_OIDC_CLIENT_ID` and `WHAGENT_CLIENT_ID` are **different clients** and must
 not be confused: one is the browser-facing login the human completes, the other
 is fcm's machine identity it calls whagent-net with.
+
+### Local Tilt cannot run this flow — use a real environment
+
+Do not try to rehearse this in the local Tilt stack. Three checked-in defaults
+make the delegated path unreachable there, all of them correct:
+
+- `friendly_computing_machine/Tiltfile` supplies only `FCM_WEB_PUBLIC_URL` to its
+  apps. The other four — `FCM_OIDC_ISSUER_URL`, `FCM_OIDC_CLIENT_ID`,
+  `FCM_OIDC_CLIENT_SECRET`, `FCM_WEB_SESSION_SECRET` — are required options on
+  `fcm web run` and are not wired, so the `web` app exits with
+  `Missing option '--web-public-url' (env var: 'FCM_WEB_PUBLIC_URL')` and its
+  siblings if you start it as-is.
+- whagent-net's `Tiltfile` runs `api` with `GRPC_AUTH_MODE=none`, which injects
+  dev claims and never verifies a token, so no real `client_id` ever reaches the
+  allowlist gate.
+- whagent-net's `Tiltfile` leaves `WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS` at
+  its empty default — the fail-closed posture, not an oversight.
+
+Tilt is fine for building and for the fakes-backed unit tests
+(`bazel test //friendly_computing_machine/tests:test_web
+//friendly_computing_machine/tests:test_identity
+//friendly_computing_machine/tests:test_bot`). It is not evidence.
 
 ## The flow, and where each step observes it
 
@@ -466,6 +506,9 @@ branch (not against an earlier revision of the docs):
 | `WHAGENT_UI_PUBLIC_URL` | `temporal/whagent/workflow.py` | matches; fcm posts `<url>/sessions/<id>` |
 | `WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS` | `whagent_net/api/main.go`, `api/handlers/start.go` + `session.go`, `whagent_net/ENV.md` | matches; read by `api`, empty = fail closed, `PERMISSION_DENIED` |
 | `GRPC_AUTH_MODE` | `whagent_net/api/main.go`, `whagent_net/ENV.md` | matches; `none` (dev) vs `oidc` |
+| `WHAGENT_OIDC_ISSUER` | `whagent_net/ENV.md` | matches; read by `api`, `ui`, `mcp`; must equal `FCM_OIDC_ISSUER_URL` |
+| `WHAGENT_JWKS_ADDR` (`:8090`), `WHAGENT_SIGNING_KEY`, `WHAGENT_SIGNING_KEY_ID` | `whagent_net/ENV.md` | match; `api` serving the JWKS and signing persona claims |
+| Tilt supplies only `FCM_WEB_PUBLIC_URL` | `friendly_computing_machine/Tiltfile:99,114` | confirmed; the other four are required options on `fcm web run` and unset |
 | `POSTGRES_URL` / `PG_DATABASE_URL` | `ENV.md` (FCM) / `whagent_net/ENV.md` | match; FCM tables in schema `fcm`, whagent-net `sessions` unqualified |
 | `GET /link/{token}` | `web/app.py` | matches |
 | `GET /link/callback` | `web/app.py`, `web/config.py` `callback_url` | matches; `${FCM_WEB_PUBLIC_URL}/link/callback` |
