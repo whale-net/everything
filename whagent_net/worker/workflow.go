@@ -609,11 +609,12 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 
 	var modelResult CallModelResult
 	callIn := CallModelInput{
-		SessionID: sessionID,
-		Turn:      turn,
-		Model:     resolved.Model,
-		Provider:  resolved.Provider,
-		EventIDs:  built.EventIDs,
+		SessionID:    sessionID,
+		Turn:         turn,
+		Model:        resolved.Model,
+		Provider:     resolved.Provider,
+		EventIDs:     built.EventIDs,
+		SystemPrompt: resolved.Definition.SystemPrompt,
 	}
 	if err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, callModelActivityOptions), ActivityCallModel, callIn).Get(ctx, &modelResult); err != nil {
 		if v == workflow.DefaultVersion {
@@ -759,11 +760,12 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 			finalEvents = rebuilt.EventIDs
 
 			loopCallIn := CallModelInput{
-				SessionID: sessionID,
-				Turn:      turn,
-				Model:     resolved.Model,
-				Provider:  resolved.Provider,
-				EventIDs:  rebuilt.EventIDs,
+				SessionID:    sessionID,
+				Turn:         turn,
+				Model:        resolved.Model,
+				Provider:     resolved.Provider,
+				EventIDs:     rebuilt.EventIDs,
+				SystemPrompt: resolved.Definition.SystemPrompt,
 			}
 			if err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, callModelActivityOptions), ActivityCallModel, loopCallIn).Get(ctx, &modelResult); err != nil {
 				return failTurn(ctx, sessionID, turn, err)

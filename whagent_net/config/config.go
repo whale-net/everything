@@ -106,8 +106,9 @@ type AgentDefinitionConfig struct {
 	// whagent_net/session.AgentDefinition.SystemPrompt (migration 015):
 	// optional system-role instruction text for a session using this
 	// definition. Left empty, the definition carries no system prompt at
-	// all -- the historical, still-default behavior. Storage only for
-	// now: nothing reads this field into a model call yet.
+	// all -- the historical, still-default behavior. Prepended to every
+	// model call as a RoleSystem message when set (worker/activities.go
+	// CallModel).
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 

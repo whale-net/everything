@@ -35,6 +35,33 @@ func TestMarshalToolUnlockPayload_RoundTrips(t *testing.T) {
 	assert.Equal(t, "things about widgets", payload.Query)
 }
 
+// TestWithSystemPrompt_PrependsWhenSet proves withSystemPrompt prepends a
+// RoleSystem message ahead of the existing transcript-derived messages when
+// AgentDefinition.SystemPrompt is set -- the fix for the gap
+// CallModel's (activities.go) doc comment used to describe: the field was
+// written to and read from Postgres but never reached the model call.
+func TestWithSystemPrompt_PrependsWhenSet(t *testing.T) {
+	prompt := "You are a helpful assistant named Fred."
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: "what is your name?"}}
+
+	got := withSystemPrompt(msgs, &prompt)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, llm.Message{Role: llm.RoleSystem, Content: prompt}, got[0])
+	assert.Equal(t, msgs[0], got[1])
+}
+
+// TestWithSystemPrompt_NilOrEmptyIsNoop proves a nil or empty-string prompt
+// leaves msgs unchanged -- the historical, still-default behavior for a
+// session using an agent definition with no system prompt configured.
+func TestWithSystemPrompt_NilOrEmptyIsNoop(t *testing.T) {
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: "hi"}}
+	empty := ""
+
+	assert.Equal(t, msgs, withSystemPrompt(msgs, nil))
+	assert.Equal(t, msgs, withSystemPrompt(msgs, &empty))
+}
+
 // TestEventsToMessages_ToolUnlockEventIsSkipped proves a tool_unlock event
 // produces no llm.Message: eventsToMessages must decode a transcript
 // containing one identically to the same transcript without it, since

@@ -258,10 +258,9 @@ definition into the FR3/FR4 search-based tool-discovery mode this
 milestone adds the plumbing for.
 
 `system_prompt` (migration 015) is an optional `TEXT` column for a
-system-role instruction, `NULL` by default. It is storage only for now —
-`worker`'s message construction (`worker/context.go`'s `eventsToMessages`)
-does not read it into a model call yet, so setting it today has no runtime
-effect.
+system-role instruction, `NULL` by default. When set, `worker/activities.go`'s
+`CallModel` prepends it to the request as a `RoleSystem` message on every
+model call this agent definition makes.
 
 To further constrain that same agent to only two of the server's tools
 (C22 — e.g. a research-only agent that must never call a write tool the
