@@ -250,6 +250,41 @@ never returns between turns. Per turn:
 6. Workflow updates status (`awaiting_input` / `done`), records the turn's
    context event-ID list.
 
+**Tool-loop commit order vs. the wire protocol.** Step 4 dispatches a
+response's tool calls and commits the `assistant_message` carrying them
+*afterwards*, so one iteration's transcript segment is seq-ordered
+`tool_call:N … tool_result:N … assistant_message:I(tool_calls=[N…])`. The
+OpenAI wire protocol requires the opposite: a `tool` message must answer a
+tool call in a *preceding* assistant message. Rendered in raw seq order a
+turn's context is therefore a hard 400 on every model call after its first
+tool use, and the malformed events persist in the transcript, poisoning
+every later turn. This went unnoticed only because the model used in dev
+tolerated it.
+
+The repair lives in the projection, not the transcript:
+`worker/context.go`'s `eventsToMessages` runs `hoistAssistantToolCalls`,
+moving an assistant message ahead of the run of results it answers (and
+nothing else). Context is by definition "a projection over the transcript
+… derived, ephemeral, rebuilt every turn", so protocol validity belongs
+there; doing it in the projection also repairs sessions *already* stored
+in the broken order rather than only new ones, with no
+`workflow.GetVersion` gate and no event-schema change. The reordering is a
+pure function of the transcript, so already-rendered messages keep their
+relative order as a session grows and the prompt-cache prefix survives
+(`worker/context_test.go`'s `…RendersPriorTurnsAsAnUnchangedPrefix`).
+
+**Activity timeouts.** `workflow.go`'s `defaultActivityOptions` (2-minute
+`StartToCloseTimeout`, 5 attempts) is sized for the store-backed
+activities, which are Postgres reads and writes. `CallModel` overrides it
+with `callModelActivityOptions` (5 minutes, 3 attempts): an LLM completion
+is bounded by neither a database nor our latency budget, and the 2-minute
+default was measurably wrong — dev model calls ran 95s, 96s, 99s, 89s and
+150s, each either brushing or crossing the ceiling, with the 150s one
+completing only because Temporal retried it. Note the cost consequence: a
+timed-out attempt records `PromptTokens: 0`, so a retry the provider
+*billed* is invisible to the cost cap. `callModelActivityOptions` reduces
+that exposure; it does not eliminate it.
+
 Bounded tasks (~100 turns) are the target; Continue-As-New is deferred
 until that assumption changes. `parent_session_id` is set from day one so a
 session started via `mcp` by another session is an ordinary session.
@@ -355,10 +390,19 @@ picks between two shapes for a turn's `Tools`:
 
 `Tools`' render order is pinned — `search_tools` first, then unlocked names
 in unlock order — and never re-sorted or re-filtered by later state. This is
-a prompt-caching prefix-stability concern: `tools` renders first in the
-provider request, and any byte-level reordering of that prefix invalidates
-the whole request's cache (`cache_read_input_tokens` silently drops to
-zero). M4 does not implement caching itself; it only avoids foreclosing it.
+a prompt-caching prefix-stability concern: `tools` is byte-stable across
+every turn of a session, so any reordering of that block invalidates the
+request's cache (`cache_read_input_tokens` silently drops to zero). (The
+block is *not* rendered first in the request body — openai-go's encoder
+emits `messages` ahead of `tools` — but stability of the `tools` array is
+the property that matters, and is what is pinned here.) The same concern
+governs the context projection: a turn's already-rendered messages must
+keep their exact relative order as the session grows, which is why
+`worker/context.go`'s `hoistAssistantToolCalls` repairs the tool-loop
+commit order by a deterministic projection rule rather than re-deriving it
+per turn, and why `fitToBudget` returns a contiguous newest-suffix (a
+stable prefix until a trim is forced). M4 does not implement caching
+itself; it only avoids foreclosing it.
 A model-issued `search_tools` call is answered entirely in-process
 (`whagent_net/worker.Activities.SearchTools`, `activities.go`) — it is never
 dispatched to a domain server, so it never appears as an `mcp.ClientSession.
@@ -455,6 +499,17 @@ session row. A tool result a domain server returns with its own `isError`
 flag set is an ordinary tool-result event, never this failure event or an
 input to this classification — that boundary is whagent-net's own
 judgement, never originated or tagged by a domain server.
+
+The same rule covers input the model got wrong rather than a server that
+failed. Tool-call arguments that do not decode as JSON are answered to the
+model as an ordinary `IsError: true` tool result
+(`worker/tools/dispatch.go`'s `Dispatch`), never a Go error: a hard error
+would fail the turn and end the session `failed` over one bad argument
+blob, and would classify as `non_retryable`, so retrying the session could
+never rescue it. This matches how `search_tools` has always handled a
+malformed query (`worker/activities.go`'s `decodeSearchQuery`) — the
+boundary is *recoverable-by-the-model* vs. *not*, not *domain server* vs.
+*not*.
 
 Classification rules:
 
@@ -866,16 +921,22 @@ outright — the session still exists and a caller should retry with
 - **Front door for humans before Phase 2**: `mcp` from Claude Code is the
   v1 answer; Slack via `friendly_computing_machine` is plausible later.
 - **Context budgeting strategy** (summarization vs. truncation, when to
-  write summary events): answered for **search-mode sessions only** (M4,
-  issue #2673, FR10) — `worker/budget.go`'s `fitToBudget` charges a
-  search-mode turn's tool definitions and transcript content against one
-  shared `searchModeContextBudget`, unit'd as a character count over each
-  side's wire-bound JSON/content (no tokenizer dependency, monotonic in
-  real token cost, both halves measured the same way). A **bulk-mode**
-  session still carries the pre-M4 placeholder (`worker/context.go`'s flat
-  `maxContextEvents` truncation) — this remains this open item's
-  unresolved half, deferred to whatever milestone first hits it for bulk
-  mode too.
+  write summary events): **truncation is now answered for both modes** —
+  `worker/budget.go`'s `fitToBudget` charges each turn's transcript
+  content against a character budget, unit'd as a character count over the
+  wire-bound content (no tokenizer dependency, monotonic in real token
+  cost). Search mode (M4, issue #2673, FR10) shares one
+  `searchModeContextBudget` across its tool definitions *and* transcript
+  content; bulk mode uses `bulkModeContextBudget` over transcript content
+  alone, because `processTurn` runs `ActivityListToolDefinitions` *after*
+  `ActivityBuildContext` for a bulk turn, so no `turn_tool_defs` row exists
+  to charge yet. A bulk turn additionally keeps the older
+  `maxContextEvents` count ceiling, which bounds the `turn_context` row's
+  event-ID list rather than the request; the two are applied count-first,
+  characters-second, so a cut between an assistant message and its tool
+  results is always repaired afterwards. **Summarization** — replacing
+  dropped turns with summary events rather than losing them — remains the
+  open half, deferred to whatever milestone first wants it.
 - **Provider abstraction**: non-goal — one provider (OpenRouter) and a
   base-URL swap covers the foreseeable need.
 - **Cron-scheduled sessions**: non-goal *as a service offering* — a
