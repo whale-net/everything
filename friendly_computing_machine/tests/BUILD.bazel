@@ -8,6 +8,7 @@ py_test(
     size = "small",
     srcs = [
         "bot/test_slack_models.py",
+        "bot/test_whagent_gating.py",
         "conftest.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],

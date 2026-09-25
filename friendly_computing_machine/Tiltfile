@@ -91,6 +91,7 @@ build_images_from_apps(APPS, watch_paths, platform)
 slack_bot_token = os.environ.get('SLACK_BOT_TOKEN', '')
 slack_app_token = os.environ.get('SLACK_APP_TOKEN', '')
 google_api_key = os.environ.get('GOOGLE_API_KEY', '')
+fcm_web_public_url = os.environ.get('FCM_WEB_PUBLIC_URL', '')
 
 apps_config = build_apps_config(
     APPS,
@@ -105,6 +106,7 @@ apps_config = build_apps_config(
         'SLACK_BOT_TOKEN': slack_bot_token,
         'SLACK_APP_TOKEN': slack_app_token,
         'GOOGLE_API_KEY': google_api_key,
+        'FCM_WEB_PUBLIC_URL': fcm_web_public_url,
     }
 )
 

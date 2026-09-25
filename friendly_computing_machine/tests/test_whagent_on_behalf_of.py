@@ -236,13 +236,6 @@ def test_app_mention_passes_linked_identity_into_workflow_params(whagent_handler
     assert params.first_message == "what is the status?"
 
 
-def test_app_mention_leaves_on_behalf_of_unset_for_unlinked_user(whagent_handler, monkeypatch):
-    params = _run_mention(whagent_handler, monkeypatch, None)
-
-    assert params.on_behalf_of_iss is None
-    assert params.on_behalf_of_sub is None
-
-
 # ----------------------------------------------------------------------
 # replay safety: an old payload lacking the new fields still deserializes
 # ----------------------------------------------------------------------

@@ -12,7 +12,8 @@ queried later.
 
 The bot also exposes one small inbound HTTP surface — the **identity-link web app** — used only to bind
 a Slack user to their Keycloak identity so whagent-net's `on_behalf_of` delegation can act as them.
-It is additive and currently unlinked; nothing points at it until the Slack gating task lands.
+An `@mention` in an agent-linked channel is gated on that binding: a user with no stored mapping is
+prompted with a one-time link (see below) instead of being given a session.
 
 ## Components
 
@@ -57,6 +58,23 @@ Guarantees:
   in one transaction, so a failed or replayed link leaves the DB unchanged.
 - No access, refresh, or ID token is ever persisted or logged; only the `(iss, sub)` pair is stored.
 - A successful link logs at INFO with the Slack team/user ids and `iss`/`sub` (never tokens).
+
+#### Link gating (bot)
+
+`bot/handlers/whagent.py`'s `handle_whagent_app_mention` is **block-until-linked**. After the channel's
+agent link resolves and *before* any workflow is started, it looks up `get_keycloak_identity(team_id,
+user_id)`. If the mentioning user has no stored mapping it:
+
+1. mints a one-time token with `mint_link_token(team_id, user_id)`,
+2. posts a Slack `chat_postEphemeral` (visible only to that user) containing a clickable
+   `${FCM_WEB_PUBLIC_URL}/link/<token>` link, and
+3. returns without starting anything.
+
+Because the check runs before `start_workflow` (and before any `slackthreadsession` row is written), a
+blocked mention never leaves an orphaned `ACTIVE` thread-session row. The prompt is self-contained — no
+slash command or out-of-band instruction. A prompt issuance logs at INFO with the Slack team/user ids
+(never the token). If `FCM_WEB_PUBLIC_URL` is unset the mention is still blocked and an ERROR is logged.
+Multi-participant attribution inside an already-linked thread is out of scope.
 
 ## Integrations
 
