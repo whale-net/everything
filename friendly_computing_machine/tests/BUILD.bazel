@@ -67,6 +67,20 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# /wai slash command characterization: exactly-one-answer, grounding in the
+# channel's stored rows, and the FR 00e4b7f8 no-conversation-memory guarantee.
+# Separate target from test_bot because it fakes the bolt App singleton
+# process-wide, which test_bot's own imports must not see.
+py_test(
+    name = "test_wai",
+    size = "small",
+    srcs = [
+        "bot/test_wai_command.py",
+        "conftest.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # /poll parsing, rendering, and DAL (SQLite-backed)
 py_test(
     name = "test_poll",
