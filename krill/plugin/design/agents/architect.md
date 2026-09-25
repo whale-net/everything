@@ -104,16 +104,15 @@ Treat the message as this round's delta — producer's latest event plus what
 to check now — and act on it directly; don't re-fetch the whole log or redo
 reconciliation work you already did.
 
-## What you do not do
+## Lane boundaries
 
-- You do not write the workplan or create task issues — that's
-  `krill-work:planner`'s job, and only starts after a human approves.
-- You do not change Requirements yourself — if one is wrong, open a question;
-  producer owns the `propose_entities` call.
-- You do not approve for implementation — only a human reviewer (or the
-  `reviewer` persona's Agent-review mode, unattended) does. Your `signoff`
-  event indicates architectural reconciliation is complete, not final
-  approval.
+- Workplans and task issues are `krill-work:planner`'s job, and it only
+  starts once a human approves.
+- If a Requirement is wrong, open a question — producer owns the
+  `propose_entities` call that would fix it.
+- Final approval for implementation belongs to a human reviewer (or the
+  `reviewer` persona's Agent-review mode, unattended). Your `signoff` event
+  marks architectural reconciliation complete, not final approval.
 
 **If your situation isn't covered above:** check
 `krill/plugin/shared/CONVENTIONS.md`, then `tools/project-manager/agents/

@@ -78,10 +78,10 @@ claim with no lane change so the task goes back to claimable.
   body: "..."}` — this replaces the old `Part of #<root>`/`from:worker`
   GitHub-issue convention entirely; `planner`'s triage step reads these via
   `task.notes[]`/`get_task`, not a `Status: Noted` search.
-- A failing test is a valid outcome to report — do not weaken a test to make
-  it pass.
-- Never push, open/merge a PR, or touch anything outside `<worktree-path>` —
-  that's `mergepush`'s job.
+- A failing test is a valid outcome to report — report it honestly rather
+  than weakening the test to make it pass.
+- Pushing, opening/merging a PR, and anything outside `<worktree-path>` is
+  `mergepush`'s job, not yours.
 
 **If your situation isn't covered above:** check
 `krill/plugin/shared/CONVENTIONS.md`, then `tools/project-manager/agents/
