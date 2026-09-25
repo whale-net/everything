@@ -22,11 +22,14 @@ go_library(
         "identity.go",
         "writeclient.go",
         "writes.go",
+        "readclient.go",
+        "spec_page.go",
     ],
     importpath = "github.com/whale-net/everything/krill/ui",
     visibility = ["//visibility:private"],
     deps = [
         "//krill/identity",
+        "//krill/slice",
         "//krill/store",
         "//libs/go/db",
         "//libs/go/htmxauth",
@@ -79,9 +82,19 @@ release_app(
 
 go_test(
     name = "ui_lib_test",
-    srcs = ["nav_test.go"],
+    srcs = [
+        "nav_test.go",
+        "spec_page_test.go",
+        "spec_parity_test.go",
+    ],
     embed = [":ui_lib"],
-    deps = ["//libs/go/htmxauth"],
+    deps = [
+        "//krill/mcp/tools",
+        "//krill/slice",
+        "//krill/store",
+        "//libs/go/htmxauth",
+        "@com_github_google_uuid//:uuid",
+    ],
 )
 
 # Field-parity coverage for the ops console's read views: each row mapper
