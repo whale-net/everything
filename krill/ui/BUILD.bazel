@@ -85,9 +85,11 @@ go_test(
     srcs = [
         "nav_test.go",
         "spec_page_test.go",
+        "spec_parity_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
+        "//krill/mcp/tools",
         "//krill/slice",
         "//krill/store",
         "//libs/go/htmxauth",
