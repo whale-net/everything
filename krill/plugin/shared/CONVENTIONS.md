@@ -208,9 +208,11 @@ as the read-only tools below (`get_milestone`/`list_milepebbles`/
 
 - `create_milestone {krill_session_id, product_id, name, outcome,
   fr_budget?}` → `{id}`. `name` is the bare identifier (`"M3"`); `outcome`
-  is a one-sentence outcome.
-- `set_fr_budget {krill_session_id, milestone_id, fr_budget}` — revises the
-  budget; only the latest value reads back.
+  is a one-sentence outcome. `fr_budget` is optional and has no default —
+  see "FR budget" below.
+- `set_fr_budget {krill_session_id, milestone_id, fr_budget}` — revises a
+  milestone's or milepebble's budget (`milestone_id` takes either id); only
+  the latest value reads back.
 - `add_delivers {krill_session_id, milestone_id, entity_id}` — associates a
   Feature or Requirement into the milestone's `Delivers` set. Call once per
   entity; idempotent.
@@ -221,13 +223,21 @@ as the read-only tools below (`get_milestone`/`list_milepebbles`/
   records one deliberately-deferred item; `destination` is required.
 - `get_milestone {id}` → authoring fields plus `Delivers`/`Must not
   foreclose`/deferrals, read-only, no session gate.
-- `create_milepebble {krill_session_id, milestone_id, name, outcome}` → cuts
-  a sub-milestone container; `add_milepebble_scope` associates an entity
+- `create_milepebble {krill_session_id, milestone_id, name, outcome,
+  fr_budget?}` → cuts a sub-milestone container; `add_milepebble_scope` associates an entity
   already in the parent milestone's own `Delivers` set (rejected
   otherwise); `add_discovered_scope` creates a new Feature/Requirement
   *and* associates it to a milepebble (and the parent milestone's
   `Delivers` set) in one call, for scope discovered mid-milestone;
-  `list_milepebbles {milestone_id}` → every milepebble in position order.
+  `list_milepebbles {milestone_id}` → every milepebble in position order,
+  each with its `fr_budget`.
+- **FR budget (default 12) is per milepebble, not per milestone.** A
+  milestone has no Requirement cap, so a complex milestone can be planned
+  in full and cut into milepebbles of at most 12 Requirements each (every
+  Requirement delivered by exactly one milepebble). A milestone with no
+  milepebbles cut yet is its own single milepebble, so the 12 applies to it
+  directly. This overrides `tools/project-manager/CONVENTIONS.md`'s
+  per-milestone default for krill-hosted milestones only.
 - `set_milestone_status {krill_session_id, milestone_id, status, note?}` —
   `status` is one of the fixed seven: `not started, in design, planned, in
   progress, shipped, partially complete, abandoned`. `get_milestone_status`

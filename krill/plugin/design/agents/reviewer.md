@@ -79,7 +79,10 @@ held) is cleared or every standing blocker has a `ruling`.
 2. **Apply the same bar a human reviewer would:** does the design deliver
    what the intake asked for, is
    any cheap non-blocking stakeholder feedback still unfolded for no stated
-   reason, does it stay inside its milestone's FR budget and cite `Delivers`
+   reason, does it stay inside its FR budget (per milepebble for a
+   krill-hosted milestone, default 12, the milestone itself uncapped —
+   CONVENTIONS.md "FR budget"; the roadmap's `FR budget` otherwise) and
+   cite `Delivers`
    capabilities correctly, and are you willing to disagree with architect's
    `reconciliation` sign-off if you can point at something specific it
    missed?

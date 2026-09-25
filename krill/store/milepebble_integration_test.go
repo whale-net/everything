@@ -47,11 +47,11 @@ func TestMilepebbleStore_CreateMilepebble_CutIntoThree_ListedInPositionOrder(t *
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "ship it incrementally", nil, self, self)
 	require.NoError(t, err)
 
-	p1, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "first slice", self, self)
+	p1, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "first slice", nil, self, self)
 	require.NoError(t, err)
-	p2, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 2", "second slice", self, self)
+	p2, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 2", "second slice", nil, self, self)
 	require.NoError(t, err)
-	p3, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 3", "third slice", self, self)
+	p3, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 3", "third slice", nil, self, self)
 	require.NoError(t, err)
 
 	for _, p := range []store.MilestoneRef{p1, p2, p3} {
@@ -69,6 +69,43 @@ func TestMilepebbleStore_CreateMilepebble_CutIntoThree_ListedInPositionOrder(t *
 	assert.Less(t, milepebbles[1].Position, milepebbles[2].Position)
 }
 
+// TestMilepebbleStore_CreateMilepebble_FRBudget_PerMilepebble proves the FR
+// budget lives on each milepebble: two milepebbles of one budgetless
+// milestone each carry their own budget, and SetFRBudget revises one alone.
+func TestMilepebbleStore_CreateMilepebble_FRBudget_PerMilepebble(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record")
+	require.NoError(t, err)
+
+	self := milestoneAuthoringTestSubject("agent-1")
+	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "a milestone too big for one budget", nil, self, self)
+	require.NoError(t, err)
+
+	budget := 12
+	p1, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "first slice", &budget, self, self)
+	require.NoError(t, err)
+	p2, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 2", "second slice", &budget, self, self)
+	require.NoError(t, err)
+	require.NotNil(t, p1.FRBudget)
+	assert.Equal(t, 12, *p1.FRBudget)
+
+	require.NoError(t, s.MilestoneAuthoring().SetFRBudget(ctx, p2.ID, 8, self, self))
+
+	milepebbles, err := s.MilestoneAuthoring().ListMilepebblesByMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	require.Len(t, milepebbles, 2)
+	require.NotNil(t, milepebbles[0].FRBudget)
+	require.NotNil(t, milepebbles[1].FRBudget)
+	assert.Equal(t, 12, *milepebbles[0].FRBudget)
+	assert.Equal(t, 8, *milepebbles[1].FRBudget)
+
+	parent, _, _, _, err := s.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	assert.Nil(t, parent.FRBudget, "a milepebble's budget never writes through to its parent milestone")
+}
+
 // TestMilepebbleStore_CreateMilepebble_UnknownParent_ReturnsErrNotFound is
 // issue #2684's Testing section item 2's first half: a milepebble cannot
 // be created without a real parent milestone.
@@ -78,7 +115,7 @@ func TestMilepebbleStore_CreateMilepebble_UnknownParent_ReturnsErrNotFound(t *te
 	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
 
 	self := milestoneAuthoringTestSubject("agent-1")
-	_, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, uuid.New(), "cut 1", "", self, self)
+	_, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, uuid.New(), "cut 1", "", nil, self, self)
 	assert.ErrorIs(t, err, store.ErrNotFound)
 
 	var count int
@@ -100,10 +137,10 @@ func TestMilepebbleStore_CreateMilepebble_ParentIsAnotherMilepebble_Rejected(t *
 	self := milestoneAuthoringTestSubject("agent-1")
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 
-	_, err = s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milepebble.ID, "cut 1 of cut 1", "", self, self)
+	_, err = s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milepebble.ID, "cut 1 of cut 1", "", nil, self, self)
 	assert.ErrorIs(t, err, store.ErrNotFound, "a milepebble's parent must be a milestone, never another milepebble")
 
 	milepebbles, err := s.MilestoneAuthoring().ListMilepebblesByMilestone(ctx, milepebble.ID)
@@ -136,7 +173,7 @@ func TestMilepebbleStore_AddMilepebbleDelivers_SucceedsForSubsetEntity_RejectsNo
 	require.NoError(t, s.MilestoneAuthoring().AddDelivers(ctx, scopeID, milestone.ID, inSet.ID, self, self),
 		"seed the parent milestone's own Delivers set with exactly one entity")
 
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 
 	require.NoError(t, s.MilestoneAuthoring().AddMilepebbleDelivers(ctx, scopeID, milepebble.ID, inSet.ID, self, self),
@@ -204,7 +241,7 @@ func TestMilepebbleStore_AddDiscoveredScope_Requirement(t *testing.T) {
 	deferral, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "cut for later", "M4", self, self)
 	require.NoError(t, err)
 
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 
 	body := "the system must do X"
@@ -272,7 +309,7 @@ func TestMilepebbleStore_AddDiscoveredScope_OneOffFeature(t *testing.T) {
 	self := milestoneAuthoringTestSubject("agent-1")
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "ship the outcome", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 
 	description := "a fix nobody wrote down ahead of time"

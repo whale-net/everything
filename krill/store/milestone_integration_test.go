@@ -149,9 +149,9 @@ func TestMilestoneStore_ListRefsByProduct_FiltersToMilestoneKind(t *testing.T) {
 	require.NoError(t, err)
 
 	self := store.Subject{Iss: "https://issuer.example.com", Sub: "agent-1", Kind: store.SubjectKindService}
-	_, err = s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, m1.ID, "cut 1", "", self, self)
+	_, err = s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, m1.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
-	_, err = s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, m1.ID, "cut 2", "", self, self)
+	_, err = s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, m1.ID, "cut 2", "", nil, self, self)
 	require.NoError(t, err)
 
 	refs, err := s.Milestones().ListRefsByProduct(ctx, scopeID, product.ID)

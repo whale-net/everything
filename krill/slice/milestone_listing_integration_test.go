@@ -75,14 +75,14 @@ func TestListProductDelivery_FiltersToSingleStatus(t *testing.T) {
 	}
 
 	// A-planned gets a milepebble that itself also matches the filter.
-	mpMatch, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, ids["A-planned"], "mp-match", "", self, self)
+	mpMatch, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, ids["A-planned"], "mp-match", "", nil, self, self)
 	require.NoError(t, err)
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, mpMatch.ID, store.MilestoneStatusPlanned, nil, self, self)
 	require.NoError(t, err)
 
 	// B-planned gets a milepebble that does NOT match the filter -- it
 	// must not appear even though its parent does.
-	mpNoMatch, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, ids["B-planned"], "mp-no-match", "", self, self)
+	mpNoMatch, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, ids["B-planned"], "mp-no-match", "", nil, self, self)
 	require.NoError(t, err)
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, mpNoMatch.ID, store.MilestoneStatusInProgress, nil, self, self)
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestListProductDelivery_EmptyFilterReturnsEverything_PositionOrder(t *testi
 	// listing must preserve that order, not e.g. reverse or name-sort it.
 	var milepebbleIDs []uuid.UUID
 	for _, name := range []string{"mp-first", "mp-second"} {
-		mp, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestoneIDs[1], name, "", self, self)
+		mp, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestoneIDs[1], name, "", nil, self, self)
 		require.NoError(t, err)
 		milepebbleIDs = append(milepebbleIDs, mp.ID)
 	}
@@ -238,12 +238,12 @@ func TestListProductDelivery_MilestoneNoSelfMatch_MilepebbleMatch_ReturnsOnlyMat
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, milestone.ID, store.MilestoneStatusShipped, nil, self, self)
 	require.NoError(t, err)
 
-	matching, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "matching", "", self, self)
+	matching, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "matching", "", nil, self, self)
 	require.NoError(t, err)
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, matching.ID, store.MilestoneStatusPlanned, nil, self, self)
 	require.NoError(t, err)
 
-	nonMatching, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "non-matching", "", self, self)
+	nonMatching, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "non-matching", "", nil, self, self)
 	require.NoError(t, err)
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, nonMatching.ID, store.MilestoneStatusShipped, nil, self, self)
 	require.NoError(t, err)
@@ -324,7 +324,7 @@ func TestListProductDelivery_MilepebblesNeverAppearAsTopLevelEntries(t *testing.
 
 	milestone, err := entities.MilestoneAuthoring().CreateMilestone(ctx, scopeID, w.Product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "mp1", "", self, self)
+	milepebble, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "mp1", "", nil, self, self)
 	require.NoError(t, err)
 
 	q := slice.NewQuerier(entities)
@@ -410,7 +410,7 @@ func TestListProductDelivery_NPlusOneGuard(t *testing.T) {
 		require.NoError(t, err)
 
 		for j := 0; j < milepebblesPerMilestone; j++ {
-			mp, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, m.ID, fmt.Sprintf("M%d-mp%d", i, j), "", self, self)
+			mp, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, m.ID, fmt.Sprintf("M%d-mp%d", i, j), "", nil, self, self)
 			require.NoError(t, err)
 			_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, mp.ID, store.MilestoneStatusPlanned, nil, self, self)
 			require.NoError(t, err)

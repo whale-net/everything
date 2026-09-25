@@ -86,7 +86,7 @@ func newTaskTestWorld(t *testing.T, ctx context.Context, s *store.Store, scopeID
 
 	cut, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M-cut", "ship it too", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, cut.ID, "MP1", "a slice of M-cut", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, cut.ID, "MP1", "a slice of M-cut", nil, self, self)
 	require.NoError(t, err)
 
 	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)

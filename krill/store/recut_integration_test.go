@@ -182,7 +182,7 @@ func TestRecutStore_MoveScope_MilestoneToMilepebble_SubsetInvariantHolds(t *test
 
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)
 	require.NoError(t, err)
@@ -211,9 +211,9 @@ func TestRecutStore_MoveScope_MilepebbleToMilepebbleSiblings_SubsetInvariantHold
 
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble1, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble1, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble2, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 2", "", self, self)
+	milepebble2, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 2", "", nil, self, self)
 	require.NoError(t, err)
 	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)
 	require.NoError(t, err)
@@ -244,7 +244,7 @@ func TestRecutStore_MoveScope_IntoMilepebble_NonSiblingSourceNotInParentDelivers
 
 	milestoneA, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "MA", "", nil, self, self)
 	require.NoError(t, err)
-	milepebbleA1, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestoneA.ID, "cut 1", "", self, self)
+	milepebbleA1, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestoneA.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 	milestoneB, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "MB", "", nil, self, self)
 	require.NoError(t, err)
@@ -393,7 +393,7 @@ func TestRecutStore_MoveScope_OutOfMilestone_DropsMilepebbleAssociations(t *test
 
 	milestoneA, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "MA", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestoneA.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestoneA.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 	milestoneB, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "MB", "", nil, self, self)
 	require.NoError(t, err)

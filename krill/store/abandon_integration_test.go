@@ -177,7 +177,7 @@ func TestAbandonStore_Abandon_FR9_MilepebbleDirect(t *testing.T) {
 
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestAbandonStore_Abandon_CascadesToLiveMilepebbles(t *testing.T) {
 
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)
 	require.NoError(t, err)
@@ -264,7 +264,7 @@ func TestAbandonStore_Abandon_CascadeFailure_RollsBackParentMoveAndStatus(t *tes
 
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	alreadyAbandoned, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	alreadyAbandoned, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)
 	require.NoError(t, err)
