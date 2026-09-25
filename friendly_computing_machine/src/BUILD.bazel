@@ -21,6 +21,7 @@ py_library(
         "//friendly_computing_machine/src/friendly_computing_machine/manman",
         "//friendly_computing_machine/src/friendly_computing_machine/models",
         "//friendly_computing_machine/src/friendly_computing_machine/temporal",
+        "//friendly_computing_machine/src/friendly_computing_machine/web",
         "//friendly_computing_machine/src/friendly_computing_machine/whagent",
         "//friendly_computing_machine/src/migrations",
     ],

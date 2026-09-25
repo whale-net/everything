@@ -96,6 +96,11 @@ from libs.python.cli.types import (
     WhagentKeycloakTokenUrl,
     WhagentClientId,
     WhagentClientSecret,
+    FcmWebPublicUrl,
+    FcmOidcIssuerUrl,
+    FcmOidcClientId,
+    FcmOidcClientSecret,
+    FcmWebSessionSecret,
 )
 
 
@@ -114,6 +119,11 @@ __all__ = [
     'WhagentKeycloakTokenUrl',
     'WhagentClientId',
     'WhagentClientSecret',
+    'FcmWebPublicUrl',
+    'FcmOidcIssuerUrl',
+    'FcmOidcClientId',
+    'FcmOidcClientSecret',
+    'FcmWebSessionSecret',
 
     # Type aliases - RabbitMQ
     'RabbitMQHost',

@@ -13,6 +13,7 @@ py_library(
         "//friendly_computing_machine/src/friendly_computing_machine/gemini",
         "//friendly_computing_machine/src/friendly_computing_machine/models",
         "//friendly_computing_machine/src/friendly_computing_machine/temporal",
+        "//friendly_computing_machine/src/friendly_computing_machine/web",
         "//friendly_computing_machine/src/migrations",
         "//libs/python/alembic",
         "//libs/python/cli:params",

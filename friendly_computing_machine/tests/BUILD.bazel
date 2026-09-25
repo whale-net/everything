@@ -89,3 +89,14 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# OIDC link web endpoint (FastAPI TestClient, Authlib stubbed)
+py_test(
+    name = "test_web",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "web/test_web_app.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)

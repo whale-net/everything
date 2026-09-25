@@ -22,3 +22,22 @@ See [docs/whagent_integration.md](docs/whagent_integration.md) for the feature t
 | `WHAGENT_CLIENT_SECRET` | fcm's whagent-net service-account Keycloak client secret. |
 
 Required on both `bot run-slack-socket-app` (posts to Slack) and `workflow run` (runs the Temporal worker that actually calls whagent-net).
+
+### OIDC identity link web app (`web run`)
+
+The `web` app performs the browser OIDC login that links a Slack user to their Keycloak identity. It runs against the same Keycloak realm as whagent-net's `api`/`ui`.
+
+| Variable | Purpose |
+|---|---|
+| `FCM_WEB_PUBLIC_URL` | Externally-reachable base URL of this app (e.g. `https://fcm-web.example.com`). Used to build the OIDC callback URL `${FCM_WEB_PUBLIC_URL}/link/callback`, and (once the Slack gating task lands) the link URL posted to Slack. |
+| `FCM_OIDC_ISSUER_URL` | Keycloak realm issuer URL (e.g. `https://keycloak.example.com/realms/whagent`). Authlib fetches `<issuer>/.well-known/openid-configuration`. |
+| `FCM_OIDC_CLIENT_ID` | Keycloak client id for the **confidential browser-login** client (distinct from the `WHAGENT_CLIENT_ID` service account). |
+| `FCM_OIDC_CLIENT_SECRET` | Keycloak client secret for the confidential browser-login client. |
+| `FCM_WEB_SESSION_SECRET` | Signing key for the Starlette session cookie that carries Authlib's OIDC `state`/`nonce` and the one-time link token across the redirect. |
+| `FCM_WEB_PORT` | Optional. Port the app listens on (default `8000`). |
+
+Required Keycloak client config (provisioned through normal release/human steps, not by this repo):
+- Type: **Confidential**, standard flow enabled.
+- Valid redirect URI: exactly `${FCM_WEB_PUBLIC_URL}/link/callback`.
+
+All of these are required on `web run`. The browser-facing client id/secret are intentionally separate from the `WHAGENT_*` service-account credentials.
