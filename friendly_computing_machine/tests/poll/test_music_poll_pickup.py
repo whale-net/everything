@@ -266,9 +266,19 @@ def test_pickup_creates_one_response_row_for_a_link_inside_the_window(session):
     assert responses[0].slack_message_id == vote.id
     assert responses[0].slack_user_id == user.id
     assert responses[0].url == SONG_URL
+    assert responses[0].created_at is not None
     # the instance now has a response, so a second pass adds nothing
     assert _run_pickup() is TaskInstanceStatus.OK
     assert len(session.exec(select(MusicPollResponse)).all()) == 1
+
+
+def test_pickup_is_a_no_op_when_there_is_nothing_to_process(session):
+    channel, user = _channel(session), _user(session)
+    _window(session, channel, user, _poll(session, channel))
+
+    # the job runs hourly regardless, so an empty run still reports OK
+    assert _run_pickup() is TaskInstanceStatus.OK
+    assert session.exec(select(MusicPollResponse)).all() == []
 
 
 def test_pickup_creates_no_row_for_a_message_outside_the_window(session):
