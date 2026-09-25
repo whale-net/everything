@@ -157,12 +157,13 @@ type App struct {
 	revisionEvents store.RevisionEventStore
 
 	// spec reads the spec axis (products, the capability map, decisions,
-	// personas, non-goals) for the /spec pages. Unlike writes it is not a
-	// session-attributed HTTP client: reads are ungated, and the reader
-	// calls the same //krill/slice.Querier and //krill/store methods the
-	// MCP spec tools wrap, so a page and the matching tool agree (see
-	// readclient.go).
-	spec *specReader
+	// personas, non-goals, and the delivery/roadmap view) for the /spec
+	// pages. Unlike writes it is not a session-attributed HTTP client:
+	// reads are ungated, and the reader calls the same //krill/slice.Querier
+	// and //krill/store methods the MCP spec tools wrap, so a page and the
+	// matching tool agree (see readclient.go). Held as the specReadClient
+	// interface so the view assembly is testable against a fake.
+	spec specReadClient
 }
 
 // NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A

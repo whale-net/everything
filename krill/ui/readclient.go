@@ -24,6 +24,23 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
+// specReadClient is the read seam the /spec and delivery pages depend on:
+// the spec-axis reads each page makes. *specReader is the production
+// implementation; the interface exists so the view assembly and the
+// per-container breakdown-failure tolerance are testable against an
+// in-memory fake, with no database. The method set is exactly the reads
+// the mounted handlers call -- adding a page that reads through app.spec
+// adds its method here, so the seam stays a deliberate list.
+type specReadClient interface {
+	ProductSlice(ctx context.Context, productID uuid.UUID) (slice.Document, error)
+	Personas(ctx context.Context, productID uuid.UUID) ([]store.Persona, error)
+	NonGoals(ctx context.Context, productID uuid.UUID) ([]store.NonGoal, error)
+	Delivery(ctx context.Context, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error)
+	DeliveryBreakdown(ctx context.Context, containerID uuid.UUID) (shipped, unshipped slice.Document, err error)
+	Product(ctx context.Context, productID uuid.UUID) (store.Product, error)
+	Products(ctx context.Context) ([]store.Product, error)
+}
+
 // specReader is the spec-axis read side of the UI, backed directly by
 // store.Store (krill/ui already holds a pool for its session store and
 // auth tables). The write side, by contrast, is the HTTP client in
@@ -33,6 +50,9 @@ type specReader struct {
 	store   *store.Store
 	querier *slice.Querier
 }
+
+// *specReader is the production specReadClient.
+var _ specReadClient = (*specReader)(nil)
 
 // newSpecReader wires reader to this deployment's store. The querier is
 // //krill/slice's, so the Document the capability map and decisions pages
