@@ -108,11 +108,11 @@ def get_unprocessed_music_poll_instances(
     """Get the music poll instances whose voting window is closed.
 
     A closed window is re-read on every pass rather than retired after its first
-    response, so a week can accumulate as many responses as it gets votes and a
-    link that arrives after the week closed is still recorded. The pickup skips
-    messages it has already turned into response rows, which is what keeps the
-    repeated passes idempotent. Weeks with no links are therefore re-selected
-    forever, because there is no processed-but-empty state.
+    response, so a week accumulates every vote cast in it, including a link the
+    archive only stored after the week closed. The pickup skips messages it has
+    already turned into response rows, which is what keeps the repeated passes
+    idempotent. Weeks with no links are therefore re-selected forever, because
+    there is no processed-but-empty state.
     """
     with SessionManager(in_session) as session:
         stmt = select(MusicPollInstance).where(
