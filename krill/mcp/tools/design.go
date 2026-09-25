@@ -237,18 +237,27 @@ func RegisterAppendRevisionEvent(reg *server.Registry, sessions store.SessionSto
 // ── propose_entities (write, FR9/FR10/NFR2 -- Agent-only) ───────────────────
 
 // mediatedProposalInput mirrors store.MediatedEntityProposal field-for-
-// field, exactly like api/handlers/mediated.go's mediatedProposalRequest.
+// field, exactly like api/handlers/mediated.go's mediatedProposalRequest
+// -- except Position, which is deliberately absent (issue #3027's
+// position-schema drift).
 //
-// Position is accepted and silently ignored: FR7 assigns each proposed
-// entity's position server-side, never a caller-supplied value -- see
-// mediatedProposalRequest's doc comment.
+// FR7 assigns each proposed entity's position server-side, never from a
+// caller. The HTTP twin (mediatedProposalRequest) still declares the field
+// so a request body carrying it still decodes under decodeStrict, but
+// advertising it here told MCP callers to send a value with no effect --
+// and because a non-pointer field with no omitempty, the generated
+// jsonschema marked it REQUIRED, so a caller correctly following
+// agents/producer.md ("no position field -- don't set one") failed schema
+// validation. The doc and the server were right; the tool schema was the
+// defect. Removing the field is the fix; do not reintroduce it as an
+// optional or defaulted one -- a caller-settable position is the bug
+// whichever way it is typed.
 type mediatedProposalInput struct {
 	Kind                string  `json:"kind" jsonschema:"feature or requirement."`
 	ParentID            *string `json:"parent_id,omitempty" jsonschema:"An existing FeatureSet (for a feature proposal) or Feature (for a requirement proposal) surrogate id. Exactly one of parent_id/parent_proposal_index must be set."`
 	ParentProposalIndex *int    `json:"parent_proposal_index,omitempty" jsonschema:"The 0-based index of an earlier feature proposal in this same call's proposals list. Only a requirement proposal may set this."`
 	Name                string  `json:"name"`
 	Body                *string `json:"body,omitempty"`
-	Position            int     `json:"position"`
 	RequirementKind     string  `json:"requirement_kind,omitempty" jsonschema:"FR or NFR; required when kind is requirement, must be empty otherwise."`
 	SummaryLine         string  `json:"summary_line"`
 }

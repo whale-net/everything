@@ -39,6 +39,7 @@ go_library(
         "task_payload.go",
         "task_release.go",
         "task_requeue.go",
+        "work_mount.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
     visibility = ["//visibility:public"],
@@ -665,6 +666,47 @@ go_test(
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Pins /mcp/work's exact tool set (issue #3028). The work mount's
+# registration used to be 18 inline Register* calls in krill/mcp/main.go,
+# which no test exercised -- the six discovery reads added for #3028 could
+# be deleted with the whole suite still green, and a krill-work persona
+# would silently lose the ability to resolve a Product. work_mount.go makes
+# the mount a single testable call site. No database: store.New(nil) plus
+# in-memory MCP transports, like registry_tools_test.go.
+go_test(
+    name = "work_mount_registration_test",
+    srcs = ["work_mount_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Regression check for the position-schema drift (M8's c7699a57): the
+# propose_entities MCP schema must not advertise a caller-settable
+# position, because FR7 assigns it server-side. The field was a non-pointer
+# int with no omitempty, so the generated jsonschema marked it REQUIRED and a
+# caller correctly following agents/producer.md failed validation. The fix is
+# a removal, not a retyping, so this asserts absence at both the top level
+# and inside each proposal -- and that the real required fields survive.
+go_test(
+    name = "propose_entities_schema_test",
+    srcs = ["propose_entities_schema_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

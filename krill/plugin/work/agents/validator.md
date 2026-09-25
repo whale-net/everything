@@ -19,8 +19,8 @@ task issue and its Project `Status` field instead, exactly as
 `tools/project-manager/agents/validator.md` describes. Your caller tells
 you which path you're on; say so in your report either way.
 
-**`claim_task` and `complete_task` hit a known blocker. Make the call
-anyway.**
+**`claim_task` and `complete_task` work normally from this dispatch. A
+`forbidden` from either is a real regression — report it.**
 
 @../../shared/snippets/task-lifecycle-blocker.md
 

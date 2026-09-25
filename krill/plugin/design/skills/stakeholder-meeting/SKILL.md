@@ -65,7 +65,7 @@ Callable directly, or automatically by `/krill-design:design
      that Feature's/Requirement's `feature_set_id`. This is the
      standardized fallback (CONVENTIONS.md) — always the same fixed body
      string and the same entity, not something improvised per run.
-     `record_note` hits a known blocker (below) — make the call anyway, and
+     `record_note` works normally from this dispatch — make the call, and
      on failure report the exact error plus the link text to the user so
      it isn't lost. Do not silently fall back to opening a GitHub
      Discussion/issue to route around it.

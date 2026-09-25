@@ -190,10 +190,10 @@ run:
   path would have posted, so both paths stay grep-discoverable the same
   way — this is a location fallback, not a different format.
 
-`record_note` hits the same known blocker described under "Work axis"
-below — make the call anyway; if it fails, report the exact error and the
-link/body text you tried to record so it isn't lost, and do not fall back
-to opening a GitHub Discussion/issue to route around it.
+`record_note` works from this dispatch — make the call; if it fails,
+report the exact error and the link/body text you tried to record so it
+isn't lost, and do not fall back to opening a GitHub Discussion/issue to
+route around it.
 
 See `krill-design:stakeholder-meeting`'s step 4 for the concrete
 application.

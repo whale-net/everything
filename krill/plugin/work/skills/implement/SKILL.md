@@ -43,10 +43,10 @@ discovery and dispatch differ, below.
    branch name in place of `{task-issue-number, title}`, and reads title/body
    itself via `get_task` (see `agents/mergepush.md`).
 
-Every `worker`/`validator` dispatch you make will itself hit the known
-`claim_task`/`complete_task` blocker and report `forbidden` — see
-`agents/worker.md`. Don't route around it; surface those failures in your
-own report as-is.
+Every `worker`/`validator` dispatch you make has a working
+`claim_task`/`complete_task` surface — see `agents/worker.md`. A
+`forbidden` from either is a real regression; don't route around it,
+surface it in your own report as-is.
 
 ## Steps (no-Milestone GitHub fallback)
 
