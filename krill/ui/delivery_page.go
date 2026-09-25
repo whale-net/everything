@@ -44,11 +44,12 @@ type deliveryBreakdown struct {
 // deliveryMilepebble is one milepebble row: its own status and, when
 // partially complete, its shipped/unshipped breakdown.
 type deliveryMilepebble struct {
-	ID        string
-	Name      string
-	Outcome   string
-	Status    string // one of the seven-value store.MilestoneStatus set
-	Breakdown *deliveryBreakdown
+	ID          string
+	Name        string
+	Outcome     string
+	Status      string // one of the seven-value store.MilestoneStatus set
+	StatusClass string // CSS modifier keeping the seven states visually distinct
+	Breakdown   *deliveryBreakdown
 }
 
 // deliveryMilestone is one milestone row with its nested milepebbles.
@@ -58,6 +59,7 @@ type deliveryMilestone struct {
 	Outcome     string
 	FRBudget    string // the stored budget, empty when unset
 	Status      string
+	StatusClass string // CSS modifier keeping the seven states visually distinct
 	Breakdown   *deliveryBreakdown
 	Milepebbles []deliveryMilepebble
 }
@@ -87,7 +89,7 @@ var deliveryTemplate = template.Must(template.New("delivery").Parse(productNavTe
 {{range .Milestones}}
   <li id="{{.ID}}">
     <strong>{{.Name}}</strong> <code class="id">{{.ID}}</code>
-    <span class="status">{{.Status}}</span>
+    <span class="status {{.StatusClass}}">{{.Status}}</span>
     {{if .FRBudget}}<span class="frbudget">FR budget {{.FRBudget}}</span>{{end}}
     {{if .Outcome}}<div>{{.Outcome}}</div>{{end}}
     {{if .Breakdown}}{{template "deliverybreakdown" .Breakdown}}{{end}}
@@ -96,7 +98,7 @@ var deliveryTemplate = template.Must(template.New("delivery").Parse(productNavTe
     {{range .Milepebbles}}
       <li id="{{.ID}}">
         <strong>{{.Name}}</strong> <code class="id">{{.ID}}</code>
-        <span class="status">{{.Status}}</span>
+        <span class="status {{.StatusClass}}">{{.Status}}</span>
         {{if .Outcome}}<div>{{.Outcome}}</div>{{end}}
         {{if .Breakdown}}{{template "deliverybreakdown" .Breakdown}}{{end}}
       </li>
@@ -130,11 +132,9 @@ func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
 		renderSpecError(w, r, err)
 		return
 	}
-	breakdowns, err := app.deliveryBreakdowns(r.Context(), listing)
-	if err != nil {
-		renderSpecError(w, r, err)
-		return
-	}
+	// A per-container breakdown read that fails is non-fatal: every
+	// container's status still renders, just without that one's breakdown.
+	breakdowns := app.deliveryBreakdowns(r.Context(), listing)
 
 	renderShell(w, r, "Delivery", specPath, renderPage(deliveryTemplate, deliveryPageOf(product, listing, breakdowns, productID)))
 }
@@ -144,7 +144,12 @@ func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
 // same Querier.GetDeliveryBreakdown the MCP tool get_delivery_breakdown
 // wraps. A container in any other status gets no entry -- its shipped/unshipped
 // breakdown is not applicable, not "zero shipped, zero unshipped".
-func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryListing) (map[uuid.UUID]deliveryBreakdown, error) {
+//
+// A breakdown read that fails for one container is non-fatal: it is logged
+// at ERROR (a genuine failed read, not expected control flow) and that
+// container is left without a breakdown, so one bad container never takes
+// down the page's statuses.
+func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryListing) map[uuid.UUID]deliveryBreakdown {
 	var ids []uuid.UUID
 	for _, m := range listing.Milestones {
 		if m.Status == store.MilestoneStatusPartiallyComplete {
@@ -161,14 +166,15 @@ func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryLi
 	for _, id := range ids {
 		shipped, unshipped, err := app.spec.DeliveryBreakdown(ctx, id)
 		if err != nil {
-			return nil, err
+			logger.Error("delivery breakdown read failed", "container", id.String(), "error", err)
+			continue
 		}
 		breakdowns[id] = deliveryBreakdown{
 			Shipped:   deliveryEntitiesOf(shipped),
 			Unshipped: deliveryEntitiesOf(unshipped),
 		}
 	}
-	return breakdowns, nil
+	return breakdowns
 }
 
 // deliveryPageOf assembles the roadmap from a delivery listing, attaching
@@ -182,20 +188,22 @@ func deliveryPageOf(product store.Product, listing slice.DeliveryListing, breakd
 	}
 	for _, m := range listing.Milestones {
 		entry := deliveryMilestone{
-			ID:        m.ID.String(),
-			Name:      m.Name,
-			Outcome:   deref(m.Outcome),
-			FRBudget:  frBudgetString(m.FRBudget),
-			Status:    string(m.Status),
-			Breakdown: breakdownFor(breakdowns, m.ID),
+			ID:          m.ID.String(),
+			Name:        m.Name,
+			Outcome:     deref(m.Outcome),
+			FRBudget:    frBudgetString(m.FRBudget),
+			Status:      string(m.Status),
+			StatusClass: statusClass(m.Status),
+			Breakdown:   breakdownFor(breakdowns, m.ID),
 		}
 		for _, mp := range m.Milepebbles {
 			entry.Milepebbles = append(entry.Milepebbles, deliveryMilepebble{
-				ID:        mp.ID.String(),
-				Name:      mp.Name,
-				Outcome:   deref(mp.Outcome),
-				Status:    string(mp.Status),
-				Breakdown: breakdownFor(breakdowns, mp.ID),
+				ID:          mp.ID.String(),
+				Name:        mp.Name,
+				Outcome:     deref(mp.Outcome),
+				Status:      string(mp.Status),
+				StatusClass: statusClass(mp.Status),
+				Breakdown:   breakdownFor(breakdowns, mp.ID),
 			})
 		}
 		page.Milestones = append(page.Milestones, entry)
@@ -239,4 +247,30 @@ func frBudgetString(budget *int) string {
 		return ""
 	}
 	return strconv.Itoa(*budget)
+}
+
+// statusClass maps the seven-value MilestoneStatus set to the CSS modifier
+// a status badge carries, so each state is visually distinct -- notably
+// "shipped" (done) versus "partially complete" (has a breakdown) -- without
+// the template doing any string munging. An unrecognized value falls back
+// to a neutral class rather than rendering an empty badge.
+func statusClass(s store.MilestoneStatus) string {
+	switch s {
+	case store.MilestoneStatusNotStarted:
+		return "status-not-started"
+	case store.MilestoneStatusInDesign:
+		return "status-in-design"
+	case store.MilestoneStatusPlanned:
+		return "status-planned"
+	case store.MilestoneStatusInProgress:
+		return "status-in-progress"
+	case store.MilestoneStatusShipped:
+		return "status-shipped"
+	case store.MilestoneStatusPartiallyComplete:
+		return "status-partial"
+	case store.MilestoneStatusAbandoned:
+		return "status-abandoned"
+	default:
+		return "status-other"
+	}
 }

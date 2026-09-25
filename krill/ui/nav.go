@@ -83,6 +83,20 @@ nav.subnav { margin: 0.5rem 0 1.25rem; padding-bottom: 0.5rem; border-bottom: 1p
 nav.subnav a { display: inline-block; margin-right: 0.75rem; }
 nav.subnav a[aria-current="page"] { font-weight: 600; text-decoration: underline; }
 code.id { font-size: 0.8em; opacity: 0.6; }
+/* Delivery/roadmap view: status badges, FR budgets, and the
+   shipped/unshipped breakdown block (delivery_page.go). */
+.status { display: inline-block; padding: 0.05rem 0.55rem; border-radius: 999px; font-size: 0.8rem; border: 1px solid rgba(128,128,128,0.4); white-space: nowrap; }
+.status-not-started { background: rgba(128,128,128,0.1); }
+.status-in-design { background: rgba(128,128,128,0.18); }
+.status-planned { background: rgba(66,133,244,0.14); border-color: rgba(66,133,244,0.5); }
+.status-in-progress { background: rgba(66,133,244,0.24); border-color: rgba(66,133,244,0.6); }
+.status-shipped { background: rgba(46,160,67,0.18); border-color: rgba(46,160,67,0.5); }
+.status-partial { background: rgba(219,154,26,0.2); border-color: rgba(219,154,26,0.6); }
+.status-abandoned { background: rgba(218,68,68,0.15); border-color: rgba(218,68,68,0.5); text-decoration: line-through; }
+.frbudget { margin-left: 0.5rem; font-size: 0.8rem; opacity: 0.8; }
+.breakdown { margin: 0.5rem 0 0.75rem 1.25rem; padding: 0.5rem 0.75rem; border-left: 3px solid rgba(128,128,128,0.35); background: rgba(128,128,128,0.07); border-radius: 0 4px 4px 0; }
+.breakdown ul { margin: 0.25rem 0 0.5rem; padding-left: 1.25rem; }
+.breakdown p { margin: 0.25rem 0; opacity: 0.8; }
 </style>
 </head>
 <body>
