@@ -22,8 +22,10 @@ def handle_message(event, say):
 
             # Bolt runs only the first matching "message" listener, so the
             # whagent thread relay is dispatched from here.
+            relayed = False
             try:
-                span.set_attribute("whagent.relayed", relay_thread_reply(event))
+                relayed = relay_thread_reply(event)
+                span.set_attribute("whagent.relayed", relayed)
             except Exception:
                 logger.exception("failed to relay thread reply to whagent-net")
 
@@ -54,9 +56,14 @@ def handle_message(event, say):
             if message.slack_channel_slack_id not in {
                 info.slack_channel.slack_id for info in config.music_poll_infos
             }:
-                logger.info(
-                    "skipping message %s - not in music poll channel", message.slack_id
-                )
+                # A relayed whagent turn was already handled above -- it's not
+                # dropped, it's just not a poll-channel message, so don't log
+                # it as skipped.
+                if not relayed:
+                    logger.info(
+                        "skipping message %s - not in music poll channel",
+                        message.slack_id,
+                    )
                 span.set_attribute("message.processed", False)
                 span.set_attribute("message.reason", "not in music poll channel")
                 return
