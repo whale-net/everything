@@ -34,7 +34,7 @@ type createMilestoneInput struct {
 	ProductID string `json:"product_id" jsonschema:"The Product surrogate id this milestone belongs to, as a UUID string."`
 	Name      string `json:"name" jsonschema:"The bare milestone identifier, e.g. \"M3\"."`
 	Outcome   string `json:"outcome" jsonschema:"The milestone's outcome sentence (FR1)."`
-	FRBudget  *int   `json:"fr_budget" jsonschema:"Optional FR budget (FR2) -- may be set later via set_fr_budget. No default cap: the 12-FR default applies per milepebble."`
+	FRBudget  *int   `json:"fr_budget,omitempty" jsonschema:"Optional FR budget (FR2) -- may be set later via set_fr_budget. No default cap: the 12-FR default applies per milepebble."`
 }
 
 // RegisterCreateMilestone registers create_milestone (FR1): mints a new
@@ -259,7 +259,7 @@ type createMilepebbleInput struct {
 	MilestoneID string `json:"milestone_id" jsonschema:"The parent milestone's surrogate id, as a UUID string."`
 	Name        string `json:"name" jsonschema:"The milepebble's short name, unique among its parent milestone's own milepebbles."`
 	Outcome     string `json:"outcome" jsonschema:"The milepebble's outcome sentence."`
-	FRBudget    *int   `json:"fr_budget" jsonschema:"Optional FR budget for this milepebble (default 12 by convention) -- may be set later via set_fr_budget."`
+	FRBudget    *int   `json:"fr_budget,omitempty" jsonschema:"Optional FR budget for this milepebble (default 12 by convention) -- may be set later via set_fr_budget."`
 }
 
 // RegisterCreateMilepebble registers create_milepebble (FR3): cuts a
