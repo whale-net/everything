@@ -29,7 +29,7 @@ The `web` app performs the browser OIDC login that links a Slack user to their K
 
 | Variable | Purpose |
 |---|---|
-| `FCM_WEB_PUBLIC_URL` | Externally-reachable base URL of this app (e.g. `https://fcm-web.example.com`). Used to build the OIDC callback URL `${FCM_WEB_PUBLIC_URL}/link/callback`, and (once the Slack gating task lands) the link URL posted to Slack. |
+| `FCM_WEB_PUBLIC_URL` | Externally-reachable base URL of this app (e.g. `https://fcm-web.example.com`). Used to build the OIDC callback URL `${FCM_WEB_PUBLIC_URL}/link/callback`, and — on the `bot` app — the one-time `${FCM_WEB_PUBLIC_URL}/link/<token>` link posted as an ephemeral prompt when an unlinked user `@mention`s an agent-linked channel. Required on both `web run` and `bot run-slack-socket-app`. |
 | `FCM_OIDC_ISSUER_URL` | Keycloak realm issuer URL (e.g. `https://keycloak.example.com/realms/whagent`). Authlib fetches `<issuer>/.well-known/openid-configuration`. |
 | `FCM_OIDC_CLIENT_ID` | Keycloak client id for the **confidential browser-login** client (distinct from the `WHAGENT_CLIENT_ID` service account). |
 | `FCM_OIDC_CLIENT_SECRET` | Keycloak client secret for the confidential browser-login client. |

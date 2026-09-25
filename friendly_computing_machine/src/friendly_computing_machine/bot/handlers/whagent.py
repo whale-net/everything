@@ -11,6 +11,7 @@ calls it.
 """
 
 import logging
+import os
 import re
 
 from opentelemetry import trace
@@ -23,6 +24,10 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     get_slack_channel,
     get_thread_session,
+)
+from friendly_computing_machine.src.friendly_computing_machine.db.dal.identity_dal import (
+    get_keycloak_identity,
+    mint_link_token,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackThreadSessionStatusEnum,
@@ -54,8 +59,23 @@ def _strip_bot_mention(text: str) -> str:
     return _LEADING_MENTION_RE.sub("", text, count=1).strip()
 
 
+def _web_public_url() -> str:
+    # base URL of the identity-link web app; the minted one-time token is
+    # appended as /link/<token>, which the web app redeems.
+    return os.environ.get("FCM_WEB_PUBLIC_URL", "").rstrip("/")
+
+
+def _slack_team_id(event, body) -> str:
+    """Workspace id for an app_mention.
+
+    The inner app_mention payload carries `team`; the event envelope carries
+    `team_id`. Prefer the event, fall back to the envelope.
+    """
+    return event.get("team") or (body or {}).get("team_id") or ""
+
+
 @app.event("app_mention")
-def handle_whagent_app_mention(event, say):
+def handle_whagent_app_mention(event, say, client=None, body=None):
     with tracer.start_as_current_span("handle_whagent_app_mention") as span:
         try:
             channel_slack_id = event["channel"]
@@ -78,6 +98,41 @@ def handle_whagent_app_mention(event, say):
                 return
             span.set_attribute("whagent.agent_id", agent_id)
 
+            # Block-until-linked gate. A mention from a user with no stored
+            # Slack->Keycloak mapping gets a one-time link prompt instead of a
+            # session, checked before any workflow / slackthreadsession row is
+            # created so a blocked mention leaves no orphaned ACTIVE thread.
+            team_id = _slack_team_id(event, body)
+            user_id = event.get("user")
+            if user_id and get_keycloak_identity(team_id, user_id) is None:
+                web_public_url = _web_public_url()
+                if not web_public_url:
+                    logger.error(
+                        "FCM_WEB_PUBLIC_URL is unset; cannot mint identity link "
+                        "for unlinked slack team=%s user=%s",
+                        team_id,
+                        user_id,
+                    )
+                else:
+                    token = mint_link_token(team_id, user_id)
+                    client.chat_postEphemeral(
+                        channel=channel_slack_id,
+                        user=user_id,
+                        thread_ts=thread_ts,
+                        text=(
+                            "Link your Slack account to use this agent: "
+                            f"<{web_public_url}/link/{token}|Link my account> "
+                            "(one-time link, expires in 10 minutes)."
+                        ),
+                    )
+                    logger.info(
+                        "issued identity link prompt slack team=%s user=%s",
+                        team_id,
+                        user_id,
+                    )
+                span.set_attribute("whagent.identity_link_prompted", True)
+                return
+
             # A mention inside an already-active thread is just another reply;
             # the "message" event for it is relayed by relay_thread_reply.
             existing = get_thread_session(slack_channel.id, thread_ts)
@@ -89,7 +144,7 @@ def handle_whagent_app_mention(event, say):
                 return
 
             first_message = _strip_bot_mention(event.get("text", ""))
-            client = get_whagent_client()
+            whagent_client = get_whagent_client()
 
             workflow_id = workflow_id_for_thread(
                 get_app_env(), channel_slack_id, thread_ts
@@ -105,7 +160,7 @@ def handle_whagent_app_mention(event, say):
                     agent_id=agent_id,
                     first_message=first_message,
                     slack_user_id=event.get("user", ""),
-                    whagent_ui_public_url=client.ui_public_url,
+                    whagent_ui_public_url=whagent_client.ui_public_url,
                 ),
                 id=workflow_id,
                 task_queue=get_temporal_queue_name("main"),
