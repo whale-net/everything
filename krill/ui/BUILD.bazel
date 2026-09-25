@@ -85,10 +85,15 @@ go_test(
 
 # Field-parity coverage for the ops console's read views: each row mapper
 # presents the store row's subject pairs and target identity the same way
-# the GET /console/* wire does.
+# the GET /console/* wire does; the handler-level cases drive each view
+# against a narrow fake store to prove data parity, paging pass-through, and
+# cross-scope-token rejection.
 go_test(
     name = "ui_ops_test",
-    srcs = ["ops_test.go"],
+    srcs = [
+        "ops_test.go",
+        "ops_handlers_test.go",
+    ],
     embed = [":ui_lib"],
     deps = [
         "//krill/store",

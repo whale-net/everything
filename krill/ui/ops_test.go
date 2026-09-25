@@ -30,10 +30,10 @@ func TestOpsActorShowsKind(t *testing.T) {
 func TestNewClaimedRowCarriesBothClaimSubjects(t *testing.T) {
 	id := uuid.New()
 	row := newClaimedRow(store.ClaimedTaskRow{
-		TaskID:               id,
-		Title:                "t",
-		ClaimantActing:       store.Subject{Iss: "ai", Sub: "a", Kind: store.SubjectKindHuman},
-		ClaimantOnBehalfOf:   store.Subject{Iss: "bi", Sub: "b", Kind: store.SubjectKindService},
+		TaskID:             id,
+		Title:              "t",
+		ClaimantActing:     store.Subject{Iss: "ai", Sub: "a", Kind: store.SubjectKindHuman},
+		ClaimantOnBehalfOf: store.Subject{Iss: "bi", Sub: "b", Kind: store.SubjectKindService},
 	})
 	assert.Equal(t, id.String(), row.TaskID)
 	assert.Equal(t, "ai a (human)", row.Claimant, "claimant's acting subject shows its kind")
