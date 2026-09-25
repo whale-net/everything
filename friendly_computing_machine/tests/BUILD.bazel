@@ -103,6 +103,20 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# LB1 route tables (slackspecialchanneltype / slackspecialchannel) and the
+# type-to-channel lookup. The exerciser reads the migration chain off disk, so
+# the versioned migrations are runtime data here, not just a py_library srcs.
+py_test(
+    name = "test_route_table",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_route_table_exerciser.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # CLI entry point import (guards against transitive dependency collisions
 # across fcm_lib's bundled subcommands, e.g. "google" namespace conflicts)
 py_test(
