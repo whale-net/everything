@@ -398,6 +398,13 @@ one shared chrome (`krill/ui/nav.go`), which marks the link for the area
 being viewed. Each area's real read surface is its own task; today each
 root renders the shell with a placeholder body.
 
+`ui` also serves the two mutating actions an operator can perform -- `POST
+/tasks/{id}/escalate` and `POST /design-sessions` -- each mounted behind
+the sign-in gate plus the operator-identity resolver, so every write it
+issues is attributed to the signed-in operator's real Keycloak `(iss, sub)`
+and never to anything the browser supplies (see
+`ARCHITECTURE/32-ui-write-identity.md`).
+
 ```sh
 PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \
   KRILL_UI_PUBLIC_URL=http://localhost:8085 \

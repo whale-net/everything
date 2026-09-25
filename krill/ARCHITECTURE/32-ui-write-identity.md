@@ -45,6 +45,26 @@ browser page  →  requireOperator (Keycloak session → real (iss, sub))
              →  api RequireSession → GatedSession → handler
 ```
 
+`krill/ui/writes.go` is where that chain is walked, once, for every
+mutating action the UI performs: `withKrillSession` reads the Subject
+`requireOperator` put on the request context, resolves the deployment's
+scope (`ScopeStore.GetSole` — a browser has no way to learn a scope id, and
+there is exactly one), mints the session, and hands the session id to the
+route's write. Nothing a browser sends can influence any of those three:
+a request body carries the action's own arguments (`reason`,
+`product_id`, `opening_submission`) and nothing else — there is no
+identity, scope, or session field on the wire to tamper with. The two
+routes it serves are `POST /tasks/{id}/escalate` (a Swarm Operator's manual
+task intervention) and `POST /design-sessions` (a Requirement Contributor's
+submission); both are mounted behind `RequireAuth` + `requireOperator` in
+`setupRoutes`. `api`'s own verdict on a write — an unknown task, a
+cross-scope product — is relayed to the browser unchanged, so a rejected
+write is visibly rejected rather than silently dropped.
+
+A session is minted per write rather than cached: each `krill_session` row
+is the durable record of which real identity performed which mutation, and
+a UI's write volume does not make that cost interesting.
+
 `KRILL_API_URL` names the `api` base URL this client targets and is
 required: a `ui` with no configured `api` refuses to boot rather than
 serve pages whose writes would go unattributed. Persona resolution stays
