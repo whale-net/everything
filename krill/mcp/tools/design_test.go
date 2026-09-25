@@ -514,7 +514,7 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 				"design_session_id": designSessionID,
 				"verified_against":  "main@deadbeef",
 				"proposals": []map[string]any{
-					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Bulk CSV export (swarm operator)", "position": 1, "summary_line": "mediated proposal via the auth door"},
+					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Bulk CSV export (swarm operator)", "summary_line": "mediated proposal via the auth door"},
 				},
 			},
 		})
@@ -544,7 +544,7 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 				"design_session_id": designSessionID,
 				"verified_against":  "main@deadbeef",
 				"proposals": []map[string]any{
-					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Bulk CSV export", "position": 1, "summary_line": "mediated proposal"},
+					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Bulk CSV export", "summary_line": "mediated proposal"},
 				},
 			},
 		})
@@ -574,7 +574,7 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 				"design_session_id": designSessionID,
 				"verified_against":  "main@deadbeef",
 				"proposals": []map[string]any{
-					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Should never be created", "position": 2, "summary_line": "self-attributed"},
+					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Should never be created", "summary_line": "self-attributed"},
 				},
 			},
 		})
