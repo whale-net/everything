@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# Every plugin's agent frontmatter and MCP manifests, as runfiles data.
+#
+# Deliberately a filegroup over the whole plugin tree rather than a
+# per-file srcs list: agent_tools_test.go resolves sibling agents and both
+# manifest forms relative to a located root, and a new plugin or agent
+# should be covered by the moment it is committed, not after a BUILD edit.
+# Symlinked shared/agents/help.md resolves to its target under runfiles, so
+# the shared persona is checked through each plugin that symlinks it.
+#
+# The `**` globs do reach each plugin's dotfile .mcp.json (Bazel's glob only
+# skips dotfiles when the pattern itself has no directory component), which
+# is what lets the test compare frontmatter against a real manifest.
+filegroup(
+    name = "plugin_files",
+    srcs = glob([
+        "design/**",
+        "work/**",
+        "shared/**",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+# Guards that every `mcp__plugin_<plugin>_<server>__*` entry in an agent's
+# `tools:` frontmatter names a server that the same plugin's .mcp.json
+# actually registers -- and that the work-axis personas can still reach the
+# /mcp/work mount carrying claim_task/complete_task/get_task/record_note.
+#
+# This exists because krill-work's task-lifecycle tools were moved onto a
+# dedicated /mcp/work mount and its manifest servers renamed
+# krill-mcp-design-* -> krill-mcp-work-*, without touching the
+# krill/plugin/work/agents/*.md frontmatter. The mismatch is invisible: an
+# unmatched allowlist pattern is simply ignored, so worker, validator,
+# mergepush, planner, and system-validator all lost their task-lifecycle
+# tools with no error anywhere. See agent_tools_test.go's package comment.
+#
+# Pure Go, no Docker, runs as part of `bazel test //...`.
+go_test(
+    name = "agent_tools_test",
+    size = "small",
+    srcs = ["agent_tools_test.go"],
+    data = [":plugin_files"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@rules_go//go/runfiles",
+    ],
+)
