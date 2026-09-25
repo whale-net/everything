@@ -246,6 +246,10 @@ type CallModelInput struct {
 	// verbatim into llm.Request.Provider -- see that field's doc comment.
 	Provider *llm.ProviderPreferences
 	EventIDs []uuid.UUID
+	// SystemPrompt is ResolveAgentDefinitionResult.Definition.SystemPrompt,
+	// forwarded verbatim. Nil/empty means no system message is prepended to
+	// the request -- the historical, still-default behavior.
+	SystemPrompt *string
 }
 
 // CallModelResult is CallModel's activity result.
@@ -257,7 +261,9 @@ type CallModelResult struct {
 // re-reads in.EventIDs' rows from a.Store (never receives their bodies
 // over the activity boundary itself -- see CallModelInput's doc comment),
 // decodes them back into an llm.Request via eventsToMessages (context.go),
-// and re-reads in.Turn's tool list the same way -- ReadTurnToolDefs,
+// prepending in.SystemPrompt as a RoleSystem message via withSystemPrompt
+// (context.go) when the agent definition has one set, and re-reads in.Turn's
+// tool list the same way -- ReadTurnToolDefs,
 // keyed on (in.SessionID, in.Turn), the row ActivityListToolDefinitions
 // persisted earlier this turn (see that activity's ListToolDefinitionsResult
 // doc comment for why: this used to be a CallModelInput.Tools field
@@ -287,6 +293,7 @@ func (a *Activities) CallModel(ctx context.Context, in CallModelInput) (CallMode
 	if err != nil {
 		return CallModelResult{}, fmt.Errorf("call model: decode context events: %w", err)
 	}
+	messages = withSystemPrompt(messages, in.SystemPrompt)
 
 	toolDefs, err := readTurnToolDefs(ctx, a.Store, in.SessionID, in.Turn)
 	if err != nil {

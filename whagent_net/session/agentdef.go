@@ -89,9 +89,9 @@ type AgentDefinition struct {
 	ToolLoadingMode   ToolLoadingMode
 	// SystemPrompt is an optional system-role instruction text for a
 	// session using this definition (migration 015). Nil means no system
-	// prompt is set -- the historical, still-default behavior. Storage
-	// only for now: nothing in worker/context.go reads this field into a
-	// model call yet.
+	// prompt is set -- the historical, still-default behavior. Forwarded
+	// into CallModelInput.SystemPrompt (worker/activities.go) and prepended
+	// to the request as a RoleSystem message when set.
 	SystemPrompt *string
 	CreatedAt    time.Time
 }
