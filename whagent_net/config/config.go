@@ -102,6 +102,13 @@ type AgentDefinitionConfig struct {
 	// only behavior before M4); "search" is the FR3/FR4 opt-in to
 	// search-based tool discovery. Validate rejects any other value.
 	ToolLoadingMode string `yaml:"tool_loading_mode"`
+	// SystemPrompt decodes 1:1 into
+	// whagent_net/session.AgentDefinition.SystemPrompt (migration 015):
+	// optional system-role instruction text for a session using this
+	// definition. Left empty, the definition carries no system prompt at
+	// all -- the historical, still-default behavior. Storage only for
+	// now: nothing reads this field into a model call yet.
+	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
 // document is agents.yaml's top-level shape.

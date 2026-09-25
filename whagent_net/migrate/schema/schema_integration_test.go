@@ -72,7 +72,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(14), latest, "expected the latest migration source version to be 14 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition + 007_agent_definition_domain, issue #2424 + 008_delegated_grant, issue #2426 + 009_mcpauth_cutover, issue #2434 + 010_agent_definition_scope + 011_agent_definition_surrogate_key + 012_agent_definition_max_tool_iterations + 013_agent_definition_tool_loading_mode + 014_turn_tool_defs) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(15), latest, "expected the latest migration source version to be 15 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition + 007_agent_definition_domain, issue #2424 + 008_delegated_grant, issue #2426 + 009_mcpauth_cutover, issue #2434 + 010_agent_definition_scope + 011_agent_definition_surrogate_key + 012_agent_definition_max_tool_iterations + 013_agent_definition_tool_loading_mode + 014_turn_tool_defs + 015_agent_definition_system_prompt) -- update this test if a later migration has since landed")
 
 	// -- Up: every table must exist, version must land clean at the latest --
 	require.NoError(t, runner.Up(), "apply every migration")

@@ -56,6 +56,10 @@
 #                      Unset (omitted) means "bulk". This milestone ships
 #                      the capability only -- no shipped agent below opts
 #                      in yet.
+#   - system_prompt:  optional system-role instruction text (migration 015).
+#                      Unset (omitted) means no system prompt at all -- the
+#                      historical, still-default behavior. Storage only for
+#                      now: nothing reads this field into a model call yet.
 #
 # `model_definitions` entries (session.ModelDefinition, upserted into the
 # `model_definition` table by `name` -- NOT versioned/SCD2 like
