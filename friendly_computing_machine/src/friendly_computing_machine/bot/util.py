@@ -132,7 +132,7 @@ def slack_post_thread_message(
     channel: str,
     text: str,
     thread_ts: Optional[str] = None,
-    blocks: Optional[list[Block]] = None,
+    blocks: Optional[list[Block | dict]] = None,
 ) -> str:
     """Post a message to Slack using Slack's own ts string directly.
 
@@ -161,7 +161,7 @@ def slack_update_message(
     channel: str,
     ts: str,
     text: str,
-    blocks: Optional[list[Block]] = None,
+    blocks: Optional[list[Block | dict]] = None,
 ) -> str:
     """Update an existing Slack message by ts. See slack_post_thread_message."""
     web_client = get_slack_web_client()

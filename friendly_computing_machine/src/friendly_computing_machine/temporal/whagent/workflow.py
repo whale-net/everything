@@ -267,7 +267,10 @@ class SlackThreadAgentWorkflow:
             await workflow.execute_activity(
                 update_slack_message_activity,
                 UpdateSlackMessageParams(
-                    channel_id=params.channel_slack_id, ts=current_ts, text=final_text
+                    channel_id=params.channel_slack_id,
+                    ts=current_ts,
+                    text=final_text,
+                    markdown=True,
                 ),
                 start_to_close_timeout=ACTIVITY_TIMEOUT,
             )
