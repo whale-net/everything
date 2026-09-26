@@ -850,6 +850,35 @@ func TestReportTargetProgress_SignalsWorkflow(t *testing.T) {
 	}
 }
 
+// TestReportTargetProgress_AcceptsBuilding pins BUILDING as an accepted
+// progress state alongside BUILT/PUSHED: it is what lets CI report a single
+// target's start-of-build, so only the in-flight target is BUILDING rather
+// than the whole batch.
+func TestReportTargetProgress_AcceptsBuilding(t *testing.T) {
+	srv, repo, temporal, runID := notifyFixture(t)
+	if err := repo.ReleaseRuns().SetBuildRef(context.Background(), runID, "410", "https://run/410"); err != nil {
+		t.Fatalf("SetBuildRef: %v", err)
+	}
+
+	resp, err := srv.ReportTargetProgress(ctxWithRoles(auth.RoleBuilder), progressReq(runID, 410, "demo-svc", pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILDING))
+	if err != nil {
+		t.Fatalf("ReportTargetProgress: %v", err)
+	}
+	if !resp.Signaled {
+		t.Fatalf("expected Signaled=true")
+	}
+	if len(temporal.signals) != 1 {
+		t.Fatalf("expected exactly 1 SignalWorkflow call, got %d", len(temporal.signals))
+	}
+	payload, ok := temporal.signals[0].Arg.(release.TargetProgressSignal)
+	if !ok {
+		t.Fatalf("expected TargetProgressSignal payload, got %T", temporal.signals[0].Arg)
+	}
+	if payload.State != repository.ReleaseRunTargetStateBuilding {
+		t.Fatalf("expected state %q, got %q", repository.ReleaseRunTargetStateBuilding, payload.State)
+	}
+}
+
 // TestReportTargetProgress_RunIDMismatch mirrors
 // TestNotifyBuildComplete_RunIDMismatch's stale-notification defense.
 func TestReportTargetProgress_RunIDMismatch(t *testing.T) {

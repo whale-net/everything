@@ -348,12 +348,12 @@ func (s *ReleaseServer) NotifyBuildComplete(ctx context.Context, req *pb.NotifyB
 	return &pb.NotifyBuildCompleteResponse{Signaled: true}, nil
 }
 
-// ReportTargetProgress delivers one image target's intra-build progress
-// (BUILT or PUSHED) onto the running ReleaseWorkflow, ahead of
+// ReportTargetProgress delivers one target's intra-build progress (BUILDING,
+// BUILT, or PUSHED) onto the running ReleaseWorkflow, ahead of
 // NotifyBuildComplete's batch-wide terminal signal -- release_helper_go
-// calls this in-process from ExecuteBuildApp, holding the same
-// app-registry-builder client credentials NotifyBuildComplete uses. Mirrors
-// NotifyBuildComplete's structure closely: same auth, same run lookup, same
+// calls this in-process from ExecuteBuildApp/ExecuteBuildCharts, holding the
+// same app-registry-builder client credentials NotifyBuildComplete uses.
+// Mirrors NotifyBuildComplete's structure closely: same auth, same run lookup, same
 // github_run_id cross-check, same "workflow not found is an informational
 // no-op" stance (the progress signal is advisory -- FinalizePublish's own
 // walk-forward RecordTargetState call self-heals any target that never got
@@ -372,12 +372,14 @@ func (s *ReleaseServer) ReportTargetProgress(ctx context.Context, req *pb.Report
 	}
 	var state repository.ReleaseRunTargetState
 	switch req.GetState() {
+	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILDING:
+		state = repository.ReleaseRunTargetStateBuilding
 	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILT:
 		state = repository.ReleaseRunTargetStateBuilt
 	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUSHED:
 		state = repository.ReleaseRunTargetStatePushed
 	default:
-		return nil, status.Errorf(codes.InvalidArgument, "state must be BUILT or PUSHED, got %s", req.GetState())
+		return nil, status.Errorf(codes.InvalidArgument, "state must be BUILDING, BUILT, or PUSHED, got %s", req.GetState())
 	}
 	if s.temporal == nil {
 		// Unreachable in a real deployment -- see NotifyBuildComplete's
