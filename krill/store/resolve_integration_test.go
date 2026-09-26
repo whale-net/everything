@@ -249,7 +249,7 @@ func TestResolveNonGoal_PromoteOpensASuccessorUnderTheSameID(t *testing.T) {
 		`SELECT valid_to::text, kind, name FROM non_goal WHERE id = $1 AND valid_to IS NOT NULL`, fx.deferred.ID).
 		Scan(&closedValidTo, &closedKind, &closedName))
 	require.NotNil(t, closedValidTo, "the promote must set valid_to on the predecessor, not remove it")
-	assert.Equal(t, store.NonGoalKindDeferred, closedKind, "the closed revision keeps the kind it had -- a promote changes the successor, never the record of what was there")
+	assert.Equal(t, string(store.NonGoalKindDeferred), closedKind, "the closed revision keeps the kind it had -- a promote changes the successor, never the record of what was there")
 	assert.Equal(t, fx.deferred.Name, closedName)
 }
 
@@ -285,10 +285,12 @@ func TestResolveNonGoal_PromotePreservesEverythingButTheKind(t *testing.T) {
 	assert.Equal(t, moved.ID, promoted.ID, "the successor keeps the same surrogate id, so the assertion above is about a re-kind rather than about a fresh row")
 
 	// And the promoted row is a genuinely new physical revision, not the
-	// closed one re-read: same id, different revision_id.
+	// closed one re-read: same id, different revision_id. The predecessor
+	// here is `moved`, the row this test promoted -- `fx.deferred` was
+	// never resolved and so has no closed revision to find.
 	var closedRevisionID uuid.UUID
 	require.NoError(t, db.Pool.QueryRow(ctx,
-		`SELECT revision_id FROM non_goal WHERE id = $1 AND valid_to IS NOT NULL`, fx.deferred.ID).Scan(&closedRevisionID))
+		`SELECT revision_id FROM non_goal WHERE id = $1 AND valid_to IS NOT NULL`, moved.ID).Scan(&closedRevisionID))
 	assert.NotEqual(t, promoted.RevisionID, closedRevisionID,
 		"the successor must be a new row, not the closed predecessor re-read -- equal revision ids would mean the SCD2 interval was never actually rolled")
 }
@@ -346,7 +348,7 @@ func TestResolveNonGoal_RetireOpensNoSuccessor(t *testing.T) {
 	require.NoError(t, db.Pool.QueryRow(ctx,
 		`SELECT id, kind, name, body FROM non_goal WHERE id = $1`, fx.deferred.ID).Scan(&gotID, &gotKind, &gotName, &gotBody))
 	assert.Equal(t, fx.deferred.ID, gotID, "the tombstone keeps its original surrogate id (LB2)")
-	assert.Equal(t, store.NonGoalKindDeferred, gotKind)
+	assert.Equal(t, string(store.NonGoalKindDeferred), gotKind)
 	assert.Equal(t, fx.deferred.Name, gotName)
 	require.NotNil(t, gotBody, "a tombstone must retain the body it was authored with -- an auditor reads the retired row, not a summary of it")
 	assert.Equal(t, resolveBody, *gotBody)

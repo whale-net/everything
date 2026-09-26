@@ -2976,7 +2976,7 @@ func TestMigration022_SchemaContract(t *testing.T) {
 	// identically-identified row is a different fact, not a collision.
 	otherScopeID := uuid.New()
 	require.NoError(t, db.Pool.QueryRow(ctx, `
-		INSERT INTO scope (id, repo_full_name, default_branch) VALUES ($1, $2, 'main')
+		INSERT INTO scope (id, repo_full_name, default_branch) VALUES ($1, $2, 'main') RETURNING id
 	`, otherScopeID, "non-goal-promotion-022/other").Scan(&otherScopeID))
 	_, err = db.Pool.Exec(ctx, insertPromotion, otherScopeID, promotedID, productID, "deferred", "permanent")
 	require.NoError(t, err, "promotions are per scope (LB1) -- another scope's promotion of the same id is not a collision")
