@@ -171,13 +171,18 @@ func (f *fakeDecisionStore) ListCurrentByFeatureSet(ctx context.Context, feature
 	return nil, nil
 }
 
-// fakeAmendStore backs amend_test.go (issue #2493's Testing section) --
-// records the last AmendRequirement/AmendLoadBearingDecision call's
-// arguments so a test can assert the gate reached (or never reached) the
-// store, without needing a real Postgres (that is
+// fakeAmendStore backs amend_test.go -- records the last call of each
+// AmendStore method's arguments so a test can assert the gate reached (or
+// never reached) the store, without needing a real Postgres (that is
 // krill/store/amend_integration_test.go's job).
+//
+// amendCalls is the record every method appends to, newest last, so a test
+// that only cares "did the store get called at all, with which id" can read
+// one field instead of eight.
 type fakeAmendStore struct {
 	amendErr error
+
+	calls []amendCall
 
 	gotRequirementID   uuid.UUID
 	gotRequirementName string
@@ -188,18 +193,77 @@ type fakeAmendStore struct {
 	gotDecisionBody *string
 }
 
+// amendCall is one recorded AmendStore call: which kind was amended, the id
+// it named, and the replacement content as the handler passed it through.
+type amendCall struct {
+	kind        string
+	id          uuid.UUID
+	name        string
+	description *string
+	body        *string
+	vision      string
+	outcome     *string
+}
+
+func (f *fakeAmendStore) record(call amendCall) error {
+	f.calls = append(f.calls, call)
+	return f.amendErr
+}
+
+func (f *fakeAmendStore) AmendProduct(ctx context.Context, id uuid.UUID, name, vision string) (store.Product, error) {
+	if err := f.record(amendCall{kind: "product", id: id, name: name, vision: vision}); err != nil {
+		return store.Product{}, err
+	}
+	return store.Product{ID: id, Name: name, Vision: vision}, nil
+}
+
+func (f *fakeAmendStore) AmendFeatureSet(ctx context.Context, id uuid.UUID, name string, description *string) (store.FeatureSet, error) {
+	if err := f.record(amendCall{kind: "feature_set", id: id, name: name, description: description}); err != nil {
+		return store.FeatureSet{}, err
+	}
+	return store.FeatureSet{ID: id, Name: name, Description: description}, nil
+}
+
+func (f *fakeAmendStore) AmendFeature(ctx context.Context, id uuid.UUID, name string, description *string) (store.Feature, error) {
+	if err := f.record(amendCall{kind: "feature", id: id, name: name, description: description}); err != nil {
+		return store.Feature{}, err
+	}
+	return store.Feature{ID: id, Name: name, Description: description}, nil
+}
+
 func (f *fakeAmendStore) AmendRequirement(ctx context.Context, id uuid.UUID, name string, body *string) (store.Requirement, error) {
 	f.gotRequirementID, f.gotRequirementName, f.gotRequirementBody = id, name, body
-	if f.amendErr != nil {
-		return store.Requirement{}, f.amendErr
+	if err := f.record(amendCall{kind: "requirement", id: id, name: name, body: body}); err != nil {
+		return store.Requirement{}, err
 	}
 	return store.Requirement{ID: id, Name: name, Body: body}, nil
 }
 
+func (f *fakeAmendStore) AmendPersona(ctx context.Context, id uuid.UUID, name string, description *string) (store.Persona, error) {
+	if err := f.record(amendCall{kind: "persona", id: id, name: name, description: description}); err != nil {
+		return store.Persona{}, err
+	}
+	return store.Persona{ID: id, Name: name, Description: description}, nil
+}
+
+func (f *fakeAmendStore) AmendNonGoal(ctx context.Context, id uuid.UUID, name string, body *string) (store.NonGoal, error) {
+	if err := f.record(amendCall{kind: "non_goal", id: id, name: name, body: body}); err != nil {
+		return store.NonGoal{}, err
+	}
+	return store.NonGoal{ID: id, Name: name, Body: body}, nil
+}
+
 func (f *fakeAmendStore) AmendLoadBearingDecision(ctx context.Context, id uuid.UUID, name string, body *string) (store.LoadBearingDecision, error) {
 	f.gotDecisionID, f.gotDecisionName, f.gotDecisionBody = id, name, body
-	if f.amendErr != nil {
-		return store.LoadBearingDecision{}, f.amendErr
+	if err := f.record(amendCall{kind: "load_bearing_decision", id: id, name: name, body: body}); err != nil {
+		return store.LoadBearingDecision{}, err
 	}
 	return store.LoadBearingDecision{ID: id, Name: name, Body: body}, nil
+}
+
+func (f *fakeAmendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name string, outcome *string) (store.MilestoneRef, error) {
+	if err := f.record(amendCall{kind: "milestone", id: id, name: name, outcome: outcome}); err != nil {
+		return store.MilestoneRef{}, err
+	}
+	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
 }

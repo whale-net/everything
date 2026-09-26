@@ -501,15 +501,12 @@ func (s taskStore) CreateTask(ctx context.Context, params CreateTaskParams) (Tas
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// milestone_ref is plain (not SCD2, LB3), so its parentage is checked
-	// with a direct existence lookup rather than currentRowExists --
-	// mirrors MilestoneAuthoringStore.CreateMilepebble's own check. A
-	// Feature or Requirement id (NFR7) simply names no row in
+	// A Feature or Requirement id (NFR7) simply names no current row in
 	// milestone_ref at all, so it is rejected right here as ErrNotFound,
 	// the same path a stale or cross-scope milestone_id takes.
 	var kind string
 	err = tx.QueryRow(ctx, `
-		SELECT kind FROM milestone_ref WHERE id = $1 AND scope_id = $2
+		SELECT kind FROM milestone_ref WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL
 	`, params.MilestoneID, params.ScopeID).Scan(&kind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, errParentNotFound("milestone_ref", params.MilestoneID)
@@ -526,7 +523,7 @@ func (s taskStore) CreateTask(ctx context.Context, params CreateTaskParams) (Tas
 		var hasMilepebbleCut bool
 		err = tx.QueryRow(ctx, `
 			SELECT EXISTS (
-				SELECT 1 FROM milestone_ref WHERE parent_milestone_id = $1 AND scope_id = $2
+				SELECT 1 FROM milestone_ref WHERE parent_milestone_id = $1 AND scope_id = $2 AND valid_to IS NULL
 			)
 		`, params.MilestoneID, params.ScopeID).Scan(&hasMilepebbleCut)
 		if err != nil {

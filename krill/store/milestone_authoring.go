@@ -70,7 +70,7 @@ type MilestoneAuthoringStore interface {
 
 	// CreateMilepebble inserts a new `milestone_ref` row under
 	// parentMilestoneID with kind='milepebble' (migration 011, issue
-	// #2684, FR3), assigning position via nextSiblingPositionPlain among
+	// #2684, FR3), assigning position via nextSiblingPosition among
 	// siblings sharing the same parent (not the same product -- two
 	// milepebbles under different parents may share a position) and
 	// recording the LB4 subject pair. Returns ErrNotFound if
@@ -182,7 +182,7 @@ func (s milestoneAuthoringStore) CreateMilestone(ctx context.Context, scopeID, p
 		return MilestoneRef{}, errParentNotFound("product", productID)
 	}
 
-	position, err := nextSiblingPositionPlain(ctx, tx, "milestone_ref", "product_id", productID, scopeID)
+	position, err := nextSiblingPosition(ctx, tx, "milestone_ref", "product_id", productID, scopeID)
 	if err != nil {
 		return MilestoneRef{}, err
 	}
@@ -215,7 +215,11 @@ func (s milestoneAuthoringStore) SetOutcome(ctx context.Context, milestoneID uui
 	// (mirroring every other revise-shaped method in this package) so a
 	// caller cannot construct a revise with no attributable subject, even
 	// though this table does not yet persist it per-revision.
-	tag, err := s.pool.Exec(ctx, `UPDATE milestone_ref SET outcome = $1 WHERE id = $2`, outcome, milestoneID)
+	// Scoped to the current revision: a superseded row's outcome is
+	// history, never a revise target. The audited supersession of a
+	// milestone's authoring content is AmendMilestone (amend.go), which
+	// closes this row and opens a successor.
+	tag, err := s.pool.Exec(ctx, `UPDATE milestone_ref SET outcome = $1 WHERE id = $2 AND valid_to IS NULL`, outcome, milestoneID)
 	if err != nil {
 		return fmt.Errorf("update milestone_ref outcome: %w", err)
 	}
@@ -226,7 +230,7 @@ func (s milestoneAuthoringStore) SetOutcome(ctx context.Context, milestoneID uui
 }
 
 func (s milestoneAuthoringStore) SetFRBudget(ctx context.Context, milestoneID uuid.UUID, budget int, acting, onBehalfOf Subject) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE milestone_ref SET fr_budget = $1 WHERE id = $2`, budget, milestoneID)
+	tag, err := s.pool.Exec(ctx, `UPDATE milestone_ref SET fr_budget = $1 WHERE id = $2 AND valid_to IS NULL`, budget, milestoneID)
 	if err != nil {
 		return fmt.Errorf("update milestone_ref fr_budget: %w", err)
 	}
@@ -250,7 +254,7 @@ func (s milestoneAuthoringStore) addRelation(ctx context.Context, scopeID, miles
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	exists, err := plainRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
+	exists, err := currentRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
 	if err != nil {
 		return err
 	}
@@ -291,7 +295,7 @@ func (s milestoneAuthoringStore) AddDeferral(ctx context.Context, scopeID, miles
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	exists, err := plainRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
+	exists, err := currentRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
 	if err != nil {
 		return MilestoneDeferral{}, err
 	}
@@ -351,7 +355,7 @@ func (s milestoneAuthoringStore) GetMilestone(ctx context.Context, id uuid.UUID)
 	ref, err := scanMilestoneRef(s.pool.QueryRow(ctx, `
 		SELECT `+milestoneRefColumns+`
 		FROM milestone_ref
-		WHERE id = $1
+		WHERE id = $1 AND valid_to IS NULL
 	`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MilestoneRef{}, nil, nil, nil, fmt.Errorf("%w: milestone id %s", ErrNotFound, id)
@@ -429,7 +433,7 @@ func (s milestoneAuthoringStore) CreateMilepebble(ctx context.Context, scopeID, 
 	var parentKind string
 	var productID uuid.UUID
 	err = tx.QueryRow(ctx, `
-		SELECT kind, product_id FROM milestone_ref WHERE id = $1 AND scope_id = $2
+		SELECT kind, product_id FROM milestone_ref WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL
 	`, parentMilestoneID, scopeID).Scan(&parentKind, &productID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MilestoneRef{}, errParentNotFound("milestone_ref", parentMilestoneID)
@@ -445,7 +449,7 @@ func (s milestoneAuthoringStore) CreateMilepebble(ctx context.Context, scopeID, 
 	// milepebbles cut from different parent milestones under the same
 	// product must not compete for the same position (see this method's
 	// doc comment on MilestoneAuthoringStore).
-	position, err := nextSiblingPositionPlain(ctx, tx, "milestone_ref", "parent_milestone_id", parentMilestoneID, scopeID)
+	position, err := nextSiblingPosition(ctx, tx, "milestone_ref", "parent_milestone_id", parentMilestoneID, scopeID)
 	if err != nil {
 		return MilestoneRef{}, err
 	}
@@ -478,7 +482,7 @@ func getMilepebbleParent(ctx context.Context, q txQuerier, scopeID, milepebbleID
 	var kind string
 	var parentMilestoneID uuid.NullUUID
 	err := q.QueryRow(ctx, `
-		SELECT kind, parent_milestone_id FROM milestone_ref WHERE id = $1 AND scope_id = $2
+		SELECT kind, parent_milestone_id FROM milestone_ref WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL
 	`, milepebbleID, scopeID).Scan(&kind, &parentMilestoneID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.UUID{}, errParentNotFound("milestone_ref", milepebbleID)
@@ -548,7 +552,7 @@ func listMilepebblesByMilestone(ctx context.Context, q milestoneRefQueryer, mile
 	rows, err := q.Query(ctx, `
 		SELECT `+milestoneRefColumns+`
 		FROM milestone_ref
-		WHERE parent_milestone_id = $1
+		WHERE parent_milestone_id = $1 AND valid_to IS NULL
 		ORDER BY position
 	`, milestoneID)
 	if err != nil {

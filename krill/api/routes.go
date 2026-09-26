@@ -20,8 +20,9 @@ import (
 // (issue #2543), GET /design-sessions/{id}/open-questions (issue #2545,
 // FR6), and GET /milestones/{id} (issue #2683, FR1/FR2) are ungated; every
 // entity
-// create/attach endpoint (issue #2490, FR1/FR2/FR4), the two amend
-// endpoints below (FR12, issue #2493), the pointer-artifact create
+// create/attach endpoint (issue #2490, FR1/FR2/FR4), the amend
+// endpoints below (FR12, issue #2493; generalised to every spec-axis kind
+// by issue #2958/#2966), the pointer-artifact create
 // endpoint (issue #2496, FR20), POST /design-sessions and POST
 // /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8), POST
 // /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2), the five
@@ -265,8 +266,18 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.HandleFunc("GET /design-sessions/{id}/open-questions", handlers.ListOpenQuestionsHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/propose", gate(handlers.ProposeEntitiesHandler(entities.MediatedWrites())))
 
+	// amend: every spec-axis kind is supersedable in place, under its
+	// unchanged surrogate id (FR 8b2e87d1). A Milestone's amend reaches
+	// only its own authoring content -- never its delivery axis
+	// (FR 39373553).
+	mux.Handle("POST /products/{id}/amend", gate(handlers.AmendProductHandler(entities.Amend())))
+	mux.Handle("POST /feature-sets/{id}/amend", gate(handlers.AmendFeatureSetHandler(entities.Amend())))
+	mux.Handle("POST /features/{id}/amend", gate(handlers.AmendFeatureHandler(entities.Amend())))
 	mux.Handle("POST /requirements/{id}/amend", gate(handlers.AmendRequirementHandler(entities.Amend())))
+	mux.Handle("POST /personas/{id}/amend", gate(handlers.AmendPersonaHandler(entities.Amend())))
+	mux.Handle("POST /non-goals/{id}/amend", gate(handlers.AmendNonGoalHandler(entities.Amend())))
 	mux.Handle("POST /load-bearing-decisions/{id}/amend", gate(handlers.AmendLoadBearingDecisionHandler(entities.Amend())))
+	mux.Handle("POST /milestones/{id}/amend", gate(handlers.AmendMilestoneHandler(entities.Amend())))
 
 	mux.HandleFunc("GET /requirements/{id}/as-of", handlers.GetRequirementAsOfHandler(entities.History()))
 	mux.HandleFunc("GET /requirements/{id}/versions", handlers.ListRequirementVersionsHandler(entities.History()))

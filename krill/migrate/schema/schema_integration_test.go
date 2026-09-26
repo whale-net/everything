@@ -89,6 +89,26 @@ func hasForeignKeyTo(t *testing.T, ctx context.Context, db *dbtest.Postgres, tab
 	return exists
 }
 
+// hasPrimaryKeyOn reports whether table's PRIMARY KEY is exactly the one
+// named column. A table can carry at most one, so this is the assertion
+// that pins which column is the per-row key after a migration reshapes a
+// table around it.
+func hasPrimaryKeyOn(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, column string) bool {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint c
+			JOIN pg_class t ON t.oid = c.conrelid
+			JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+			WHERE t.relname = $1 AND c.contype = 'p'
+			  AND array_length(c.conkey, 1) = 1 AND a.attname = $2
+		)
+	`, table, column).Scan(&exists))
+	return exists
+}
+
 // columnNames returns every column name for table from information_schema.
 func columnNames(t *testing.T, ctx context.Context, db *dbtest.Postgres, table string) []string {
 	t.Helper()
@@ -163,18 +183,18 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(19), latest, "expected the latest migration source version to be 19 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(20), latest, "expected the latest migration source version to be 20 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
 	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-019")
+	require.NoError(t, runner.Up(), "apply migrations 001-020")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(19), version)
+	assert.Equal(t, uint(20), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -229,7 +249,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(19), version)
+	assert.Equal(t, uint(20), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -640,8 +660,9 @@ func TestMigration003_SchemaContract(t *testing.T) {
 // both new tables (LB1), the milestone_ref (scope_id, product_id, name)
 // uniqueness that makes GetOrCreateRef idempotent, the entity_milestone
 // (entity_id, milestone_id, relation) uniqueness (widened by migration 010
-// to include relation) that makes AddAssociation idempotent, and
-// milestone_id's real FK to milestone_ref(id).
+// to include relation) that makes AddAssociation idempotent, and -- as of
+// migration 020 -- milestone_id as a plain uuid column, since milestone_ref
+// became SCD2 and its immutable id stopped being table-wide unique.
 func TestMigration004_SchemaContract(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -661,12 +682,13 @@ func TestMigration004_SchemaContract(t *testing.T) {
 			"milestone_ref must not carry a %q column -- status is a later issue's, not M1's/M3's, and a milepebble is never referenced by a milepebble_id column even on its own table (LB6's own note)", forbidden)
 	}
 	assert.ElementsMatch(t, []string{
-		"id", "scope_id", "product_id", "name", "created_at",
+		"revision_id", "id", "scope_id", "product_id", "name", "created_at",
 		"kind", "outcome", "fr_budget", "position", "parent_milestone_id",
 		"created_by_acting_iss", "created_by_acting_sub", "created_by_acting_kind",
 		"created_by_on_behalf_of_iss", "created_by_on_behalf_of_sub", "created_by_on_behalf_of_kind",
+		"valid_from", "valid_to",
 	}, milestoneRefCols,
-		"milestone_ref must be exactly the bare reference shape LB6 specifies (004_milestone_assoc) plus the authoring columns migration 010 (issue #2683) added plus migration 011's (issue #2684) parent_milestone_id -- no more, no less")
+		"milestone_ref must be exactly the bare reference shape LB6 specifies (004_milestone_assoc) plus the authoring columns migration 010 (issue #2683) added plus migration 011's (issue #2684) parent_milestone_id plus migration 020's SCD2 triple -- no more, no less")
 
 	// -- LB6's trap, other direction: no spec entity table may have grown a milestone_id column --
 	for _, table := range []string{"feature", "requirement", "load_bearing_decision"} {
@@ -733,7 +755,7 @@ func TestMigration004_SchemaContract(t *testing.T) {
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id) VALUES ($1, $2, gen_random_uuid())
 	`, scopeID, featureID)
-	assert.Error(t, err, "entity_milestone.milestone_id must be FK-enforced against milestone_ref(id)")
+	assert.NoError(t, err, "entity_milestone.milestone_id has been a plain uuid column since migration 020 -- milestone_ref is SCD2, so no FK can target its immutable id; parent existence is enforced by krill/store's currentRowExists, the same boundary migration 002 draws for every spec-axis parent link")
 }
 
 // TestMigration005_SchemaContract asserts 005_pointer_artifact's own
@@ -851,8 +873,9 @@ func TestMigration005_SchemaContract(t *testing.T) {
 // milestone_deferral's `destination` is NOT NULL (FR1: every deferred
 // entry cites where it went) and its subject-pair columns ARE mandatory
 // (every write path onto that table is AddDeferral, which always has a
-// real caller session); milestone_deferral.milestone_id is a real
-// DB-enforced FK to milestone_ref(id); and entity_milestone.relation
+// real caller session); milestone_deferral.milestone_id is a plain uuid
+// column store-layer-enforced since migration 020; and
+// entity_milestone.relation
 // rejects a value other than "delivers"/"must_not_foreclose", defaults to
 // "delivers" (so a pre-migration-010 importer-written row keeps its
 // existing meaning), and its widened unique index
@@ -931,7 +954,7 @@ func TestMigration010_SchemaContract(t *testing.T) {
 	assert.Equal(t, "NO", nullable, "milestone_deferral.scope_id must be NOT NULL (LB1)")
 	assert.Equal(t, "uuid", dataType, "milestone_deferral.scope_id must be a plain uuid column")
 	assert.True(t, hasForeignKeyTo(t, ctx, db, "milestone_deferral", "scope"), "milestone_deferral.scope_id must carry a real DB-enforced FK to scope(id) (LB1)")
-	assert.True(t, hasForeignKeyTo(t, ctx, db, "milestone_deferral", "milestone_ref"), "milestone_deferral.milestone_id must carry a real DB-enforced FK to milestone_ref(id) -- milestone_ref is not SCD2, so its id is table-wide unique")
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "milestone_deferral", "milestone_ref"), "milestone_deferral.milestone_id must NOT carry a DB-enforced FK to milestone_ref -- since migration 020 milestone_ref is SCD2, so its immutable id is not table-wide unique and parent existence is store-layer-enforced only")
 
 	// NULL destination is rejected by the NOT NULL constraint itself (an
 	// empty string is NOT NULL's blind spot -- that half of FR1's
@@ -954,7 +977,7 @@ func TestMigration010_SchemaContract(t *testing.T) {
 			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
 		) VALUES ($1, gen_random_uuid(), 'deferred body', 'M4', 'iss', 'sub', 'human', 'iss', 'sub', 'human')
 	`, scopeID)
-	assert.Error(t, err, "milestone_deferral.milestone_id must be FK-enforced against milestone_ref(id)")
+	assert.NoError(t, err, "milestone_deferral.milestone_id is a plain uuid column since migration 020; parent existence is enforced by krill/store's currentRowExists, not by the database")
 
 	// -- entity_milestone.relation: CHECK, default, and the widened unique index --
 	var featureSetID, featureID uuid.UUID
@@ -1108,11 +1131,11 @@ func TestMigration011_SchemaContract(t *testing.T) {
 		assert.NotContains(t, cols, "milestone_id", "%s must never carry a milestone_id column either (LB6, re-asserted here now that milepebbles exist too)", table)
 	}
 
-	// -- parent_milestone_id: nullable, real DB-enforced FK to milestone_ref(id) --
+	// -- parent_milestone_id: nullable plain uuid, store-layer-enforced --
 	dataType, nullable := nullableColumn(t, ctx, db, "milestone_ref", "parent_milestone_id")
 	assert.Equal(t, "YES", nullable, "milestone_ref.parent_milestone_id must be nullable -- NULL for every kind=\"milestone\" row")
 	assert.Equal(t, "uuid", dataType, "milestone_ref.parent_milestone_id must be a plain uuid column")
-	assert.True(t, hasForeignKeyTo(t, ctx, db, "milestone_ref", "milestone_ref"), "milestone_ref.parent_milestone_id must carry a real DB-enforced FK back onto milestone_ref(id)")
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "milestone_ref", "milestone_ref"), "milestone_ref.parent_milestone_id must NOT carry a DB-enforced self-FK -- since migration 020 milestone_ref is SCD2, so its immutable id is not table-wide unique")
 
 	var scopeID uuid.UUID
 	require.NoError(t, db.Pool.QueryRow(ctx, `
@@ -1152,11 +1175,11 @@ func TestMigration011_SchemaContract(t *testing.T) {
 	`, scopeID, productID, milestoneID)
 	assert.Error(t, err, "a kind=\"milestone\" row with a non-NULL parent_milestone_id must be rejected -- a milestone has no parent milestone")
 
-	// -- parent_milestone_id FK is real, not just a plain uuid column --
+	// -- parent_milestone_id parentage is store-layer-enforced, not a DB FK --
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'dangling-parent', 'milepebble', gen_random_uuid())
 	`, scopeID, productID)
-	assert.Error(t, err, "milestone_ref.parent_milestone_id must be FK-enforced against milestone_ref(id)")
+	assert.NoError(t, err, "milestone_ref.parent_milestone_id is a plain uuid column since migration 020; CreateMilepebble's own parent lookup is what rejects a dangling parent")
 
 	// -- re-scoped uniqueness: two milepebbles under the SAME parent sharing a name is rejected --
 	_, err = db.Pool.Exec(ctx, `
@@ -1326,7 +1349,7 @@ func TestMigration012_SchemaContract(t *testing.T) {
 	dataType, nullable = nullableColumn(t, ctx, db, "milestone_status_event", "milestone_id")
 	assert.Equal(t, "NO", nullable, "milestone_status_event.milestone_id must be NOT NULL")
 	assert.Equal(t, "uuid", dataType, "milestone_status_event.milestone_id must be a plain uuid column")
-	assert.True(t, hasForeignKeyTo(t, ctx, db, "milestone_status_event", "milestone_ref"), "milestone_status_event.milestone_id must carry a real DB-enforced FK to milestone_ref(id) -- milestone_ref is not SCD2, so its id is table-wide unique")
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "milestone_status_event", "milestone_ref"), "milestone_status_event.milestone_id must NOT carry a DB-enforced FK to milestone_ref -- since migration 020 milestone_ref is SCD2, so its immutable id is not table-wide unique")
 
 	// -- LB4/NFR4: every subject column NOT NULL ------------------------------
 	for _, col := range []string{
@@ -1383,7 +1406,7 @@ func TestMigration012_SchemaContract(t *testing.T) {
 	assert.NoError(t, insertStatusEvent(milepebbleID, "planned"), "milestone_status_event must accept a kind='milepebble' target the same as a kind='milestone' one (FR9)")
 
 	// -- milestone_id FK is real, not just a plain uuid column ----------------
-	assert.Error(t, insertStatusEvent(uuid.New(), "planned"), "milestone_status_event.milestone_id must be FK-enforced against milestone_ref(id)")
+	assert.NoError(t, insertStatusEvent(uuid.New(), "planned"), "milestone_status_event.milestone_id is a plain uuid column since migration 020; RecordTransition's own currentRowExists check is what rejects an unknown milestone")
 
 	// -- subject-pair columns are mandatory: NULL is rejected -----------------
 	_, err = db.Pool.Exec(ctx, `
@@ -1517,7 +1540,7 @@ func TestMigration013_SchemaContract(t *testing.T) {
 	dataType, nullable = nullableColumn(t, ctx, db, "delivery_shipment", "milestone_id")
 	assert.Equal(t, "NO", nullable, "delivery_shipment.milestone_id must be NOT NULL")
 	assert.Equal(t, "uuid", dataType, "delivery_shipment.milestone_id must be a plain uuid column")
-	assert.True(t, hasForeignKeyTo(t, ctx, db, "delivery_shipment", "milestone_ref"), "delivery_shipment.milestone_id must carry a real DB-enforced FK to milestone_ref(id)")
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "delivery_shipment", "milestone_ref"), "delivery_shipment.milestone_id must NOT carry a DB-enforced FK to milestone_ref -- since migration 020 milestone_ref is SCD2, so its immutable id is not table-wide unique")
 
 	// -- LB4/NFR4: every subject column NOT NULL ------------------------------
 	for _, col := range []string{
@@ -1565,7 +1588,7 @@ func TestMigration013_SchemaContract(t *testing.T) {
 	assert.NoError(t, insertShipment(milepebbleID), "delivery_shipment must accept a kind='milepebble' target the same as a kind='milestone' one (FR9)")
 
 	// -- milestone_id FK is real, not just a plain uuid column ----------------
-	assert.Error(t, insertShipment(uuid.New()), "delivery_shipment.milestone_id must be FK-enforced against milestone_ref(id)")
+	assert.NoError(t, insertShipment(uuid.New()), "delivery_shipment.milestone_id is a plain uuid column since migration 020 (milestone_ref is SCD2, so its id cannot carry a FK); this raw insert bypasses krill/store by design, so the store's in-transaction currentRowExists check on milestone_ref is what rejects an unknown milestone -- it is covered in krill/store, not here")
 
 	// -- a second row for the exact same (entity, milestone) pair is accepted,
 	// never rejected as a duplicate (NFR2/NFR3: appending, not upserting) --
@@ -2638,4 +2661,80 @@ func TestMigration019_UpDownRoundTrip(t *testing.T) {
 
 	require.NoError(t, runner.Steps(1), "re-apply migration 019 after Down() -- must be re-runnable")
 	assert.NoError(t, insertStatusEvent("designed"), "re-applying 019 must accept 'designed' again")
+}
+
+// TestMigration020_SchemaContract asserts the shape migration 020 gives
+// `milestone_ref`: the SCD2 triple migration 002 gave every other
+// spec-axis table, `revision_id` as the row key rather than `id`, and
+// every name index scoped to current rows only.
+func TestMigration020_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- the SCD2 triple, with the same types migration 002 uses --
+	for _, col := range []struct{ name, dataType string }{
+		{"revision_id", "uuid"},
+		{"valid_from", "timestamp with time zone"},
+		{"valid_to", "timestamp with time zone"},
+	} {
+		dataType, _ := nullableColumn(t, ctx, db, "milestone_ref", col.name)
+		assert.Equal(t, col.dataType, dataType, "milestone_ref.%s must carry the SCD2 type every other spec-axis table uses", col.name)
+	}
+	_, nullable := nullableColumn(t, ctx, db, "milestone_ref", "valid_to")
+	assert.Equal(t, "YES", nullable, "milestone_ref.valid_to must be nullable -- NULL marks the current revision")
+
+	// -- revision_id is the primary key now, id no longer is --
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "milestone_ref", "revision_id"),
+		"milestone_ref's primary key must be revision_id, not id -- multiple revisions of one milestone legitimately share an id")
+	assert.False(t, hasPrimaryKeyOn(t, ctx, db, "milestone_ref", "id"),
+		"milestone_ref.id must no longer be the primary key once the table is SCD2")
+
+	// -- every pre-existing row became its own first, current revision --
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('milestone-scd2-020/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+	var validTo sql.NullTime
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT valid_to FROM milestone_ref WHERE id = $1 AND valid_to IS NULL
+	`, milestoneID).Scan(&validTo))
+	assert.False(t, validTo.Valid, "every row migration 020 finds must become a current revision -- it supersedes no id")
+
+	// -- closing a row and opening its successor under the same id is what
+	// an amend does, and the unique indexes must tolerate it --
+	_, err = db.Pool.Exec(ctx, `UPDATE milestone_ref SET valid_to = NOW() WHERE id = $1`, milestoneID)
+	require.NoError(t, err)
+	var successorID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (id, scope_id, product_id, name) VALUES ($1, $2, $3, 'M1') RETURNING id
+	`, milestoneID, scopeID, productID).Scan(&successorID))
+	assert.Equal(t, milestoneID, successorID, "a supersession reuses the immutable id (LB2)")
+
+	// A second current row for the same id is what the SCD2 index forbids.
+	_, err = db.Pool.Exec(ctx, `UPDATE milestone_ref SET valid_to = NULL WHERE id = $1`, milestoneID)
+	assert.Error(t, err, "milestone_ref_current_id_idx must reject a second current revision for one id")
+
+	// -- the child milestone_id columns are plain uuid columns, not FKs --
+	for _, table := range []string{"entity_milestone", "milestone_deferral", "milestone_status_event", "delivery_shipment", "task"} {
+		assert.False(t, hasForeignKeyTo(t, ctx, db, table, "milestone_ref"),
+			"%s.milestone_id must NOT carry a DB-enforced FK to milestone_ref -- since 020 milestone_ref is SCD2, so its immutable id is not table-wide unique; parent existence is krill/store's job", table)
+	}
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "milestone_ref", "milestone_ref"),
+		"milestone_ref.parent_milestone_id must NOT carry a DB-enforced self-FK, for the same reason")
 }

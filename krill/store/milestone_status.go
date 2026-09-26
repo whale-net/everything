@@ -113,11 +113,11 @@ func (s milestoneStatusEventStore) RecordTransition(ctx context.Context, scopeID
 func recordTransitionTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUID, status MilestoneStatus, note *string, acting, onBehalfOf Subject) (MilestoneStatusEvent, error) {
 	// milestone_ref's own kind CHECK (migration 011) already restricts
 	// every row to kind IN ('milestone', 'milepebble', 'backlog') -- a
-	// plain existence check under scopeID is therefore sufficient to
+	// existence check under scopeID is therefore sufficient to
 	// enforce this method's "target is a milestone or milepebble"
 	// contract; Abandon (abandon.go) itself is what keeps a backlog row
 	// from ever reaching here.
-	exists, err := plainRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
+	exists, err := currentRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
 	if err != nil {
 		return MilestoneStatusEvent{}, err
 	}
