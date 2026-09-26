@@ -57,7 +57,7 @@ func specProductID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // (an unknown or superseded product) is a 404 the operator can act on;
 // anything else is a genuine read failure and is logged at ERROR before a
 // 500. Both render inside the shell, not as a bare http.Error string.
-func renderSpecError(w http.ResponseWriter, r *http.Request, err error) {
+func renderSpecError(w http.ResponseWriter, r *http.Request, anchor string, err error) {
 	if errors.Is(err, store.ErrNotFound) {
 		renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
 			Title:    "Not found",
@@ -75,7 +75,7 @@ func renderSpecError(w http.ResponseWriter, r *http.Request, err error) {
 	// need to be told. Answer 200 with the message inline; the no-JS
 	// browser still gets the full status-coded page.
 	if r.Header.Get("HX-Request") != "" {
-		renderFragment(w, r, pages.SpecInlineError("Could not load the spec. The spec store could not be read; see the logs."))
+		renderFragment(w, r, pages.SpecInlineError(anchor, "Could not load the spec. The spec store could not be read; see the logs."))
 		return
 	}
 	renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
@@ -174,7 +174,7 @@ func productNavFor(id uuid.UUID, current string) []components.NavLink {
 func (app *App) handleSpecProducts(w http.ResponseWriter, r *http.Request) {
 	products, err := app.spec.Products(r.Context())
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.ProductsAnchor, err)
 		return
 	}
 
@@ -205,7 +205,7 @@ func (app *App) handleCapabilityMap(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := app.spec.ProductSlice(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.CapabilityMapAnchor, err)
 		return
 	}
 
@@ -268,7 +268,7 @@ func (app *App) handleSpecDecisions(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := app.spec.ProductSlice(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.DecisionsAnchor, err)
 		return
 	}
 
@@ -307,12 +307,12 @@ func (app *App) handleSpecPersonas(w http.ResponseWriter, r *http.Request) {
 
 	product, err := app.spec.Product(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.PersonasAnchor, err)
 		return
 	}
 	personas, err := app.spec.Personas(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.PersonasAnchor, err)
 		return
 	}
 
@@ -357,12 +357,12 @@ func (app *App) handleSpecNonGoals(w http.ResponseWriter, r *http.Request) {
 
 	product, err := app.spec.Product(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.NonGoalsAnchor, err)
 		return
 	}
 	nonGoals, err := app.spec.NonGoals(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.NonGoalsAnchor, err)
 		return
 	}
 

@@ -37,13 +37,13 @@ func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
 
 	product, err := app.spec.Product(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.DeliveryAnchor, err)
 		return
 	}
 	// A nil status filter means "all", mirroring the querier's contract.
 	listing, err := app.spec.Delivery(r.Context(), productID, nil)
 	if err != nil {
-		renderSpecError(w, r, err)
+		renderSpecError(w, r, pages.DeliveryAnchor, err)
 		return
 	}
 	// A per-container breakdown read that fails is non-fatal: every

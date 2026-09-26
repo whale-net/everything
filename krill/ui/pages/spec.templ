@@ -347,10 +347,20 @@ templ NonGoals(page NonGoalsPage) {
 // fails. Every spec page's Refresh button re-requests its own route, so
 // this is reachable by htmx, and htmx does not swap on a non-2xx -- a
 // status-coded page here would leave the operator clicking Refresh with
-// no feedback at all. It is a single top-level <section>, so it also
-// satisfies the refresh invariant in refresh_test.go.
-templ SpecInlineError(message string) {
-	<section data-krill="spec-status">
+// no feedback at all.
+//
+// anchor must be the id the requesting page's Refresh button targets.
+// htmx's outerHTML inserts the response in place of the target and then
+// REMOVES the target, so a fragment without that id would delete the swap
+// target itself -- and the next Refresh would find no target, at which
+// point htmx returns before issuing the request. The page would freeze
+// with no request ever reaching the server.
+//
+// One component serves all six spec/delivery pages, which is why the
+// anchor is a parameter rather than hardcoded: the fragment has to land on
+// the id of whichever page asked for it.
+templ SpecInlineError(anchor, message string) {
+	<section id={ anchor } data-krill="spec-status">
 		@htmxui.Alert(htmxui.AlertError, message, templ.Attributes{
 			"data-krill": "spec-status-detail",
 		})

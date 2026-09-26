@@ -587,8 +587,16 @@ templ TaskActions(controls []TaskActionControl) {
 // happened before the handler knew which view it was assembling, and
 // rendering a plausible-looking empty table would be worse than saying so.
 // The message is generic by design; the detail is logged, not shown.
+//
+// It carries the results id, and that is not decoration. It is swapped
+// into the results block, and htmx's outerHTML inserts the response in
+// place of the target and then REMOVES the target -- so a fragment without
+// the id would delete the swap target itself. The next Refresh would then
+// find no target, and htmx returns before issuing the request, so the
+// console freezes with no network evidence that anything was attempted.
+// Carrying the id keeps the block refreshable after an error.
 templ OpsInlineError(message string) {
-	<div data-krill="ops-inline-error">
+	<div id={ opsResultsID } data-krill="ops-inline-error">
 		@htmxui.Alert(htmxui.AlertError, message, nil)
 	</div>
 }

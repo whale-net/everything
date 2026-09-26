@@ -197,6 +197,12 @@ func TestInterventionReturnToRejectsOpenRedirect(t *testing.T) {
 		// console root.
 		"/opsarchive",
 		"/ops/../../etc/passwd",
+		// The percent-encoded spelling of the same traversal. The ".."
+		// check has to run on the DECODED path; testing the raw string
+		// would pass this straight through and the browser would then
+		// normalise it to a path outside /ops.
+		"/ops/%2e%2e/%2e%2e/etc/passwd",
+		"/ops/%2E%2E/secret",
 	}
 	for _, to := range hostile {
 		t.Run(to, func(t *testing.T) {

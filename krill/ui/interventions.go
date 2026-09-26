@@ -299,24 +299,29 @@ func interventionReturnTo(r *http.Request) string {
 		return fallback
 	}
 	// Only a path this binary actually serves is honoured, and it must
-	// survive path cleaning as one. Two separate checks, because each
-	// alone misses a case:
+	// still be one after the browser has percent-decoded and
+	// path-normalised it. Three checks, because each alone misses a case:
 	//
+	//   - Rejecting an absolute or host-bearing URL rejects off-site
+	//     values outright.
+	//   - Rejecting ".." in the DECODED path rejects
+	//     "/ops/../../etc/passwd" and its percent-encoded spelling
+	//     "/ops/%2e%2e/%2e%2e/etc/passwd". The check has to run on
+	//     u.Path, which url.Parse has already decoded -- testing the raw
+	//     string would pass the encoded form straight through, and the
+	//     browser would then normalise it to a path outside /ops.
 	//   - Matching at segment boundaries rejects "/opsarchive", which
-	//     shares the raw prefix but is not a view.
-	//   - Rejecting ".." rejects "/ops/../../etc/passwd", which passes
-	//     that check and is then normalised by the redirect machinery
-	//     into a path outside /ops entirely.
+	//     shares the raw prefix but is not a view this binary serves.
 	//
-	// Neither is an open redirect -- the value is only ever used as a
-	// same-origin Location or HX-Redirect -- but a return_to that
-	// resolves to a 404, or to somewhere the operator did not ask for, is
-	// a worse answer than falling back to the console root.
-	if strings.Contains(to, "..") {
-		return fallback
-	}
+	// None of these is an open-redirect defence on its own: the value is
+	// only ever used as a same-origin Location or HX-Redirect. They are
+	// here so a return_to resolves to a view the operator asked for
+	// rather than a 404 or somewhere else on this origin.
 	u, err := url.Parse(to)
 	if err != nil || u.IsAbs() || u.Host != "" || u.Scheme != "" {
+		return fallback
+	}
+	if strings.Contains(u.Path, "..") {
 		return fallback
 	}
 	if u.Path != opsPath && !strings.HasPrefix(u.Path, opsPath+"/") {
