@@ -92,6 +92,8 @@ func isUniqueViolation(err error) bool {
 //   - store.ErrNameConflict (an amend's replacement name collides with a
 //     live sibling, errors.go) / a scope-qualified unique-constraint
 //     violation                                                  -> 409
+//   - store.ErrEntityDelivered / store.ErrHasLiveChildren (void's two
+//     refusals, FR 2a3a8eef) -- the target is spoken for         -> 409
 //   - anything else (a genuine store failure)                         -> 500
 //
 // Every create handler below funnels its store call's error through this
@@ -113,6 +115,11 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrClaimNotCurrent),
 		errors.Is(err, store.ErrTaskNotClaimed),
 		errors.Is(err, store.ErrNameConflict),
+		// Void's two refusals (FR 2a3a8eef). Both are conflicts, not bad
+		// requests: the request was well-formed, but the target is spoken
+		// for. Each error body names the correct next step.
+		errors.Is(err, store.ErrEntityDelivered),
+		errors.Is(err, store.ErrHasLiveChildren),
 		errors.Is(err, store.ErrEntityDeliveredByCompetingMilestone):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case isUniqueViolation(err):

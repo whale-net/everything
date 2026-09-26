@@ -31,6 +31,7 @@ go_library(
     srcs = [
         "abandon.go",
         "amend.go",
+        "void.go",
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",
@@ -1661,3 +1662,46 @@ go_test(
     ],
 )
 
+# Real Postgres integration test for VoidStore (void.go, FR d38d726e /
+# FR 2a3a8eef): the SCD2 close-without-successor tombstone. Covers the
+# three explicit consequences of a void (name freed, display number
+# retired and never reissued, row audit-readable with its original id and
+# number), both refusals (delivered/shipped, live children) across the full
+# per-kind child set, and a cross-scope case for every existence check.
+#
+# The refusal tests use a pgx query tracer rather than asserting only that
+# no row survived: a guard that ran AFTER the tombstoning UPDATE and then
+# rolled back would pass a "writes nothing" assertion while still being
+# misordered, so these assert no write statement is ever ISSUED.
+#
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:void_integration_test --test_output=all
+go_test(
+    name = "void_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["void_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

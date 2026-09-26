@@ -39,6 +39,7 @@ go_library(
         "task_payload.go",
         "task_release.go",
         "task_requeue.go",
+        "void.go",
         "work_mount.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
@@ -280,6 +281,25 @@ go_test(
 go_test(
     name = "amend_registration_test",
     srcs = ["amend_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test for void.go: RegisterVoidAll registers void_entity
+# (one verb with a kind discriminator, not one tool per kind) and
+# list_void_events, and void_entity reaches the matching store method for all
+# seven void-able kinds with the session's scope and LB4 subjects.
+go_test(
+    name = "void_registration_test",
+    srcs = ["void_registration_test.go"],
     deps = [
         ":tools",
         "//krill/mcp/server",

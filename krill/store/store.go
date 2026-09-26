@@ -107,6 +107,13 @@ func (s *Store) Abandon() AbandonStore { return abandonStore{pool: s.pool} }
 // write path (FR12, issue #2493) for Requirement and LoadBearingDecision.
 func (s *Store) Amend() AmendStore { return amendStore{pool: s.pool} }
 
+// Void returns the VoidStore implementation -- the SCD2
+// close-WITHOUT-successor tombstone write path (FR d38d726e, FR 2a3a8eef),
+// sitting alongside Amend: where an amend closes a row and opens a
+// successor under the same id, a void closes it and opens nothing, freeing
+// the row's name while retiring its display number for good.
+func (s *Store) Void() VoidStore { return voidStore{pool: s.pool} }
+
 // History returns the HistoryStore implementation -- as-of reads and
 // version lists (FR11, issue #2493) for Requirement and
 // LoadBearingDecision.

@@ -163,6 +163,8 @@ func run() error {
 	// create_feature/create_requirement, the non-mediated spec entity
 	// creation tools that previously existed only over HTTP -- plus
 	// create_persona/create_non_goal), tools.RegisterAmendAll,
+	// tools.RegisterVoidAll (void_entity, the tombstone verb, plus its
+	// list_void_events audit read),
 	// tools.RegisterListProducts, tools.RegisterListPersonas/
 	// RegisterListNonGoals, tools.RegisterDesignAll (issue #2547),
 	// tools.RegisterMilestoneAll (milestone authoring, issue #2683),
@@ -197,6 +199,11 @@ func run() error {
 	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals(), entities.Features(), entities.Requirements())
 	// amend_requirement/amend_load_bearing_decision: SCD2 corrections, the MCP twin of POST /{requirements,load-bearing-decisions}/{id}/amend.
 	tools.RegisterAmendAll(designReg, sessions, entities.Amend())
+	// void_entity: the tombstone verb (the SCD2 close-WITHOUT-successor),
+	// and list_void_events, its audit read. The MCP twin of the seven
+	// POST /{kind}/{id}/void routes, with the kind as an argument rather
+	// than a path segment.
+	tools.RegisterVoidAll(designReg, sessions, entities.Void())
 	// list_products: ungated Product discovery, the entry point for every get_*_slice product_id.
 	tools.RegisterListProducts(designReg, entities.Products())
 	// list_personas/list_non_goals: ungated discovery for the two entity kinds create_persona/create_non_goal mint, with no other MCP-reachable read path (not part of the slice.Document either).
