@@ -29,6 +29,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/manmanv2/migrate/schema"
 )
 
 // openMigrateTestDB044 mirrors migration_041_integration_test.go's helper --
@@ -84,7 +85,7 @@ func TestMigration044_BackfillsExistingRowsToUnknownAndEnforcesCheck(t *testing.
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB044(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
 	latest, err := runner.LatestVersion()
 	if err != nil {
@@ -169,7 +170,7 @@ func TestMigration044_DownDropsColumnCleanly(t *testing.T) {
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB044(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	if err := runner.Up(); err != nil {
 		t.Fatalf("Up (full history): %v", err)
 	}

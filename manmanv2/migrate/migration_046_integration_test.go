@@ -32,6 +32,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/manmanv2/migrate/schema"
 )
 
 // openMigrateTestDB046 mirrors migration_044_integration_test.go's helper --
@@ -167,7 +168,7 @@ func TestMigration046_DropsRiverTablesWhenPresent(t *testing.T) {
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB046(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
 	latest, err := runner.LatestVersion()
 	if err != nil {
@@ -213,7 +214,7 @@ func TestMigration046_NoopOnDatabaseThatNeverRanRiver(t *testing.T) {
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB046(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
 	if err := runner.Up(); err != nil {
 		t.Fatalf("Up (full history, no River schema ever present): %v", err)

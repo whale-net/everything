@@ -29,6 +29,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/manmanv2/migrate/schema"
 )
 
 // openMigrateTestDB042 mirrors migration_040_integration_test.go's helper --
@@ -125,7 +126,7 @@ func attachSGCLibrary(ctx context.Context, t *testing.T, db *dbtest.Postgres, sg
 func migrateTo41ThenSeedAndApply42(ctx context.Context, t *testing.T, db *dbtest.Postgres, sqlDB *sql.DB, seed func()) *migrate.Runner {
 	t.Helper()
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
 	latest, err := runner.LatestVersion()
 	if err != nil {
@@ -194,7 +195,7 @@ func TestMigration042_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB042(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	// Target version 42 explicitly rather than Up() (which now also
 	// applies 043-044) -- same rationale as the other migration integration
 	// tests' use of Migrate(N) over a relative Up()/Steps() call: this
@@ -609,7 +610,7 @@ func TestMigration042_BackfillIsIdempotent(t *testing.T) {
 	// Re-execute the migration's own up.sql content directly -- this is
 	// what "re-running the migration" means for a framework (golang-migrate)
 	// that otherwise refuses to re-apply an already-applied version.
-	upSQL, err := migrations.ReadFile("migrations/042_gameconfig_workshop_libraries.up.sql")
+	upSQL, err := schema.Migrations.ReadFile("migrations/042_gameconfig_workshop_libraries.up.sql")
 	if err != nil {
 		t.Fatalf("read migration 042 up.sql: %v", err)
 	}
@@ -655,7 +656,7 @@ func TestMigration042_DownDropsThreeTablesLeavesSGCIntact(t *testing.T) {
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB042(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	if err := runner.Up(); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
