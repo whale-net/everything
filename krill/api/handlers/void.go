@@ -32,10 +32,10 @@ type voidRequest struct {
 // number -- a rendered `FR7` citation is derived at render time, so there
 // is nothing stored to retire (FR d38d726e (c)).
 type VoidEventWire struct {
-	ID                   string  `json:"id"`
-	EntityKind           string  `json:"entity_kind"`
-	EntityID             string  `json:"entity_id"`
-	ProductID            string  `json:"product_id"`
+	ID         string `json:"id"`
+	EntityKind string `json:"entity_kind"`
+	EntityID   string `json:"entity_id"`
+	ProductID  string `json:"product_id"`
 	// Outcome says which close-WITHOUT-successor caller tombstoned the row
 	// -- a mistaken create (`void`) or a settled `deferred` Non-Goal
 	// (`retire`, FR d0021a0f). Both leave the same shape, so without this

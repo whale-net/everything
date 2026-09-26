@@ -1679,6 +1679,52 @@ go_test(
 # README for the full rationale.
 #
 # Run it explicitly (requires a working Docker daemon):
+# Real Postgres integration test for ResolveStore (resolve.go, FR d0021a0f /
+# FR 19123858): settling a `deferred` Non-Goal. The two outcomes are
+# asserted to DIFFER rather than merely to succeed -- a retire that
+# silently promoted would pass a test that only checks "resolve worked" --
+# and every claim about what a promote preserves is asserted on the
+# specific field, since a test checking only the id would pass even if the
+# body were dropped.
+#
+# The `deferred`-only guard's PLACEMENT is checked with a pgx query tracer,
+# not by asserting "no row was written": a guard that ran after the closing
+# UPDATE and then rolled back would satisfy a writes-nothing assertion
+# while still being misordered. Mirrors void_integration_test's own tracer.
+#
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale. Tagged exactly as void_integration_test
+# is, so the two run under identical conditions.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:resolve_integration_test --test_output=all
+go_test(
+    name = "resolve_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["resolve_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 #   bazel test //krill/store:void_integration_test --test_output=all
 go_test(
     name = "void_integration_test",

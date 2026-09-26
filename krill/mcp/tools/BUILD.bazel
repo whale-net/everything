@@ -313,6 +313,27 @@ go_test(
     ],
 )
 
+# No-database unit test for resolve.go: RegisterResolveAll registers
+# resolve_non_goal (one verb over a two-value outcome, not one tool per
+# outcome) and list_non_goal_promotions, resolve_non_goal forwards both
+# outcomes with the session's scope and LB4 subjects, and any outcome
+# outside the two-value set is refused before the store rather than
+# defaulted inside it.
+go_test(
+    name = "resolve_registration_test",
+    srcs = ["resolve_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # No-database unit test: RegisterEntityCreateAll registers exactly
 # {create_product, create_feature_set, create_load_bearing_decision,
 # create_persona, create_non_goal, create_feature, create_requirement} over

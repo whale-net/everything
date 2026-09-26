@@ -34,8 +34,8 @@ var resolveOutcomes = []store.ResolveOutcome{store.ResolvePromote, store.Resolve
 // caller-supplied field.
 type resolveNonGoalInput struct {
 	krillSessionInput
-	NonGoalID string `json:"non_goal_id" jsonschema:"The surrogate id (LB2) of the deferred Non-Goal to resolve, as a UUID string."`
-	Outcome   string `json:"outcome" jsonschema:"How to settle it: 'promote' re-kinds it to 'permanent' and keeps it (close + successor, body and name preserved); 'retire' tombstones it (close with no successor, name freed). No other value is accepted."`
+	NonGoalID string  `json:"non_goal_id" jsonschema:"The surrogate id (LB2) of the deferred Non-Goal to resolve, as a UUID string."`
+	Outcome   string  `json:"outcome" jsonschema:"How to settle it: 'promote' re-kinds it to 'permanent' and keeps it (close + successor, body and name preserved); 'retire' tombstones it (close with no successor, name freed). No other value is accepted."`
 	Reason    *string `json:"reason,omitempty" jsonschema:"Optional free-text reason, recorded in the resolution's history for the audit reads."`
 }
 
