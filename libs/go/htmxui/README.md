@@ -114,6 +114,22 @@ Each is a `.templ` component in `libs/go/htmxui`, daisyUI-classes-only
   `Disabled`/`DisabledReason`, `CancelHref`). The `<form>` element itself
   stays app-owned; `submitAttrs` forwards onto the submit `<button>` (e.g.
   an `hx-post` target).
+- **`Alert(variant AlertVariant, message string, attrs templ.Attributes)`**
+  (`alert.templ`) — the shared flash / inline-message box. `AlertVariant`
+  covers `AlertInfo`/`AlertSuccess`/`AlertWarning`/`AlertError`, and the
+  ARIA role is **derived** from the variant (`status` for info/success,
+  `alert` for warning/error) rather than passed in — that derivation is
+  what consolidates the `role="alert"`-vs-`role="status"` drift the
+  cross-domain survey in `ARCHITECTURE.md` §13 found. A children slot
+  covers the minority of call sites that need an action link or retry
+  button alongside the message.
+- **`EmptyState(title, description, actionText, actionHref string, attrs templ.Attributes)`**
+  (`empty_state.templ`) — the shared "nothing here yet" card. The
+  description's opacity is fixed at `text-base-content/60`, consolidating
+  the /50-vs-/60-vs-/70 drift §13 found. Every field is optional and
+  omitted when empty (§4); the action link renders only when **both**
+  `actionText` and `actionHref` are set, so a caller cannot emit a
+  labelless link or a destinationless label.
 
 ## BUILD shape: `templ_library`, not `go_library`
 

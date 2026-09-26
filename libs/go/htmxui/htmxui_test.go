@@ -797,3 +797,132 @@ func TestUserMenu_ComposesAlongsideHeaderRightSlot(t *testing.T) {
 		t.Errorf("expected app-specific extra to render adjacent to UserMenu, not nested inside its dropdown, got %q", body)
 	}
 }
+
+// --- Alert / EmptyState -----------------------------------------------------
+
+func TestAlert_VariantEmitsExactlyOneColourClass(t *testing.T) {
+	for _, tc := range []struct {
+		variant AlertVariant
+		want    string
+	}{
+		{AlertInfo, "alert-info"},
+		{AlertSuccess, "alert-success"},
+		{AlertWarning, "alert-warning"},
+		{AlertError, "alert-error"},
+	} {
+		body := render(t, Alert(tc.variant, "message", nil))
+		if !hasClass(body, "alert") {
+			t.Errorf("%s: expected the base alert class, got %q", tc.variant, body)
+		}
+		if !hasClass(body, tc.want) {
+			t.Errorf("%s: expected %s, got %q", tc.variant, tc.want, body)
+		}
+		for _, other := range []AlertVariant{AlertInfo, AlertSuccess, AlertWarning, AlertError} {
+			if other != tc.variant && hasClass(body, string(other)) {
+				t.Errorf("%s: emitted a second colour class %s, got %q", tc.variant, other, body)
+			}
+		}
+	}
+}
+
+func TestAlert_UnsetVariantEmitsBareAlertClass(t *testing.T) {
+	body := render(t, Alert("", "message", nil))
+	if !hasClass(body, "alert") {
+		t.Fatalf("expected the base alert class, got %q", body)
+	}
+	if body != `<div class="alert" role="alert"><span class="text-sm">message</span></div>` {
+		t.Errorf("expected a bare alert with no stray whitespace, got %q", body)
+	}
+}
+
+// TestAlert_RoleIsDerivedFromVariant pins the derivation that consolidates
+// the drift ARCHITECTURE §13 surveyed: calm variants are polite status
+// regions, urgent ones are assertive alerts.
+func TestAlert_RoleIsDerivedFromVariant(t *testing.T) {
+	for _, tc := range []struct {
+		variant AlertVariant
+		want    string
+	}{
+		{AlertInfo, `role="status"`},
+		{AlertSuccess, `role="status"`},
+		{AlertWarning, `role="alert"`},
+		{AlertError, `role="alert"`},
+		{"", `role="alert"`},
+	} {
+		body := render(t, Alert(tc.variant, "m", nil))
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("%s: expected %s, got %q", tc.variant, tc.want, body)
+		}
+	}
+}
+
+func TestAlert_ForwardsAttrsAndRendersMessage(t *testing.T) {
+	body := render(t, Alert(AlertError, "krill rejected the release.", templ.Attributes{
+		"id":    "intervention-error",
+		"class": "mt-2",
+	}))
+	if !strings.Contains(body, `id="intervention-error"`) {
+		t.Errorf("expected the attrs escape hatch to be forwarded, got %q", body)
+	}
+	if !hasClass(body, "mt-2") {
+		t.Errorf("expected a forwarded class to merge with the variant classes, got %q", body)
+	}
+	if !strings.Contains(body, "krill rejected the release.") {
+		t.Errorf("expected the message to render, got %q", body)
+	}
+	// Alert() called with no children slot in this test harness renders an
+	// empty body; assert the message span still wraps a location where
+	// children would land (after it), matching TestButton_RendersChildren.
+	if !strings.Contains(body, "</span>") {
+		t.Errorf("expected a closing </span> for the message, got %q", body)
+	}
+}
+
+func TestEmptyState_OmitsEveryEmptyField(t *testing.T) {
+	body := render(t, EmptyState("", "", "", "", nil))
+	if strings.Contains(body, "<h3") {
+		t.Errorf("an empty title must omit the heading, got %q", body)
+	}
+	if strings.Contains(body, "<p ") {
+		t.Errorf("an empty description must omit the paragraph, got %q", body)
+	}
+	if strings.Contains(body, "<a ") {
+		t.Errorf("an empty action must omit the link, got %q", body)
+	}
+	if !hasClass(body, "card") {
+		t.Errorf("expected the card chrome to remain, got %q", body)
+	}
+}
+
+func TestEmptyState_ActionNeedsBothTextAndHref(t *testing.T) {
+	// A label with no destination, or a destination with no label, would
+	// each render a control the operator cannot act on.
+	if body := render(t, EmptyState("t", "d", "Add one", "", nil)); strings.Contains(body, "Add one") {
+		t.Errorf("action text with no href must not render, got %q", body)
+	}
+	if body := render(t, EmptyState("t", "d", "", "/ops/claimed", nil)); strings.Contains(body, "/ops/claimed") {
+		t.Errorf("action href with no text must not render, got %q", body)
+	}
+	body := render(t, EmptyState("Nothing here", "yet", "Add one", "/ops/claimed", nil))
+	if !strings.Contains(body, `href="/ops/claimed"`) || !strings.Contains(body, "Add one") {
+		t.Errorf("a fully-specified action must render, got %q", body)
+	}
+}
+
+// TestEmptyState_FixesDescriptionOpacityAtSixty pins the single decision
+// that consolidates the /50-vs-/60-vs-/70 drift in ARCHITECTURE §13.
+func TestEmptyState_FixesDescriptionOpacityAtSixty(t *testing.T) {
+	body := render(t, EmptyState("t", "d", "", "", nil))
+	if !hasClass(body, "text-base-content/60") {
+		t.Errorf("expected the description at text-base-content/60, got %q", body)
+	}
+}
+
+func TestEmptyState_ForwardsAttrs(t *testing.T) {
+	body := render(t, EmptyState("No design sessions", "yet", "", "", templ.Attributes{
+		"data-krill": "design-empty",
+	}))
+	if !strings.Contains(body, `data-krill="design-empty"`) {
+		t.Errorf("expected the attrs escape hatch to be forwarded, got %q", body)
+	}
+}

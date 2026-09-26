@@ -214,28 +214,18 @@ implementing one of these should read the real call sites listed below, the
 same way `Confirm` was built from its three), not happen automatically
 because this list exists.
 
-- **Alert/flash banner** — by far the strongest signal: `<div role="alert"
-  class="alert alert-{variant} ...">` (or a thin wrapper of the same shape)
-  appears independently in **every surveyed domain** —
-  `tools/app_registry/ui` (15+ call sites, e.g. `promote.templ`,
-  `environment_form.templ`, `deployments.templ`), `leaflab/ui` (`admin_boards.templ`,
-  `board_detail.templ`, `boards.templ`, `regions.templ`,
-  `sensor_history.templ`), `whagent_net/ui` (`grants.templ`,
-  `grants_admin.templ`, `link_ass_result.templ`, `mcp_consent.templ`,
-  `session_new.templ`), and `manmanv2/ui` (already has its own generic
-  `components.Alert(alertType, message)` in `ui.templ`). Already drifting
-  between copies (some append `shadow-md`, some don't; `role="alert"` vs.
-  `role="status"` for success). Same variant-enum-plus-message-slot shape as
-  `Badge`. This is the single best next candidate for a shared
-  `htmxui.Alert`.
-- **Empty-state message** — `<p class="text-base-content/NN">No X
-  yet.</p>` (or `opacity-70` equivalent), with the opacity fraction actively
-  drifting between call sites even within one domain (`audience_score_system`
-  alone has `/50`, `/60`, and `/70` versions). Found in
-  `audience_score_system/web` (20+ sites), `leaflab/ui`, `whagent_net/ui`.
-  `manmanv2/ui` already has a generic `components.EmptyState(title,
-  description, actionText, actionHref)` in `ui.templ` worth using as the
-  starting shape.
+- ~~**Alert/flash banner**~~ — **done: `htmxui.Alert`** (`alert.templ`).
+  The `<div role="alert" class="alert alert-{variant} ...">` box appeared
+  independently in every surveyed domain and had already begun to drift
+  (`shadow-md` on some copies, `role="alert"` vs `role="status"` for
+  success). The primitive resolves both: the role is *derived* from the
+  variant rather than passed in. Adopt it instead of writing another copy;
+  the other domains' existing call sites are adoption debt, not a second
+  primitive to build.
+- ~~**Empty-state message**~~ — **done: `htmxui.EmptyState`**
+  (`empty_state.templ`). The description's opacity was drifting between
+  `/50`, `/60`, and `/70`; the primitive fixes it at `/60` and takes the
+  `actionText`/`actionHref` pair `manmanv2/ui`'s local version already had.
 - **Form field group** — the `form-control`/`label`/`label-text` wrapper
   plus an inline `<p class="text-error text-sm">{ err }</p>` validation
   message, reinvented per-field in `audience_score_system/web` (10+ sites
