@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/libs/go/dbtest"
 )
 
 // deliveryParentFixture is a product whose scope deliberately straddles
@@ -242,4 +243,207 @@ func TestAddDeliversMany_MilepebbleAndBacklog_AreNotCompetingOwners(t *testing.T
 	require.NoError(t, s.MilestoneAuthoring().AddDeliversMany(ctx, scopeID, milestone.ID, []uuid.UUID{f.nextFeature}, self, self))
 	assert.False(t, deliversAssociation(t, ctx, db, f.nextFeature, cut.ID),
 		"the milestone-level re-cut drops the milepebble's association too -- a cut cannot outlive its parent's claim")
+}
+
+// milepbbleParentFixture is M1 plus two cuts cut from it, and a competing
+// milestone M2 of the same product -- the exact shape that made
+// MoveScope(E, from=MP, to=M2) leave E delivered by both M1 and M2.
+type milepebbleParentFixture struct {
+	parent     uuid.UUID // M1
+	cut1, cut2 uuid.UUID // two milepebbles of M1
+	competing  uuid.UUID // M2
+	entity     uuid.UUID
+}
+
+func newMilepebbleParentFixture(t *testing.T, ctx context.Context, s *store.Store, scopeID, productID uuid.UUID) milepebbleParentFixture {
+	t.Helper()
+	self := milestoneAuthoringTestSubject("agent-1")
+
+	parent, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, productID, "M1", "", nil, self, self)
+	require.NoError(t, err)
+	cut1, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, parent.ID, "cut 1", "", nil, self, self)
+	require.NoError(t, err)
+	cut2, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, parent.ID, "cut 2", "", nil, self, self)
+	require.NoError(t, err)
+	competing, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, productID, "M2", "", nil, self, self)
+	require.NoError(t, err)
+	featureSet, err := s.FeatureSets().Create(ctx, scopeID, productID, "FS", nil)
+	require.NoError(t, err)
+	feature, err := s.Features().Create(ctx, scopeID, featureSet.ID, "F1", nil)
+	require.NoError(t, err)
+
+	// M1 delivers E, and the subset invariant means so does every cut
+	// that narrows it -- the state the move has to unwind cleanly.
+	require.NoError(t, s.MilestoneAuthoring().AddDelivers(ctx, scopeID, parent.ID, feature.ID, self, self))
+	require.NoError(t, s.MilestoneAuthoring().AddMilepebbleDelivers(ctx, scopeID, cut1.ID, feature.ID, self, self))
+
+	return milepebbleParentFixture{
+		parent: parent.ID, cut1: cut1.ID, cut2: cut2.ID,
+		competing: competing.ID, entity: feature.ID,
+	}
+}
+
+// milestoneLevelDelivers returns every `kind='milestone'` row of this
+// product that delivers the entity -- the level LB6 says there can be at
+// most one of.
+func milestoneLevelDelivers(t *testing.T, ctx context.Context, db *dbtest.Postgres, scopeID, productID, entityID uuid.UUID) []uuid.UUID {
+	t.Helper()
+	rows, err := db.Pool.Query(ctx, `
+		SELECT em.milestone_id FROM entity_milestone em
+		JOIN milestone_ref mr ON mr.id = em.milestone_id
+		WHERE em.entity_id = $1 AND em.relation = 'delivers'
+		  AND mr.kind = 'milestone' AND mr.scope_id = $2 AND mr.product_id = $3
+	`, entityID, scopeID, productID)
+	require.NoError(t, err)
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		require.NoError(t, rows.Scan(&id))
+		ids = append(ids, id)
+	}
+	require.NoError(t, rows.Err())
+	return ids
+}
+
+// TestMoveScope_MilepebbleToCompetingMilestone_LeavesOneMilestoneOwner is
+// the CRITICAL case the re-cut got wrong: moving an entity out of a
+// milepebble into a competing milestone must not leave the milepebble's
+// parent milestone still delivering it. Before the fix the parent row
+// survived the move, E was delivered by both M1 and M2 -- the exact state
+// addDeliversTx refuses -- and M2's own later AddDelivers of E tripped
+// that refusal for a stale M1 association nobody could see.
+func TestMoveScope_MilepebbleToCompetingMilestone_LeavesOneMilestoneOwner(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	self := milestoneAuthoringTestSubject("agent-1")
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record")
+	require.NoError(t, err)
+	f := newMilepebbleParentFixture(t, ctx, s, scopeID, product.ID)
+
+	require.NoError(t, s.Recut().MoveScope(ctx, scopeID, []uuid.UUID{f.entity}, f.cut1, f.competing, self, self))
+
+	assert.Equal(t, []uuid.UUID{f.competing}, milestoneLevelDelivers(t, ctx, db, scopeID, product.ID, f.entity),
+		"after the move the entity must be delivered by exactly one milestone -- the destination, not the milepebble's parent")
+	assert.False(t, deliversAssociation(t, ctx, db, f.entity, f.cut1), "the source cut must not keep delivering the entity")
+	assert.True(t, deliversAssociation(t, ctx, db, f.entity, f.competing), "the destination must deliver the entity")
+	assert.False(t, deliversAssociation(t, ctx, db, f.entity, f.parent),
+		"the milepebble's parent milestone must not survive as a second milestone-level owner")
+
+	// And the stale M1 row must not be what makes the next plan fail.
+	require.NoError(t, s.MilestoneAuthoring().AddDeliversMany(ctx, scopeID, f.competing, []uuid.UUID{f.entity}, self, self),
+		"a milestone that already holds the entity through the re-cut must be able to re-deliver it idempotently, not be refused against a stale row")
+}
+
+// TestMoveScope_MilepebbleOut_ParentRowSurvivesWhileSiblingCutDelivers is
+// the sibling case: the parent milestone's association is only ever a
+// consequence of some cut delivering the entity, so it may only be
+// dropped once the last cut lets go. While a sibling cut of M1 still
+// delivers the entity, moving the entity out of MP1 must leave M1's row
+// in place -- the FR3 subset invariant demands exactly that.
+func TestMoveScope_MilepebbleOut_ParentRowSurvivesWhileSiblingCutDelivers(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	self := milestoneAuthoringTestSubject("agent-1")
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record")
+	require.NoError(t, err)
+	f := newMilepebbleParentFixture(t, ctx, s, scopeID, product.ID)
+	require.NoError(t, s.MilestoneAuthoring().AddMilepebbleDelivers(ctx, scopeID, f.cut2, f.entity, self, self))
+
+	require.NoError(t, s.Recut().MoveScope(ctx, scopeID, []uuid.UUID{f.entity}, f.cut1, f.cut2, self, self))
+
+	assert.False(t, deliversAssociation(t, ctx, db, f.entity, f.cut1), "the entity leaves the cut it was moved out of")
+	assert.True(t, deliversAssociation(t, ctx, db, f.entity, f.cut2), "the entity lands in the sibling cut")
+	assert.True(t, deliversAssociation(t, ctx, db, f.entity, f.parent),
+		"the shared parent must keep delivering the entity while cut 2 still delivers it -- FR3's subset invariant")
+}
+
+// TestMoveScope_MilepebbleOut_SiblingCut_CompetingMilestone_Refused pins
+// the one move that cannot be made cleanly. M1's association has to
+// survive (cut 2 still delivers the entity) and the destination is a
+// competing milestone, so applying it would give the entity two
+// milestone-level owners -- the state LB6 forbids. The move is refused
+// loudly, writing nothing, rather than half-applied.
+func TestMoveScope_MilepebbleOut_SiblingCut_CompetingMilestone_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	self := milestoneAuthoringTestSubject("agent-1")
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record")
+	require.NoError(t, err)
+	f := newMilepebbleParentFixture(t, ctx, s, scopeID, product.ID)
+	require.NoError(t, s.MilestoneAuthoring().AddMilepebbleDelivers(ctx, scopeID, f.cut2, f.entity, self, self))
+
+	err = s.Recut().MoveScope(ctx, scopeID, []uuid.UUID{f.entity}, f.cut1, f.competing, self, self)
+	require.ErrorIs(t, err, store.ErrEntityDeliveredBySiblingCut)
+	assert.Contains(t, err.Error(), f.cut2.String(), "the refusal must name the sibling cut still delivering the entity")
+
+	assert.True(t, deliversAssociation(t, ctx, db, f.entity, f.cut1), "a refused move must leave the source cut's association untouched")
+	assert.False(t, deliversAssociation(t, ctx, db, f.entity, f.competing), "a refused move must write nothing into the destination")
+	assert.Equal(t, []uuid.UUID{f.parent}, milestoneLevelDelivers(t, ctx, db, scopeID, product.ID, f.entity),
+		"a refused move must not change which milestone owns the entity")
+}
+
+// TestMoveScope_LastCutLetsGo_ParentMilestoneRowIsDropped closes the
+// lifecycle from the other side: the parent's association survives only
+// while some cut of that parent delivers the entity, so the move that
+// takes the entity out of the LAST cut of M1 and into a competing
+// milestone is the one that leaves M1 with no Delivers row for it. The
+// same re-cut into the backlog bucket deliberately does not -- abandoning
+// a cut is a narrower act than re-cutting it, and FR9 pins that the
+// parent milestone's own claim survives it.
+func TestMoveScope_LastCutLetsGo_ParentMilestoneRowIsDropped(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	self := milestoneAuthoringTestSubject("agent-1")
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record")
+	require.NoError(t, err)
+	f := newMilepebbleParentFixture(t, ctx, s, scopeID, product.ID)
+	require.NoError(t, s.MilestoneAuthoring().AddMilepebbleDelivers(ctx, scopeID, f.cut2, f.entity, self, self))
+
+	// One cut lets go, the sibling still delivers it: the parent keeps it.
+	require.NoError(t, s.Recut().MoveScope(ctx, scopeID, []uuid.UUID{f.entity}, f.cut1, f.cut2, self, self))
+	assert.True(t, deliversAssociation(t, ctx, db, f.entity, f.parent),
+		"cut 2 still delivers the entity, so the parent milestone keeps its own claim on it")
+
+	// The last cut lets go, to a competing milestone: the parent is left
+	// with no Delivers row for the entity at all.
+	require.NoError(t, s.Recut().MoveScope(ctx, scopeID, []uuid.UUID{f.entity}, f.cut2, f.competing, self, self))
+	assert.False(t, deliversAssociation(t, ctx, db, f.entity, f.parent),
+		"once the last cut of the parent stops delivering the entity to a competing milestone, the parent must be left with no Delivers row for it")
+	assert.Equal(t, []uuid.UUID{f.competing}, milestoneLevelDelivers(t, ctx, db, scopeID, product.ID, f.entity),
+		"the destination is the entity's only milestone-level owner")
+}
+
+// TestMoveScope_MilepebbleToBacklog_ParentMilestoneKeepsItsClaim pins
+// the other side of the same rule, so a later change does not widen the
+// parent-release to destinations it must not touch. Sweeping a cut's
+// scope into the backlog is what Abandon does (FR9), and abandoning a
+// milepebble alone leaves the parent milestone's own Delivers
+// association exactly where it is.
+func TestMoveScope_MilepebbleToBacklog_ParentMilestoneKeepsItsClaim(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	self := milestoneAuthoringTestSubject("agent-1")
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record")
+	require.NoError(t, err)
+	f := newMilepebbleParentFixture(t, ctx, s, scopeID, product.ID)
+
+	backlog, err := s.Recut().GetOrCreateBacklog(ctx, scopeID, product.ID, self, self)
+	require.NoError(t, err)
+	require.NoError(t, s.Recut().MoveScope(ctx, scopeID, []uuid.UUID{f.entity}, f.cut1, backlog.ID, self, self))
+
+	assert.False(t, deliversAssociation(t, ctx, db, f.entity, f.cut1), "the entity leaves the abandoned cut")
+	assert.True(t, deliversAssociation(t, ctx, db, f.entity, backlog.ID), "the entity lands in the backlog bucket")
+	assert.True(t, deliversAssociation(t, ctx, db, f.entity, f.parent),
+		"FR9: abandoning a milepebble alone must not touch its parent milestone's own Delivers association")
 }

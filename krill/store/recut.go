@@ -75,6 +75,9 @@ type RecutStore interface {
 	//     milepebble's parent milestone's Delivers set, unless from is
 	//     itself a milepebble sharing that same parent (ErrMilepebbleDeliversNotSubset)
 	//     -- see the FR3-subset paragraph below.
+	//   - from is a milepebble, to is a different milestone, and a
+	//     sibling cut of from's parent milestone still delivers entityID
+	//     (ErrEntityDeliveredBySiblingCut).
 	//
 	// Never touches a `delivery_shipment` row (NFR3: those are append-only
 	// history, immutable by construction -- see migration 013's own LB3/
@@ -112,6 +115,20 @@ type RecutStore interface {
 	// the milestone-level association would make re-cutting a milestone
 	// with milepebbles impractical for exactly the case FR5 exists for.
 	//
+	// The converse holds for the competing-milestone case: moving an item
+	// OUT of a milepebble to a milestone other than its own parent also
+	// drops that parent milestone's own Delivers association with the
+	// item, in the same transaction, so the item never ends up delivered
+	// by two milestones at once (LB6 -- the single-association delivery
+	// axis AddDeliversMany enforces). The parent row survives while a
+	// sibling cut of that same parent still delivers the item, which the
+	// subset invariant above requires it to; such a move is rejected
+	// (ErrEntityDeliveredBySiblingCut) rather than applied. Every other
+	// destination -- the backlog bucket, a sibling cut, the parent
+	// milestone itself -- is a narrowing or a relocation within the same
+	// parent, and leaves the parent's own association alone (the contract
+	// Abandon, which sweeps into the backlog, is also held to by FR9).
+	//
 	// This is the re-cut MilestoneAuthoringStore.AddDeliversMany names as
 	// the way out of ErrEntityDeliveredByCompetingMilestone, so it is not
 	// itself held to that rule: a move is what establishes the single
@@ -143,6 +160,16 @@ var ErrEntityShipped = errors.New("krill/store: entity is already shipped and ca
 // not currently a relation='delivers' `entity_milestone` association of
 // the `from` container -- there is nothing to move.
 var ErrEntityNotInContainer = errors.New("krill/store: entity is not a delivers association of the from container")
+
+// ErrEntityDeliveredBySiblingCut is MoveScope's named rejection for the
+// one move that would leave an entity with two milestone-level Delivers
+// owners: the source is a milepebble, and a sibling cut of the same
+// parent milestone still delivers the entity. The parent milestone's own
+// association has to survive that sibling (FR3's subset invariant), so
+// it cannot also be dropped for the move -- which means a competing
+// milestone cannot be the destination. The caller moves the entity out of
+// the sibling cut first, or re-cuts within the same parent.
+var ErrEntityDeliveredBySiblingCut = errors.New("krill/store: entity is still delivered by a sibling milepebble of the source's parent milestone")
 
 func (s recutStore) GetOrCreateBacklog(ctx context.Context, scopeID, productID uuid.UUID, acting, onBehalfOf Subject) (MilestoneRef, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -266,6 +293,21 @@ func milestoneRefKindAndParent(ctx context.Context, q txQuerier, scopeID, id uui
 	return MilestoneKind(kind), parent, nil
 }
 
+// competesWithMilepebbleParent reports whether a move from a milepebble
+// to toContainerID would hand the entity to a milestone other than the
+// one that milepebble belongs to. That is the single move whose end
+// state depends on what happens to the parent milestone's own Delivers
+// row, and the single move that can leave an entity with two
+// milestone-level owners: the parent's claim is released only here (FR3
+// keeps the row while a sibling cut of the same parent still delivers the
+// entity, which moveScopeTx then refuses as a destination), while a move
+// to the backlog bucket, to a sibling cut, or up to the parent itself
+// leaves the parent's claim alone.
+func competesWithMilepebbleParent(fromKind MilestoneKind, fromParent *uuid.UUID, toKind MilestoneKind, toContainerID uuid.UUID) bool {
+	return fromKind == MilestoneKindMilepebble && fromParent != nil &&
+		toKind == MilestoneKindMilestone && toContainerID != *fromParent
+}
+
 func (s recutStore) MoveScope(ctx context.Context, scopeID uuid.UUID, entityIDs []uuid.UUID, fromContainerID, toContainerID uuid.UUID, acting, onBehalfOf Subject) error {
 	if len(entityIDs) == 0 {
 		return fmt.Errorf("entity_ids: at least one entity id is required")
@@ -353,6 +395,33 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 				}
 			}
 		}
+
+		// A milepebble's Delivers row is only ever a narrowing of its
+		// parent milestone's own (FR3's subset invariant), so handing the
+		// entity to a competing milestone has to take the parent
+		// milestone's row with it (pass 2) or the entity would end up
+		// delivered by two milestones at once -- the state
+		// AddDeliversMany refuses and LB6 forbids. The parent row may
+		// only be released while no other cut of that parent still
+		// delivers the entity, so when a sibling cut does, a competing
+		// milestone cannot be the destination at all.
+		if competesWithMilepebbleParent(fromKind, fromParent, toKind, toContainerID) {
+			var sibling uuid.UUID
+			err := tx.QueryRow(ctx, `
+				SELECT em.milestone_id FROM entity_milestone em
+				WHERE em.entity_id = $1 AND em.relation = $2
+				  AND em.milestone_id <> $3
+				  AND em.milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $4)
+				LIMIT 1
+			`, entityID, string(MilestoneRelationDelivers), fromContainerID, *fromParent).Scan(&sibling)
+			if err == nil {
+				return fmt.Errorf("%w: entity %s, milepebble %s, sibling milepebble %s, parent milestone %s; move the entity out of that cut first",
+					ErrEntityDeliveredBySiblingCut, entityID, fromContainerID, sibling, *fromParent)
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("check sibling milepebble delivers: %w", err)
+			}
+		}
 	}
 
 	// Pass 2: apply. Every statement here is idempotent (ON CONFLICT DO
@@ -377,6 +446,31 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 				  AND milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $3 AND valid_to IS NULL)
 			`, entityID, string(MilestoneRelationDelivers), fromContainerID); err != nil {
 				return fmt.Errorf("drop milepebble associations: %w", err)
+			}
+		}
+
+		// The same rule from the other direction, and only for the one
+		// destination that would otherwise leave the entity delivered by
+		// two milestones at once: handing it to a COMPETING milestone has
+		// to release the source milepebble's parent milestone's claim on
+		// it too. Every other destination deliberately keeps the parent's
+		// row -- a move to the backlog bucket, to a sibling cut, or up to
+		// the parent itself is a narrowing or a relocation within the
+		// same parent milestone, and Abandon (which sweeps into the
+		// backlog) is held to the same contract by FR9. The row is kept
+		// when a sibling cut still delivers the entity, which pass 1 has
+		// already refused as a destination combination.
+		if competesWithMilepebbleParent(fromKind, fromParent, toKind, toContainerID) {
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM entity_milestone
+				WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
+				  AND NOT EXISTS (
+					  SELECT 1 FROM entity_milestone
+					  WHERE entity_id = $1 AND relation = $3
+					    AND milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $2)
+				  )
+			`, entityID, *fromParent, string(MilestoneRelationDelivers)); err != nil {
+				return fmt.Errorf("drop parent milestone association: %w", err)
 			}
 		}
 

@@ -44,7 +44,11 @@ type MoveScopeResponse struct {
 //   - an entity_id already shipped in `from` (store.ErrEntityShipped, 409)
 //     -- "truncate, never rewind" made tool-enforced;
 //   - a move into a milepebble that would violate the FR3 subset
-//     invariant (store.ErrMilepebbleDeliversNotSubset, 409).
+//     invariant (store.ErrMilepebbleDeliversNotSubset, 409);
+//   - a move out of a milepebble to a competing milestone while a sibling
+//     cut of the same parent still delivers the entity, which would leave
+//     it with two milestone-level owners
+//     (store.ErrEntityDeliveredBySiblingCut, 409).
 func MoveScopeHandler(recut store.RecutStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -91,7 +95,8 @@ func MoveScopeHandler(recut store.RecutStore) http.HandlerFunc {
 		if err := recut.MoveScope(r.Context(), sess.ScopeID, entityIDs, from, to, sess.Acting, sess.OnBehalfOf); err != nil {
 			if errors.Is(err, store.ErrEntityNotInContainer) ||
 				errors.Is(err, store.ErrEntityShipped) ||
-				errors.Is(err, store.ErrMilepebbleDeliversNotSubset) {
+				errors.Is(err, store.ErrMilepebbleDeliversNotSubset) ||
+			errors.Is(err, store.ErrEntityDeliveredBySiblingCut) {
 				writeJSONError(w, http.StatusConflict, err.Error())
 				return
 			}
