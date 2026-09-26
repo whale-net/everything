@@ -489,3 +489,219 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
+
+# Real-Postgres coverage for GameRepository, replaying the real shipped
+# migrations via //manmanv2/migrate/schema rather than hand-written DDL -- so
+# drift between game.go's SQL and the actual games table is caught. Same
+# build-tag/target conventions as the other integration targets here.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:game_integration_test --test_output=all
+go_test(
+    # keep
+    name = "game_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "game_integration_test.go",
+        "migrations_harness_integration_test.go",
+    ],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Real-Postgres coverage for GameConfigRepository, replaying the real shipped
+# migrations via //manmanv2/migrate/schema rather than the hand-written DDL
+# const the older tests in this package use. Same build-tag/target
+# conventions as game_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:gameconfig_integration_test --test_output=all
+go_test(
+    # keep
+    name = "gameconfig_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "gameconfig_integration_test.go",
+        "migrations_harness_integration_test.go",
+    ],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Real-Postgres coverage for ServerGameConfigRepository, replaying the real shipped
+# migrations via //manmanv2/migrate/schema rather than the hand-written DDL
+# const the older tests in this package use. Same build-tag/target
+# conventions as game_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:servergameconfig_integration_test --test_output=all
+go_test(
+    # keep
+    name = "servergameconfig_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "migrations_harness_integration_test.go",
+        "servergameconfig_integration_test.go",
+    ],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Real-Postgres coverage for GameConfigVolumeRepository, replaying the real shipped
+# migrations via //manmanv2/migrate/schema rather than the hand-written DDL
+# const the older tests in this package use. Same build-tag/target
+# conventions as game_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:gameconfigvolume_integration_test --test_output=all
+go_test(
+    # keep
+    name = "gameconfigvolume_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "gameconfigvolume_integration_test.go",
+        "migrations_harness_integration_test.go",
+    ],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Real-Postgres coverage for ConfigurationStrategyRepository, replaying the real shipped
+# migrations via //manmanv2/migrate/schema rather than the hand-written DDL
+# const the older tests in this package use. Same build-tag/target
+# conventions as game_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:configuration_strategy_integration_test --test_output=all
+go_test(
+    # keep
+    name = "configuration_strategy_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "configuration_strategy_integration_test.go",
+        "migrations_harness_integration_test.go",
+    ],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Real-Postgres coverage for AddonPathPresetRepository, replaying the real shipped
+# migrations via //manmanv2/migrate/schema rather than the hand-written DDL
+# const the older tests in this package use. Same build-tag/target
+# conventions as game_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:addon_path_preset_integration_test --test_output=all
+go_test(
+    # keep
+    name = "addon_path_preset_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "addon_path_preset_integration_test.go",
+        "migrations_harness_integration_test.go",
+    ],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
