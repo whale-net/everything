@@ -7,7 +7,7 @@ This document explains the two different Slack tokens used in the Friendly Compu
 ### 1. Slack App Token (`SLACK_APP_TOKEN`)
 - **Format**: `xapp-1-...`
 - **Purpose**: Socket Mode connection for real-time events
-- **Used by**: Main Slack bot service (`run` command)
+- **Used by**: Slack bot service (`fcm bot run-slack-socket-app`) and the task pool (`fcm bot run-taskpool`)
 - **Enables**:
   - Real-time message events
   - Slash command interactions
@@ -18,8 +18,9 @@ This document explains the two different Slack tokens used in the Friendly Compu
 - **Format**: `xoxb-...`
 - **Purpose**: Web API calls to Slack
 - **Used by**:
-  - Main Slack bot service (for sending messages)
-  - Subscribe service (for notifications)
+  - Slack bot service (for sending messages)
+  - Task pool service (for posting scheduled messages, e.g. the weekly music poll)
+  - Temporal worker (`fcm workflow run`)
   - Utility commands (`send-test-command`, `who-am-i`)
 - **Enables**:
   - Sending messages (`chat.postMessage`)
@@ -29,21 +30,20 @@ This document explains the two different Slack tokens used in the Friendly Compu
 
 ## How They Work Together
 
-1. **Main Bot Service** (`fcm bot run`):
+1. **Slack Bot Service** (`fcm bot run-slack-socket-app`):
    - Uses **App Token** for Socket Mode to receive events
    - Uses **Bot Token** for Web API to send responses
 
-2. **Subscribe Service** (`fcm bot subscribe`):
-   - Only needs **Bot Token** for sending notifications
-   - No real-time events needed (uses RabbitMQ instead)
+2. **Task Pool Service** (`fcm bot run-taskpool`) and **Temporal Worker** (`fcm workflow run`):
+   - Only need the **Bot Token** — they post and read, but hold no Socket Mode connection
 
 ## Environment Variables
 
 ```bash
-# Required for both services
+# Required by bot, taskpool, and worker
 export SLACK_BOT_TOKEN="xoxb-your-bot-token"
 
-# Required for main bot service only
+# Required for Socket Mode only (bot and taskpool)
 export SLACK_APP_TOKEN="xapp-1-your-app-token"
 ```
 
@@ -51,7 +51,7 @@ export SLACK_APP_TOKEN="xapp-1-your-app-token"
 
 - **Security**: App tokens have broader permissions for Socket Mode
 - **Separation**: Web API calls can be made independently of Socket Mode
-- **Flexibility**: Subscribe service doesn't need Socket Mode overhead
+- **Flexibility**: The task pool and worker don't need Socket Mode overhead
 - **Slack Architecture**: Different parts of Slack API require different authentication
 
 ## Getting Tokens
