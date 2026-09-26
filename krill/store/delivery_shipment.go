@@ -81,6 +81,19 @@ func (s deliveryShipmentStore) MarkShipped(ctx context.Context, scopeID, milesto
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// milestone_ref is SCD2 (migration 020), so its id is not table-wide
+	// unique and Postgres cannot target a FK at it -- 020 dropped
+	// delivery_shipment_milestone_id_fkey. The in-transaction check below
+	// is the only backstop that stops a shipment row against a milestone
+	// that does not exist.
+	exists, err := currentRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errParentNotFound("milestone_ref", milestoneID)
+	}
+
 	var delivers bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (

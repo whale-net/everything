@@ -1588,7 +1588,7 @@ func TestMigration013_SchemaContract(t *testing.T) {
 	assert.NoError(t, insertShipment(milepebbleID), "delivery_shipment must accept a kind='milepebble' target the same as a kind='milestone' one (FR9)")
 
 	// -- milestone_id FK is real, not just a plain uuid column ----------------
-	assert.NoError(t, insertShipment(uuid.New()), "delivery_shipment.milestone_id is a plain uuid column since migration 020; MarkShipped's own currentRowExists check is what rejects an unknown milestone")
+	assert.NoError(t, insertShipment(uuid.New()), "delivery_shipment.milestone_id is a plain uuid column since migration 020 (milestone_ref is SCD2, so its id cannot carry a FK); this raw insert bypasses krill/store by design, so the store's in-transaction currentRowExists check on milestone_ref is what rejects an unknown milestone -- it is covered in krill/store, not here")
 
 	// -- a second row for the exact same (entity, milestone) pair is accepted,
 	// never rejected as a duplicate (NFR2/NFR3: appending, not upserting) --

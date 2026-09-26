@@ -41,7 +41,12 @@ type MilestoneStore interface {
 	// validate that entityID names a real row of either table -- the
 	// importer resolves entityID from its own just-written entities
 	// before calling this, so there is nothing to look up here that the
-	// caller does not already know.
+	// caller does not already know. milestoneID IS validated in
+	// transaction against a current `milestone_ref` row: migration 020
+	// SCD2s that table, so its id is not table-wide unique and Postgres
+	// cannot target a FK at it -- 020 dropped
+	// entity_milestone_milestone_id_fkey, and this check is the
+	// replacement.
 	AddAssociation(ctx context.Context, scopeID, entityID, milestoneID uuid.UUID) error
 
 	// ListAssociationsByMilestone returns every EntityMilestone row for
@@ -172,6 +177,25 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 }
 
 func (s milestoneStore) AddAssociation(ctx context.Context, scopeID, entityID, milestoneID uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// milestone_ref is SCD2 (migration 020), so its id is not table-wide
+	// unique and Postgres cannot target a FK at it -- 020 dropped
+	// entity_milestone_milestone_id_fkey. Without this check a dangling
+	// (entity, milestone) delivers row is plantable, and MarkShipped's own
+	// milestone_ref check would then be satisfied by it.
+	exists, err := currentRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errParentNotFound("milestone_ref", milestoneID)
+	}
+
 	// relation is written explicitly as MilestoneRelationDelivers -- the
 	// importer (FR16) has no concept of "must not foreclose", so every row
 	// it writes is a Delivers row, same meaning this column defaults to
@@ -181,13 +205,16 @@ func (s milestoneStore) AddAssociation(ctx context.Context, scopeID, entityID, m
 	// the first two, as this method did before that migration, is no
 	// longer a valid arbiter and fails at the database with "no unique or
 	// exclusion constraint matching the ON CONFLICT specification".
-	_, err := s.pool.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
-	`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers))
-	if err != nil {
+	`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers)); err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

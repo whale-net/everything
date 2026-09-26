@@ -10,10 +10,10 @@
 // itself.
 //
 // `task_dependency` is plain (not SCD2, LB3 -- see the migration's own
-// note on this table), so parentage is checked with plainRowExists, the
-// same helper CreateMilepebble/AddDeferral use for their own plain
-// milestone_ref parent, never currentRowExists (which assumes a
-// `valid_to` column this table does not have).
+// note on this table), so parentage is checked with plainRowExists, never
+// currentRowExists (which assumes a `valid_to` column this table does not
+// have). CreateMilepebble/AddDeferral check their own `milestone_ref`
+// parent with currentRowExists, since migration 020 made that table SCD2.
 package store
 
 import (
