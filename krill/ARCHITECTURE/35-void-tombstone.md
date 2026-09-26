@@ -102,7 +102,7 @@ already takes an `entity_kind` over the same spec-axis kinds. HTTP keeps
 one route per kind because there the path genuinely *is* the
 discriminator, and REST already reads that way.
 
-**No `POST /void-events`.** The audit read is scope-keyed, and every
+**No `GET /void-events`.** The audit read is scope-keyed, and every
 ungated read in `krill/api` is keyed off a globally-unique entity id
 instead; exposing it would have meant either a new store method or a
 caller-supplied `scope_id` query parameter that reads any scope's register.

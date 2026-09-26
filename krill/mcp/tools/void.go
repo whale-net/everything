@@ -6,13 +6,13 @@
 //
 // ONE tool, not seven: the seven void-able kinds differ in nothing a caller
 // can act on -- the arguments, the refusals, and the returned id are
-// identical, and the store already dispatches on kind internally
-// (store.VoidStore's voidEntity). Seven tools would put seven near-identical
-// descriptions in the model's context and make it pick between them on
-// nothing. This mirrors record_note, which already takes an entity_kind
-// discriminator over the same five spec-axis kinds, rather than inventing a
-// second convention. The HTTP twin keeps one route per kind because there
-// the path genuinely is the discriminator.
+// identical. voidEntity is one shared body parameterised by a kind constant;
+// the caller's switch does the dispatch, passing that constant through. Seven
+// tools would put seven near-identical descriptions in the model's context and
+// make it pick between them on nothing. This mirrors record_note, which
+// already takes an entity_kind discriminator over the same five spec-axis
+// kinds, rather than inventing a second convention. The HTTP twin keeps one
+// route per kind because there the path genuinely is the discriminator.
 //
 // Milestone is deliberately absent: a milestone is a delivery-axis fact
 // whose delivery records are append-only, and FR 39373553 gives it amend
