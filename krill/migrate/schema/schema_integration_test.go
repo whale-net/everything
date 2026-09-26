@@ -198,18 +198,18 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(21), latest, "expected the latest migration source version to be 21 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(22), latest, "expected the latest migration source version to be 22 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event, 022_non_goal_promotion) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
 	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-021")
+	require.NoError(t, runner.Up(), "apply migrations 001-022")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(21), version)
+	assert.Equal(t, uint(22), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -233,6 +233,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.True(t, tableExists(t, ctx, db, "task_attempt"), "expected table \"task_attempt\" to exist after Up() (015_work_axis, issue #2719)")
 	assert.True(t, tableExists(t, ctx, db, "task_note"), "expected table \"task_note\" to exist after Up() (015_work_axis, issue #2719)")
 	assert.True(t, tableExists(t, ctx, db, "void_event"), "expected table \"void_event\" to exist after Up() (021_void_event)")
+	assert.True(t, tableExists(t, ctx, db, "non_goal_promotion"), "expected table \"non_goal_promotion\" to exist after Up() (022_non_goal_promotion)")
 
 	// -- Down: every table must be gone -------------------------------------
 	require.NoError(t, runner.Down(), "roll back every migration")
@@ -259,6 +260,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.False(t, tableExists(t, ctx, db, "task_attempt"), "expected table \"task_attempt\" to be dropped after Down() -- a clean database (015_work_axis, issue #2719)")
 	assert.False(t, tableExists(t, ctx, db, "task_note"), "expected table \"task_note\" to be dropped after Down() -- a clean database (015_work_axis, issue #2719)")
 	assert.False(t, tableExists(t, ctx, db, "void_event"), "expected table \"void_event\" to be dropped after Down() -- a clean database (021_void_event)")
+	assert.False(t, tableExists(t, ctx, db, "non_goal_promotion"), "expected table \"non_goal_promotion\" to be dropped after Down() -- a clean database (022_non_goal_promotion)")
 
 	// -- Up again: re-runnable from the clean state --------------------------
 	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
@@ -266,7 +268,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(21), version)
+	assert.Equal(t, uint(22), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -568,9 +570,15 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 		// no REFERENCES, because each void-able table is SCD2 and so has no
 		// table-wide unique id for a FK to target. See TestMigration021_SchemaContract.
 		"void_event",
+		// The PROMOTE register (022_non_goal_promotion). It is the same
+		// append-only audit shape as void_event and for the same reason
+		// carries no REFERENCES: a promote supersedes a spec-axis SCD2 row
+		// rather than parenting one, so non_goal_promotion.non_goal_id is a
+		// bare UUID. See TestMigration022_SchemaContract.
+		"non_goal_promotion",
 	}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + task_escalation_event/task_intervention_event/task_note_lifecycle_event (016_escalation_axis, issue #2868) + void_event (021_void_event) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + task_escalation_event/task_intervention_event/task_note_lifecycle_event (016_escalation_axis, issue #2868) + void_event (021_void_event) + non_goal_promotion (022_non_goal_promotion) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table EXCEPT feature and
 	// load_bearing_decision -- migration 017 (issue #2969) reversed LB2's
