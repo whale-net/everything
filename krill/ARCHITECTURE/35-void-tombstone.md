@@ -81,6 +81,45 @@ An empty `kind` means *every* kind, not *none*. It carries the original
 `entity_id` and `retired_display_number` — the identity a `C7`-style
 citation resolved to before the void — plus the LB4 subject pair.
 
+## The exposed verb
+
+FR d38d726e opens "a Requirement Contributor can void a mistaken create",
+and a Requirement Contributor reaches krill through MCP — so the verb has
+to exist above the store or the FR is unreachable. It mirrors the amend
+surface ([`33-scd2-amend-all-spec-kinds.md`](33-scd2-amend-all-spec-kinds.md)):
+
+| | HTTP | MCP |
+|---|---|---|
+| void | seven `POST /{kind}/{id}/void` routes, gated | `void_entity {entity_kind, entity_id, reason}`, gated |
+| audit | — (see below) | `list_void_events {scope_id, entity_kind?}`, ungated |
+
+**MCP gets one verb, HTTP gets seven routes.** The seven kinds differ in
+nothing a caller can act on — same arguments, same refusals, same returned
+id, and the store already dispatches on kind internally. Seven tools would
+put seven near-identical descriptions in front of a model choosing between
+them on nothing. The discriminator form is not invented: `record_note`
+already takes an `entity_kind` over the same spec-axis kinds. HTTP keeps
+one route per kind because there the path genuinely *is* the
+discriminator, and REST already reads that way.
+
+**No `POST /void-events`.** The audit read is scope-keyed, and every
+ungated read in `krill/api` is keyed off a globally-unique entity id
+instead; exposing it would have meant either a new store method or a
+caller-supplied `scope_id` query parameter that reads any scope's register.
+The MCP tool takes `scope_id` explicitly, exactly as `list_products`
+already does. Wiring an HTTP twin is open work.
+
+### Reuse by the Non-Goal resolve verb
+
+FR d0021a0f's RETIRE outcome is specified as "the same shape as void".
+`VoidStore.VoidNonGoal` is that shape and is deliberately left directly
+callable: RETIRE adds one check of its own — that the NonGoal is currently
+`deferred` — and its "outcome, actor and timestamp" record is exactly the
+`void_event` row `VoidNonGoal` already writes. Nothing here must be
+duplicated to add it. Void deliberately does *not* enforce the `deferred`
+check itself, because a `permanent` NonGoal may also be a mistaken create,
+which is void's own case.
+
 ## Testing note
 
 `//krill/store:void_integration_test` uses a pgx query tracer for the

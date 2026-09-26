@@ -107,9 +107,13 @@ type VoidStore interface {
 
 	// VoidNonGoal tombstones the current NonGoal row for id, of either
 	// kind. This is the same close-without-successor shape the resolve
-	// verb's RETIRE outcome needs (FR d0021a0f); it does not itself check
-	// that the NonGoal is `deferred` -- that is the resolve verb's rule to
-	// enforce, and a permanent NonGoal may still be a mistaken create.
+	// verb's RETIRE outcome needs (FR d0021a0f), and it is deliberately
+	// reusable as that outcome: the RETIRE path adds one check of its own
+	// -- that the NonGoal is currently `deferred` -- and records the
+	// chosen outcome, actor and timestamp through this same call, which
+	// writes exactly that triple into void_event. It does not enforce the
+	// `deferred` check here, because a permanent NonGoal may also be a
+	// mistaken create, which is void's own case.
 	VoidNonGoal(ctx context.Context, scopeID, id uuid.UUID, reason *string, acting, onBehalfOf Subject) error
 
 	// VoidLoadBearingDecision tombstones the current

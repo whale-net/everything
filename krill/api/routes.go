@@ -22,7 +22,8 @@ import (
 // entity
 // create/attach endpoint (issue #2490, FR1/FR2/FR4), the amend
 // endpoints below (FR12, issue #2493; generalised to every spec-axis kind
-// by issue #2958/#2966), the pointer-artifact create
+// by issue #2958/#2966) and the seven void endpoints below (FR d38d726e,
+// FR 2a3a8eef), the pointer-artifact create
 // endpoint (issue #2496, FR20), POST /design-sessions and POST
 // /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8), POST
 // /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2), the five
@@ -278,6 +279,20 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /non-goals/{id}/amend", gate(handlers.AmendNonGoalHandler(entities.Amend())))
 	mux.Handle("POST /load-bearing-decisions/{id}/amend", gate(handlers.AmendLoadBearingDecisionHandler(entities.Amend())))
 	mux.Handle("POST /milestones/{id}/amend", gate(handlers.AmendMilestoneHandler(entities.Amend())))
+
+	// void: the tombstone verb, the other half of the LB3 boundary call
+	// amend draws. Every void-able spec-axis kind has one; a Milestone does
+	// not, because its delivery axis is append-only and its authoring
+	// fields are amendable (FR 39373553). Both refusals -- a delivered or
+	// shipped entity, an entity with a live child -- return 409 (FR
+	// 2a3a8eef).
+	mux.Handle("POST /products/{id}/void", gate(handlers.VoidProductHandler(entities.Void())))
+	mux.Handle("POST /feature-sets/{id}/void", gate(handlers.VoidFeatureSetHandler(entities.Void())))
+	mux.Handle("POST /features/{id}/void", gate(handlers.VoidFeatureHandler(entities.Void())))
+	mux.Handle("POST /requirements/{id}/void", gate(handlers.VoidRequirementHandler(entities.Void())))
+	mux.Handle("POST /personas/{id}/void", gate(handlers.VoidPersonaHandler(entities.Void())))
+	mux.Handle("POST /non-goals/{id}/void", gate(handlers.VoidNonGoalHandler(entities.Void())))
+	mux.Handle("POST /load-bearing-decisions/{id}/void", gate(handlers.VoidLoadBearingDecisionHandler(entities.Void())))
 
 	mux.HandleFunc("GET /requirements/{id}/as-of", handlers.GetRequirementAsOfHandler(entities.History()))
 	mux.HandleFunc("GET /requirements/{id}/versions", handlers.ListRequirementVersionsHandler(entities.History()))

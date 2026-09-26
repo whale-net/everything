@@ -95,6 +95,7 @@ go_library(
         "task_reclaim.go",
         "task_release.go",
         "task_requeue.go",
+        "void.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",
@@ -143,6 +144,7 @@ go_test(
     srcs = [
         "abandon_test.go",
         "amend_test.go",
+        "void_test.go",
         "console_test.go",
         "decision_test.go",
         "delivery_shipment_test.go",
