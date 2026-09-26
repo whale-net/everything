@@ -1,11 +1,9 @@
 package main
 
 import (
-	"html/template"
-	"net/http"
 	"strings"
 
-	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/krill/ui/components"
 )
 
 // navArea is one top-level destination in the shell's persistent nav.
@@ -13,6 +11,11 @@ import (
 // design-session browser, spec+delivery browser -- are FR 85a8b33c's
 // contract; the credential widget is the page that predates the shell and
 // stays reachable from it.
+//
+// The chrome that renders these lives in krill/ui/components/layout.templ
+// (a wrapper around //libs/go/htmxui's Shell); this file keeps only what
+// is krill's own: the area table and the rule for deciding which one is
+// active. htmxui.Shell hardcodes no nav of its own, by design.
 type navArea struct {
 	// Path is this area's own route prefix on this binary.
 	Path string
@@ -51,69 +54,6 @@ var navAreas = []navArea{
 	},
 }
 
-// shellLayout wraps every signed-in page: the persistent nav, the
-// signed-in identity, a sign-out link, and whatever the page handler
-// rendered into Content. A page's Content is the already-rendered output
-// of one of this package's own page templates -- never request data
-// concatenated into markup; see the page templates in routes.go and
-// credentials_page.go.
-//
-// The stylesheet is inlined rather than served from a static route: this
-// binary has no asset pipeline, and a nav an operator cannot see the
-// active state of is not a nav.
-var shellLayout = template.Must(template.New("shell").Funcs(template.FuncMap{
-	"navIsActive": navIsActive,
-}).Parse(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}} &middot; krill</title>
-<style>
-:root { color-scheme: light dark; }
-body { font-family: system-ui, sans-serif; margin: 0; line-height: 1.5; }
-header { border-bottom: 1px solid rgba(128,128,128,0.35); padding: 0.75rem 1.5rem; }
-header h1 { font-size: 1.1rem; margin: 0 0 0.5rem; }
-header h1 a { color: inherit; text-decoration: none; }
-nav a { display: inline-block; margin-right: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px; text-decoration: none; }
-nav a.active { font-weight: 600; background: rgba(128,128,128,0.2); }
-.identity { margin: 0.5rem 0 0; font-size: 0.9rem; opacity: 0.8; }
-main { padding: 1.5rem; max-width: 60rem; }
-nav.subnav { margin: 0.5rem 0 1.25rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(128,128,128,0.25); }
-nav.subnav a { display: inline-block; margin-right: 0.75rem; }
-nav.subnav a[aria-current="page"] { font-weight: 600; text-decoration: underline; }
-code.id { font-size: 0.8em; opacity: 0.6; }
-/* Delivery/roadmap view: status badges, FR budgets, and the
-   shipped/unshipped breakdown block (delivery_page.go). */
-.status { display: inline-block; padding: 0.05rem 0.55rem; border-radius: 999px; font-size: 0.8rem; border: 1px solid rgba(128,128,128,0.4); white-space: nowrap; }
-.status-not-started { background: rgba(128,128,128,0.1); }
-.status-in-design { background: rgba(128,128,128,0.18); }
-.status-designed { background: rgba(128,128,128,0.26); }
-.status-planned { background: rgba(66,133,244,0.14); border-color: rgba(66,133,244,0.5); }
-.status-in-progress { background: rgba(66,133,244,0.24); border-color: rgba(66,133,244,0.6); }
-.status-shipped { background: rgba(46,160,67,0.18); border-color: rgba(46,160,67,0.5); }
-.status-partial { background: rgba(219,154,26,0.2); border-color: rgba(219,154,26,0.6); }
-.status-abandoned { background: rgba(218,68,68,0.15); border-color: rgba(218,68,68,0.5); text-decoration: line-through; }
-.frbudget { margin-left: 0.5rem; font-size: 0.8rem; opacity: 0.8; }
-.breakdown { margin: 0.5rem 0 0.75rem 1.25rem; padding: 0.5rem 0.75rem; border-left: 3px solid rgba(128,128,128,0.35); background: rgba(128,128,128,0.07); border-radius: 0 4px 4px 0; }
-.breakdown ul { margin: 0.25rem 0 0.5rem; padding-left: 1.25rem; }
-.breakdown p { margin: 0.25rem 0; opacity: 0.8; }
-</style>
-</head>
-<body>
-<header>
-  <h1><a href="/">krill</a></h1>
-  <nav>
-    {{range .Areas}}<a href="{{.Path}}"{{if navIsActive . $.ActivePath}} class="active" aria-current="page"{{end}}>{{.Label}}</a>
-    {{end}}</nav>
-  <p class="identity">{{if .User}}Signed in as {{.User}} &middot; {{end}}<a href="/logout">Sign out</a></p>
-</header>
-<main>
-{{.Content}}
-</main>
-</body>
-</html>`))
-
 // navIsActive reports whether the page being rendered belongs to this nav
 // area, so an operator can see where they are without reading the URL.
 // Matched at path-segment boundaries rather than by raw prefix: an area
@@ -127,47 +67,16 @@ func navIsActive(area navArea, activePath string) bool {
 	return strings.HasPrefix(activePath, area.Path+"/")
 }
 
-// renderShell writes one signed-in page: the shell chrome plus the
-// page's own rendered body, with a 200 status. Every app route is
-// mounted behind app.auth.RequireAuthFunc by setupRoutes, so the
-// identity renderShell reads is always present.
-func renderShell(w http.ResponseWriter, r *http.Request, title, activePath string, content template.HTML) {
-	renderShellStatus(w, r, title, activePath, content, http.StatusOK)
-}
-
-// renderShellStatus is renderShell with an explicit status code, so a
-// page that renders a real "not found" or "bad request" body still does
-// so inside the shell chrome rather than as a bare http.Error string.
-func renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath string, content template.HTML, status int) {
-	// Every app route is behind app.auth.RequireAuthFunc, so a user is
-	// present in practice; the nil guard keeps the identity line from
-	// rendering as a dangling "Signed in as ." if a route is ever mounted
-	// without the gate.
-	var username string
-	if user := htmxauth.GetUser(r.Context()); user != nil {
-		username = user.PreferredUsername
+// navLinks turns the area table into the chrome's nav slot, marking the
+// area the page being rendered belongs to.
+func navLinks(activePath string) []components.NavLink {
+	links := make([]components.NavLink, 0, len(navAreas))
+	for _, area := range navAreas {
+		links = append(links, components.NavLink{
+			Label:  area.Label,
+			Href:   area.Path,
+			Active: navIsActive(area, activePath),
+		})
 	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	err := shellLayout.Execute(w, struct {
-		Title      string
-		ActivePath string
-		User       string
-		Areas      []navArea
-		Content    template.HTML
-	}{
-		Title:      title,
-		ActivePath: activePath,
-		User:       username,
-		Areas:      navAreas,
-		Content:    content,
-	})
-	if err != nil {
-		// shellLayout is parsed once at init and this package's data
-		// never fails to execute against it, so an error here is a
-		// programming mistake -- the same reasoning setupRoutes uses to
-		// panic on MountSelfServe's error.
-		panic(err)
-	}
+	return links
 }

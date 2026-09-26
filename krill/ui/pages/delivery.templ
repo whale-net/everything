@@ -1,0 +1,167 @@
+package pages
+
+// The delivery/roadmap page body: a product's every milestone and
+// milepebble with its current status, plus the per-item shipped vs
+// unshipped breakdown for each partially-complete container. The pure
+// builders that populate these view models stay in //krill/ui (package
+// main), so delivery_page_test.go keeps exercising the same functions the
+// HTTP handler calls.
+
+import (
+	"github.com/whale-net/everything/krill/ui/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// DeliveryAnchor is the DOM id this page's content region carries, so the
+// manual Refresh button can replace the region it lives in rather than
+// itself. Only one product's delivery page renders at a time, so the id
+// need not be per-product.
+const DeliveryAnchor = "krill-spec-delivery"
+
+// DeliveryEntity is one spec entity (a Feature or a Requirement) a
+// container delivers, flattened out of a breakdown Document into a single
+// display row.
+type DeliveryEntity struct {
+	Label string // "Cn — Name" for a Feature, "FR — Name" for a Requirement
+	ID    string
+}
+
+// DeliveryBreakdown is one container's per-item shipped vs
+// not-yet-shipped scope, the get_delivery_breakdown shape. Present only
+// for a partially-complete container; nil for every other status.
+//
+// Error is set instead of the two lists when that container's breakdown
+// read failed: one unreadable container degrades to an inline error in
+// place of its own block rather than taking the whole page down.
+type DeliveryBreakdown struct {
+	Shipped   []DeliveryEntity
+	Unshipped []DeliveryEntity
+	Error     string
+}
+
+// DeliveryMilepebble is one milepebble row: its own status and, when
+// partially complete, its shipped/unshipped breakdown.
+type DeliveryMilepebble struct {
+	ID        string
+	Name      string
+	Outcome   string
+	Status    string // one of the eight-value store.MilestoneStatus set
+	Breakdown *DeliveryBreakdown
+}
+
+// DeliveryMilestone is one milestone row with its nested milepebbles.
+type DeliveryMilestone struct {
+	ID          string
+	Name        string
+	Outcome     string
+	FRBudget    string // the stored budget, empty when unset
+	Status      string
+	Breakdown   *DeliveryBreakdown
+	Milepebbles []DeliveryMilepebble
+}
+
+// DeliveryPage is one product's delivery/roadmap view.
+type DeliveryPage struct {
+	Product    ProductHeader
+	Nav        []components.NavLink
+	Path       string
+	Milestones []DeliveryMilestone
+}
+
+// statusBadge renders one container's status. The colour, size, and soft
+// treatment come from components.MilestoneStatusStyle, so "shipped" and
+// "partially complete" stay visually distinct without this file knowing
+// anything about daisyUI.
+templ statusBadge(status string) {
+	{{ s := components.MilestoneStatusStyle(status) }}
+	@htmxui.Badge(status, s.Variant, s.Size, s.Soft, nil)
+}
+
+// breakdownBlock is the shared shipped/unshipped block, rendered for
+// both a milestone and its milepebbles so the two look identical.
+//
+// data-krill is the stable hook a test (and an operator's own tooling)
+// scopes to; the classes are presentation only.
+templ breakdownBlock(b *DeliveryBreakdown) {
+	<div data-krill="delivery-breakdown" class="mt-2 rounded-lg border border-base-300 p-3 text-sm">
+		if b.Error != "" {
+			@htmxui.Alert(htmxui.AlertError, b.Error, nil)
+		} else {
+			<strong>Shipped</strong>
+			if len(b.Shipped) > 0 {
+				<ul class="mt-1 list-disc pl-5 space-y-1">
+					for _, e := range b.Shipped {
+						<li>
+							{ e.Label }
+							@entityID(e.ID)
+						</li>
+					}
+				</ul>
+			} else {
+				<p class="mt-1">Nothing shipped yet.</p>
+			}
+			<strong class="mt-2 block">Unshipped</strong>
+			if len(b.Unshipped) > 0 {
+				<ul class="mt-1 list-disc pl-5 space-y-1">
+					for _, e := range b.Unshipped {
+						<li>
+							{ e.Label }
+							@entityID(e.ID)
+						</li>
+					}
+				</ul>
+			} else {
+				<p class="mt-1">Nothing unshipped.</p>
+			}
+		}
+	</div>
+}
+
+// Delivery renders a product's milestone roadmap -- list_product_delivery's
+// shape, with get_delivery_breakdown's per-item detail inlined for each
+// partially-complete container (FR 4398c532).
+templ Delivery(page DeliveryPage) {
+	<section id={ DeliveryAnchor } data-krill="delivery">
+		@pageHeader(DeliveryAnchor, page.Path, page.Product.Name+" — delivery & roadmap", page.Product.Vision)
+		@components.SubNav(page.Nav)
+		if len(page.Milestones) == 0 {
+			@htmxui.EmptyState("No milestones yet.", "Every milestone and milepebble this product is planned to deliver.", "", "", templ.Attributes{})
+		} else {
+			<ol class="mt-4 space-y-4">
+				for _, m := range page.Milestones {
+					<li id={ m.ID }>
+						<strong>{ m.Name }</strong>
+						@entityID(m.ID)
+						@statusBadge(m.Status)
+						if m.FRBudget != "" {
+							<span class="badge badge-ghost badge-sm">FR budget { m.FRBudget }</span>
+						}
+						if m.Outcome != "" {
+							<div class="text-sm text-base-content/70">{ m.Outcome }</div>
+						}
+						if m.Breakdown != nil {
+							@breakdownBlock(m.Breakdown)
+						}
+						if len(m.Milepebbles) > 0 {
+							<ul class="mt-3 list-disc pl-5 space-y-3">
+								for _, mp := range m.Milepebbles {
+									<li id={ mp.ID }>
+										<strong>{ mp.Name }</strong>
+										@entityID(mp.ID)
+										@statusBadge(mp.Status)
+										if mp.Outcome != "" {
+											<div class="text-sm text-base-content/70">{ mp.Outcome }</div>
+										}
+										if mp.Breakdown != nil {
+											@breakdownBlock(mp.Breakdown)
+										}
+									</li>
+								}
+							</ul>
+						}
+					</li>
+				}
+			</ol>
+		}
+	</section>
+}

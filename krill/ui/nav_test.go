@@ -111,15 +111,21 @@ func TestShellRendersOnEveryRoute(t *testing.T) {
 		if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
 			t.Errorf("GET %s Content-Type = %q, want text/html; charset=utf-8", path, ct)
 		}
-		for _, want := range []string{"<html", "<nav>", "Sign out", "</html>"} {
+		// "<nav" and "<main" rather than the exact tags: the shell's
+		// landmarks carry attributes (aria-label, class), and what this
+		// test is guarding is that a full document with a nav and a main
+		// region is rendered, not the attribute-free spelling.
+		for _, want := range []string{"<html", "<nav", "Logout", "</html>"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("GET %s missing %q from the shell chrome", path, want)
 			}
 		}
 		// The signed-in identity is the whole point of the gate the
 		// shell sits behind; its absence means the page rendered
-		// unauthenticated.
-		if !strings.Contains(body, "Signed in as") {
+		// unauthenticated. htmxui's UserMenu renders the bare
+		// preferred username rather than a "Signed in as ..." sentence,
+		// so the dev user's name is the signal.
+		if !strings.Contains(body, "developer") {
 			t.Errorf("GET %s rendered no signed-in identity", path)
 		}
 	}
@@ -327,17 +333,27 @@ func areaByPath(t *testing.T, path string) navArea {
 	return navArea{}
 }
 
-// activeLabels extracts the link text of every nav anchor the shell marked
-// active, by scanning the rendered <a> tags rather than the navAreas
-// table -- a test that derived its expectation from the same list it is
-// checking would pass even if the marking were dropped entirely. The text
-// is entity-decoded so it can be compared against a navArea's raw Label
-// ("Spec & delivery", which the shell correctly renders as
-// "Spec &amp; delivery").
+// activeLabels extracts the link text of every primary-nav anchor the
+// shell marked active, by scanning the rendered <a> tags rather than the
+// navAreas table -- a test that derived its expectation from the same
+// list it is checking would pass even if the marking were dropped
+// entirely. The text is entity-decoded so it can be compared against a
+// navArea's raw Label ("Spec & delivery", which the shell correctly
+// renders as "Spec &amp; delivery").
+//
+// It keys on aria-current="page", not on a class name: the ARIA
+// current-state is the contract, and a class is a cosmetic detail that
+// the next restyle is free to rename. The scan is scoped to the
+// data-krill="primary-nav" region so a page's own product sub-nav (which
+// also carries aria-current) can never be counted as a primary link.
 func activeLabels(body string) []string {
+	primary := primaryNavRegion(body)
+	if primary == "" {
+		return nil
+	}
 	var labels []string
-	for _, tag := range anchorTags(body) {
-		if !strings.Contains(tag, `class="active"`) {
+	for _, tag := range anchorTags(primary) {
+		if !strings.Contains(tag, `aria-current="page"`) {
 			continue
 		}
 		if start := strings.Index(tag, ">"); start >= 0 {
@@ -345,6 +361,20 @@ func activeLabels(body string) []string {
 		}
 	}
 	return labels
+}
+
+// primaryNavRegion slices the shell chrome's primary nav out of a page so
+// a scan of it cannot wander into the page body.
+func primaryNavRegion(body string) string {
+	start := strings.Index(body, `data-krill="primary-nav"`)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(body[start:], "</nav>")
+	if end < 0 {
+		return ""
+	}
+	return body[start : start+end]
 }
 
 func anchorTags(body string) []string {

@@ -1,0 +1,387 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// The design-session read surface, as page bodies. The pure builders that
+// populate the view models below stay in //krill/ui (package main) so the
+// package-main tests keep compiling unchanged; only the markup moved here.
+//
+// Every region that a test needs to isolate carries a stable id
+// (design-sessions, revision-events, open-questions, session-nav). A test
+// slices on those ids rather than on a heading's literal markup, so
+// restyling a heading can never break a section-scoped assertion --
+// htmxui ARCHITECTURE §14: assert the claim, not the byte layout.
+
+// DesignSessionRow is one row of a product's session list.
+type DesignSessionRow struct {
+	ID                string
+	OpeningSubmission string
+	CreatedAt         string
+	SignedOff         bool
+	DetailPath        string
+}
+
+// DesignSessionListPage is the product-scoped session list. Error and
+// OpeningSubmission are set only when an "open a session" submission is
+// rejected and the form is re-rendered: Error is the readable api status +
+// message shown inline, and OpeningSubmission is the operator's typed text,
+// preserved so a rejection is not a data-loss event.
+//
+// FormAction is the open form's own POST target, supplied by the caller so
+// the path shape stays owned by package main's designProductSessionsPath
+// rather than being rebuilt here.
+type DesignSessionListPage struct {
+	ProductID         string
+	Sessions          []DesignSessionRow
+	Error             string
+	OpeningSubmission string
+	FormAction        string
+}
+
+// EntityDeltaRow is one spec entity a revision event touched.
+type EntityDeltaRow struct {
+	EntityID    string
+	Change      string
+	SummaryLine string
+}
+
+// OpenQuestionDeltaRow is one question a revision event opened.
+type OpenQuestionDeltaRow struct {
+	QuestionID string
+	Text       string
+	Blocking   string // "blocking" or "non-blocking"
+}
+
+// RevisionEventRow is one round of a session's ordered log.
+type RevisionEventRow struct {
+	ID                string
+	SeqNo             int
+	EventType         string
+	Acting            string
+	OnBehalfOf        string
+	VerifiedAgainst   string
+	SignoffStatus     string
+	CreatedAt         string
+	EntityDeltas      []EntityDeltaRow
+	OpenedQuestions   []OpenQuestionDeltaRow
+	ResolvedQuestions []string
+}
+
+// OpenQuestionRow is one currently-open question, tagged blocking or
+// non-blocking exactly as list_open_questions tags it.
+type OpenQuestionRow struct {
+	QuestionID    string
+	Text          string
+	Blocking      string // "blocking" or "non-blocking"
+	OpenedAtSeqNo int
+}
+
+// DesignSessionDetailPage is one session: its row, its full ordered
+// revision-event log, and its currently-open questions. Error, FollowUp,
+// and CheckedResolve are set only when a "submit follow-up" round is
+// rejected and the form is re-rendered: Error is the readable api status +
+// message, FollowUp is the operator's typed text, and CheckedResolve holds
+// the question ids whose resolve box was ticked, all preserved so a
+// rejection is not a data-loss event.
+//
+// AnswersPath is the follow-up form's own POST target, supplied by the
+// caller so the path shape stays owned by package main.
+type DesignSessionDetailPage struct {
+	ID                     string
+	ProductID              string
+	OpeningSubmission      string
+	OpenedByKrillSessionID string
+	CreatedAt              string
+	ProductSessionsPath    string
+	Events                 []RevisionEventRow
+	OpenQuestions          []OpenQuestionRow
+	Error                  string
+	FollowUp               string
+	CheckedResolve         map[string]bool
+	AnswersPath            string
+}
+
+// IsChecked reports whether a resolve box for the given question id was
+// ticked, so a rejected follow-up round re-renders the form with the
+// operator's original ticks intact. A nil CheckedResolve reads every id as
+// unticked, which is the GET handler's normal case.
+func (p DesignSessionDetailPage) IsChecked(id string) bool { return p.CheckedResolve[id] }
+
+// DesignRoot is the design root's landing body: it takes a product id and
+// navigates to that product's session list -- the entry point a
+// Requirement Contributor needs to reach a session without already holding
+// its id.
+//
+// The form is a plain JS-free GET to /design/go, which validates the id
+// server-side and 302s to the session list. The old inline <script> that
+// read a text input and assigned window.location duplicated that rule in
+// the browser; the server already owns it, and the only user-controlled
+// path segment is a validated UUID, so there is no open-redirect surface.
+templ DesignRoot() {
+	<h2>Design sessions</h2>
+	<p>Browse a product's design sessions. Enter the product's id to open its session list.</p>
+	<form method="get" action="/design/go" class="max-w-xl">
+		<p class="form-control w-full">
+			<label class="label" for="product-id">Product id</label>
+			<input id="product-id" name="product_id" type="text" placeholder="00000000-0000-0000-0000-000000000000" class="input input-bordered w-full font-mono"/>
+		</p>
+		<p class="mt-3">
+			<button type="submit" class="btn btn-primary">Browse sessions</button>
+		</p>
+	</form>
+}
+
+// DesignSessionList is the product-scoped session list, each session
+// linking into its own detail page.
+templ DesignSessionList(page DesignSessionListPage) {
+	<h2>Design sessions</h2>
+	<p>Product <code>{ page.ProductID }</code></p>
+	<h3>Open a new design session</h3>
+	<p>Describe your idea in plain language. krill records it as the session's opening submission; it does not create or change any spec entity here.</p>
+	@OpenSessionForm(page)
+	<div id="design-sessions">
+		if len(page.Sessions) > 0 {
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Session</th>
+						<th>Opening submission</th>
+						<th>Status</th>
+						<th>Created</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, s := range page.Sessions {
+						<tr>
+							<td><a href={ templ.URL(s.DetailPath) }><code>{ s.ID }</code></a></td>
+							<td>{ s.OpeningSubmission }</td>
+							<td>{ sessionStatusLabel(s.SignedOff) }</td>
+							<td>{ s.CreatedAt }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		} else {
+			@htmxui.EmptyState("No design sessions for this product yet.", "Open one above to start a design conversation.", "", "", nil)
+		}
+	</div>
+}
+
+// OpenSessionForm is the "open a design session" form, and the hx-post
+// swap target for it.
+//
+// The form is doubled (htmxui ARCHITECTURE §9: the <form> element and its
+// hx-* wiring stay app-owned): method+action is the no-JS path, which
+// answers 303 to the new session's detail page, and hx-post+hx-target+
+// hx-swap is the htmx path, which answers HX-Redirect to that same page.
+//
+// That doubling is the payoff: the no-HX half is byte-for-byte the form
+// this page has always rendered, so the eight 303 + Location assertions in
+// design_write_test.go keep passing verbatim while the HX half is new.
+// A refusal answers 200 with this same fragment carrying Error inline and
+// the operator's typed text preserved, so a rejection is never a
+// data-loss event and never a status code the swap target cannot render.
+templ OpenSessionForm(page DesignSessionListPage) {
+	<form
+		id="open-session-form"
+		method="post"
+		action={ templ.URL(page.FormAction) }
+		hx-post={ page.FormAction }
+		hx-target="#open-session-form"
+		hx-swap="outerHTML"
+	>
+		if page.Error != "" {
+			@htmxui.Alert(htmxui.AlertError, "Not saved: "+page.Error, nil)
+		}
+		<p>
+			<label class="label" for="opening-submission">Your idea or user story</label>
+			<textarea id="opening-submission" name="opening_submission" rows="4" required placeholder="Users need to bulk-export their data as CSV" class="textarea textarea-bordered w-full max-w-2xl">{ page.OpeningSubmission }</textarea>
+		</p>
+		<p><button type="submit" class="btn btn-primary">Open design session</button></p>
+	</form>
+}
+
+// DesignSessionDetail is one session's full ordered revision-event log and
+// its currently-open questions.
+templ DesignSessionDetail(page DesignSessionDetailPage) {
+	<h2>Design session</h2>
+	<dl class="grid grid-cols-1 gap-x-6 sm:grid-cols-3">
+		<dt class="font-medium">ID</dt>
+		<dd class="sm:col-span-2"><code>{ page.ID }</code></dd>
+		<dt class="font-medium">Product</dt>
+		<dd class="sm:col-span-2"><code>{ page.ProductID }</code></dd>
+		<dt class="font-medium">Opening submission</dt>
+		<dd class="sm:col-span-2">{ page.OpeningSubmission }</dd>
+		<dt class="font-medium">Opened by krill session</dt>
+		<dd class="sm:col-span-2"><code>{ page.OpenedByKrillSessionID }</code></dd>
+		<dt class="font-medium">Created</dt>
+		<dd class="sm:col-span-2">{ page.CreatedAt }</dd>
+	</dl>
+	<section id="revision-events">
+		<h3>Revision events</h3>
+		if len(page.Events) > 0 {
+			<ol class="space-y-3">
+				for _, ev := range page.Events {
+					@revisionEvent(ev)
+				}
+			</ol>
+		} else {
+			<p>No revision events yet.</p>
+		}
+	</section>
+	<section id="open-questions">
+		<h3>Open questions</h3>
+		if len(page.OpenQuestions) > 0 {
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Question</th>
+						<th>Tag</th>
+						<th>Opened at</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, q := range page.OpenQuestions {
+						<tr>
+							<td><code>{ q.QuestionID }</code> — { q.Text }</td>
+							<td>{ q.Blocking }</td>
+							<td>#{ itoa(q.OpenedAtSeqNo) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		} else {
+			<p>No open questions.</p>
+		}
+	</section>
+	<p id="session-nav">
+		<a href={ templ.URL(page.ProductSessionsPath) }>Back to this product's sessions</a>
+	</p>
+	<h3>Submit follow-up</h3>
+	<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
+	@FollowUpForm(page)
+}
+
+// revisionEvent is one round of the session's ordered log. The #seq type
+// header, the acting/on-behalf-of meta, and the delta/opened-question
+// list items are the specific claims design_page_test.go parses, so their
+// text -- not their classes -- is what is load-bearing here.
+templ revisionEvent(ev RevisionEventRow) {
+	<li>
+		<strong>#{ itoa(ev.SeqNo) } { ev.EventType }</strong>
+		if ev.SignoffStatus != "" {
+			{ " — signoff: " }
+			{ ev.SignoffStatus }
+		}
+		<br>
+		<small>acting: { ev.Acting } · on behalf of: { ev.OnBehalfOf } · { ev.CreatedAt }</small>
+		<br>
+		<small>event id: <code>{ ev.ID }</code></small>
+		if ev.VerifiedAgainst != "" {
+			<br>
+			<small>verified against: { ev.VerifiedAgainst }</small>
+		}
+		if len(ev.EntityDeltas) > 0 {
+			<ul>
+				for _, d := range ev.EntityDeltas {
+					<li>{ d.Change } <code>{ d.EntityID }</code> — { d.SummaryLine }</li>
+				}
+			</ul>
+		}
+		if len(ev.OpenedQuestions) > 0 {
+			<p>Opened questions:</p>
+			<ul>
+				for _, q := range ev.OpenedQuestions {
+					<li><code>{ q.QuestionID }</code> ({ q.Blocking }): { q.Text }</li>
+				}
+			</ul>
+		}
+		if len(ev.ResolvedQuestions) > 0 {
+			<p>Resolved questions:
+				for _, qid := range ev.ResolvedQuestions {
+					<code>{ qid }</code>
+				}
+			</p>
+		}
+	</li>
+}
+
+// FollowUpForm is the "submit follow-up" form, and the hx-post swap target
+// for it -- doubled exactly as OpenSessionForm is: method+action is the
+// no-JS path (303 back to this session's detail page), hx-post+hx-target+
+// hx-swap is the htmx path (HX-Redirect to the same page, because the
+// appended round changes the log, the open-question table, and this form's
+// own checkbox set -- all outside the swap target).
+//
+// The textarea is deliberately not required: an answer round is meaningful
+// with follow-up text OR at least one ticked resolve box, so the empty
+// round is refused server-side (renderAnswerFormFailure) and the error is
+// shown inline here. The old inline <script> that blocked it client-side
+// was a second, worse copy of that rule.
+templ FollowUpForm(page DesignSessionDetailPage) {
+	<form
+		id="follow-up-form"
+		method="post"
+		action={ templ.URL(page.AnswersPath) }
+		hx-post={ page.AnswersPath }
+		hx-target="#follow-up-form"
+		hx-swap="outerHTML"
+	>
+		if page.Error != "" {
+			@htmxui.Alert(htmxui.AlertError, "Not saved: "+page.Error, nil)
+		}
+		if len(page.OpenQuestions) > 0 {
+			<fieldset class="fieldset">
+				<legend class="fieldset-legend">Open questions this answer closes</legend>
+				for _, q := range page.OpenQuestions {
+					<p>
+						<label class="label cursor-pointer justify-start gap-2">
+							<input type="checkbox" name="resolve" value={ q.QuestionID } checked?={ page.IsChecked(q.QuestionID) } class="checkbox checkbox-sm"/>
+							<span><code>{ q.QuestionID }</code> ({ q.Blocking }): { q.Text }</span>
+						</label>
+					</p>
+				}
+			</fieldset>
+		}
+		<p>
+			<label class="label" for="follow-up">Your follow-up</label>
+			<textarea id="follow-up" name="follow_up" rows="4" placeholder="It should use the postgres flag table." class="textarea textarea-bordered w-full max-w-2xl">{ page.FollowUp }</textarea>
+		</p>
+		<p><button type="submit" class="btn btn-primary">Submit follow-up</button></p>
+	</form>
+}
+
+// sessionStatusLabel is the list row's status cell, read last-signoff-wins
+// by the builder that populates the row.
+func sessionStatusLabel(signedOff bool) string {
+	if signedOff {
+		return "signed off"
+	}
+	return "open"
+}
+
+// itoa keeps the #seq_no / #opened-at rendering free of a strconv import
+// in the generated file for one call each.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}

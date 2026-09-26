@@ -6,6 +6,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -70,4 +71,26 @@ func TestNewNoteRowNamesTargetByID(t *testing.T) {
 	entity := newNoteRow(store.OpenNoteRow{EntityContext: &store.OpenNoteEntityContext{EntityID: entityID, Title: "a req"}})
 	assert.Contains(t, entity.Target, entityID.String())
 	assert.Contains(t, entity.Target, "a req")
+}
+
+// TestClaimedPollingDueOnlyFiresNearExpiry covers the rule that decides
+// whether the claimed view keeps polling: it fires while any claim on the
+// page is inside its lease's near-expiry window, and stops once none is.
+// An empty page never polls, and a lapsed lease still counts as near
+// expiry -- the operator watching for a row to disappear is exactly the
+// case the poll exists for.
+func TestClaimedPollingDueOnlyFiresNearExpiry(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	row := func(lease time.Time) store.ClaimedTaskRow {
+		return store.ClaimedTaskRow{TaskID: uuid.New(), LeaseExpiresAt: lease}
+	}
+
+	assert.False(t, claimedPollingDue(nil, now), "an empty page has nothing transient to watch")
+	assert.False(t, claimedPollingDue([]store.ClaimedTaskRow{row(now.Add(24 * time.Hour))}, now),
+		"a comfortably held lease is settled, not transient")
+	assert.True(t, claimedPollingDue([]store.ClaimedTaskRow{row(now.Add(time.Minute))}, now),
+		"a lease about to lapse is the one transient state the console watches")
+	assert.True(t, claimedPollingDue([]store.ClaimedTaskRow{
+		row(now.Add(24 * time.Hour)), row(now.Add(-time.Minute)),
+	}, now), "one transient claim on the page is enough to keep the whole view live")
 }

@@ -16,7 +16,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"html/template"
 	"net/http"
 	"strconv"
 
@@ -24,93 +23,8 @@ import (
 
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
-
-// deliveryEntity is one spec entity (a Feature or a Requirement) a container
-// delivers, flattened out of a breakdown Document into a single display row.
-type deliveryEntity struct {
-	Label string // "Cn -- Name" for a Feature, "FR -- Name" for a Requirement
-	ID    string
-}
-
-// deliveryBreakdown is one container's per-item shipped vs not-yet-shipped
-// scope, the get_delivery_breakdown shape. Present only for a
-// partially-complete container; nil for every other status.
-type deliveryBreakdown struct {
-	Shipped   []deliveryEntity
-	Unshipped []deliveryEntity
-}
-
-// deliveryMilepebble is one milepebble row: its own status and, when
-// partially complete, its shipped/unshipped breakdown.
-type deliveryMilepebble struct {
-	ID          string
-	Name        string
-	Outcome     string
-	Status      string // one of the eight-value store.MilestoneStatus set
-	StatusClass string // CSS modifier keeping the seven states visually distinct
-	Breakdown   *deliveryBreakdown
-}
-
-// deliveryMilestone is one milestone row with its nested milepebbles.
-type deliveryMilestone struct {
-	ID          string
-	Name        string
-	Outcome     string
-	FRBudget    string // the stored budget, empty when unset
-	Status      string
-	StatusClass string // CSS modifier keeping the seven states visually distinct
-	Breakdown   *deliveryBreakdown
-	Milepebbles []deliveryMilepebble
-}
-
-type deliveryPage struct {
-	Product    productHeader
-	Nav        productNav
-	Milestones []deliveryMilestone
-}
-
-// deliveryBreakdownTemplate is the shared shipped/unshipped block, included
-// for both a milestone and its milepebbles so the two render identically.
-const deliveryBreakdownTemplate = `{{define "deliverybreakdown"}}
-<div class="breakdown">
-<strong>Shipped</strong>
-{{if .Shipped}}<ul>{{range .Shipped}}<li>{{.Label}} <code class="id">{{.ID}}</code></li>{{end}}</ul>{{else}}<p>Nothing shipped yet.</p>{{end}}
-<strong>Unshipped</strong>
-{{if .Unshipped}}<ul>{{range .Unshipped}}<li>{{.Label}} <code class="id">{{.ID}}</code></li>{{end}}</ul>{{else}}<p>Nothing unshipped.</p>{{end}}
-</div>
-{{end}}`
-
-var deliveryTemplate = template.Must(template.New("delivery").Parse(productNavTemplate + deliveryBreakdownTemplate + `<h2>{{.Product.Name}} &mdash; delivery &amp; roadmap</h2>
-{{if .Product.Vision}}<p>{{.Product.Vision}}</p>{{end}}
-{{template "productnav" .}}
-{{if .Milestones}}
-<ol>
-{{range .Milestones}}
-  <li id="{{.ID}}">
-    <strong>{{.Name}}</strong> <code class="id">{{.ID}}</code>
-    <span class="status {{.StatusClass}}">{{.Status}}</span>
-    {{if .FRBudget}}<span class="frbudget">FR budget {{.FRBudget}}</span>{{end}}
-    {{if .Outcome}}<div>{{.Outcome}}</div>{{end}}
-    {{if .Breakdown}}{{template "deliverybreakdown" .Breakdown}}{{end}}
-    {{if .Milepebbles}}
-    <ul>
-    {{range .Milepebbles}}
-      <li id="{{.ID}}">
-        <strong>{{.Name}}</strong> <code class="id">{{.ID}}</code>
-        <span class="status {{.StatusClass}}">{{.Status}}</span>
-        {{if .Outcome}}<div>{{.Outcome}}</div>{{end}}
-        {{if .Breakdown}}{{template "deliverybreakdown" .Breakdown}}{{end}}
-      </li>
-    {{end}}
-    </ul>
-    {{end}}
-  </li>
-{{end}}
-</ol>
-{{else}}
-<p>No milestones yet.</p>
-{{end}}`))
 
 // handleSpecDelivery renders a product's delivery/roadmap: every milestone
 // and milepebble with its current status, plus the shipped/unshipped
@@ -133,10 +47,11 @@ func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A per-container breakdown read that fails is non-fatal: every
-	// container's status still renders, just without that one's breakdown.
+	// container's status still renders, just with that one's breakdown
+	// replaced by an inline error.
 	breakdowns := app.deliveryBreakdowns(r.Context(), listing)
 
-	renderShell(w, r, "Delivery", specPath, renderPage(deliveryTemplate, deliveryPageOf(product, listing, breakdowns, productID)))
+	renderSpecPage(w, r, "Delivery", pages.Delivery(deliveryPageOf(product, listing, breakdowns, productID)))
 }
 
 // deliveryBreakdowns resolves the per-item shipped/unshipped breakdown for
@@ -147,9 +62,10 @@ func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
 //
 // A breakdown read that fails for one container is non-fatal: it is logged
 // at ERROR (a genuine failed read, not expected control flow) and that
-// container is left without a breakdown, so one bad container never takes
-// down the page's statuses.
-func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryListing) map[uuid.UUID]deliveryBreakdown {
+// container is given a breakdown carrying the error instead of its lists, so
+// the page renders an inline error in place of that one block rather than
+// taking down every container's status with it.
+func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryListing) map[uuid.UUID]pages.DeliveryBreakdown {
 	var ids []uuid.UUID
 	for _, m := range listing.Milestones {
 		if m.Status == store.MilestoneStatusPartiallyComplete {
@@ -162,14 +78,15 @@ func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryLi
 		}
 	}
 
-	breakdowns := make(map[uuid.UUID]deliveryBreakdown, len(ids))
+	breakdowns := make(map[uuid.UUID]pages.DeliveryBreakdown, len(ids))
 	for _, id := range ids {
 		shipped, unshipped, err := app.spec.DeliveryBreakdown(ctx, id)
 		if err != nil {
 			logger.Error("delivery breakdown read failed", "container", id.String(), "error", err)
+			breakdowns[id] = pages.DeliveryBreakdown{Error: "This container's shipped/unshipped breakdown could not be read. See the logs."}
 			continue
 		}
-		breakdowns[id] = deliveryBreakdown{
+		breakdowns[id] = pages.DeliveryBreakdown{
 			Shipped:   deliveryEntitiesOf(shipped),
 			Unshipped: deliveryEntitiesOf(unshipped),
 		}
@@ -181,29 +98,28 @@ func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryLi
 // each partially-complete container's shipped/unshipped breakdown from
 // breakdowns. Pure, so the field-parity with the MCP wire is unit-testable
 // without a database.
-func deliveryPageOf(product store.Product, listing slice.DeliveryListing, breakdowns map[uuid.UUID]deliveryBreakdown, productID uuid.UUID) deliveryPage {
-	page := deliveryPage{
+func deliveryPageOf(product store.Product, listing slice.DeliveryListing, breakdowns map[uuid.UUID]pages.DeliveryBreakdown, productID uuid.UUID) pages.DeliveryPage {
+	page := pages.DeliveryPage{
 		Product: productHeaderOf(product),
 		Nav:     productNavFor(productID, deliveryPath(productID)),
+		Path:    deliveryPath(productID),
 	}
 	for _, m := range listing.Milestones {
-		entry := deliveryMilestone{
-			ID:          m.ID.String(),
-			Name:        m.Name,
-			Outcome:     deref(m.Outcome),
-			FRBudget:    frBudgetString(m.FRBudget),
-			Status:      string(m.Status),
-			StatusClass: statusClass(m.Status),
-			Breakdown:   breakdownFor(breakdowns, m.ID),
+		entry := pages.DeliveryMilestone{
+			ID:        m.ID.String(),
+			Name:      m.Name,
+			Outcome:   deref(m.Outcome),
+			FRBudget:  frBudgetString(m.FRBudget),
+			Status:    string(m.Status),
+			Breakdown: breakdownFor(breakdowns, m.ID),
 		}
 		for _, mp := range m.Milepebbles {
-			entry.Milepebbles = append(entry.Milepebbles, deliveryMilepebble{
-				ID:          mp.ID.String(),
-				Name:        mp.Name,
-				Outcome:     deref(mp.Outcome),
-				Status:      string(mp.Status),
-				StatusClass: statusClass(mp.Status),
-				Breakdown:   breakdownFor(breakdowns, mp.ID),
+			entry.Milepebbles = append(entry.Milepebbles, pages.DeliveryMilepebble{
+				ID:        mp.ID.String(),
+				Name:      mp.Name,
+				Outcome:   deref(mp.Outcome),
+				Status:    string(mp.Status),
+				Breakdown: breakdownFor(breakdowns, mp.ID),
 			})
 		}
 		page.Milestones = append(page.Milestones, entry)
@@ -213,7 +129,7 @@ func deliveryPageOf(product store.Product, listing slice.DeliveryListing, breakd
 
 // breakdownFor returns the breakdown for a container id, or nil when that
 // container is not partially complete (and so has no breakdown to show).
-func breakdownFor(breakdowns map[uuid.UUID]deliveryBreakdown, id uuid.UUID) *deliveryBreakdown {
+func breakdownFor(breakdowns map[uuid.UUID]pages.DeliveryBreakdown, id uuid.UUID) *pages.DeliveryBreakdown {
 	b, ok := breakdowns[id]
 	if !ok {
 		return nil
@@ -224,16 +140,16 @@ func breakdownFor(breakdowns map[uuid.UUID]deliveryBreakdown, id uuid.UUID) *del
 // deliveryEntitiesOf flattens a breakdown Document (a Feature or Requirement
 // set) into display rows, in Features-then-Requirements order. The Documents
 // a breakdown returns carry today's two delivers-able kinds.
-func deliveryEntitiesOf(doc slice.Document) []deliveryEntity {
-	entities := make([]deliveryEntity, 0, len(doc.Features)+len(doc.Requirements))
+func deliveryEntitiesOf(doc slice.Document) []pages.DeliveryEntity {
+	entities := make([]pages.DeliveryEntity, 0, len(doc.Features)+len(doc.Requirements))
 	for _, f := range doc.Features {
-		entities = append(entities, deliveryEntity{
+		entities = append(entities, pages.DeliveryEntity{
 			Label: fmt.Sprintf("C%d -- %s", f.DisplayNumber, f.Name),
 			ID:    f.ID.String(),
 		})
 	}
 	for _, r := range doc.Requirements {
-		entities = append(entities, deliveryEntity{
+		entities = append(entities, pages.DeliveryEntity{
 			Label: fmt.Sprintf("%s -- %s", r.Kind, r.Name),
 			ID:    r.ID.String(),
 		})
@@ -247,32 +163,4 @@ func frBudgetString(budget *int) string {
 		return ""
 	}
 	return strconv.Itoa(*budget)
-}
-
-// statusClass maps the eight-value MilestoneStatus set to the CSS modifier
-// a status badge carries, so each state is visually distinct -- notably
-// "shipped" (done) versus "partially complete" (has a breakdown) -- without
-// the template doing any string munging. An unrecognized value falls back
-// to a neutral class rather than rendering an empty badge.
-func statusClass(s store.MilestoneStatus) string {
-	switch s {
-	case store.MilestoneStatusNotStarted:
-		return "status-not-started"
-	case store.MilestoneStatusInDesign:
-		return "status-in-design"
-	case store.MilestoneStatusDesigned:
-		return "status-designed"
-	case store.MilestoneStatusPlanned:
-		return "status-planned"
-	case store.MilestoneStatusInProgress:
-		return "status-in-progress"
-	case store.MilestoneStatusShipped:
-		return "status-shipped"
-	case store.MilestoneStatusPartiallyComplete:
-		return "status-partial"
-	case store.MilestoneStatusAbandoned:
-		return "status-abandoned"
-	default:
-		return "status-other"
-	}
 }

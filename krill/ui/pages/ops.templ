@@ -1,0 +1,650 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// This file holds every page body the ops console renders: the four
+// read views (claimed / escalated / cancelled / notes) and the four task
+// interventions' affordances (the row controls, the rejection page, the
+// cancel-confirm card).
+//
+// Each read view is one route in two modes. The results *fragment* is
+// what a polled/swapped response carries -- no chrome, always HTTP 200 --
+// and the *page* component is that same fragment under the view's
+// heading, description and Refresh button, composed into the shell by
+// krill/ui/templ_render.go's renderShell. A view therefore derives its
+// data exactly once per request and both modes render the same view-model,
+// so a fragment can never drift from the page it was swapped out of.
+//
+// The pure builders and mappers that populate these view-models stay in
+// package main (krill/ui/ops.go, krill/ui/interventions.go): the paths,
+// the identity resolution, the store paging rule, and the open-redirect
+// guard are krill's rules, not presentation.
+
+// opsResultsID is the stable id every read view's results block carries.
+// It is the swap target for the row interventions' hx-post and for the
+// manual Refresh button, and the poll's own "this" target resolves to it.
+// One constant rather than a per-view generated id, so it is also
+// byte-stable across a polled fragment's renders.
+const opsResultsID = "ops-results"
+
+// cancelConfirmID is the stable id of the cancel-confirm card, and the
+// hx-target of that card's own doubled form.
+const cancelConfirmID = "cancel-confirm"
+
+// ---------------------------------------------------------------------------
+// view models
+// ---------------------------------------------------------------------------
+
+// ClaimedRow is one row of the claimed-task view. Every field is a
+// pre-formatted plain string built by newClaimedRow in package main, so
+// this file stays free of store reach-in and pointer logic.
+//
+// Lease is an absolute RFC3339 instant, never a relative "in 3m": the
+// results block is polled (see claimedPollAttrs), and a fragment whose
+// bytes shifted between two polls for no state change would defeat the
+// whole point of the poll.
+type ClaimedRow struct {
+	TaskID     string
+	Title      string
+	Delivery   string
+	Session    string
+	Claimant   string
+	OnBehalfOf string
+	Lane       string
+	Lease      string
+	Attempts   int
+	Actions    templ.Component
+}
+
+// EscalatedRow is one row of the escalated-task view (newEscalatedRow).
+type EscalatedRow struct {
+	TaskID     string
+	Title      string
+	Delivery   string
+	Reason     string
+	Counter    string
+	Lane       string
+	At         string
+	Actor      string
+	OnBehalfOf string
+	Summary    string
+	Verdict    string
+	Actions    templ.Component
+}
+
+// CancelledRow is one row of the cancelled-task view (newCancelledRow).
+type CancelledRow struct {
+	TaskID     string
+	Title      string
+	Delivery   string
+	By         string
+	OnBehalfOf string
+	At         string
+}
+
+// NoteRow is one row of the open-notes view (newNoteRow). Target names
+// the note's target entity by id as well as title.
+type NoteRow struct {
+	NoteID    string
+	Kind      string
+	Target    string
+	CreatedAt string
+	Body      string
+}
+
+// OpsResultsData is the shared furniture of a read view's results block:
+// its table, its "next page" link, an optional inline refusal, and the
+// poll wiring the view's own route should (or should not) carry.
+//
+// Poll is a templ.Attributes rather than a bool so the *condition* for
+// polling stays with the view that owns it (claimedPollAttrs) and this
+// shared wrapper just forwards whatever that view decided.
+type OpsResultsData struct {
+	// Table is the view's rows, or its EmptyState when there are none.
+	Table templ.Component
+	// NextHref is the "next page" link, empty on the last page.
+	NextHref string
+	// Error is a refusal to present inline above the table, empty when none.
+	Error string
+	// Poll is the view's self-terminating poll wiring, nil for no timer.
+	Poll templ.Attributes
+}
+
+// OpsPageData is the page chrome around a results block: the view's
+// heading and one-line description, a manual Refresh button, and the
+// results themselves.
+type OpsPageData struct {
+	Heading     string
+	Description string
+	// RefreshHref is the view's own path -- the manual refresh's hx-get,
+	// and the same route the poll uses. Empty omits the button.
+	RefreshHref string
+	Results     templ.Component
+}
+
+// ClaimedData is the claimed-task view's view-model, for both its page
+// and its results fragment.
+//
+// Href is the view's own path; Polling is decided server-side by
+// claimedPollingDue over the freshly-read store rows, never by anything
+// the browser supplied.
+type ClaimedData struct {
+	Rows     []ClaimedRow
+	NextHref string
+	Error    string
+	Href     string
+	Polling  bool
+}
+
+// EscalatedData is the escalated-task view's view-model.
+type EscalatedData struct {
+	Rows     []EscalatedRow
+	NextHref string
+	Error    string
+	Href     string
+}
+
+// CancelledData is the cancelled-task view's view-model.
+type CancelledData struct {
+	Rows     []CancelledRow
+	NextHref string
+	Error    string
+	Href     string
+}
+
+// NotesData is the open-notes view's view-model.
+type NotesData struct {
+	Rows     []NoteRow
+	NextHref string
+	Error    string
+	Href     string
+}
+
+// TaskActionControl is one control on a console row: an inline form for a
+// non-destructive verb (Kind "form") or a link to a destructive verb's
+// confirmation page (Kind "confirm"). Populated by renderTaskActions in
+// package main, which owns the verb vocabulary; this file only renders.
+type TaskActionControl struct {
+	Kind       string
+	Label      string
+	Action     string
+	ReasonHint string
+	ReturnTo   string
+}
+
+// InterventionErrorData is the in-shell rejection page's data.
+type InterventionErrorData struct {
+	Heading  string
+	Detail   string
+	ReturnTo string
+}
+
+// CancelConfirmData is the cancel-confirm card's data. Error carries a
+// refusal to present inline when the card is re-rendered after one.
+type CancelConfirmData struct {
+	TaskID   string
+	Action   string
+	ReturnTo string
+	Error    string
+}
+
+// ---------------------------------------------------------------------------
+// shared furniture
+// ---------------------------------------------------------------------------
+
+// opsResults renders one read view's results block: the id every swap
+// targets, the view's poll wiring when it has any, an inline refusal when
+// the block is being re-derived after a refused intervention, the rows
+// themselves, and the next-page link.
+templ opsResults(d OpsResultsData) {
+	<div id={ opsResultsID } { d.Poll... }>
+		if d.Error != "" {
+			@htmxui.Alert(htmxui.AlertError, d.Error, nil)
+		}
+		@d.Table
+		if d.NextHref != "" {
+			<p class="mt-2">
+				<a href={ templ.URL(d.NextHref) } class="link">Next page →</a>
+			</p>
+		}
+	</div>
+}
+
+// opsPageChrome renders a read view's page: its heading with the manual
+// Refresh button, its one-line description, and the results block.
+//
+// The Refresh button sits outside the results block on purpose. It is the
+// only affordance the three settled views have, and swapping the block it
+// lives in would take the button with it.
+templ opsPageChrome(d OpsPageData) {
+	<div class="flex flex-wrap items-center justify-between gap-4">
+		<h2>{ d.Heading }</h2>
+		if d.RefreshHref != "" {
+			<button
+				type="button"
+				class="btn btn-ghost btn-sm"
+				hx-get={ d.RefreshHref }
+				hx-target={ "#" + opsResultsID }
+				hx-swap="outerHTML"
+			>Refresh</button>
+		}
+	</div>
+	<p class="mt-1 text-sm text-base-content/60">{ d.Description }</p>
+	<div class="mt-4">
+		@d.Results
+	</div>
+}
+
+// claimedPollAttrs is the claimed view's self-terminating poll, modelled
+// on manmanv2's deploymentRowPollAttrs: the poll attributes are emitted
+// only while the state they watch is transient, and because this route's
+// own HX-Request response IS the same fragment, a settled view comes back
+// without them and the loop stops by itself. No client-side timer
+// bookkeeping, no separate refresh endpoint -- hx-get is /ops/claimed
+// itself, and the handler's HX-Request branch answers it.
+//
+// This is the one place krill's console has a genuine transient state: a
+// lease near expiry. The operator watches the row leave when the lease
+// lapses. The other three views get a manual Refresh instead -- a task is
+// escalated or it is not, so a timer would be pure cost, and it would
+// swap a table out from under an operator typing a reason into a row.
+func claimedPollAttrs(d ClaimedData) templ.Attributes {
+	if !d.Polling {
+		return templ.Attributes{}
+	}
+	return templ.Attributes{
+		"hx-get":     d.Href,
+		"hx-trigger": "every 3s",
+		"hx-target":  "this",
+		"hx-swap":    "outerHTML",
+	}
+}
+
+// ---------------------------------------------------------------------------
+// claimed view
+// ---------------------------------------------------------------------------
+
+templ ClaimedResults(d ClaimedData) {
+	@opsResults(OpsResultsData{
+		Table:    claimedTable(d.Rows),
+		NextHref: d.NextHref,
+		Error:    d.Error,
+		Poll:     claimedPollAttrs(d),
+	})
+}
+
+templ ClaimedPage(d ClaimedData) {
+	@opsPageChrome(OpsPageData{
+		Heading:     "Claimed tasks",
+		Description: "Every task that currently holds a claim, with its claimant, lane, and lease expiry.",
+		RefreshHref: d.Href,
+		Results:     ClaimedResults(d),
+	})
+}
+
+templ claimedTable(rows []ClaimedRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No claimed tasks.", "Nothing holds a claim in this scope right now.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Task</th>
+						<th>Delivery</th>
+						<th>Claimant</th>
+						<th>On behalf of</th>
+						<th>Lane</th>
+						<th>Lease expires</th>
+						<th>Attempts</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover">
+							<td class="text-sm">
+								{ row.TaskID }
+								<br />
+								{ row.Title }
+							</td>
+							<td class="text-sm">{ row.Delivery }</td>
+							<td class="text-sm">
+								{ row.Claimant }
+								<br />
+								<small class="text-base-content/60">session { row.Session }</small>
+							</td>
+							<td class="text-sm">{ row.OnBehalfOf }</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Lane, laneVariant(row.Lane), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td class="text-sm">{ row.Lease }</td>
+							<td class="text-sm">{ strconv.Itoa(row.Attempts) }</td>
+							<td class="text-sm">
+								<div class="flex flex-wrap items-center gap-1">
+									if row.Actions != nil {
+										@row.Actions
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// ---------------------------------------------------------------------------
+// escalated view
+// ---------------------------------------------------------------------------
+
+templ EscalatedResults(d EscalatedData) {
+	@opsResults(OpsResultsData{
+		Table:    escalatedTable(d.Rows),
+		NextHref: d.NextHref,
+		Error:    d.Error,
+	})
+}
+
+templ EscalatedPage(d EscalatedData) {
+	@opsPageChrome(OpsPageData{
+		Heading:     "Escalated tasks",
+		Description: "Every task with an active escalation, and why it escalated.",
+		RefreshHref: d.Href,
+		Results:     EscalatedResults(d),
+	})
+}
+
+templ escalatedTable(rows []EscalatedRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No escalated tasks.", "No task in this scope carries an active escalation.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Task</th>
+						<th>Delivery</th>
+						<th>Reason</th>
+						<th>Counter/cap</th>
+						<th>Lane</th>
+						<th>Escalated</th>
+						<th>By</th>
+						<th>On behalf of</th>
+						<th>Summary</th>
+						<th>Last verdict</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover">
+							<td class="text-sm">
+								{ row.TaskID }
+								<br />
+								{ row.Title }
+							</td>
+							<td class="text-sm">{ row.Delivery }</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Reason, htmxui.BadgeWarning, htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td class="text-sm">{ row.Counter }</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Lane, laneVariant(row.Lane), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td class="text-sm">{ row.At }</td>
+							<td class="text-sm">{ row.Actor }</td>
+							<td class="text-sm">{ row.OnBehalfOf }</td>
+							<td class="text-sm">{ row.Summary }</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Verdict, verdictVariant(row.Verdict), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td class="text-sm">
+								<div class="flex flex-wrap items-center gap-1">
+									if row.Actions != nil {
+										@row.Actions
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cancelled view
+// ---------------------------------------------------------------------------
+
+templ CancelledResults(d CancelledData) {
+	@opsResults(OpsResultsData{
+		Table:    cancelledTable(d.Rows),
+		NextHref: d.NextHref,
+		Error:    d.Error,
+	})
+}
+
+templ CancelledPage(d CancelledData) {
+	@opsPageChrome(OpsPageData{
+		Heading:     "Cancelled tasks",
+		Description: "Every cancelled (dead-lettered) task, and who cancelled it.",
+		RefreshHref: d.Href,
+		Results:     CancelledResults(d),
+	})
+}
+
+templ cancelledTable(rows []CancelledRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No cancelled tasks.", "Nothing has been dead-lettered in this scope.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Task</th>
+						<th>Delivery</th>
+						<th>Cancelled by</th>
+						<th>On behalf of</th>
+						<th>Cancelled at</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover">
+							<td class="text-sm">
+								{ row.TaskID }
+								<br />
+								{ row.Title }
+							</td>
+							<td class="text-sm">{ row.Delivery }</td>
+							<td class="text-sm">{ row.By }</td>
+							<td class="text-sm">{ row.OnBehalfOf }</td>
+							<td class="text-sm">{ row.At }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// ---------------------------------------------------------------------------
+// open-notes view
+// ---------------------------------------------------------------------------
+
+templ NotesResults(d NotesData) {
+	@opsResults(OpsResultsData{
+		Table:    notesTable(d.Rows),
+		NextHref: d.NextHref,
+		Error:    d.Error,
+	})
+}
+
+templ NotesPage(d NotesData) {
+	@opsPageChrome(OpsPageData{
+		Heading:     "Open notes",
+		Description: "Every note still at 'noted', and the task or spec entity it targets.",
+		RefreshHref: d.Href,
+		Results:     NotesResults(d),
+	})
+}
+
+templ notesTable(rows []NoteRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No open notes.", "No note in this scope is still awaiting a decision.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Note</th>
+						<th>Kind</th>
+						<th>Target</th>
+						<th>Created</th>
+						<th>Body</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover">
+							<td class="text-sm">{ row.NoteID }</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Kind, htmxui.BadgeInfo, htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td class="text-sm">{ row.Target }</td>
+							<td class="text-sm">{ row.CreatedAt }</td>
+							<td class="text-sm">{ row.Body }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// ---------------------------------------------------------------------------
+// task interventions
+// ---------------------------------------------------------------------------
+
+// TaskActions renders the intervention controls for one console row. A
+// non-destructive verb is an inline form carrying its own reason prompt; a
+// destructive verb is a plain link to its confirmation page, so nothing
+// posts until the operator confirms on the next page.
+//
+// Every form is doubled -- method="post" + action= AND hx-post +
+// hx-target + hx-swap (htmxui ARCHITECTURE §9: the <form> element and its
+// hx-* attributes stay app-owned). A no-JS browser takes exactly the
+// branch it took before, so the 303 it gets back is unchanged; an htmx
+// browser gets the view's results block re-derived in place at 200.
+templ TaskActions(controls []TaskActionControl) {
+	for _, c := range controls {
+		if c.Kind == "form" {
+			<form
+				method="post"
+				action={ templ.URL(c.Action) }
+				hx-post={ c.Action }
+				hx-target={ "#" + opsResultsID }
+				hx-swap="outerHTML"
+				class="inline"
+			>
+				<input type="hidden" name="return_to" value={ c.ReturnTo } />
+				<input type="text" name="reason" placeholder={ c.ReasonHint } size="18" aria-label={ c.ReasonHint } />
+				<button type="submit" class="btn btn-ghost btn-xs">{ c.Label }</button>
+			</form>
+		} else {
+			<a href={ templ.URL(c.Action) } class="btn btn-error btn-xs">{ c.Label }…</a>
+		}
+	}
+}
+
+// InterventionError is the in-shell page a refused intervention renders
+// for a no-JS browser. The htmx path never reaches it: a refusal rides
+// inside the re-derived results block as an inline Alert instead, because
+// an htmx swap target's HTTP status is not surfaced to the operator.
+templ InterventionError(d InterventionErrorData) {
+	<h2>{ d.Heading }</h2>
+	@htmxui.Alert(htmxui.AlertError, d.Detail, nil)
+	<p class="mt-4">
+		<a href={ templ.URL(d.ReturnTo) } class="link">Back to the console</a>
+	</p>
+}
+
+// CancelConfirmCard is the confirmation step for the destructive cancel
+// verb: a GET page, and the hx-target of its own doubled form.
+//
+// The card carries cancelConfirmID so the form can swap it in place, and
+// a refusal re-renders this same card at 200 with the reason inline --
+// the operator's typed rationale stays on screen instead of vanishing
+// behind a status code.
+templ CancelConfirmCard(d CancelConfirmData) {
+	<div id={ cancelConfirmID } class="card bg-base-100 border-2 border-error/40 shadow-md">
+		<div class="card-body">
+			<h2 class="card-title">Cancel task { d.TaskID }?</h2>
+			<p class="text-sm">
+				Canceling dead-letters this task. It is never claimable again and a later requeue cannot reopen it. This cannot be undone.
+			</p>
+			if d.Error != "" {
+				@htmxui.Alert(htmxui.AlertError, d.Error, nil)
+			}
+			<form
+				method="post"
+				action={ templ.URL(d.Action) }
+				hx-post={ d.Action }
+				hx-target={ "#" + cancelConfirmID }
+				hx-swap="outerHTML"
+				class="mt-4"
+			>
+				<input type="hidden" name="return_to" value={ d.ReturnTo } />
+				<label class="form-control" for="reason">
+					<span class="label-text">Reason (required):</span>
+					<textarea id="reason" name="reason" rows="3" cols="48" required class="textarea textarea-bordered"></textarea>
+				</label>
+				<button type="submit" class="btn btn-error mt-4">Confirm cancel</button>
+			</form>
+			<p class="mt-4">
+				<a href={ templ.URL(d.ReturnTo) } class="link">Back to the console</a>
+			</p>
+		</div>
+	</div>
+}
+
+// ---------------------------------------------------------------------------
+// domain vocabulary -> badge colour
+// ---------------------------------------------------------------------------
+
+// laneVariant maps krill's task lane onto a badge colour, in the spirit
+// of htmxui ARCHITECTURE §13's domain-owned status mapper: the vocabulary
+// is krill's, expressed in terms of htmxui.Badge rather than folded into
+// it. Work still in flight is warning-coloured, a finished lane is
+// success, and an unrecognised lane falls through to neutral rather than
+// failing to compile when a sixth lane is added.
+func laneVariant(lane string) htmxui.BadgeVariant {
+	switch lane {
+	case "Implementation", "Scaffold", "Testing", "Validation":
+		return htmxui.BadgeWarning
+	case "Done":
+		return htmxui.BadgeSuccess
+	default:
+		return htmxui.BadgeNeutral
+	}
+}
+
+// verdictVariant maps a task's most recent verdict onto a badge colour.
+func verdictVariant(verdict string) htmxui.BadgeVariant {
+	switch verdict {
+	case "pass":
+		return htmxui.BadgeSuccess
+	case "fail":
+		return htmxui.BadgeError
+	default:
+		// "-" (no verdict recorded yet) and any future value.
+		return htmxui.BadgeNeutral
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // ---------------------------------------------------------------------------
@@ -418,17 +420,28 @@ type renderedEvent struct {
 var (
 	reEventHeader = regexp.MustCompile(`<strong>#(\d+) ([^<]+)</strong>`)
 	reSignoffCell = regexp.MustCompile(`signoff: ([^<]+)`)
-	reEventMeta   = regexp.MustCompile(`acting: ([^&]*) &middot; on behalf of: ([^&]*) &middot; ([^<]*)`)
+	reEventMeta   = regexp.MustCompile(`acting: ([^·]*) · on behalf of: ([^·]*) · ([^<]*)`)
 	reEventID     = regexp.MustCompile(`event id: <code>([^<]+)</code>`)
 	reVerified    = regexp.MustCompile(`verified against: ([^<]+)`)
-	reDeltaLI     = regexp.MustCompile(`(?s)<li>\s*(created|updated) <code>([^<]+)</code> &mdash; (.*?)</li>`)
-	reOpenedLI    = regexp.MustCompile(`(?s)<li><code>([^<]+)</code> \((blocking|non-blocking)\): (.*?)</li>`)
+	reDeltaLI     = regexp.MustCompile(`(?s)<li[^>]*>\s*(created|updated) <code>([^<]+)</code> — (.*?)</li>`)
+	reOpenedLI    = regexp.MustCompile(`(?s)<li[^>]*><code>([^<]+)</code> \((blocking|non-blocking)\): (.*?)</li>`)
 	reResolvedSec = regexp.MustCompile(`(?s)Resolved questions:(.*)$`)
 	reCodeTag     = regexp.MustCompile(`<code>([^<]*)</code>`)
 )
 
-// pageSection returns the slice of body between the two given markers, so
-// parsing one section never picks up the shell's or a neighbouring
+// The design page's regions carry stable ids (pages/design.templ), and
+// every section-scoped parse slices on those. Slicing on a heading's
+// literal markup instead would break the moment a heading gained a class
+// -- htmxui ARCHITECTURE §14: assert the claim, not the byte layout.
+const (
+	regionSessions     = `id="design-sessions"`
+	regionRevisionLog  = `id="revision-events"`
+	regionOpenQuestion = `id="open-questions"`
+	regionSessionNav   = `id="session-nav"`
+)
+
+// pageSection returns the slice of body between the two given region ids,
+// so parsing one section never picks up the shell's or a neighbouring
 // section's markup.
 func pageSection(t *testing.T, body, from, to string) string {
 	t.Helper()
@@ -445,18 +458,19 @@ func pageSection(t *testing.T, body, from, to string) string {
 
 // topLevelLIs splits a region into its outermost <li>...</li> blocks, so an
 // event's nested entity-delta and opened-question <li>s stay inside their
-// own event's block.
+// own event's block. It matches on the "<li" prefix, not "<li>", so a list
+// item carrying daisyUI classes still counts.
 func topLevelLIs(region string) []string {
 	var out []string
 	depth, start := 0, -1
 	for i := 0; i < len(region); {
 		switch {
-		case strings.HasPrefix(region[i:], "<li>"):
+		case strings.HasPrefix(region[i:], "<li"):
 			if depth == 0 {
 				start = i
 			}
 			depth++
-			i += len("<li>")
+			i += len("<li")
 		case strings.HasPrefix(region[i:], "</li>"):
 			depth--
 			i += len("</li>")
@@ -489,7 +503,7 @@ func allSubmatch(re *regexp.Regexp, s string) []string {
 
 func parseRenderedEvents(t *testing.T, body string) []renderedEvent {
 	t.Helper()
-	region := pageSection(t, body, "<h3>Revision events</h3>", "<h3>Open questions</h3>")
+	region := pageSection(t, body, regionRevisionLog, regionOpenQuestion)
 	blocks := topLevelLIs(region)
 	events := make([]renderedEvent, 0, len(blocks))
 	for _, b := range blocks {
@@ -774,7 +788,7 @@ var reSessionRow = regexp.MustCompile(
 
 func parseRenderedSessionRows(t *testing.T, body string) []renderedSessionRow {
 	t.Helper()
-	region := pageSection(t, body, "<h2>Design sessions</h2>", "")
+	region := pageSection(t, body, regionSessions, "")
 	var rows []renderedSessionRow
 	for _, m := range reSessionRow.FindAllStringSubmatch(region, -1) {
 		rows = append(rows, renderedSessionRow{
@@ -834,11 +848,11 @@ type renderedOpenQuestion struct {
 }
 
 var reOpenQuestionRow = regexp.MustCompile(
-	`<tr><td><code>([^<]+)</code> &mdash; (.*?)</td><td>(blocking|non-blocking)</td><td>#(\d+)</td></tr>`)
+	`<tr><td><code>([^<]+)</code> — (.*?)</td><td>(blocking|non-blocking)</td><td>#(\d+)</td></tr>`)
 
 func parseRenderedOpenQuestions(t *testing.T, body string) []renderedOpenQuestion {
 	t.Helper()
-	region := pageSection(t, body, "<h3>Open questions</h3>", "<p><a href=")
+	region := pageSection(t, body, regionOpenQuestion, regionSessionNav)
 	var out []renderedOpenQuestion
 	for _, m := range reOpenQuestionRow.FindAllStringSubmatch(region, -1) {
 		seq, err := strconv.Atoi(m[4])
@@ -896,4 +910,130 @@ func TestDesignRead_ErrorPaths_SeparateStores(t *testing.T) {
 		assert.Equal(t, http.StatusOK, list.Code)
 		assert.Contains(t, list.Body.String(), "No design sessions")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// the JS-free browse target: GET /design/go
+// ---------------------------------------------------------------------------
+
+// TestHandleDesignGo covers the design root's product-id browse, which
+// replaced an inline <script> that assigned window.location. The rule now
+// lives in one place -- here -- and the only user-controlled path segment
+// is a UUID this handler validates before it builds the redirect target,
+// so a malformed or hostile value is a 400 rather than an open redirect.
+func TestHandleDesignGo(t *testing.T) {
+	app := newDesignReadApp(fakeDesignSessions{}, fakeRevisionEvents{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+designGoPath, app.handleDesignGo)
+
+	t.Run("a valid id 302s to that product's session list", func(t *testing.T) {
+		productID := uuid.New()
+		rec := get(mux, designGoPath+"?product_id="+productID.String())
+		assert.Equal(t, http.StatusFound, rec.Code)
+		assert.Equal(t, designProductSessionsPath(productID), rec.Header().Get("Location"))
+	})
+
+	t.Run("a bad id is 400 with a message", func(t *testing.T) {
+		for _, bad := range []string{
+			"",
+			"not-a-uuid",
+			"../../etc/passwd",
+			"//evil.example",
+			"https://evil.example/x",
+		} {
+			rec := get(mux, designGoPath+"?product_id="+url.QueryEscape(bad))
+			assert.Equal(t, http.StatusBadRequest, rec.Code, "product_id=%q must be refused", bad)
+			assert.Empty(t, rec.Header().Get("Location"),
+				"a refused product_id must never produce a redirect target: %q", bad)
+			assert.NotEmpty(t, strings.TrimSpace(rec.Body.String()), "a 400 must carry a message")
+		}
+	})
+
+	t.Run("surrounding whitespace is tolerated", func(t *testing.T) {
+		productID := uuid.New()
+		rec := get(mux, designGoPath+"?product_id="+url.QueryEscape("  "+productID.String()+"  "))
+		assert.Equal(t, http.StatusFound, rec.Code)
+		assert.Equal(t, designProductSessionsPath(productID), rec.Header().Get("Location"))
+	})
+}
+
+// TestDesignRoot_FormIsJSFree pins the root page's shape: a plain GET form
+// posting to /design/go, with no inline <script> left to duplicate the
+// server's redirect rule.
+func TestDesignRoot_FormIsJSFree(t *testing.T) {
+	body := mustRenderComponent(pages.DesignRoot())
+
+	assert.Contains(t, body, `action="/design/go"`, "the root must submit a plain GET to the browse handler")
+	assert.Contains(t, body, `method="get"`)
+	assert.Contains(t, body, `name="product_id"`)
+	assert.NotContains(t, body, "<script", "the root carries no inline script; the server owns the redirect")
+	assert.NotContains(t, body, "window.location")
+}
+
+// ---------------------------------------------------------------------------
+// one route, two modes: the HX-Request read fragments
+// ---------------------------------------------------------------------------
+
+// hxGet issues the same GET an htmx control would, with the HX-Request
+// header set.
+func hxGet(mux *http.ServeMux, target string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestDesignReads_HXRequestRendersBareFragment proves each read view is
+// one route with two modes: with HX-Request the page body comes back as a
+// bare fragment at 200 (no chrome, so hx-swap can drop it in place),
+// without it the same body comes back inside the shell.
+func TestDesignReads_HXRequestRendersBareFragment(t *testing.T) {
+	productID := uuid.New()
+	sessionID := uuid.New()
+	ds := fakeDesignSessions{
+		byID:      map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}},
+		byProduct: map[uuid.UUID][]store.DesignSession{productID: {{ID: sessionID, ProductID: productID}}},
+	}
+	re := fakeRevisionEvents{
+		bySession: map[uuid.UUID][]store.RevisionEvent{sessionID: {event(1, store.EventTypeDraft)}},
+	}
+	mux := designReadMux(newDesignReadApp(ds, re))
+
+	t.Run("session list", func(t *testing.T) {
+		rec := hxGet(mux, designProductSessionsPath(productID))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		body := rec.Body.String()
+		assert.Contains(t, body, sessionID.String(), "the fragment carries the same data the full page does")
+		assert.NotContains(t, body, "<!DOCTYPE html>", "the fragment must carry no document chrome")
+		assert.NotContains(t, body, "<main", "the fragment must carry no shell chrome")
+	})
+
+	t.Run("session detail", func(t *testing.T) {
+		rec := hxGet(mux, designSessionPath(sessionID))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		body := rec.Body.String()
+		assert.Contains(t, body, string(store.EventTypeDraft), "the fragment carries the same log the full page does")
+		assert.NotContains(t, body, "<!DOCTYPE html>", "the fragment must carry no document chrome")
+		assert.NotContains(t, body, "<main", "the fragment must carry no shell chrome")
+	})
+
+	t.Run("a plain GET still gets the shell", func(t *testing.T) {
+		rec := get(mux, designSessionPath(sessionID))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), "<main", "the no-JS half must keep the full chrome")
+	})
+}
+
+// TestDesignSessionList_EmptyState covers the htmxui.EmptyState case: a
+// product with no sessions is a deliberate empty state, not an error, and
+// it says so in the words the operator already reads.
+func TestDesignSessionList_EmptyState(t *testing.T) {
+	app := newDesignReadApp(fakeDesignSessions{}, fakeRevisionEvents{})
+	rec := get(designReadMux(app), designProductSessionsPath(uuid.New()))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "No design sessions for this product yet.")
+	assert.NotContains(t, body, "<table", "an empty product renders the empty state, not an empty table")
 }

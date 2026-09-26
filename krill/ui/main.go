@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"net/http"
 	"os"
@@ -32,8 +33,14 @@ import (
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxbase"
 	"github.com/whale-net/everything/libs/go/logging"
 )
+
+// faviconIco is served at /favicon.ico, which htmxbase's layout links on
+// every page. Embedded rather than served from disk so the image stays a
+// pure-Go cross-compile with no asset pipeline.
+var faviconIco []byte
 
 // config holds `ui`'s configuration, loaded entirely from environment
 // variables -- no config files (see ../ENV.md).
@@ -345,6 +352,13 @@ func run() error {
 func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", handleHealthz)
 
+	// htmxbase's layout links /favicon.ico by default; serving it from
+	// the embedded bytes keeps every page from 404-ing a favicon it
+	// asked for. Unauthenticated on purpose -- it is a static asset, and
+	// gating it would mean a redirect loop's worth of state on a request
+	// that carries none.
+	mux.HandleFunc("/favicon.ico", htmxbase.FaviconHandler(faviconIco))
+
 	mux.HandleFunc("/login", app.auth.HandleLogin)
 	mux.HandleFunc("/auth/login", app.auth.HandleLogin) // alias: see doc comment above.
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
@@ -430,6 +444,14 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// carries no krill session, exactly like api's ungated read handlers.
 	mux.HandleFunc("GET /design/products/{productID}/design-sessions", app.auth.RequireAuthFunc(app.handleDesignSessionList))
 	mux.HandleFunc("GET /design/design-sessions/{id}", app.auth.RequireAuthFunc(app.handleDesignSessionDetail))
+
+	// The design root's JS-free product browse: the operator types a
+	// product id into a plain GET form and this 302s them to that
+	// product's session list. It replaces a window.location script; a
+	// read, so RequireAuthFunc and no operator identity. The id is
+	// uuid.Parse'd before it reaches the path, so it is not a
+	// user-controlled redirect target.
+	mux.HandleFunc("GET "+designGoPath, app.auth.RequireAuthFunc(app.handleDesignGo))
 
 	// The spec browser (FRs 638a7e5f, 6aa70e3a, b4c1c77f): a static area
 	// landing, then the store-backed product index at /spec/products, and

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -394,4 +395,152 @@ func TestViewRejectsInvalidPageSize(t *testing.T) {
 
 	rec = serve(app.handleClaimedTasks, opsClaimedPath+"?page_size=-1")
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// 4. one route, two modes: the htmx fragment branch
+// ---------------------------------------------------------------------------
+
+// serveHX issues the same GET the browser's poll / Refresh button / row
+// intervention would issue, with the HX-Request header htmx sets. That one
+// header is the whole difference between the two branches of a read view.
+func serveHX(h http.HandlerFunc, target string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	return rec
+}
+
+// TestReadViewFragmentBranchOmitsChrome requires the HX-Request half of a
+// read view to answer 200 with the bare results block: the same rows the
+// page renders, with no shell, no heading, and no second derivation of the
+// data. It is also how the claimed view's own poll reaches this route --
+// there is no separate refresh endpoint.
+func TestReadViewFragmentBranchOmitsChrome(t *testing.T) {
+	tasks := &fakeOpsTasks{claimedPage: store.Page[store.ClaimedTaskRow]{
+		Items: []store.ClaimedTaskRow{{TaskID: uuid.New(), Title: "a fragment row"}},
+	}}
+	rec := serveHX(newOpsApp(tasks).handleClaimedTasks, opsClaimedPath)
+	got := body(t, rec)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "a fragment branch is always 200")
+	assert.Contains(t, got, `id="ops-results"`, "the fragment is the results block every swap targets")
+	assert.Contains(t, got, "a fragment row", "the same rows the page renders reach the fragment")
+	assert.NotContains(t, got, "<html", "a fragment carries no document")
+	assert.NotContains(t, got, "Every task that currently holds a claim",
+		"the heading and description are page chrome, not part of the swap")
+}
+
+// TestPolledClaimedFragmentIsByteStable requires two renders of one
+// unchanged claimed page to be byte-identical. A polled fragment whose
+// bytes shifted for no state change -- a relative "in 3m" timestamp, a
+// generated id, a map's iteration order -- would make every poll a
+// spurious change; this is the rule libs/go/htmxsse's README states for
+// any self-refreshing fragment, and it holds without SSE too.
+//
+// The row's lease is far from the poll horizon in both renders, so the
+// poll decision itself is not what is being compared -- a settled view is
+// the interesting one, being the one that has to stay still.
+func TestPolledClaimedFragmentIsByteStable(t *testing.T) {
+	tasks := &fakeOpsTasks{claimedPage: store.Page[store.ClaimedTaskRow]{
+		Items: []store.ClaimedTaskRow{{
+			TaskID:         uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+			Title:          "a settled claim",
+			LeaseExpiresAt: time.Now().Add(24 * time.Hour),
+		}},
+	}}
+	app := newOpsApp(tasks)
+
+	first := body(t, serveHX(app.handleClaimedTasks, opsClaimedPath))
+	second := body(t, serveHX(app.handleClaimedTasks, opsClaimedPath))
+	assert.Equal(t, first, second, "an unchanged claimed page must render the same bytes twice")
+}
+
+// TestClaimedViewPollsOnlyWhileALeaseIsNearExpiry covers the console's one
+// transient state. The poll attributes are emitted only while some claim's
+// lease is near expiry, and because this route's own HX-Request response
+// IS the same fragment, a settled view comes back without them and the
+// loop stops on its own -- no client-side timer bookkeeping.
+func TestClaimedViewPollsOnlyWhileALeaseIsNearExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		lease    time.Time
+		wantPoll bool
+	}{
+		{"lease about to lapse", time.Now().Add(time.Minute), true},
+		{"lease comfortably held", time.Now().Add(24 * time.Hour), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tasks := &fakeOpsTasks{claimedPage: store.Page[store.ClaimedTaskRow]{
+				Items: []store.ClaimedTaskRow{{TaskID: uuid.New(), Title: "a claim", LeaseExpiresAt: tc.lease}},
+			}}
+			app := newOpsApp(tasks)
+			page := body(t, serve(app.handleClaimedTasks, opsClaimedPath))
+			// The fragment is where the poll decision is visible without the
+			// page's manual Refresh button (which carries its own hx-get) in
+			// the way -- and the fragment is exactly what the poll receives.
+			fragment := body(t, serveHX(app.handleClaimedTasks, opsClaimedPath))
+
+			if tc.wantPoll {
+				assert.Contains(t, fragment, `hx-get="`+opsClaimedPath+`"`,
+					"the poll targets the view's own route -- there is no separate refresh endpoint")
+				assert.Contains(t, fragment, `hx-trigger="every 3s"`)
+				assert.Contains(t, fragment, `hx-swap="outerHTML"`)
+			} else {
+				assert.NotContains(t, fragment, "hx-trigger",
+					"a settled view carries no poll attributes, so the loop stops by itself")
+				assert.NotContains(t, fragment, "hx-get",
+					"a settled fragment has nothing left to refresh on a timer")
+			}
+			// Either way the view keeps its manual refresh, and never a timer
+			// wired around one.
+			assert.Contains(t, page, ">Refresh<")
+			assert.Equal(t, tc.wantPoll, strings.Contains(page, `hx-trigger="every 3s"`),
+				"the page and its fragment must agree about whether the view is polling")
+		})
+	}
+}
+
+// TestSettledViewsRefreshManuallyWithoutATimer covers the other three
+// views. A task is escalated, or cancelled, or noted -- or it is not, so
+// a timer would be pure cost; and it would swap a table out from under an
+// operator typing a reason into a row action. They get a manual Refresh
+// button pointing at the view's own route instead.
+func TestSettledViewsRefreshManuallyWithoutATimer(t *testing.T) {
+	tasks := &fakeOpsTasks{
+		escalatedPage: store.Page[store.EscalatedTaskRow]{Items: []store.EscalatedTaskRow{{TaskID: uuid.New(), Title: "escalated"}}},
+		cancelledPage: store.Page[store.CancelledTaskRow]{Items: []store.CancelledTaskRow{{TaskID: uuid.New(), Title: "cancelled"}}},
+		notesPage:     store.Page[store.OpenNoteRow]{Items: []store.OpenNoteRow{{NoteID: uuid.New(), Body: "a note"}}},
+	}
+	app := newOpsApp(tasks)
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		handler http.HandlerFunc
+	}{
+		{"escalated", opsEscalatedPath, app.handleEscalatedTasks},
+		{"cancelled", opsCancelledPath, app.handleCancelledTasks},
+		{"notes", opsNotesPath, app.handleOpenNotes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := body(t, serve(tc.handler, tc.path))
+
+			assert.Contains(t, got, ">Refresh<", "a settled view offers a manual refresh")
+			assert.Contains(t, got, `hx-get="`+tc.path+`"`, "the button refreshes the view from its own route")
+			assert.NotContains(t, got, "hx-trigger", "no settled view carries a timer")
+		})
+	}
+}
+
+// TestEmptyReadViewsRenderAnEmptyState requires an empty page to say so
+// with the shared empty-state primitive rather than a table with nothing
+// in it, on both branches.
+func TestEmptyReadViewsRenderAnEmptyState(t *testing.T) {
+	app := newOpsApp(&fakeOpsTasks{})
+	assert.Contains(t, body(t, serve(app.handleClaimedTasks, opsClaimedPath)), "No claimed tasks.")
+	assert.Contains(t, body(t, serve(app.handleEscalatedTasks, opsEscalatedPath)), "No escalated tasks.")
+	assert.Contains(t, body(t, serve(app.handleCancelledTasks, opsCancelledPath)), "No cancelled tasks.")
+	assert.Contains(t, body(t, serve(app.handleOpenNotes, opsNotesPath)), "No open notes.")
 }

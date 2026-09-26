@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // ── wire types ───────────────────────────────────────────────────────────────
@@ -134,13 +135,17 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 	return nil
 }
 
-// renderOpenFormFailure re-renders a product's session list in-shell after a
-// rejected "open a session" write, with the operator's opening text preserved
-// so a rejection is never a data-loss event. A *writeRejection is shown inline
-// as the api's status + named message; anything else (no resolved operator,
-// unresolvable scope, unreachable api) never reached krill and falls back to
-// writeWriteError's 502. If the page's own read fails to re-render, fall back
-// to a plain status page.
+// renderOpenFormFailure re-renders the "open a session" form after a
+// rejected write, with the operator's opening text preserved so a rejection
+// is never a data-loss event. A *writeRejection is shown inline as the
+// api's status + named message; anything else (no resolved operator,
+// unresolvable scope, unreachable api) never reached krill and falls back
+// to writeWriteError's 502. If the page's own read fails to re-render,
+// fall back to a plain status page.
+//
+// Both modes answer 200, never the rejection's status: the no-JS path
+// re-renders the whole page in-shell, and the htmx path answers the form
+// fragment alone so hx-swap="outerHTML" can drop the error in place.
 func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, productID uuid.UUID, opening string, err error) {
 	var rejection *writeRejection
 	if !errors.As(err, &rejection) {
@@ -153,20 +158,23 @@ func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, pr
 		http.Error(w, rejection.message, rejection.status)
 		return
 	}
-	renderShell(w, r, "Design sessions", designPath, renderPage(designSessionListTemplate, designSessionListPage{
+	page := pages.DesignSessionListPage{
 		ProductID:         productID.String(),
 		Sessions:          sessions,
 		Error:             fmt.Sprintf("%d: %s", rejection.status, rejection.message),
 		OpeningSubmission: opening,
-	}))
+		FormAction:        designProductSessionsPath(productID),
+	}
+	if isHXRequest(r) {
+		renderFragment(w, r, pages.OpenSessionForm(page))
+		return
+	}
+	renderShell(w, r, "Design sessions", designPath, pages.DesignSessionList(page))
 }
 
-// renderAnswerFormFailure re-renders a session's detail page in-shell after a
-// rejected "submit follow-up" write, preserving the follow-up text and which
-// resolve boxes were ticked. A *writeRejection is shown inline as the api's
-// status + named message; anything else never reached krill and falls back to
-// writeWriteError's 502. If the page's own read fails to re-render, fall back
-// to a plain status page.
+// renderAnswerFormFailure re-renders the "submit follow-up" form after a
+// rejected write, preserving the follow-up text and which resolve boxes
+// were ticked. Same 200-both-modes rule as renderOpenFormFailure.
 func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, id uuid.UUID, err error, followUp string, resolved []string) {
 	var rejection *writeRejection
 	if !errors.As(err, &rejection) {
@@ -186,7 +194,24 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 	detail.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
 	detail.FollowUp = followUp
 	detail.CheckedResolve = checked
-	renderShell(w, r, "Design session", designPath, renderPage(designSessionDetailTemplate, detail))
+	if isHXRequest(r) {
+		renderFragment(w, r, pages.FollowUpForm(detail))
+		return
+	}
+	renderShell(w, r, "Design session", designPath, pages.DesignSessionDetail(detail))
+}
+
+// hxRedirect answers a successful doubled-form write for an htmx caller:
+// 200 with an HX-Redirect, so the browser performs the same
+// POST/Redirect/Get navigation the no-JS branch performs with a 303. This
+// is the one HX-Redirect in this surface, and it earns its place -- the
+// success outcome navigates to a different page (the new session's detail
+// page), which an hx-swap fragment cannot express. The no-HX branch is
+// untouched, so its 303 + Location behaviour is unchanged.
+func hxRedirect(w http.ResponseWriter, to string) {
+	w.Header().Set("HX-Redirect", to)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
 }
 
 // ── handlers ─────────────────────────────────────────────────────────────────
@@ -197,6 +222,10 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 // (POST/Redirect/Get) to the new session's detail page, so a refresh cannot
 // re-open the session. A rejected write re-renders the list in-shell with the
 // operator's text preserved (renderOpenFormFailure).
+//
+// The form is doubled, so one route serves both a no-JS browser and an htmx
+// one; the no-HX half of that pair is the 303 + Location below, left
+// exactly as it was.
 func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Request) {
 	productID, err := parseUUIDPathValue(w, r, "productID", "product")
 	if err != nil {
@@ -232,6 +261,10 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return
 	}
+	if isHXRequest(r) {
+		hxRedirect(w, designSessionPath(id))
+		return
+	}
 	http.Redirect(w, r, designSessionPath(id), http.StatusSeeOther)
 }
 
@@ -241,6 +274,10 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 // session's detail page (POST/Redirect/Get). A rejected write re-renders the
 // detail page in-shell with the operator's text and ticks preserved
 // (renderAnswerFormFailure).
+//
+// Doubled form, one route: the no-HX half answers the 303 + Location below,
+// untouched; the HX half answers 200 and either HX-Redirects on success or
+// re-renders this form with the error inline.
 func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUIDPathValue(w, r, "id", "design session")
 	if err != nil {
@@ -302,6 +339,10 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if isHXRequest(r) {
+		hxRedirect(w, designSessionPath(id))
+		return
+	}
 	http.Redirect(w, r, designSessionPath(id), http.StatusSeeOther)
 }
 

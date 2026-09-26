@@ -9,17 +9,23 @@
 // All four pages render current revisions only: the reader's GetCurrent /
 // ListCurrentByProduct methods never touch history, so a superseded
 // revision is never surfaced.
+//
+// Every page body is a templ component under krill/ui/pages; this file
+// keeps the handlers, the route spellings, and the pure view-model
+// builders that the field-parity tests exercise without a database.
 package main
 
 import (
 	"errors"
-	"html/template"
 	"net/http"
 
+	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/components"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // specProductsPath lists the products an operator can browse into;
@@ -36,8 +42,12 @@ const (
 func specProductID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		renderSpecStatus(w, r, "Spec", specPath, http.StatusBadRequest,
-			"<h2>Bad product id</h2><p>The product id in the URL is not a UUID.</p>")
+		renderSpecStatus(w, r, http.StatusBadRequest, pages.StatusPage{
+			Title:    "Bad product id",
+			Detail:   "The product id in the URL is not a UUID.",
+			BackHref: specProductsPath,
+			BackText: "Back to products",
+		})
 		return uuid.Nil, false
 	}
 	return id, true
@@ -49,34 +59,52 @@ func specProductID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // 500. Both render inside the shell, not as a bare http.Error string.
 func renderSpecError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, store.ErrNotFound) {
-		renderSpecStatus(w, r, "Spec", specPath, http.StatusNotFound,
-			"<h2>Not found</h2><p>No current product matches that id.</p>")
+		renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
+			Title:    "Not found",
+			Detail:   "No current product matches that id.",
+			BackHref: specProductsPath,
+			BackText: "Back to products",
+		})
 		return
 	}
 	logger.Error("spec read failed", "error", err)
-	renderSpecStatus(w, r, "Spec", specPath, http.StatusInternalServerError,
-		"<h2>Could not load the spec</h2><p>The spec store could not be read. See the logs.</p>")
+	renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
+		Title:    "Could not load the spec",
+		Detail:   "The spec store could not be read. See the logs.",
+		BackHref: specProductsPath,
+		BackText: "Back to products",
+	})
 }
 
-// renderSpecStatus renders a bare, already-safe page body through the
-// shell with an explicit status, for the error and not-yet-wired cases
-// that have no template of their own.
-func renderSpecStatus(w http.ResponseWriter, r *http.Request, title, activePath string, status int, body template.HTML) {
-	renderShellStatus(w, r, title, activePath, body, status)
+// renderSpecStatus renders the spec area's error body through the shell
+// with an explicit status, for the cases that have no data view of their
+// own (a bad id, an unknown product, a failed store read, and the
+// not-yet-wired cases that reuse it).
+//
+// The status necessarily lives here rather than in the component: templ
+// components are body-writers with no status concept, so renderShellStatus
+// keeps owning the response and this only supplies the body.
+func renderSpecStatus(w http.ResponseWriter, r *http.Request, status int, page pages.StatusPage) {
+	renderShellStatus(w, r, "Spec", specPath, pages.SpecStatus(page), status)
 }
 
-// productHeader is the common "which product am I looking at" banner the
-// per-product pages show.
-type productHeader struct {
-	Name   string
-	Vision string
-	Href   string // the product's capability-map page
+// renderSpecPage serves one spec page in both modes off its single
+// route: an htmx request gets the page's own content region as a bare
+// 200 fragment, and a browser gets that same component inside the shell
+// chrome. The Refresh button each page carries re-requests its own path
+// with HX-Request set, which is what lands on the fragment branch.
+func renderSpecPage(w http.ResponseWriter, r *http.Request, title string, body templ.Component) {
+	if r.Header.Get("HX-Request") != "" {
+		renderFragment(w, r, body)
+		return
+	}
+	renderShell(w, r, title, specPath, body)
 }
 
 // productHeaderOf builds the banner from a store product's own current
 // row and the {id} it is browsed at.
-func productHeaderOf(p store.Product) productHeader {
-	return productHeader{Name: p.Name, Vision: p.Vision, Href: productPath(p.ID)}
+func productHeaderOf(p store.Product) pages.ProductHeader {
+	return pages.ProductHeader{Name: p.Name, Vision: p.Vision, Href: productPath(p.ID)}
 }
 
 // productHeaderOfEntity builds the same banner from a slice.Document's
@@ -85,11 +113,11 @@ func productHeaderOf(p store.Product) productHeader {
 // read. A nil Product -- which get_product_slice does not produce on
 // success, but the shared type allows -- yields a name-less banner rather
 // than a panic.
-func productHeaderOfEntity(p *slice.ProductEntity, id uuid.UUID) productHeader {
+func productHeaderOfEntity(p *slice.ProductEntity, id uuid.UUID) pages.ProductHeader {
 	if p == nil {
-		return productHeader{Href: productPath(id)}
+		return pages.ProductHeader{Href: productPath(id)}
 	}
-	return productHeader{Name: p.Name, Vision: p.Vision, Href: productPath(id)}
+	return pages.ProductHeader{Name: p.Name, Vision: p.Vision, Href: productPath(id)}
 }
 
 // productPath is the capability-map page for a product.
@@ -106,61 +134,28 @@ func personasPath(id uuid.UUID) string  { return productPath(id) + "/personas" }
 func nonGoalsPath(id uuid.UUID) string  { return productPath(id) + "/non-goals" }
 func deliveryPath(id uuid.UUID) string  { return productPath(id) + "/delivery" }
 
-// productNavLink is one destination in the per-product cross-nav.
-type productNavLink struct {
-	Label  string
-	Href   string
-	Active bool // the page currently being rendered
-}
-
-// productNav is the five per-product cross-links every spec page carries, so
-// an operator landing on any one of them can reach the other four -- and the
-// sibling ops / design areas the shell nav offers -- without retyping a URL.
-type productNav []productNavLink
-
-// productNavTemplate is the shared cross-nav fragment, included by each of
-// the per-product page templates via {{template "productnav" .}}. It
-// lives in its own define so the links are spelled once.
-const productNavTemplate = `{{define "productnav"}}
-<nav class="subnav">
-{{range .Nav}}<a href="{{.Href}}"{{if .Active}} aria-current="page"{{end}}>{{.Label}}</a>
-{{end}}</nav>
-{{end}}`
-
 // productNavFor builds the five per-product cross-links, marking the one
-// matching current as active.
-func productNavFor(id uuid.UUID, current string) productNav {
-	links := []struct{ label, href string }{
-		{"Capability map", productPath(id)},
-		{"Decisions", decisionsPath(id)},
-		{"Personas", personasPath(id)},
-		{"Non-goals", nonGoalsPath(id)},
-		{"Delivery", deliveryPath(id)},
+// matching current as active. The component that renders them is
+// components.SubNav, shared with the delivery page so the two spell the
+// cross-nav once.
+//
+// The links are plain <a> navigation rather than htmx swaps: moving
+// between them is navigation, not a refresh of the current view.
+func productNavFor(id uuid.UUID, current string) []components.NavLink {
+	links := []components.NavLink{
+		{Label: "Capability map", Href: productPath(id)},
+		{Label: "Decisions", Href: decisionsPath(id)},
+		{Label: "Personas", Href: personasPath(id)},
+		{Label: "Non-goals", Href: nonGoalsPath(id)},
+		{Label: "Delivery", Href: deliveryPath(id)},
 	}
-	nav := make(productNav, 0, len(links))
-	for _, l := range links {
-		nav = append(nav, productNavLink{Label: l.label, Href: l.href, Active: l.href == current})
+	for i := range links {
+		links[i].Active = links[i].Href == current
 	}
-	return nav
+	return links
 }
 
 // -- product index --------------------------------------------------------
-
-// productListItem is one row of the product index.
-type productListItem struct {
-	Name        string
-	Vision      string
-	CapabilityH string // /spec/products/{id} -- the capability map
-}
-
-var productsTemplate = template.Must(template.New("products").Parse(`<h2>Products</h2>
-{{if .}}
-<ul>
-{{range .}}<li><a href="{{.CapabilityH}}">{{.Name}}</a>{{if .Vision}} &mdash; {{.Vision}}{{end}}</li>
-{{end}}</ul>
-{{else}}
-<p>No products yet.</p>
-{{end}}`))
 
 // handleSpecProducts lists the current products in the deployment's sole
 // scope so an operator can pick one to browse. It mirrors the mcp
@@ -173,78 +168,21 @@ func (app *App) handleSpecProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := make([]productListItem, 0, len(products))
+	items := make([]pages.ProductListItem, 0, len(products))
 	for _, p := range products {
-		items = append(items, productListItem{
+		items = append(items, pages.ProductListItem{
 			Name:        p.Name,
 			Vision:      p.Vision,
 			CapabilityH: productPath(p.ID),
 		})
 	}
-	renderShell(w, r, "Products", specPath, renderPage(productsTemplate, items))
+	renderSpecPage(w, r, "Products", pages.Products(pages.ProductsPage{
+		Path:  specProductsPath,
+		Items: items,
+	}))
 }
 
 // -- capability map -------------------------------------------------------
-
-// capabilityFeatureSet is one FeatureSet and the Features nested under it.
-type capabilityFeatureSet struct {
-	ID          string // EntityRef.ID -- the surrogate id, as get_product_slice returns it
-	Name        string
-	Description string
-	Features    []capabilityFeature
-}
-
-// capabilityFeature is one Feature and the Requirements nested under it.
-type capabilityFeature struct {
-	ID           string // EntityRef.ID
-	Number       int    // Cn -- the stored DisplayNumber, the number a reader cites
-	Name         string
-	Description  string
-	Requirements []capabilityRequirement
-}
-
-// capabilityRequirement is one FR or NFR under a Feature.
-type capabilityRequirement struct {
-	ID   string // EntityRef.ID -- the surrogate id, so a reader can cite the exact row
-	Kind string // "FR" or "NFR"
-	Name string
-	Body string
-}
-
-type capabilityPage struct {
-	Product     productHeader
-	Nav         productNav
-	FeatureSets []capabilityFeatureSet
-}
-
-var capabilityTemplate = template.Must(template.New("capability").Parse(productNavTemplate + `<h2>{{.Product.Name}} &mdash; capability map</h2>
-{{if .Product.Vision}}<p>{{.Product.Vision}}</p>{{end}}
-{{template "productnav" .}}
-{{if .FeatureSets}}
-{{range .FeatureSets}}
-<h3 id="{{.ID}}">{{.Name}}</h3>
-{{if .Description}}<p>{{.Description}}</p>{{end}}
-{{if .Features}}
-<ul>
-{{range .Features}}
-  <li>
-    <strong>C{{.Number}} &mdash; {{.Name}}</strong> <code class="id">{{.ID}}</code>
-    {{if .Description}}<div>{{.Description}}</div>{{end}}
-    {{if .Requirements}}
-    <ul>
-    {{range .Requirements}}
-      <li><strong>{{.Kind}}</strong>: {{.Name}} <code class="id">{{.ID}}</code>{{if .Body}}<div>{{.Body}}</div>{{end}}</li>
-    {{end}}
-    </ul>
-    {{end}}
-  </li>
-{{end}}
-</ul>
-{{end}}
-{{end}}
-{{else}}
-<p>No feature sets yet.</p>
-{{end}}`))
 
 // handleCapabilityMap renders a product's FeatureSets, Features, and
 // Requirements (current revisions only) as a navigable capability map --
@@ -261,33 +199,34 @@ func (app *App) handleCapabilityMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderShell(w, r, "Capability map", specPath, renderPage(capabilityTemplate, capabilityPageOf(doc, productID)))
+	renderSpecPage(w, r, "Capability map", pages.CapabilityMap(capabilityPageOf(doc, productID)))
 }
 
 // capabilityPageOf assembles the capability map from a slice.Document,
 // grouping the flat entities by parent id into FeatureSet -> Feature ->
 // Requirement and copying every field get_product_slice returns. Pure, so
 // the field-parity with the MCP wire is unit-testable without a database.
-func capabilityPageOf(doc slice.Document, productID uuid.UUID) capabilityPage {
-	page := capabilityPage{
+func capabilityPageOf(doc slice.Document, productID uuid.UUID) pages.CapabilityPage {
+	page := pages.CapabilityPage{
 		Product: productHeaderOfEntity(doc.Product, productID),
 		Nav:     productNavFor(productID, productPath(productID)),
+		Path:    productPath(productID),
 	}
 
-	// Index requirements and features by parent id so the template can
+	// Index requirements and features by parent id so the component can
 	// nest them without a second pass per level.
-	reqsByFeature := map[uuid.UUID][]capabilityRequirement{}
+	reqsByFeature := map[uuid.UUID][]pages.CapabilityRequirement{}
 	for _, rq := range doc.Requirements {
-		reqsByFeature[rq.FeatureID] = append(reqsByFeature[rq.FeatureID], capabilityRequirement{
+		reqsByFeature[rq.FeatureID] = append(reqsByFeature[rq.FeatureID], pages.CapabilityRequirement{
 			ID:   rq.ID.String(),
 			Kind: rq.Kind,
 			Name: rq.Name,
 			Body: deref(rq.Body),
 		})
 	}
-	featsBySet := map[uuid.UUID][]capabilityFeature{}
+	featsBySet := map[uuid.UUID][]pages.CapabilityFeature{}
 	for _, f := range doc.Features {
-		featsBySet[f.FeatureSetID] = append(featsBySet[f.FeatureSetID], capabilityFeature{
+		featsBySet[f.FeatureSetID] = append(featsBySet[f.FeatureSetID], pages.CapabilityFeature{
 			ID:           f.ID.String(),
 			Number:       f.DisplayNumber,
 			Name:         f.Name,
@@ -296,7 +235,7 @@ func capabilityPageOf(doc slice.Document, productID uuid.UUID) capabilityPage {
 		})
 	}
 	for _, fs := range doc.FeatureSets {
-		page.FeatureSets = append(page.FeatureSets, capabilityFeatureSet{
+		page.FeatureSets = append(page.FeatureSets, pages.CapabilityFeatureSet{
 			ID:          fs.ID.String(),
 			Name:        fs.Name,
 			Description: deref(fs.Description),
@@ -307,32 +246,6 @@ func capabilityPageOf(doc slice.Document, productID uuid.UUID) capabilityPage {
 }
 
 // -- load-bearing decisions -----------------------------------------------
-
-type decisionItem struct {
-	ID     string // EntityRef.ID
-	Number int    // LBn -- the stored DisplayNumber
-	Name   string
-	Body   string
-}
-
-type decisionsPage struct {
-	Product   productHeader
-	Nav       productNav
-	Decisions []decisionItem
-}
-
-var decisionsTemplate = template.Must(template.New("decisions").Parse(productNavTemplate + `<h2>{{.Product.Name}} &mdash; load-bearing decisions</h2>
-{{if .Product.Vision}}<p>{{.Product.Vision}}</p>{{end}}
-{{template "productnav" .}}
-{{if .Decisions}}
-<ol>
-{{range .Decisions}}
-  <li id="{{.ID}}"><strong>LB{{.Number}} &mdash; {{.Name}}</strong> <code class="id">{{.ID}}</code>{{if .Body}}<div>{{.Body}}</div>{{end}}</li>
-{{end}}
-</ol>
-{{else}}
-<p>No load-bearing decisions yet.</p>
-{{end}}`))
 
 // handleSpecDecisions lists a product's current LoadBearingDecisions with
 // their full body text -- get_product_slice's decisions, unchanged (FR
@@ -349,19 +262,20 @@ func (app *App) handleSpecDecisions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderShell(w, r, "Decisions", specPath, renderPage(decisionsTemplate, decisionsPageOf(doc, productID)))
+	renderSpecPage(w, r, "Decisions", pages.Decisions(decisionsPageOf(doc, productID)))
 }
 
 // decisionsPageOf assembles the decisions list, copying each decision's
 // full body and LBn exactly as get_product_slice returns them. Pure, so the
 // full-body / field-parity contract is unit-testable without a database.
-func decisionsPageOf(doc slice.Document, productID uuid.UUID) decisionsPage {
-	page := decisionsPage{
+func decisionsPageOf(doc slice.Document, productID uuid.UUID) pages.DecisionsPage {
+	page := pages.DecisionsPage{
 		Product: productHeaderOfEntity(doc.Product, productID),
 		Nav:     productNavFor(productID, decisionsPath(productID)),
+		Path:    decisionsPath(productID),
 	}
 	for _, d := range doc.Decisions {
-		page.Decisions = append(page.Decisions, decisionItem{
+		page.Decisions = append(page.Decisions, pages.DecisionItem{
 			ID:     d.ID.String(),
 			Number: d.DisplayNumber,
 			Name:   d.Name,
@@ -372,31 +286,6 @@ func decisionsPageOf(doc slice.Document, productID uuid.UUID) decisionsPage {
 }
 
 // -- personas -------------------------------------------------------------
-
-type personaItem struct {
-	ID          string // the surrogate id, as list_personas returns it
-	Name        string
-	Description string
-}
-
-type personasPage struct {
-	Product  productHeader
-	Nav      productNav
-	Personas []personaItem
-}
-
-var personasTemplate = template.Must(template.New("personas").Parse(productNavTemplate + `<h2>{{.Product.Name}} &mdash; personas</h2>
-{{if .Product.Vision}}<p>{{.Product.Vision}}</p>{{end}}
-{{template "productnav" .}}
-{{if .Personas}}
-<ul>
-{{range .Personas}}
-  <li id="{{.ID}}"><strong>{{.Name}}</strong> <code class="id">{{.ID}}</code>{{if .Description}}<div>{{.Description}}</div>{{end}}</li>
-{{end}}
-</ul>
-{{else}}
-<p>No personas yet.</p>
-{{end}}`))
 
 // handleSpecPersonas lists a product's current Personas -- list_personas'
 // shape (FR b4c1c77f).
@@ -417,19 +306,20 @@ func (app *App) handleSpecPersonas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderShell(w, r, "Personas", specPath, renderPage(personasTemplate, personasPageOf(product, personas, productID)))
+	renderSpecPage(w, r, "Personas", pages.Personas(personasPageOf(product, personas, productID)))
 }
 
 // personasPageOf assembles the personas list, copying every field
 // list_personas returns (id, name, description). Pure, so field-parity is
 // unit-testable without a database.
-func personasPageOf(product store.Product, personas []store.Persona, productID uuid.UUID) personasPage {
-	page := personasPage{
+func personasPageOf(product store.Product, personas []store.Persona, productID uuid.UUID) pages.PersonasPage {
+	page := pages.PersonasPage{
 		Product: productHeaderOf(product),
 		Nav:     productNavFor(productID, personasPath(productID)),
+		Path:    personasPath(productID),
 	}
 	for _, p := range personas {
-		page.Personas = append(page.Personas, personaItem{
+		page.Personas = append(page.Personas, pages.PersonaItem{
 			ID:          p.ID.String(),
 			Name:        p.Name,
 			Description: deref(p.Description),
@@ -440,48 +330,12 @@ func personasPageOf(product store.Product, personas []store.Persona, productID u
 
 // -- non-goals ------------------------------------------------------------
 
-type nonGoalItem struct {
-	ID   string // the surrogate id, as list_non_goals returns it
-	Kind string // "permanent" or "deferred"
-	Name string
-	Body string
-}
-
-// nonGoalGroup is one kind's worth of non-goals, split so the page shows
-// the permanent vs deferred distinction the brief makes load-bearing.
-type nonGoalGroup struct {
-	Kind     string // "permanent" or "deferred"
-	Heading  string // the human-facing label for that kind
-	NonGoals []nonGoalItem
-}
-
-type nonGoalsPage struct {
-	Product productHeader
-	Nav     productNav
-	Groups  []nonGoalGroup
-}
-
 // nonGoalHeadings are the two kinds' display labels, in the order the page
 // lists them (permanent first, then deferred).
 var nonGoalHeadings = []struct{ kind, heading string }{
 	{string(store.NonGoalKindPermanent), "Permanent non-goals"},
 	{string(store.NonGoalKindDeferred), "Deferred, not foreclosed"},
 }
-
-var nonGoalsTemplate = template.Must(template.New("non_goals").Parse(productNavTemplate + `<h2>{{.Product.Name}} &mdash; non-goals</h2>
-{{if .Product.Vision}}<p>{{.Product.Vision}}</p>{{end}}
-{{template "productnav" .}}
-{{range .Groups}}
-{{if .NonGoals}}
-<h3>{{.Heading}}</h3>
-<ul>
-{{range .NonGoals}}
-  <li id="{{.ID}}"><strong>{{.Name}}</strong> <code class="id">{{.ID}}</code>{{if .Body}}<div>{{.Body}}</div>{{end}}</li>
-{{end}}
-</ul>
-{{end}}
-{{end}}
-{{if not .Groups}}<p>No non-goals yet.</p>{{end}}`))
 
 // handleSpecNonGoals lists a product's current Non-Goals, both the
 // permanent and deferred kinds -- list_non_goals' shape (FR b4c1c77f).
@@ -502,23 +356,24 @@ func (app *App) handleSpecNonGoals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderShell(w, r, "Non-goals", specPath, renderPage(nonGoalsTemplate, nonGoalsPageOf(product, nonGoals, productID)))
+	renderSpecPage(w, r, "Non-goals", pages.NonGoals(nonGoalsPageOf(product, nonGoals, productID)))
 }
 
 // nonGoalsPageOf assembles the non-goals list, copying every field
 // list_non_goals returns (id, kind, name, body) and bucketing by kind so
 // the permanent vs deferred distinction is explicit. Pure, so field-parity
 // is unit-testable without a database.
-func nonGoalsPageOf(product store.Product, nonGoals []store.NonGoal, productID uuid.UUID) nonGoalsPage {
-	page := nonGoalsPage{
+func nonGoalsPageOf(product store.Product, nonGoals []store.NonGoal, productID uuid.UUID) pages.NonGoalsPage {
+	page := pages.NonGoalsPage{
 		Product: productHeaderOf(product),
 		Nav:     productNavFor(productID, nonGoalsPath(productID)),
+		Path:    nonGoalsPath(productID),
 	}
 	// Only non-empty kinds become a group, so the "no non-goals" state
 	// renders when both kinds are empty.
-	byKind := map[string][]nonGoalItem{}
+	byKind := map[string][]pages.NonGoalItem{}
 	for _, n := range nonGoals {
-		byKind[string(n.Kind)] = append(byKind[string(n.Kind)], nonGoalItem{
+		byKind[string(n.Kind)] = append(byKind[string(n.Kind)], pages.NonGoalItem{
 			ID:   n.ID.String(),
 			Kind: string(n.Kind),
 			Name: n.Name,
@@ -527,7 +382,7 @@ func nonGoalsPageOf(product store.Product, nonGoals []store.NonGoal, productID u
 	}
 	for _, h := range nonGoalHeadings {
 		if items := byKind[h.kind]; len(items) > 0 {
-			page.Groups = append(page.Groups, nonGoalGroup{
+			page.Groups = append(page.Groups, pages.NonGoalGroup{
 				Kind:     h.kind,
 				Heading:  h.heading,
 				NonGoals: items,
@@ -540,7 +395,7 @@ func nonGoalsPageOf(product store.Product, nonGoals []store.NonGoal, productID u
 // -- helpers --------------------------------------------------------------
 
 // deref unwraps an optional text field, treating absent as empty so a
-// template never has to nil-check a body or description.
+// component never has to nil-check a body or description.
 func deref(s *string) string {
 	if s == nil {
 		return ""
