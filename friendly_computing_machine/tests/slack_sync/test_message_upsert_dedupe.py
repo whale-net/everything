@@ -5,6 +5,7 @@ once. The store is an upsert keyed on the client message id when the event
 carries one, and otherwise on team + channel + timestamp.
 """
 
+from typing import Any
 from unittest.mock import Mock
 
 from sqlmodel import select
@@ -23,7 +24,12 @@ USER = "U_SOMEONE"
 TS = "1700000000.000100"
 
 
-def _event(channel, ts=TS, client_msg_id="cmid-1", text="hello"):
+def _event(
+    channel: str,
+    ts: str = TS,
+    client_msg_id: str | None = "cmid-1",
+    text: str = "hello",
+) -> dict[str, Any]:
     event = {
         "type": "message",
         "channel": channel,
