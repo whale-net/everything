@@ -14,11 +14,19 @@
 // since populated), matching this package's "not left to inference" remit
 // without re-asserting defaultBranch over a value an operator may have
 // since corrected by hand.
+//
+// It also seeds the local-development MCP credential (`SeedDevCredential`),
+// for the reason documented on that function: the committed plugin configs
+// present a fixed `Bearer dev-local` that nothing else provisions.
 package seed
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"os"
+	"strings"
 )
 
 // repoFullName and defaultBranch are krill's own forge coordinates
@@ -31,7 +39,38 @@ import (
 const (
 	repoFullName  = "whale-net/everything"
 	defaultBranch = "main"
+
+	// devCredentialIdentity and devCredentialToken are the local-development
+	// MCP credential the committed plugin configs present as
+	// `Authorization: Bearer dev-local` (krill/plugin/{work,design}/
+	// mcp_config.json). Nothing else provisions one, so without this row
+	// every /mcp/spec, /mcp/work and /mcp/design call 401s with "auth:
+	// invalid or revoked credential" against a freshly migrated database.
+	//
+	// SECURITY: this token is committed in a PUBLIC repository, so it is
+	// readable by anyone. It is only ever usable when
+	// allowDevCredential is true, which requires an operator to opt in
+	// explicitly (see below) -- never by default, and never in a deployed
+	// environment.
+	devCredentialIdentity = "dev-local"
+	devCredentialToken    = "dev-local"
 )
+
+// AllowDevCredential reports whether the dev-credential opt-in is set.
+//
+// `migrate` runs on every deployment, prod included, so seeding an
+// unconditionally-known token would be an authentication bypass on the MCP
+// surface in any environment that has not thought to remove it. The gate
+// reads KRILL_ALLOW_DEV_CREDENTIAL, which the Tiltfile sets for the local
+// cluster and no deployment sets -- so the failure mode is "the local dev
+// loop needs one line of config", never "prod accepts a public token".
+//
+// The value is read from the process environment rather than inferred from
+// anything about the database, because nothing about a connection string
+// reliably distinguishes dev from prod.
+func AllowDevCredential() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("KRILL_ALLOW_DEV_CREDENTIAL")), "true")
+}
 
 // Seeder returns a libs/go/migrate.Seeder-compatible function that ensures
 // krill's one `scope` row exists, per this package's doc comment.
@@ -41,7 +80,13 @@ const (
 //	migrate.RunCLI(schema.Migrations, schema.Dir, migrate.WithSeeder(seed.Seeder()))
 func Seeder() func(ctx context.Context, db *sql.DB) error {
 	return func(ctx context.Context, db *sql.DB) error {
-		return SeedScope(ctx, db)
+		if err := SeedScope(ctx, db); err != nil {
+			return err
+		}
+		if !AllowDevCredential() {
+			return nil
+		}
+		return SeedDevCredential(ctx, db)
 	}
 }
 
@@ -54,5 +99,35 @@ func SeedScope(ctx context.Context, db *sql.DB) error {
 		VALUES ($1, $2)
 		ON CONFLICT (repo_full_name) DO NOTHING
 	`, repoFullName, defaultBranch)
+	return err
+}
+
+// SeedDevCredential inserts the local-development MCP credential the
+// committed plugin configs present as `Bearer dev-local`.
+//
+// It stores only the SHA-256 hash, byte-identical to
+// `auth.hashToken` (libs/go/auth/credential.go) — the same value Verify
+// looks up, and the only form the table ever holds. There is no
+// credential row without this, and the plugin configs have shipped that
+// literal since M1, so a database that has never been seeded here 401s
+// every MCP call with the opaque "invalid or revoked credential" that an
+// unknown token and a revoked one are deliberately indistinguishable
+// between (NFR1).
+//
+// Idempotent via the UNIQUE token_hash constraint: a later run is a
+// no-op, and it never clobbers or revokes a credential an operator
+// rotated. This is a development convenience only — the token is
+// committed in a public repository, so it must never be reachable in a
+// deployed environment. Seeder calls it ONLY when allowDevCredential() is
+// true, so `migrate` run without KRILL_ALLOW_DEV_CREDENTIAL never creates
+// it. Call this function directly only in a context that has established
+// the same thing.
+func SeedDevCredential(ctx context.Context, db *sql.DB) error {
+	sum := sha256.Sum256([]byte(devCredentialToken))
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO mcp_credential (identity, token_hash)
+		VALUES ($1, $2)
+		ON CONFLICT (token_hash) DO NOTHING
+	`, devCredentialIdentity, hex.EncodeToString(sum[:]))
 	return err
 }

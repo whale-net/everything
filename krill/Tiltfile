@@ -116,6 +116,14 @@ spec:
         env:
         - name: PG_DATABASE_URL
           value: "{pg_database_url}"
+        # Opt in to seeding the `dev-local` MCP credential that the
+        # committed krill-work/krill-design plugin configs present as
+        # `Authorization: Bearer dev-local`. That token is committed in a
+        # public repo, so it is ONLY ever seeded here, in the local dev
+        # cluster -- no deployment sets this, and krill/migrate/seed refuses
+        # to create the row without it.
+        - name: KRILL_ALLOW_DEV_CREDENTIAL
+          value: "true"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
@@ -126,7 +134,7 @@ spec:
         resource_deps=['postgres-dev-krill'],
         labels=['krill-infrastructure'],
     )
-    print("🔄 Migration job configured (applies 001_scope + seeds forge coordinates)")
+    print("🔄 Migration job configured (applies 001_scope, seeds forge coordinates + the dev-local MCP credential)")
 
 # api: HTTP surface with /healthz (a live DB ping, not just a boot-time
 # check) -- no spec endpoints in this task (krill/api/main.go's doc

@@ -16,7 +16,10 @@ package seed_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"os"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -128,4 +131,162 @@ func TestSeedScope_DoesNotClobberOperatorEdit(t *testing.T) {
 	require.NotNil(t, rows[0].PointerIssueNumber)
 	assert.Equal(t, 42, *rows[0].PointerIssueNumber, "a re-run must not clobber an operator's later pointer_issue_number edit")
 	assert.Equal(t, "trunk", rows[0].DefaultBranch, "a re-run must not re-assert default_branch over an operator's hand correction")
+}
+
+// readCredentialRows returns every mcp_credential row, ordered by identity.
+func readCredentialRows(t *testing.T, ctx context.Context, db *sql.DB) []CredentialRow {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, `
+		SELECT identity, token_hash FROM mcp_credential ORDER BY identity
+	`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var out []CredentialRow
+	for rows.Next() {
+		var c CredentialRow
+		require.NoError(t, rows.Scan(&c.Identity, &c.TokenHash))
+		out = append(out, c)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+type CredentialRow struct {
+	Identity  string
+	TokenHash string
+}
+
+// TestSeedDevCredential_StoresTheHashTheStoreVerifies is the test that
+// matters for the plugin mounts: the committed krill-work/krill-design
+// configs present `Authorization: Bearer dev-local`, and
+// auth.CredentialStore.Verify resolves a token by looking up
+// sha256(rawToken) in token_hash. This asserts the seeded hash is
+// byte-identical to that value, so the literal in the committed config
+// actually verifies.
+func TestSeedDevCredential_StoresTheHashTheStoreVerifies(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	require.NoError(t, seed.SeedDevCredential(ctx, db))
+
+	rows := readCredentialRows(t, ctx, db)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "dev-local", rows[0].Identity)
+	// sha256("dev-local"), hex-encoded -- the exact form
+	// libs/go/auth.hashToken produces and Verify compares against.
+	assert.Equal(t, "32f6050ffbc1d8c0b7d607d81dd2c14b6fdab2d2bb1ff345e21fcc3f76c008ce", rows[0].TokenHash)
+
+	// Only ever the hash: the table must never hold the raw token.
+	assert.NotContains(t, rows[0].TokenHash, "dev-local", "the raw token must never be persisted")
+}
+
+// TestSeedDevCredential_IsIdempotent proves re-running the seeder neither
+// duplicates the row nor errors, matching the scope seeder's contract --
+// `migrate` runs its seeder on every invocation.
+func TestSeedDevCredential_IsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	require.NoError(t, seed.SeedDevCredential(ctx, db))
+	require.NoError(t, seed.SeedDevCredential(ctx, db))
+	require.NoError(t, seed.SeedDevCredential(ctx, db))
+
+	rows := readCredentialRows(t, ctx, db)
+	assert.Len(t, rows, 1, "three seed runs must still leave exactly one credential")
+}
+
+// TestSeedDevCredential_DoesNotRevokeAnOperatorRotation proves the seeder
+// never clobbers a credential an operator replaced. If they minted their
+// own row for the same identity, the UNIQUE token_hash conflict means the
+// seed is a no-op rather than an overwrite -- so the old token keeps
+// verifying and no one is locked out.
+func TestSeedDevCredential_DoesNotRevokeAnOperatorRotation(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	// An operator already holds a credential for this identity, with a
+	// different token.
+	other := sha256.Sum256([]byte("an-operators-own-token"))
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO mcp_credential (identity, token_hash) VALUES ($1, $2)
+	`, "dev-local", hex.EncodeToString(other[:]))
+	require.NoError(t, err)
+
+	require.NoError(t, seed.SeedDevCredential(ctx, db))
+
+	rows := readCredentialRows(t, ctx, db)
+	assert.Len(t, rows, 2, "the operator's own credential must survive the seed")
+	var found bool
+	for _, c := range rows {
+		if c.TokenHash == hex.EncodeToString(other[:]) {
+			found = true
+		}
+	}
+	assert.True(t, found, "the operator's token_hash must not be overwritten or revoked")
+}
+
+// TestSeeder_DoesNotSeedTheDevCredentialWithoutOptIn is the security
+// property, and the reason this is gated at all: `migrate` runs on every
+// deployment, prod included, and the dev-local token is committed in a
+// public repository. Seeding it unconditionally would make that public
+// token a valid credential against any krill instance that ran migrate.
+func TestSeeder_DoesNotSeedTheDevCredentialWithoutOptIn(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	// No KRILL_ALLOW_DEV_CREDENTIAL set -- exactly how a deployment runs.
+	require.NoError(t, seed.Seeder()(ctx, db))
+
+	rows := readCredentialRows(t, ctx, db)
+	assert.Empty(t, rows, "Seeder must not create a credential when the opt-in is absent")
+
+	// The scope row still seeds -- the gate covers only the credential.
+	var n int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM scope`).Scan(&n))
+	assert.Equal(t, 1, n, "the gate must not affect scope seeding")
+}
+
+// TestSeeder_SeedsTheDevCredentialWithOptIn is the positive half: the
+// Tiltfile sets KRILL_ALLOW_DEV_CREDENTIAL=true, and with it the local dev
+// loop gets a working MCP mount from a clean database.
+func TestSeeder_SeedsTheDevCredentialWithOptIn(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	t.Setenv("KRILL_ALLOW_DEV_CREDENTIAL", "true")
+
+	require.NoError(t, seed.Seeder()(ctx, db))
+
+	rows := readCredentialRows(t, ctx, db)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "dev-local", rows[0].Identity)
+	assert.Equal(t, "32f6050ffbc1d8c0b7d607d81dd2c14b6fdab2d2bb1ff345e21fcc3f76c008ce", rows[0].TokenHash)
+}
+
+// TestAllowDevCredential_OnlyTrueOptsIn pins the parsing: anything that is
+// not an explicit true is a no, so a typo or a half-set value fails closed.
+func TestAllowDevCredential_OnlyTrueOptsIn(t *testing.T) {
+	for _, tc := range []struct {
+		set  bool
+		val  string
+		want bool
+	}{
+		{false, "", false},
+		{true, "", false},
+		{true, "false", false},
+		{true, "0", false},
+		{true, "1", false},
+		{true, "yes", false},
+		{true, "true", true},
+		{true, "TRUE", true},
+		{true, "  True  ", true},
+	} {
+		if tc.set {
+			t.Setenv("KRILL_ALLOW_DEV_CREDENTIAL", tc.val)
+		} else {
+			os.Unsetenv("KRILL_ALLOW_DEV_CREDENTIAL")
+		}
+		assert.Equal(t, tc.want, seed.AllowDevCredential(), "KRILL_ALLOW_DEV_CREDENTIAL=%q", tc.val)
+	}
 }
