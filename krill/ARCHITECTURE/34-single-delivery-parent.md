@@ -61,10 +61,41 @@ satisfies the same end state on its own terms — it deletes the from-associatio
 it) in the same transaction as the insert, so a re-cut never leaves the
 entity with two owners either.
 
-**The importer is not on this path.** `MilestoneStore.AddAssociation`
+**A move out of a milepebble also releases its parent.** Deleting only
+the milepebble-level row left the parent milestone's own row in place, so
+moving an entity to a competing milestone left it delivered by two — the
+state the refusal above exists to prevent, reached through the very verb
+the refusal names. The parent's row is now released for exactly one
+destination shape: a milestone other than the cut's own parent. Every
+other destination — the backlog bucket, a sibling cut, the parent itself —
+is a narrowing or a relocation within the same parent, and keeps the
+parent's claim; that boundary is FR9's shipped contract for abandoning a
+cut, which shares this transaction body, and is pinned by
+`TestAbandonStore_Abandon_FR9_MilepebbleDirect` and the conformance
+suite. Where a *sibling* cut of the same parent still delivers the
+entity, the parent must keep its row (FR3's subset invariant), so a
+competing milestone cannot be the destination at all and the move is
+refused outright with `ErrEntityDeliveredBySiblingCut`, naming the cut to
+move the entity out of first.
+
+**The importer is on this path too.** `MilestoneStore.AddAssociation`
 (FR16) is the pre-existing, session-less write the markdown importer uses
-to reconstruct a brief. It is a different method from
-`AddDeliversMany` and is deliberately left unguarded, so re-importing a
-committed brief keeps reproducing exactly what it recorded — including
-any historical overlap a brief genuinely describes. The rule binds the
-planning path, which is where the collision actually occurred.
+to reconstruct a brief, and an import is a `Delivers` write like any
+other: it enforces the same single-delivery-parent refusal, with the same
+`ErrEntityDeliveredByCompetingMilestone` and the same message, via the
+shared `refuseCompetingMilestoneDelivers`. Re-asserting a milestone's own
+association stays idempotent, so an unchanged brief re-imports cleanly.
+
+**`Must not foreclose` is not a delivery claim, and had been recorded as
+one.** The importer's second pass used to call the same `AddAssociation`
+for a brief's `Must not foreclose: LB1, LB4` list, and `AddAssociation`
+always wrote a `delivers` row. Every decision a brief listed as
+must-not-foreclose therefore ended up *looking* delivered by every
+milestone that listed it — LB1 by six, in krill's own brief. That is both
+wrong on its own terms (the renderer reads the two relations apart) and
+exactly the multi-milestone-owner state the refusal forbids, which is how
+enforcing the rule here first surfaced. The pass now writes through
+`AddMustNotForecloseAssociation`, which shares the transaction and the
+milestone-existence guard but records `relation = must_not_foreclose` and
+carries no delivery-parent rule — a constraint many milestones must respect
+is not a delivery claim by each of them.

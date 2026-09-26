@@ -332,23 +332,8 @@ func addDeliversTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUI
 	// can compete for an entity already delivered by a milestone.
 	if targetKind == MilestoneKindMilestone {
 		for _, entityID := range entityIDs {
-			var competing uuid.UUID
-			err := tx.QueryRow(ctx, `
-				SELECT mr.id
-				FROM entity_milestone em
-				JOIN milestone_ref mr ON mr.id = em.milestone_id
-				WHERE em.entity_id = $1 AND em.relation = $2
-				  AND mr.kind = $3 AND mr.id <> $4
-				  AND mr.scope_id = $5 AND mr.product_id = $6
-				LIMIT 1
-			`, entityID, string(MilestoneRelationDelivers), string(MilestoneKindMilestone),
-				milestoneID, scopeID, productID).Scan(&competing)
-			if err == nil {
-				return fmt.Errorf("%w: entity %s is already delivered by milestone %s; move_delivery_scope it there first",
-					ErrEntityDeliveredByCompetingMilestone, entityID, competing)
-			}
-			if !errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("check competing delivery: %w", err)
+			if err := refuseCompetingMilestoneDelivers(ctx, tx, scopeID, productID, milestoneID, entityID); err != nil {
+				return err
 			}
 		}
 	}
@@ -361,6 +346,35 @@ func addDeliversTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUI
 		`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers)); err != nil {
 			return fmt.Errorf("insert entity_milestone: %w", err)
 		}
+	}
+	return nil
+}
+
+// refuseCompetingMilestoneDelivers rejects associating entityID as delivered
+// by milestoneID when a DIFFERENT milestone in the same product already
+// delivers it -- the single-delivery-parent rule (LB6) every Delivers write
+// path owes, whether it was authored through add_delivers or imported from
+// a brief. Re-asserting the same milestone's own association is not a
+// conflict, so a repeat call stays idempotent; the only way to hand the
+// entity to another milestone is an explicit move_delivery_scope re-cut.
+func refuseCompetingMilestoneDelivers(ctx context.Context, tx pgx.Tx, scopeID, productID, milestoneID, entityID uuid.UUID) error {
+	var competing uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT mr.id
+		FROM entity_milestone em
+		JOIN milestone_ref mr ON mr.id = em.milestone_id AND mr.valid_to IS NULL
+		WHERE em.entity_id = $1 AND em.relation = $2
+		  AND mr.kind = $3 AND mr.id <> $4
+		  AND mr.scope_id = $5 AND mr.product_id = $6
+		LIMIT 1
+	`, entityID, string(MilestoneRelationDelivers), string(MilestoneKindMilestone),
+		milestoneID, scopeID, productID).Scan(&competing)
+	if err == nil {
+		return fmt.Errorf("%w: entity %s is already delivered by milestone %s; move_delivery_scope it there first",
+			ErrEntityDeliveredByCompetingMilestone, entityID, competing)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("check competing delivery: %w", err)
 	}
 	return nil
 }

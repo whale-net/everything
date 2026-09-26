@@ -411,7 +411,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 				SELECT em.milestone_id FROM entity_milestone em
 				WHERE em.entity_id = $1 AND em.relation = $2
 				  AND em.milestone_id <> $3
-				  AND em.milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $4)
+				  AND em.milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $4 AND valid_to IS NULL)
 				LIMIT 1
 			`, entityID, string(MilestoneRelationDelivers), fromContainerID, *fromParent).Scan(&sibling)
 			if err == nil {
@@ -467,7 +467,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 				  AND NOT EXISTS (
 					  SELECT 1 FROM entity_milestone
 					  WHERE entity_id = $1 AND relation = $3
-					    AND milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $2)
+					    AND milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $2 AND valid_to IS NULL)
 				  )
 			`, entityID, *fromParent, string(MilestoneRelationDelivers)); err != nil {
 				return fmt.Errorf("drop parent milestone association: %w", err)
