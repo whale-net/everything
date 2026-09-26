@@ -14,11 +14,17 @@
 // since populated), matching this package's "not left to inference" remit
 // without re-asserting defaultBranch over a value an operator may have
 // since corrected by hand.
+//
+// It also seeds the local-development MCP credential (`SeedDevCredential`),
+// for the reason documented on that function: the committed plugin configs
+// present a fixed `Bearer dev-local` that nothing else provisions.
 package seed
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 )
 
 // repoFullName and defaultBranch are krill's own forge coordinates
@@ -31,6 +37,15 @@ import (
 const (
 	repoFullName  = "whale-net/everything"
 	defaultBranch = "main"
+
+	// devCredentialIdentity and devCredentialToken are the local-development
+	// MCP credential the committed plugin configs present as
+	// `Authorization: Bearer dev-local` (krill/plugin/{work,design}/
+	// mcp_config.json). Nothing else provisions one, so without this row
+	// every /mcp/spec, /mcp/work and /mcp/design call 401s with "auth:
+	// invalid or revoked credential" against a freshly migrated database.
+	devCredentialIdentity = "dev-local"
+	devCredentialToken    = "dev-local"
 )
 
 // Seeder returns a libs/go/migrate.Seeder-compatible function that ensures
@@ -41,7 +56,10 @@ const (
 //	migrate.RunCLI(schema.Migrations, schema.Dir, migrate.WithSeeder(seed.Seeder()))
 func Seeder() func(ctx context.Context, db *sql.DB) error {
 	return func(ctx context.Context, db *sql.DB) error {
-		return SeedScope(ctx, db)
+		if err := SeedScope(ctx, db); err != nil {
+			return err
+		}
+		return SeedDevCredential(ctx, db)
 	}
 }
 
@@ -54,5 +72,32 @@ func SeedScope(ctx context.Context, db *sql.DB) error {
 		VALUES ($1, $2)
 		ON CONFLICT (repo_full_name) DO NOTHING
 	`, repoFullName, defaultBranch)
+	return err
+}
+
+// SeedDevCredential inserts the local-development MCP credential the
+// committed plugin configs present as `Bearer dev-local`.
+//
+// It stores only the SHA-256 hash, byte-identical to
+// `auth.hashToken` (libs/go/auth/credential.go) — the same value Verify
+// looks up, and the only form the table ever holds. There is no
+// credential row without this, and the plugin configs have shipped that
+// literal since M1, so a database that has never been seeded here 401s
+// every MCP call with the opaque "invalid or revoked credential" that an
+// unknown token and a revoked one are deliberately indistinguishable
+// between (NFR1).
+//
+// Idempotent via the UNIQUE token_hash constraint: a later run is a
+// no-op, and it never clobbers or revokes a credential an operator
+// rotated. This is a development convenience only — the token is
+// committed in the repo, so it must never be trusted in a deployed
+// environment, where a real credential is minted out of band.
+func SeedDevCredential(ctx context.Context, db *sql.DB) error {
+	sum := sha256.Sum256([]byte(devCredentialToken))
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO mcp_credential (identity, token_hash)
+		VALUES ($1, $2)
+		ON CONFLICT (token_hash) DO NOTHING
+	`, devCredentialIdentity, hex.EncodeToString(sum[:]))
 	return err
 }
