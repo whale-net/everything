@@ -562,9 +562,15 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 		"milestone_status_event", "delivery_shipment",
 		"task", "task_dependency", "task_claim", "task_lease_event", "task_attempt", "task_note",
 		"task_escalation_event", "task_intervention_event", "task_note_lifecycle_event",
+		// The void tombstone register (021_void_event). It is a delivery-axis
+		// style append-only audit table, not a spec-axis entity table and not
+		// a parentage join table -- void_event.entity_id is a bare UUID with
+		// no REFERENCES, because each void-able table is SCD2 and so has no
+		// table-wide unique id for a FK to target. See TestMigration021_SchemaContract.
+		"void_event",
 	}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + task_escalation_event/task_intervention_event/task_note_lifecycle_event (016_escalation_axis, issue #2868) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + task_escalation_event/task_intervention_event/task_note_lifecycle_event (016_escalation_axis, issue #2868) + void_event (021_void_event) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table EXCEPT feature and
 	// load_bearing_decision -- migration 017 (issue #2969) reversed LB2's

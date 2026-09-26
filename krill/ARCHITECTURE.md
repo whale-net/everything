@@ -103,4 +103,8 @@ query" section below).
 | [`ARCHITECTURE/31-escalation-console-m5.md`](ARCHITECTURE/31-escalation-console-m5.md) | The escalation/intervention/console axis (M5, root plan issue #2851, conformance issue #2877) — the whole-milestone view: component map addendum, the escalation state machine, the claimability predicate, the `/mcp/ops` mount, the console paging contract, both design-ambiguity resolutions, and the known `ListClaimedTasks` defect |
 | [`ARCHITECTURE/32-ui-write-identity.md`](ARCHITECTURE/32-ui-write-identity.md) | The signed-in operator's identity on `ui`'s own write path (LB4) — Keycloak session → real `(iss, sub)` → `writeClient` → `POST /sessions/init` → `X-Krill-Session-Id` |
 | [`ARCHITECTURE/33-scd2-amend-all-spec-kinds.md`](ARCHITECTURE/33-scd2-amend-all-spec-kinds.md) | SCD2 amend across every spec-axis kind (FR 8b2e87d1, FR f0f6bc18, FR 39373553, FR b2767a89) — the shared `supersede` body, the reparent/re-kind refusal, sibling-name uniqueness, and migration 020's SCD2 `milestone_ref` |
+<<<<<<< HEAD
 | [`ARCHITECTURE/34-single-delivery-parent.md`](ARCHITECTURE/34-single-delivery-parent.md) | One delivery parent, batched — why the Now/Next/Later FeatureSet names are cosmetic, the batched `add_delivers`, and the competing-milestone refusal that makes `move_delivery_scope` the re-cut |
+=======
+| [`ARCHITECTURE/35-void-tombstone.md`](ARCHITECTURE/35-void-tombstone.md) | Void — the SCD2 close-**without**-successor (FR d38d726e, FR 2a3a8eef) — why a void frees the name but retires the display number forever (LB2), the delivered / live-children refusals, and the `void_event` audit register |
+>>>>>>> 0126dd97 (test: prove void's tombstone, number retirement, and both refusals)

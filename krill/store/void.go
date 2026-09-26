@@ -299,19 +299,32 @@ func voidEntity(
 	// real id belonging to another scope must be reported as not-found
 	// here rather than voided.
 	lockQuery := fmt.Sprintf(`SELECT 1 FROM %s WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL FOR UPDATE`, table)
-	var lockDest any = new(int)
+	var (
+		displayNumber *int
+		lockDest      any = new(int)
+	)
 	if hasDisplayNumber {
 		lockQuery = fmt.Sprintf(`SELECT display_number FROM %s WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL FOR UPDATE`, table)
-		lockDest = new(*int)
-	}
-	var displayNumber *int
-	if hasDisplayNumber {
-		displayNumber = lockDest.(*int)
+		// Scan straight into displayNumber rather than through an `any`
+		// holding a pointer-to-pointer: pgx needs the *int itself as the
+		// destination, and a **int here panics at the type assertion.
+		lockDest = &displayNumber
 	}
 	if err := tx.QueryRow(ctx, lockQuery, id, scopeID).Scan(lockDest); errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: no current %s row for id %s in scope %s", ErrNotFound, table, id, scopeID)
 	} else if err != nil {
 		return fmt.Errorf("get current %s for void: %w", table, err)
+	}
+
+	// Resolve the product NOW, while the row is still current. Every
+	// productQuery filters the entity's own `valid_to IS NULL`, so reading
+	// it after the tombstoning UPDATE below would find nothing -- and the
+	// numbering a retirement is filed against must be the one the entity
+	// belonged to BEFORE it was voided, which is also the only product
+	// whose retired-number index this void can meaningfully join.
+	var productID uuid.UUID
+	if err := tx.QueryRow(ctx, productQuery, id, scopeID).Scan(&productID); err != nil {
+		return fmt.Errorf("resolve product for voided %s %s: %w", kind, id, err)
 	}
 
 	// Refusal (a): the delivery axis already points at this entity.
@@ -340,15 +353,6 @@ func voidEntity(
 	if _, err := tx.Exec(ctx, fmt.Sprintf(
 		`UPDATE %s SET valid_to = NOW() WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL`, table), id, scopeID); err != nil {
 		return fmt.Errorf("close current %s for void: %w", table, err)
-	}
-
-	// The product is resolved AFTER the close, from the row the lock just
-	// confirmed existed. A live entity always has a live ancestor chain
-	// (that is what the live-children refusal just enforced), so the
-	// resolution cannot fail for a reason the caller could act on.
-	var productID uuid.UUID
-	if err := tx.QueryRow(ctx, productQuery, id, scopeID).Scan(&productID); err != nil {
-		return fmt.Errorf("resolve product for voided %s %s: %w", kind, id, err)
 	}
 
 	if _, err := tx.Exec(ctx, `
