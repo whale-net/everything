@@ -10,6 +10,8 @@
 > and needs a human with Slack and Keycloak access.** The evidence section is an
 > empty template on purpose. Do not fill it with a dry run, a Tilt run, or a
 > guess; see [What does not count as evidence](#what-does-not-count-as-evidence).
+> The preconditions a human must supply are enumerated in the task's scope-note
+> `141b0391`.
 
 This runbook proves, in one continuous live run, that:
 
@@ -261,8 +263,9 @@ Click **Link my account** (or open the same URL in that user's browser) within
 10 minutes.
 
 1. `GET /link/{token}` looks the token up **without consuming it**. An unknown,
-   expired, or already-consumed token renders a static "Link failed" page and
-   does **not** redirect.
+   expired, or already-consumed token renders a static "Link failed" page
+   ("This link is invalid or has expired. Start again from Slack.", HTTP 400)
+   and does **not** redirect.
 2. The token is stashed in the Starlette session cookie, and the browser is
    redirected to Keycloak's authorize endpoint with scope `openid email profile`.
 3. The human authenticates with their realm credentials.
@@ -286,22 +289,28 @@ WHERE slack_team_id = :'SLACK_TEAM_ID' AND slack_user_id = :'SLACK_USER_ID';
 ```
 
 The same token row now reads `consumed = true` with a `consumed_at` set. The
-bot logs at INFO `linked slack team=… user=… to keycloak iss=… sub=…`.
+`web` app — not the bot — logs at INFO `linked slack team=… user=… to keycloak
+iss=… sub=…` from `web/app.py:147`. The bot emitted nothing this turn; the only
+bot log for this flow is the step-3 prompt line.
 
 **Security assertions to confirm while you are here:** no access, refresh, or ID
 token was persisted — `fcm.slackkeycloakidentity` has no column for one, and
 only the `(iss, sub)` pair is stored. No token appears in the `web` app's logs.
 
 **If the callback fails:**
-- *"No pending link request found in this session"* → the session cookie did
-  not survive the redirect. Check that `FCM_WEB_SESSION_SECRET` is identical on
-  every `web` replica and stable across the run, and that the browser is
-  accepting cookies for the public URL.
-- *"Sign-in could not be completed"* → the code exchange failed. Check the
-  client id/secret pair, that the client is Confidential, and that P6's redirect
-  URI matches byte for byte.
-- *"This link is no longer valid"* (HTTP 410) → the token was already consumed
-  or expired. Mint a fresh one by repeating step 3; do not edit the row.
+- *"No pending link request found in this session. Start again from Slack."*
+  → the session cookie did not survive the redirect. Check that
+  `FCM_WEB_SESSION_SECRET` is identical on every `web` replica and stable across
+  the run, and that the browser is accepting cookies for the public URL.
+- *"Sign-in could not be completed. Nothing was linked. Start again from
+  Slack."* → the code exchange failed. Check the client id/secret pair, that the
+  client is Confidential, and that P6's redirect URI matches byte for byte.
+- *"This link request is no longer valid. Start again from Slack."* (HTTP 410,
+  the **callback** leg) → the token was already consumed or expired. Mint a
+  fresh one by repeating step 3; do not edit the row. The earlier `GET /link/
+  {token}` leg fails differently — HTTP 400, *"This link is invalid or has
+  expired. Start again from Slack."* — so the two are distinguishable by both
+  status and wording.
 - Anything in that path writes **nothing**. A failed or replayed link leaves
   the database exactly as it was. Start again from step 3.
 
@@ -386,9 +395,20 @@ A run where `on_behalf_of_sub` equals `subject_sub` proves nothing: that is
 what a **non-delegated** session records. The assertion is that the two differ,
 and that the `on_behalf_of_*` half matches the row written in step 4.
 
-The whagent-net `ui` carries `on_behalf_of` into its session view model but does
-not render it in any page, so the row is where you observe this. Do not conclude
-anything from the UI alone.
+The whagent-net `ui` renders both identities, so you can eyeball the result
+before you trust the query. The session detail page's "Started by" line shows
+`{sess.OnBehalfOf.Sub}` and `{sess.OnBehalfOf.Kind}` unconditionally, and adds
+`(on behalf of by {sess.Subject.Sub})` **exactly when**
+`on_behalf_of.sub != subject.sub || on_behalf_of.iss != subject.iss` — that is,
+exactly the delegated condition this step exists to confirm, and the same
+condition as the "the two must differ" assertion above. The sessions list renders
+the `on_behalf_of` sub and kind in its "started by" cell too, though only the
+detail page shows the subject span.
+
+The `sessions` row remains the authoritative record. The UI is a useful
+cross-check that a human has not fat-fingered an id; it is not the evidence, and
+it does not survive a reload if the page is the only thing you looked at. Paste
+the row.
 
 ## Step 8 — Confirm follow-up turns run under the service credential
 
@@ -500,10 +520,10 @@ branch (not against an earlier revision of the docs):
 | `FCM_OIDC_CLIENT_ID` / `FCM_OIDC_CLIENT_SECRET` | `web/config.py`, `libs/python/cli/types.py`, `ENV.md` | match; distinct from `WHAGENT_CLIENT_ID` |
 | `FCM_WEB_SESSION_SECRET` | `web/config.py`, `web/app.py` `SessionMiddleware` | matches; signs the cookie carrying the link token and OIDC `state`/`nonce` |
 | `FCM_WEB_PORT` (default 8000) | `cli/web_cli.py` | matches |
-| `WHAGENT_CLIENT_ID` / `WHAGENT_CLIENT_SECRET` | `whagent/client.py`, `ENV.md` | match; fcm's service account |
-| `WHAGENT_KEYCLOAK_TOKEN_URL` | `whagent/client.py` `_fetch_token`, `ENV.md` | matches; `client_credentials` grant |
-| `WHAGENT_API_URL` | `whagent/client.py` `grpc.insecure_channel` | matches; gRPC `host:port` |
-| `WHAGENT_UI_PUBLIC_URL` | `temporal/whagent/workflow.py` | matches; fcm posts `<url>/sessions/<id>` |
+| `WHAGENT_CLIENT_ID` / `WHAGENT_CLIENT_SECRET` | `libs/python/cli/types.py` `envvar=` bindings, `whagent/client.py` as consumer, `ENV.md` | match; fcm's service account. The name→env binding is in the CLI type annotations; `whagent/client.py` takes them as parameters |
+| `WHAGENT_KEYCLOAK_TOKEN_URL` | `libs/python/cli/types.py` `envvar=`, `whagent/client.py` `_fetch_token`, `ENV.md` | matches; `client_credentials` grant |
+| `WHAGENT_API_URL` | `libs/python/cli/types.py` `envvar=`, `whagent/client.py` `grpc.insecure_channel` | matches; gRPC `host:port` |
+| `WHAGENT_UI_PUBLIC_URL` | `libs/python/cli/types.py` `envvar=`, `temporal/whagent/workflow.py` as consumer | matches; fcm posts `<url>/sessions/<id>` |
 | `WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS` | `whagent_net/api/main.go`, `api/handlers/start.go` + `session.go`, `whagent_net/ENV.md` | matches; read by `api`, empty = fail closed, `PERMISSION_DENIED` |
 | `GRPC_AUTH_MODE` | `whagent_net/api/main.go`, `whagent_net/ENV.md` | matches; `none` (dev) vs `oidc` |
 | `WHAGENT_OIDC_ISSUER` | `whagent_net/ENV.md` | matches; read by `api`, `ui`, `mcp`; must equal `FCM_OIDC_ISSUER_URL` |
@@ -514,8 +534,10 @@ branch (not against an earlier revision of the docs):
 | `GET /link/callback` | `web/app.py`, `web/config.py` `callback_url` | matches; `${FCM_WEB_PUBLIC_URL}/link/callback` |
 | `GET /health` | `web/app.py` | matches |
 | Link token TTL of 10 minutes | `identity_dal.py` `LINK_TOKEN_TTL` | matches; also the wording in the prompt text |
-| Tables `fcm.slacklinktoken`, `fcm.slackkeycloakidentity`, `fcm.slackthreadsession`, `fcm.slackchannelagentlink` | migration `c1d4e8a7b2f9`, `docs/whagent_integration.md` | match |
+| Tables `fcm.slackkeycloakidentity`, `fcm.slacklinktoken` | migration `c1d4e8a7b2f9` `slack_keycloak_identity` | match; `slacklinktoken` carries `expires_at`, `consumed`, `consumed_at` as cited in step 4 |
+| Tables `fcm.slackthreadsession`, `fcm.slackchannelagentlink` | migration `88e9ad9c1a2b` `whagent_links`, `docs/whagent_integration.md` | match; these predate the identity-link migration |
 | whagent-net `sessions` columns `subject_*`, `on_behalf_of_*` | `whagent_net/migrate/schema/migrations/001_initial_schema.up.sql` | match |
+| UI renders `on_behalf_of` sub/kind, and `(on behalf of by <subject.sub>)` under the delegated condition | `whagent_net/ui/components/session.templ` `startedByLine`, `whagent_net/ui/components/session_list.templ` `sessionListStartedByCell` | match; the differing-branch markup in `session.templ` is gated on `OnBehalfOf.Sub != Subject.Sub \|\| OnBehalfOf.Iss != Subject.Iss`, the same condition as step 7's assertion |
 
 `HELM_CHART_NAME` and `HELM_RELEASE_NAME` are read by `libs/python/logging/context.py`
 and set by `tools/helm/templates/job.yaml.tmpl`; they are documented in
