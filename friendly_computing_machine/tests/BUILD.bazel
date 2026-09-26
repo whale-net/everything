@@ -104,6 +104,20 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Message handler channel gate, redelivery dedupe, and the message-derived
+# Slack user sync (SQLite-backed)
+py_test(
+    name = "test_slack_sync_characterization",
+    size = "small",
+    srcs = [
+        "slack_sync/conftest.py",
+        "slack_sync/test_message_channel_gate.py",
+        "slack_sync/test_message_upsert_dedupe.py",
+        "slack_sync/test_user_sync_team_id.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # OIDC link web endpoint (FastAPI TestClient, Authlib stubbed)
 py_test(
     name = "test_web",

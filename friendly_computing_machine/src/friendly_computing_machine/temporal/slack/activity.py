@@ -72,6 +72,10 @@ async def backfill_slack_user_info_activity() -> list[SlackUserCreate]:
 
     slack_client = get_slack_web_client()
     slack_client.team_info()
+    # The user set is derived from stored slackmessage rows, not from a Slack
+    # user list, so it only covers users who spoke in a channel the message
+    # handler stored. Resolving an actor through this table would therefore
+    # fall back to FCM's service account for everyone else.
     slack_user_team_pairs = get_user_teams_from_messages(
         slack_team_slack_id=slack_client.team_id
     )
