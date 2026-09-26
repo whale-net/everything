@@ -187,6 +187,38 @@ func newChildlessFeatureSet(t *testing.T, ctx context.Context, s *store.Store, f
 	return fs
 }
 
+// childlessFixture is a scope whose only row is a Product, so whichever
+// product child kind a test seeds is the one the `feature_set` guard --
+// which productChildren checks first -- cannot pre-empt. The shared
+// newVoidFixture always seeds a FeatureSet, which would mask every other
+// product guard.
+type childlessFixture struct {
+	scopeID uuid.UUID
+	product store.Product
+}
+
+func newChildlessProduct(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres) childlessFixture {
+	t.Helper()
+	scopeID := newVoidScope(t, ctx, db)
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "vision")
+	require.NoError(t, err)
+	return childlessFixture{scopeID: scopeID, product: product}
+}
+
+// productMilestone seeds a bare `milestone_ref` row against productID, with
+// no entity_milestone association -- the state a product is in as soon as a
+// milestone is merely authored against it. This is what the milestone_ref
+// child guard is for; deliveredFixture would instead deliver a Feature,
+// which never makes the PRODUCT spoken for.
+func productMilestone(t *testing.T, ctx context.Context, db *dbtest.Postgres, scopeID, productID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, $3) RETURNING id
+	`, scopeID, productID, "M-"+uuid.NewString()).Scan(&milestoneID))
+	return milestoneID
+}
+
 func voidActor() store.Subject {
 	return store.Subject{Iss: "whale_net", Sub: "alex", Kind: store.SubjectKindHuman}
 }
@@ -295,8 +327,11 @@ func TestVoidFeature_FreesTheName(t *testing.T) {
 // citation already rendered for the voided Feature would silently resolve
 // to this new one.
 //
-// The test is paired with TestVoidFeature_NumberRetirementIsRedWithoutThe
-// AllRowsQuery, which proves this assertion is not vacuous.
+// The test is paired with
+// TestVoidFeature_NumberStaysRetiredAfterItsFeatureSetIsVoided and
+// TestVoidFeature_NumberingSpansEveryFeatureSetInTheProduct, which pin the
+// two ways the same guarantee breaks when the all-rows query is narrowed
+// again.
 func TestVoidFeature_RetiresTheDisplayNumber(t *testing.T) {
 	ctx := context.Background()
 	s, db := newVoidTestStore(t)
@@ -328,6 +363,73 @@ func TestVoidFeature_RetiresTheDisplayNumber(t *testing.T) {
 	`, fx.product.ID, highest.DisplayNumber).Scan(&holders))
 	assert.Equal(t, 1, holders,
 		"exactly one row -- the tombstoned one -- may hold the retired number. A second holder is exactly the silent repointing LB2 forbids")
+}
+
+// TestVoidFeature_NumberStaysRetiredAfterItsFeatureSetIsVoided is the
+// subtle half of the numbering contract, and the one a per-table reasoning
+// review is most likely to miss: a voided Feature's number stays retired
+// even after its FeatureSet is voided too. The feature_set join in
+// nextDisplayNumber is therefore unfiltered on the parent's currentness --
+// a query that filtered it back to `valid_to IS NULL` would drop the whole
+// voided FeatureSet out of the MAX and hand its numbers straight back out.
+func TestVoidFeature_NumberStaysRetiredAfterItsFeatureSetIsVoided(t *testing.T) {
+	ctx := context.Background()
+	s, db := newVoidTestStore(t)
+	fx := newVoidFixture(t, ctx, s, db)
+
+	// fx.feature is C1, the highest number in the product.
+	require.NoError(t, s.Void().VoidFeature(ctx, fx.scopeID, fx.feature.ID, nil, voidActor(), voidActor()))
+	require.NoError(t, s.Void().VoidFeatureSet(ctx, fx.scopeID, fx.featureSet.ID, nil, voidActor(), voidActor()),
+		"precondition: the FeatureSet is childless, so it can be voided once its Feature is gone")
+
+	// A brand new FeatureSet under the same product, and a create that
+	// reuses the freed name.
+	fresh, err := s.FeatureSets().Create(ctx, fx.scopeID, fx.product.ID, "A Later FS", nil)
+	require.NoError(t, err)
+	replacement, err := s.Features().Create(ctx, fx.scopeID, fresh.ID, fx.feature.Name, nil)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, fx.feature.DisplayNumber, replacement.DisplayNumber,
+		"voiding the Feature's FeatureSet must not un-retire the Feature's number -- the join is unfiltered on the parent's currentness precisely so a voided FeatureSet's numbers cannot be handed back out (FR (b), LB2)")
+	assert.Greater(t, replacement.DisplayNumber, fx.feature.DisplayNumber,
+		"the replacement must be numbered above every number the product has ever issued, voided FeatureSet or not")
+
+	events, err := s.Void().ListVoidEvents(ctx, fx.scopeID, store.VoidedFeature)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].RetiredDisplayNumber)
+	assert.Equal(t, fx.feature.DisplayNumber, *events[0].RetiredDisplayNumber,
+		"the retirement is filed against the product the Feature belonged to BEFORE the void, so it survives its FeatureSet being voided too")
+}
+
+// TestVoidFeature_NumberingSpansEveryFeatureSetInTheProduct pins the other
+// half: the number sequence is per PRODUCT, not per FeatureSet, and a void
+// in one FeatureSet must not let a create in another pick up its number.
+// Two Features in two different FeatureSets are the smallest case that
+// distinguishes the two scopes of numbering.
+func TestVoidFeature_NumberingSpansEveryFeatureSetInTheProduct(t *testing.T) {
+	ctx := context.Background()
+	s, db := newVoidTestStore(t)
+	fx := newVoidFixture(t, ctx, s, db)
+
+	other, err := s.FeatureSets().Create(ctx, fx.scopeID, fx.product.ID, "A Second FS", nil)
+	require.NoError(t, err)
+	inOther, err := s.Features().Create(ctx, fx.scopeID, other.ID, "Lives In The Second FS", nil)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, fx.feature.DisplayNumber, "precondition: the first Feature is C1")
+	require.Equal(t, 2, inOther.DisplayNumber,
+		"precondition: numbering is per PRODUCT, so a Feature in a second FeatureSet continues the sequence rather than restarting it")
+
+	// Void the higher-numbered one, which lives in the OTHER FeatureSet.
+	require.NoError(t, s.Void().VoidFeature(ctx, fx.scopeID, inOther.ID, nil, voidActor(), voidActor()))
+
+	replacement, err := s.Features().Create(ctx, fx.scopeID, fx.featureSet.ID, inOther.Name, nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, inOther.DisplayNumber, replacement.DisplayNumber,
+		"a void in one FeatureSet must not let a create in another receive the retired number -- the MAX is taken across every FeatureSet in the product (FR (b), LB2)")
+	assert.Greater(t, replacement.DisplayNumber, inOther.DisplayNumber,
+		"the replacement must be numbered above every number the product has ever issued across all of its FeatureSets")
 }
 
 // TestVoidFeature_NeverReissuesAcrossManyVoids pushes the retirement
@@ -647,16 +749,23 @@ func TestVoidFeatureSet_RefusesLiveChildren(t *testing.T) {
 // TestVoidProduct_RefusesLiveChildren walks the full product child set --
 // feature_set, persona, non_goal and milestone_ref -- because a guard that
 // knew only about feature_set would leave three real orphaning paths open.
+//
+// Every case starts from a CHILDLESS product and asserts the guard that
+// actually fired, by child-table name, in the refusal message. Both halves
+// are load-bearing: without the childless fixture the seeded persona,
+// non_goal and milestone_ref never got evaluated at all (the seeded
+// FeatureSet's guard returned first), and without the message assertion a
+// void refused for some other reason would satisfy the test just as well.
 func TestVoidProduct_RefusesLiveChildren(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		wantInMsg string
-		seed      func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx voidFixture)
+		seed      func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx childlessFixture)
 	}{
 		{
 			name:      "feature_set",
 			wantInMsg: "feature_set",
-			seed: func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx voidFixture) {
+			seed: func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx childlessFixture) {
 				_, err := s.FeatureSets().Create(ctx, fx.scopeID, fx.product.ID, "Another FS", nil)
 				require.NoError(t, err)
 			},
@@ -664,7 +773,7 @@ func TestVoidProduct_RefusesLiveChildren(t *testing.T) {
 		{
 			name:      "persona",
 			wantInMsg: "persona",
-			seed: func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx voidFixture) {
+			seed: func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx childlessFixture) {
 				_, err := s.Personas().Create(ctx, fx.scopeID, fx.product.ID, "A Persona", nil)
 				require.NoError(t, err)
 			},
@@ -672,7 +781,7 @@ func TestVoidProduct_RefusesLiveChildren(t *testing.T) {
 		{
 			name:      "non_goal",
 			wantInMsg: "non_goal",
-			seed: func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx voidFixture) {
+			seed: func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx childlessFixture) {
 				_, err := s.NonGoals().Create(ctx, fx.scopeID, fx.product.ID, store.NonGoalKindPermanent, "A NonGoal", nil)
 				require.NoError(t, err)
 			},
@@ -680,10 +789,11 @@ func TestVoidProduct_RefusesLiveChildren(t *testing.T) {
 		{
 			name:      "milestone_ref",
 			wantInMsg: "milestone_ref",
-			seed: func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx voidFixture) {
+			seed: func(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, fx childlessFixture) {
 				// A milestone hangs off a product, so voiding the product
-				// would orphan the whole delivery axis.
-				deliveredFixture(t, ctx, s, db, fx.scopeID, fx.product.ID, fx.feature.ID, store.MilestoneRelationDelivers, false)
+				// would orphan the whole delivery axis. Merely authoring one
+				// is enough -- no `delivers` association is involved.
+				productMilestone(t, ctx, db, fx.scopeID, fx.product.ID)
 			},
 		},
 	} {
@@ -691,13 +801,15 @@ func TestVoidProduct_RefusesLiveChildren(t *testing.T) {
 			ctx := context.Background()
 			s, db := newVoidTestStore(t)
 			traced, tracer := newTracedVoidStore(t, db)
-			fx := newVoidFixture(t, ctx, s, db)
+			fx := newChildlessProduct(t, ctx, s, db)
 			tc.seed(t, ctx, s, db, fx)
 
 			tracer.reset()
 			err := traced.Void().VoidProduct(ctx, fx.scopeID, fx.product.ID, nil, voidActor(), voidActor())
 			require.ErrorIs(t, err, store.ErrHasLiveChildren,
 				"a product with a live %s must be refused -- voiding it would orphan that child", tc.name)
+			assert.Contains(t, err.Error(), tc.wantInMsg,
+				"the error must name the blocking child table, so a guard that only knew about %s would fail here", "feature_set")
 			assert.Empty(t, tracer.writesUnder("product"), "PLACEMENT: no UPDATE issued on refusal")
 		})
 	}

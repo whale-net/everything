@@ -41,8 +41,9 @@
 -- *handed* a retired number in the first place. `nextDisplayNumber`
 -- (store/position.go) counts every row the product has ever had, current
 -- or closed, not just its current rows -- which is why this migration
--- replaces the partial `(feature_set_id) WHERE valid_to IS NULL` indexes
--- with non-partial ones below. No database constraint can express
+-- ADDS the non-partial `(feature_set_id, display_number)` indexes below
+-- alongside migration 002's partial ones, which cannot serve it (see the
+-- section at the foot of this file). No database constraint can express
 -- "display_number is unique per product" on these two tables, because
 -- neither carries a `product_id` column; the store is where that
 -- invariant lives, exactly as the LB2 parentage rule already puts parent
