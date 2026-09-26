@@ -46,8 +46,19 @@ type MilestoneStore interface {
 	// SCD2s that table, so its id is not table-wide unique and Postgres
 	// cannot target a FK at it -- 020 dropped
 	// entity_milestone_milestone_id_fkey, and this check is the
-	// replacement.
+	// replacement. An import is still a Delivers write, so it also owes
+	// the single-delivery-parent rule add_delivers enforces: an entity
+	// already delivered by a different milestone is refused with
+	// ErrEntityDeliveredByCompetingMilestone, while re-asserting this same
+	// milestone's own association stays idempotent.
 	AddAssociation(ctx context.Context, scopeID, entityID, milestoneID uuid.UUID) error
+
+	// AddMustNotForecloseAssociation is AddAssociation for the brief's
+	// `Must not foreclose: LB1, LB4` list, writing relation =
+	// must_not_foreclose rather than delivers. Split out from AddAssociation
+	// so a constraint a decision must respect under every milestone is not
+	// recorded as a delivery claim by each of them.
+	AddMustNotForecloseAssociation(ctx context.Context, scopeID, entityID, milestoneID uuid.UUID) error
 
 	// ListAssociationsByMilestone returns every EntityMilestone row for
 	// milestoneID, in creation order -- used by the importer's report
@@ -177,6 +188,21 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 }
 
 func (s milestoneStore) AddAssociation(ctx context.Context, scopeID, entityID, milestoneID uuid.UUID) error {
+	return s.addAssociation(ctx, scopeID, entityID, milestoneID, MilestoneRelationDelivers)
+}
+
+// AddMustNotForecloseAssociation writes the importer's `Must not
+// foreclose: LB1, LB4` entries as must_not_foreclose rows. These were
+// previously funnelled through AddAssociation, which always writes a
+// Delivers row -- so a decision every milestone in a brief listed as
+// must-not-foreclose ended up looking delivered by all of them, which is
+// both wrong on its own terms and exactly the two-milestone-owner state
+// AddAssociation now refuses.
+func (s milestoneStore) AddMustNotForecloseAssociation(ctx context.Context, scopeID, entityID, milestoneID uuid.UUID) error {
+	return s.addAssociation(ctx, scopeID, entityID, milestoneID, MilestoneRelationMustNotForeclose)
+}
+
+func (s milestoneStore) addAssociation(ctx context.Context, scopeID, entityID, milestoneID uuid.UUID, relation MilestoneRelation) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -196,20 +222,42 @@ func (s milestoneStore) AddAssociation(ctx context.Context, scopeID, entityID, m
 		return errParentNotFound("milestone_ref", milestoneID)
 	}
 
+	// An import is as much a Delivers write as add_delivers is, so it owes
+	// the same single-delivery-parent rule: a brief that names an entity
+	// under a second milestone must be refused, not quietly give the entity
+	// two milestone-level owners. Re-importing the SAME association is not a
+	// conflict -- excluding milestoneID from the lookup is what keeps a
+	// re-import of an unchanged brief idempotent. The importer has no
+	// re-cut verb, so a genuine hand-over is done through add_delivers and
+	// move_delivery_scope, both of which the refusal message names.
+	//
+	// Only the Delivers relation carries that rule: "must not foreclose"
+	// is a constraint, not a delivery claim, and a decision every milestone
+	// must respect is legitimately named by all of them.
+	if relation == MilestoneRelationDelivers {
+		targetKind, productID, err := deliversTarget(ctx, tx, scopeID, milestoneID)
+		if err != nil {
+			return err
+		}
+		if targetKind == MilestoneKindMilestone {
+			if err := refuseCompetingMilestoneDelivers(ctx, tx, scopeID, productID, milestoneID, entityID); err != nil {
+				return err
+			}
+		}
+	}
+
 	// relation is written explicitly as MilestoneRelationDelivers -- the
-	// importer (FR16) has no concept of "must not foreclose", so every row
-	// it writes is a Delivers row, same meaning this column defaults to
-	// (migration 010's comment). The ON CONFLICT target must name every
-	// column of entity_milestone_entity_milestone_idx (migration 010
-	// widened it to (entity_id, milestone_id, relation)) -- naming only
-	// the first two, as this method did before that migration, is no
-	// longer a valid arbiter and fails at the database with "no unique or
-	// exclusion constraint matching the ON CONFLICT specification".
+	// The ON CONFLICT target must name every column of
+	// entity_milestone_entity_milestone_idx (migration 010 widened it to
+	// (entity_id, milestone_id, relation)) -- naming only the first two, as
+	// this method did before that migration, is no longer a valid arbiter
+	// and fails at the database with "no unique or exclusion constraint
+	// matching the ON CONFLICT specification".
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
-	`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers)); err != nil {
+	`, scopeID, entityID, milestoneID, string(relation)); err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
 	}
 

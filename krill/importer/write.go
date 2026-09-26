@@ -137,7 +137,7 @@ func write(ctx context.Context, st *store.Store, scopeID uuid.UUID, parsed *Pars
 			if !ok {
 				return nil, fmt.Errorf("milestone %s Must not foreclose: cites %s, which the Load-bearing decisions section never defines", m.ID, lbID)
 			}
-			if err := st.Milestones().AddAssociation(ctx, scopeID, decisionID, ref.ID); err != nil {
+			if err := st.Milestones().AddMustNotForecloseAssociation(ctx, scopeID, decisionID, ref.ID); err != nil {
 				return nil, fmt.Errorf("associate %s with milestone %s: %w", lbID, m.ID, err)
 			}
 		}

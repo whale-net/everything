@@ -161,3 +161,108 @@ func TestMilestoneParentGuard_DanglingShipmentIsUnreachable(t *testing.T) {
 	`, unknown).Scan(&n))
 	assert.Zero(t, n)
 }
+
+// TestMilestoneStore_AddAssociation_CrossScopeMilestone_Refused:
+// currentRowExists filters `id AND scope_id AND valid_to IS NULL`, so the
+// scope term is doing real work in both parentage guards, not just
+// decorative tenant hygiene. A milestone that is perfectly real but belongs
+// to another scope is not a parent of anything in this one (LB1: every
+// spec-axis row is reachable only within its own scope), so AddAssociation
+// must refuse it and write nothing.
+//
+// The id is what the caller supplies, so dropping `AND scope_id = $2` from
+// the guard's query would make this test -- and nothing else in the file --
+// go red. That is the whole point of stating it.
+func TestMilestoneStore_AddAssociation_CrossScopeMilestone_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	otherScopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+
+	self := milestoneAuthoringTestSubject("agent-1")
+	otherProduct, err := s.Products().Create(ctx, otherScopeID, "Krill", "another scope's product")
+	require.NoError(t, err)
+	foreign, err := s.MilestoneAuthoring().CreateMilestone(ctx, otherScopeID, otherProduct.ID, "M1", "", nil, self, self)
+	require.NoError(t, err)
+
+	err = s.Milestones().AddAssociation(ctx, scopeID, uuid.New(), foreign.ID)
+	require.Error(t, err, "a milestone from another scope is not a valid parent here")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+
+	var n int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM entity_milestone WHERE milestone_id = $1
+	`, foreign.ID).Scan(&n))
+	assert.Zero(t, n, "a refused cross-scope AddAssociation writes no entity_milestone row")
+}
+
+// TestDeliveryShipmentStore_MarkShipped_CrossScopeMilestone_Refused: the
+// same scope term on the shipment side. A milestone that exists, but in
+// another scope, must be refused and no delivery_shipment row written.
+func TestDeliveryShipmentStore_MarkShipped_CrossScopeMilestone_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	otherScopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+
+	self := milestoneAuthoringTestSubject("agent-1")
+	otherProduct, err := s.Products().Create(ctx, otherScopeID, "Krill", "another scope's product")
+	require.NoError(t, err)
+	foreign, err := s.MilestoneAuthoring().CreateMilestone(ctx, otherScopeID, otherProduct.ID, "M1", "", nil, self, self)
+	require.NoError(t, err)
+
+	err = s.DeliveryShipments().MarkShipped(ctx, scopeID, foreign.ID, uuid.New(), nil, self, self)
+	require.Error(t, err, "a milestone from another scope must not accept a shipment")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+
+	var n int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM delivery_shipment WHERE milestone_id = $1
+	`, foreign.ID).Scan(&n))
+	assert.Zero(t, n, "a refused cross-scope MarkShipped writes no delivery_shipment row")
+}
+
+// TestMilestoneStore_AddAssociation_CompetingMilestone_Refused: the importer
+// is a Delivers write path like any other, so it owes the same
+// single-delivery-parent rule add_delivers enforces (LB6). Without the
+// guard, re-importing a brief that names the same entity under two
+// milestones would silently give the entity two milestone-level owners --
+// the exact state the authoring path refuses.
+func TestMilestoneStore_AddAssociation_CompetingMilestone_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record")
+	require.NoError(t, err)
+
+	self := milestoneAuthoringTestSubject("agent-1")
+	m1, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
+	require.NoError(t, err)
+	m2, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M2", "", nil, self, self)
+	require.NoError(t, err)
+
+	entityID := uuid.New()
+	require.NoError(t, s.Milestones().AddAssociation(ctx, scopeID, entityID, m1.ID))
+
+	// Re-importing M1's OWN association is not a conflict -- a brief
+	// re-imported unchanged must stay idempotent.
+	require.NoError(t, s.Milestones().AddAssociation(ctx, scopeID, entityID, m1.ID),
+		"re-asserting the same milestone's own association stays idempotent")
+
+	err = s.Milestones().AddAssociation(ctx, scopeID, entityID, m2.ID)
+	require.Error(t, err, "an entity already delivered by M1 must not be delivered by M2")
+	assert.ErrorIs(t, err, store.ErrEntityDeliveredByCompetingMilestone)
+	assert.Contains(t, err.Error(), "move_delivery_scope", "the refusal must name the re-cut that does work")
+
+	var n int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM entity_milestone WHERE entity_id = $1 AND relation = $2
+	`, entityID, string(store.MilestoneRelationDelivers)).Scan(&n))
+	assert.Equal(t, 1, n, "the refused association is written nowhere -- the entity still has exactly one milestone-level owner")
+
+	// The re-cut the refusal names still resolves it, so the advice the
+	// importer gives is advice that works.
+	require.NoError(t, s.Recut().MoveScope(ctx, scopeID, []uuid.UUID{entityID}, m1.ID, m2.ID, self, self))
+	require.NoError(t, s.Milestones().AddAssociation(ctx, scopeID, entityID, m2.ID),
+		"after the re-cut, the importer may assert M2's association")
+}

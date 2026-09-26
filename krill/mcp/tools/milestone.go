@@ -103,20 +103,25 @@ func RegisterSetFRBudget(reg *server.Registry, sessions store.SessionStore, mile
 	})
 }
 
-// addDeliversInput is add_delivers's argument schema (LB6).
+// addDeliversInput is add_delivers's argument schema (LB6). Pass
+// `entity_ids` to deliver a whole slice in one call -- a milestone's
+// scope routinely spans more than one FeatureSet, and the delivery axis
+// hangs off the entity, not off the FeatureSet that parents it. `entity_id`
+// stays for the single-entity call; at least one of the two is required.
 type addDeliversInput struct {
 	krillSessionInput
-	MilestoneID string `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
-	EntityID    string `json:"entity_id" jsonschema:"The delivered entity's surrogate id (feature or FR), as a UUID string."`
+	MilestoneID string   `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
+	EntityID    string   `json:"entity_id,omitempty" jsonschema:"A single delivered entity's surrogate id (feature or FR). Use entity_ids for more than one."`
+	EntityIDs   []string `json:"entity_ids,omitempty" jsonschema:"The delivered entities' surrogate ids, each a UUID string. They need not share a FeatureSet -- one call can deliver a slice spanning several."`
 }
 
-// RegisterAddDelivers registers add_delivers (LB6): attaches a
-// Delivers association between a milestone and a feature/FR via
-// store.MilestoneAuthoringStore.AddDelivers.
+// RegisterAddDelivers registers add_delivers (LB6): attaches Delivers
+// associations between a milestone and one or more features/FRs via
+// store.MilestoneAuthoringStore.AddDeliversMany.
 func RegisterAddDelivers(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "add_delivers",
-		Description: "Record that a milestone delivers a given feature or FR (LB6).",
+		Description: "Record that a milestone delivers one or more features/FRs (LB6) -- pass entity_ids to deliver a slice spanning several FeatureSets in a single call. Refuses an entity another milestone of the same product already delivers; re-cut it with move_delivery_scope first.",
 	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDeliversInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
@@ -129,12 +134,22 @@ func RegisterAddDelivers(reg *server.Registry, sessions store.SessionStore, mile
 		if err != nil {
 			return nil, zero, fmt.Errorf("milestone_id: invalid or missing UUID")
 		}
-		entityID, err := uuid.Parse(in.EntityID)
-		if err != nil {
-			return nil, zero, fmt.Errorf("entity_id: invalid or missing UUID")
+		raw := in.EntityIDs
+		if len(raw) == 0 && in.EntityID != "" {
+			raw = []string{in.EntityID}
+		}
+		if len(raw) == 0 {
+			return nil, zero, fmt.Errorf("entity_id or entity_ids: at least one delivered entity id is required")
+		}
+		entityIDs := make([]uuid.UUID, len(raw))
+		for i, id := range raw {
+			entityIDs[i], err = uuid.Parse(id)
+			if err != nil {
+				return nil, zero, fmt.Errorf("entity_ids: invalid or missing UUID %q", id)
+			}
 		}
 
-		if err := milestones.AddDelivers(ctx, sess.ScopeID, milestoneID, entityID, sess.Acting, sess.OnBehalfOf); err != nil {
+		if err := milestones.AddDeliversMany(ctx, sess.ScopeID, milestoneID, entityIDs, sess.Acting, sess.OnBehalfOf); err != nil {
 			return nil, zero, err
 		}
 		return nil, handlers.IDResponse{ID: milestoneID.String()}, nil

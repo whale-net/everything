@@ -44,10 +44,20 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
    ambiguous (freeform text, not a guaranteed machine-readable signal),
    don't guess either way — ask whoever dispatched you to confirm before
    creating tasks that might duplicate a prior run's.
-2. Ensure every Feature/Requirement this FeatureSet slice contains is in
-   the milestone's `Delivers` set — `add_delivers {krill_session_id,
-   milestone_id, entity_id}` per entity (idempotent, safe to call even if
-   already added). Works from an ordinary Claude Code session today.
+2. Ensure every Feature/Requirement this slice contains is in the
+   milestone's `Delivers` set — **one** `add_delivers {krill_session_id,
+   milestone_id, entity_ids: [...]}` call carrying every entity at once.
+   The batch is not scoped to a FeatureSet: a milestone's scope routinely
+   spans several (krill's own name them `Now`/`Next`/`Later`), and the
+   delivery axis hangs off the entity, not off the FeatureSet that parents
+   it, so there is no reason to walk FeatureSets one at a time. The call
+   is idempotent, so re-running it over an already-delivered entity is a
+   no-op. If it comes back refusing an entity because a *different*
+   milestone of the same product already delivers it, do not retry per
+   FeatureSet and do not create a second container — call
+   `move_delivery_scope {entity_ids: [...], from: <competing milestone>,
+   to: <this milestone>}` to re-cut it, then re-run step 2. Works from an
+   ordinary Claude Code session today.
 3. Break the work into cohesive tasks — one per vertical slice, ordered
    expand-contract (`tools/project-manager/CONVENTIONS.md` § Task issues &
    swimlane progression, step 3, for the full expand-contract rule). For

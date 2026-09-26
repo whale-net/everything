@@ -45,8 +45,26 @@ type MilestoneAuthoringStore interface {
 	// LoadBearingDecision.ID) is delivered by milestoneID -- an
 	// `entity_milestone` row with Relation=MilestoneRelationDelivers.
 	// Idempotent: re-adding the same (entityID, milestoneID) pair is a
-	// no-op, mirroring MilestoneStore.AddAssociation.
+	// no-op, mirroring MilestoneStore.AddAssociation. Equivalent to
+	// AddDeliversMany over a one-element batch; prefer AddDeliversMany
+	// whenever the caller already holds the whole list.
 	AddDelivers(ctx context.Context, scopeID, milestoneID, entityID uuid.UUID, acting, onBehalfOf Subject) error
+
+	// AddDeliversMany is AddDelivers over a batch: one invocation
+	// associates milestoneID's Delivers with every entity in entityIDs,
+	// all-or-nothing. The batch is not scoped to a single FeatureSet --
+	// a milestone whose scope spans several FeatureSets is delivered in
+	// one call, because the delivery axis hangs off the entity, never off
+	// the FeatureSet that happens to parent it.
+	//
+	// Rejects, writing nothing, with ErrEntityDeliveredByCompetingMilestone
+	// if any entityID is already delivered by a different `kind='milestone'`
+	// row of the same product. Re-cutting first
+	// (RecutStore.MoveScope -- the `move_delivery_scope` verb) is the only
+	// way to hand an already-delivered entity to a competing milestone.
+	// Re-adding an entity milestoneID already delivers is not a
+	// conflict: that stays an idempotent no-op.
+	AddDeliversMany(ctx context.Context, scopeID, milestoneID uuid.UUID, entityIDs []uuid.UUID, acting, onBehalfOf Subject) error
 
 	// AddMustNotForeclose records that milestoneID must not foreclose
 	// entityID (to date, always a LoadBearingDecision.ID) -- an
@@ -277,7 +295,116 @@ func (s milestoneAuthoringStore) addRelation(ctx context.Context, scopeID, miles
 }
 
 func (s milestoneAuthoringStore) AddDelivers(ctx context.Context, scopeID, milestoneID, entityID uuid.UUID, acting, onBehalfOf Subject) error {
-	return s.addRelation(ctx, scopeID, milestoneID, entityID, MilestoneRelationDelivers, acting, onBehalfOf)
+	return s.AddDeliversMany(ctx, scopeID, milestoneID, []uuid.UUID{entityID}, acting, onBehalfOf)
+}
+
+func (s milestoneAuthoringStore) AddDeliversMany(ctx context.Context, scopeID, milestoneID uuid.UUID, entityIDs []uuid.UUID, acting, onBehalfOf Subject) error {
+	if len(entityIDs) == 0 {
+		return fmt.Errorf("entity_ids: at least one entity id is required")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if err := addDeliversTx(ctx, tx, scopeID, milestoneID, entityIDs); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// addDeliversTx is AddDeliversMany's transaction-scoped core: every
+// entityID is validated before any row is written, so a batch that trips
+// any rule writes nothing at all rather than half of its scope.
+func addDeliversTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUID, entityIDs []uuid.UUID) error {
+	targetKind, productID, err := deliversTarget(ctx, tx, scopeID, milestoneID)
+	if err != nil {
+		return err
+	}
+
+	// A milepebble only ever narrows its parent milestone's own claim
+	// (FR3's subset invariant, enforced by AddMilepebbleDelivers), and the
+	// backlog bucket holds scope no milestone delivers at all, so neither
+	// can compete for an entity already delivered by a milestone.
+	if targetKind == MilestoneKindMilestone {
+		for _, entityID := range entityIDs {
+			if err := refuseCompetingMilestoneDelivers(ctx, tx, scopeID, productID, milestoneID, entityID); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, entityID := range entityIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers)); err != nil {
+			return fmt.Errorf("insert entity_milestone: %w", err)
+		}
+	}
+	return nil
+}
+
+// refuseCompetingMilestoneDelivers rejects associating entityID as delivered
+// by milestoneID when a DIFFERENT milestone in the same product already
+// delivers it -- the single-delivery-parent rule (LB6) every Delivers write
+// path owes, whether it was authored through add_delivers or imported from
+// a brief. Re-asserting the same milestone's own association is not a
+// conflict, so a repeat call stays idempotent; the only way to hand the
+// entity to another milestone is an explicit move_delivery_scope re-cut.
+func refuseCompetingMilestoneDelivers(ctx context.Context, tx pgx.Tx, scopeID, productID, milestoneID, entityID uuid.UUID) error {
+	var competing uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT mr.id
+		FROM entity_milestone em
+		JOIN milestone_ref mr ON mr.id = em.milestone_id AND mr.valid_to IS NULL
+		WHERE em.entity_id = $1 AND em.relation = $2
+		  AND mr.kind = $3 AND mr.id <> $4
+		  AND mr.scope_id = $5 AND mr.product_id = $6
+		LIMIT 1
+	`, entityID, string(MilestoneRelationDelivers), string(MilestoneKindMilestone),
+		milestoneID, scopeID, productID).Scan(&competing)
+	if err == nil {
+		return fmt.Errorf("%w: entity %s is already delivered by milestone %s; move_delivery_scope it there first",
+			ErrEntityDeliveredByCompetingMilestone, entityID, competing)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("check competing delivery: %w", err)
+	}
+	return nil
+}
+
+// ErrEntityDeliveredByCompetingMilestone is AddDeliversMany's named, loud
+// rejection: the entity already has a Delivers association with a
+// different milestone of the same product. The delivery axis stays a
+// single association (LB6) -- a FeatureSet named for a lane does not
+// create a second parent that can rival the milestone for the same
+// entity. Re-cutting with RecutStore.MoveScope is the only way to hand
+// the entity to a competing milestone.
+var ErrEntityDeliveredByCompetingMilestone = errors.New("krill/store: entity is already delivered by another milestone of this product")
+
+// deliversTarget resolves the association target's own Kind and Product
+// in one read, or errParentNotFound when it is not in scope. The Kind
+// decides which rules the write is held to, and the Product scopes the
+// search for a competing delivery.
+func deliversTarget(ctx context.Context, q txQuerier, scopeID, milestoneID uuid.UUID) (MilestoneKind, uuid.UUID, error) {
+	var kind string
+	var productID uuid.UUID
+	err := q.QueryRow(ctx, `
+		SELECT kind, product_id FROM milestone_ref WHERE id = $1 AND scope_id = $2
+	`, milestoneID, scopeID).Scan(&kind, &productID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", uuid.UUID{}, errParentNotFound("milestone_ref", milestoneID)
+	}
+	if err != nil {
+		return "", uuid.UUID{}, fmt.Errorf("get milestone_ref: %w", err)
+	}
+	return MilestoneKind(kind), productID, nil
 }
 
 func (s milestoneAuthoringStore) AddMustNotForeclose(ctx context.Context, scopeID, milestoneID, entityID uuid.UUID, acting, onBehalfOf Subject) error {
