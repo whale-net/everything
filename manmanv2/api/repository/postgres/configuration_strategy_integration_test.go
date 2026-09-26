@@ -179,14 +179,12 @@ func TestConfigurationStrategyRepository_UpdateBumpsUpdatedAt(t *testing.T) {
 	ctx := context.Background()
 
 	strategy := f.seed(t, f.gameA, "before", "file_properties", 5)
-	// Read updated_at directly: Get does not select that column (see
-	// TestConfigurationStrategyRepository_GetOmitsTimestamps), so the
-	// repository's own round-trip can't observe the bump.
-	var before time.Time
-	if err := f.pool.QueryRow(ctx,
-		`SELECT updated_at FROM configuration_strategies WHERE strategy_id = $1`, strategy.StrategyID,
-	).Scan(&before); err != nil {
-		t.Fatalf("read updated_at before Update: %v", err)
+	before, err := f.repo.Get(ctx, strategy.StrategyID)
+	if err != nil {
+		t.Fatalf("Get before Update: %v", err)
+	}
+	if before.UpdatedAt.IsZero() {
+		t.Fatal("Get returned a zero updated_at before Update")
 	}
 
 	strategy.Name = "after"
@@ -202,19 +200,12 @@ func TestConfigurationStrategyRepository_UpdateBumpsUpdatedAt(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	var afterUpdatedAt time.Time
-	if err := f.pool.QueryRow(ctx,
-		`SELECT updated_at FROM configuration_strategies WHERE strategy_id = $1`, strategy.StrategyID,
-	).Scan(&afterUpdatedAt); err != nil {
-		t.Fatalf("read updated_at after Update: %v", err)
-	}
-	if !afterUpdatedAt.After(before) {
-		t.Errorf("updated_at = %v, want after %v (Update sets CURRENT_TIMESTAMP)", afterUpdatedAt, before)
-	}
-
 	after, err := f.repo.Get(ctx, strategy.StrategyID)
 	if err != nil {
 		t.Fatalf("Get after Update: %v", err)
+	}
+	if !after.UpdatedAt.After(before.UpdatedAt) {
+		t.Errorf("updated_at = %v, want after %v (Update sets CURRENT_TIMESTAMP)", after.UpdatedAt, before.UpdatedAt)
 	}
 	if after.GameID != f.gameA {
 		t.Errorf("GameID = %d, want %d (Update must not re-parent)", after.GameID, f.gameA)
@@ -230,13 +221,11 @@ func TestConfigurationStrategyRepository_UpdateBumpsUpdatedAt(t *testing.T) {
 	}
 }
 
-// TestConfigurationStrategyRepository_GetOmitsTimestamps documents that Get's
-// column list stops at apply_order, so the ConfigurationStrategy it returns
-// always carries zero CreatedAt/UpdatedAt even though the table has both and
-// Update maintains updated_at. Pinned so that either widening Get's SELECT or
-// accepting this gap is a deliberate edit -- a caller reading
-// strategy.UpdatedAt today gets the zero time, not a real one.
-func TestConfigurationStrategyRepository_GetOmitsTimestamps(t *testing.T) {
+// TestConfigurationStrategyRepository_GetReturnsTimestamps proves Get surfaces
+// the row's created_at/updated_at, and that they agree with what the table
+// actually stores -- a caller reading strategy.UpdatedAt must get a real time,
+// never the Go zero time.
+func TestConfigurationStrategyRepository_GetReturnsTimestamps(t *testing.T) {
 	f := newStrategyHarness(t)
 	ctx := context.Background()
 
@@ -246,21 +235,38 @@ func TestConfigurationStrategyRepository_GetOmitsTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if !got.CreatedAt.IsZero() || !got.UpdatedAt.IsZero() {
-		t.Errorf("CreatedAt/UpdatedAt = %v/%v, want both zero (Get does not select them)",
-			got.CreatedAt, got.UpdatedAt)
+	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+		t.Errorf("CreatedAt/UpdatedAt = %v/%v, want both populated", got.CreatedAt, got.UpdatedAt)
 	}
 
-	// The columns do exist and are populated -- it's the repository that
-	// leaves them behind.
 	var created, updated time.Time
 	if err := f.pool.QueryRow(ctx,
 		`SELECT created_at, updated_at FROM configuration_strategies WHERE strategy_id = $1`, strategy.StrategyID,
 	).Scan(&created, &updated); err != nil {
 		t.Fatalf("read timestamps directly: %v", err)
 	}
-	if created.IsZero() || updated.IsZero() {
-		t.Errorf("stored created_at/updated_at = %v/%v, want both populated", created, updated)
+	if !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) {
+		t.Errorf("Get returned %v/%v, want the stored %v/%v", got.CreatedAt, got.UpdatedAt, created, updated)
+	}
+}
+
+// TestConfigurationStrategyRepository_ListByGameReturnsTimestamps proves the
+// listing path populates the timestamps too, not just the single-row read.
+func TestConfigurationStrategyRepository_ListByGameReturnsTimestamps(t *testing.T) {
+	f := newStrategyHarness(t)
+	ctx := context.Background()
+
+	f.seed(t, f.gameA, "listed", "file_properties", 1)
+
+	listed, err := f.repo.ListByGame(ctx, f.gameA)
+	if err != nil {
+		t.Fatalf("ListByGame: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("ListByGame returned %d rows, want 1", len(listed))
+	}
+	if listed[0].CreatedAt.IsZero() || listed[0].UpdatedAt.IsZero() {
+		t.Errorf("CreatedAt/UpdatedAt = %v/%v, want both populated", listed[0].CreatedAt, listed[0].UpdatedAt)
 	}
 }
 

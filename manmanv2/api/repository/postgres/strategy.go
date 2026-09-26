@@ -19,7 +19,7 @@ func (r *ConfigurationStrategyRepository) Create(ctx context.Context, strategy *
 	query := `
 		INSERT INTO configuration_strategies (game_id, name, description, strategy_type, target_path, base_template, render_options, apply_order)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING strategy_id
+		RETURNING strategy_id, created_at, updated_at
 	`
 
 	err := r.db.QueryRow(ctx, query,
@@ -31,7 +31,7 @@ func (r *ConfigurationStrategyRepository) Create(ctx context.Context, strategy *
 		strategy.BaseTemplate,
 		strategy.RenderOptions,
 		strategy.ApplyOrder,
-	).Scan(&strategy.StrategyID)
+	).Scan(&strategy.StrategyID, &strategy.CreatedAt, &strategy.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func (r *ConfigurationStrategyRepository) Get(ctx context.Context, strategyID in
 	strategy := &manman.ConfigurationStrategy{}
 
 	query := `
-		SELECT strategy_id, game_id, name, description, strategy_type, target_path, base_template, render_options, apply_order
+		SELECT strategy_id, game_id, name, description, strategy_type, target_path, base_template, render_options, apply_order, created_at, updated_at
 		FROM configuration_strategies
 		WHERE strategy_id = $1
 	`
@@ -58,6 +58,8 @@ func (r *ConfigurationStrategyRepository) Get(ctx context.Context, strategyID in
 		&strategy.BaseTemplate,
 		&strategy.RenderOptions,
 		&strategy.ApplyOrder,
+		&strategy.CreatedAt,
+		&strategy.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -68,7 +70,7 @@ func (r *ConfigurationStrategyRepository) Get(ctx context.Context, strategyID in
 
 func (r *ConfigurationStrategyRepository) ListByGame(ctx context.Context, gameID int64) ([]*manman.ConfigurationStrategy, error) {
 	query := `
-		SELECT strategy_id, game_id, name, description, strategy_type, target_path, base_template, render_options, apply_order
+		SELECT strategy_id, game_id, name, description, strategy_type, target_path, base_template, render_options, apply_order, created_at, updated_at
 		FROM configuration_strategies
 		WHERE game_id = $1
 		ORDER BY apply_order, strategy_id
@@ -93,6 +95,8 @@ func (r *ConfigurationStrategyRepository) ListByGame(ctx context.Context, gameID
 			&strategy.BaseTemplate,
 			&strategy.RenderOptions,
 			&strategy.ApplyOrder,
+			&strategy.CreatedAt,
+			&strategy.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err
