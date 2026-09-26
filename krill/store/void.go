@@ -2,6 +2,11 @@
 // half of the boundary call store/amend.go draws. Where an amend closes a
 // current row and opens a successor under the same immutable id, a void
 // closes the current row and opens nothing: the entity is tombstoned.
+//
+// RETIRE (FR d0021a0f) is this same close reached from a different verb:
+// store/resolve.go runs voidEntityInTx after checking its target is a
+// `deferred` Non-Goal, and records the tombstone with
+// Outcome = VoidOutcomeRetire so an auditor can tell the two apart.
 package store
 
 import (
@@ -32,9 +37,25 @@ const (
 	VoidedLoadBearingDecision VoidedEntityKind = "load_bearing_decision"
 )
 
-// VoidEvent is one row of `void_event` (migration 021): the audit record
-// that an entity was voided, by whom, when, and -- for the two kinds that
-// carry one -- which display number that void retired.
+// VoidEventOutcome names which of the two close-WITHOUT-successor callers
+// closed a row. Both produce a tombstone; only the intent differs, and
+// nothing in the closed SCD2 row records it (migration 022).
+type VoidEventOutcome string
+
+const (
+	// VoidOutcomeVoid is a mistaken create (FR d38d726e) -- of any of the
+	// seven void-able kinds, of either Non-Goal kind.
+	VoidOutcomeVoid VoidEventOutcome = "void"
+	// VoidOutcomeRetire is a `deferred` Non-Goal settled by RETIRE
+	// (FR d0021a0f) rather than retracted. It is reached only through
+	// ResolveStore (resolve.go), never by calling a Void* method directly.
+	VoidOutcomeRetire VoidEventOutcome = "retire"
+)
+
+// VoidEvent is one row of `void_event` (migrations 021 and 022): the audit
+// record that an entity was closed with no successor, by whom, when, and
+// -- for the two kinds that carry one -- which display number that void
+// retired.
 //
 // This is the ONLY way a caller reaches a tombstone. Every current read
 // filters `valid_to IS NULL`, so a voided entity is absent from the slice
@@ -47,6 +68,7 @@ type VoidEvent struct {
 	EntityKind           VoidedEntityKind
 	EntityID             uuid.UUID
 	ProductID            uuid.UUID
+	Outcome              VoidEventOutcome
 	RetiredDisplayNumber *int
 	Reason               *string
 	CreatedByActing      Subject
@@ -54,22 +76,23 @@ type VoidEvent struct {
 	CreatedAt            time.Time
 }
 
-const voidEventColumns = `id, scope_id, entity_kind, entity_id, product_id, retired_display_number, reason, ` +
+const voidEventColumns = `id, scope_id, entity_kind, entity_id, product_id, outcome, retired_display_number, reason, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
 func scanVoidEvent(row pgx.Row) (VoidEvent, error) {
 	var (
 		v                        VoidEvent
-		kind                     string
+		kind, outcome            string
 		actingIss, actingSub     string
 		actingKind               string
 		onBehalfIss, onBehalfSub string
 		onBehalfKind             string
 	)
-	err := row.Scan(&v.ID, &v.ScopeID, &kind, &v.EntityID, &v.ProductID, &v.RetiredDisplayNumber, &v.Reason,
+	err := row.Scan(&v.ID, &v.ScopeID, &kind, &v.EntityID, &v.ProductID, &outcome, &v.RetiredDisplayNumber, &v.Reason,
 		&actingIss, &actingSub, &actingKind, &onBehalfIss, &onBehalfSub, &onBehalfKind, &v.CreatedAt)
 	v.EntityKind = VoidedEntityKind(kind)
+	v.Outcome = VoidEventOutcome(outcome)
 	v.CreatedByActing = Subject{Iss: actingIss, Sub: actingSub, Kind: SubjectKind(actingKind)}
 	v.CreatedByOnBehalfOf = Subject{Iss: onBehalfIss, Sub: onBehalfSub, Kind: SubjectKind(onBehalfKind)}
 	return v, err
@@ -108,12 +131,12 @@ type VoidStore interface {
 	// VoidNonGoal tombstones the current NonGoal row for id, of either
 	// kind. This is the same close-without-successor shape the resolve
 	// verb's RETIRE outcome needs (FR d0021a0f), and it is deliberately
-	// reusable as that outcome: the RETIRE path adds one check of its own
-	// -- that the NonGoal is currently `deferred` -- and records the
-	// chosen outcome, actor and timestamp through this same call, which
-	// writes exactly that triple into void_event. It does not enforce the
-	// `deferred` check here, because a permanent NonGoal may also be a
-	// mistaken create, which is void's own case.
+	// reusable as that outcome -- resolve.go calls voidEntityInTx rather
+	// than reimplementing the close, so the two cannot drift. It does not
+	// enforce the `deferred` check here, because a permanent NonGoal may
+	// also be a mistaken create, which is void's own case. Every row this
+	// method writes records Outcome = VoidOutcomeVoid; RETIRE is reached
+	// only through ResolveStore, which is what writes the 'retire' value.
 	VoidNonGoal(ctx context.Context, scopeID, id uuid.UUID, reason *string, acting, onBehalfOf Subject) error
 
 	// VoidLoadBearingDecision tombstones the current
@@ -266,20 +289,12 @@ type voidStore struct{ pool *pgxpool.Pool }
 
 var _ VoidStore = voidStore{}
 
-// voidEntity is the shared body of every Void* method: it row-locks the
-// current row, runs BOTH refusal checks, and only then closes the row and
-// records the tombstone -- all in one transaction.
-//
-// Order is the contract, not an accident. Both refusals are evaluated
-// before the first write, so a refused void issues no UPDATE and no
-// INSERT; there is nothing to roll back and no window in which the row
-// could be observed half-closed. A reader of this function should keep it
-// that way.
-//
-// The SELECT ... FOR UPDATE row-lock is what makes two concurrent voids
-// of the same id serialize: without it both would find the same current
-// row and both proceed. With it, the second waits, then finds no current
-// row and is refused with ErrNotFound.
+// voidEntity is the shared body of every Void* method: it begins a
+// transaction and runs voidEntityInTx inside it. The body is split out
+// because a RETIRE (FR d0021a0f, resolve.go) is the same tombstone and
+// must run inside a transaction that has already checked the target is a
+// `deferred` Non-Goal -- two transactions would leave a window in which
+// the row changed between the check and the close.
 func voidEntity(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -292,12 +307,68 @@ func voidEntity(
 	reason *string,
 	acting, onBehalfOf Subject,
 ) error {
+	return voidEntityWithOutcome(ctx, pool, kind, table, productQuery, scopeID, id, children, hasDisplayNumber, reason, acting, onBehalfOf, VoidOutcomeVoid)
+}
+
+// voidEntityWithOutcome is voidEntity with the register's `outcome` value
+// chosen by the caller. Only Void* methods (which are all mistakes) and
+// the RETIRE path in resolve.go reach it, and they pass the two
+// close-WITHOUT-successor outcomes between them.
+func voidEntityWithOutcome(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	kind VoidedEntityKind,
+	table string,
+	productQuery string,
+	scopeID, id uuid.UUID,
+	children []childGuard,
+	hasDisplayNumber bool,
+	reason *string,
+	acting, onBehalfOf Subject,
+	outcome VoidEventOutcome,
+) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	if err := voidEntityInTx(ctx, tx, kind, table, productQuery, scopeID, id, children, hasDisplayNumber, reason, acting, onBehalfOf, outcome); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// voidEntityInTx is the tombstone itself: it row-locks the current row,
+// runs BOTH refusal checks, and only then closes the row and records the
+// tombstone in the caller's transaction.
+//
+// Order is the contract, not an accident. Both refusals are evaluated
+// before the first write, so a refused void issues no UPDATE and no
+// INSERT; there is nothing to roll back and no window in which the row
+// could be observed half-closed. A reader of this function should keep it
+// that way.
+//
+// The SELECT ... FOR UPDATE row-lock is what makes two concurrent voids
+// of the same id serialize: without it both would find the same current
+// row and both proceed. With it, the second waits, then finds no current
+// row and is refused with ErrNotFound.
+func voidEntityInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind VoidedEntityKind,
+	table string,
+	productQuery string,
+	scopeID, id uuid.UUID,
+	children []childGuard,
+	hasDisplayNumber bool,
+	reason *string,
+	acting, onBehalfOf Subject,
+	outcome VoidEventOutcome,
+) error {
 	// Lock the current row, and pick up the number this void retires for
 	// the two kinds that carry one. The lookup is scope-qualified (LB1): a
 	// real id belonging to another scope must be reported as not-found
@@ -361,18 +432,14 @@ func voidEntity(
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO void_event (
-			scope_id, entity_kind, entity_id, product_id, retired_display_number, reason,
+			scope_id, entity_kind, entity_id, product_id, outcome, retired_display_number, reason,
 			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
 			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`, scopeID, string(kind), id, productID, displayNumber, reason,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, scopeID, string(kind), id, productID, string(outcome), displayNumber, reason,
 		acting.Iss, acting.Sub, string(acting.Kind),
 		onBehalfOf.Iss, onBehalfOf.Sub, string(onBehalfOf.Kind)); err != nil {
 		return fmt.Errorf("insert void_event for %s: %w", kind, err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

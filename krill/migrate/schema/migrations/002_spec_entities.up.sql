@@ -105,6 +105,31 @@
 -- silently repoint to its name-reusing replacement -- the renumbering-
 -- migration failure LB2 exists to prevent. The audit record of which
 -- number each void retired lives in `void_event` (migration 021).
+--
+-- PROMOTE (FR d0021a0f) is the third case, and the one that cannot be
+-- expressed as either of the two above. It is the AMEND write path --
+-- close, then INSERT a successor under the same id -- with ONE difference:
+-- the successor's `kind` differs from the closed row's, where an amend
+-- carries `kind` forward untouched by contract. That is the whole reason
+-- promote needs its own verb rather than a flag on amend: an amend that
+-- re-kinded would make "amend never re-kinds" (FR f0f6bc18) untrue, and
+-- that guarantee is what lets a reader trust an amended row's `kind` to
+-- be the row's original kind. So the three shapes are:
+--
+--   amend    close + insert a successor, `kind` carried forward unchanged
+--   promote  close + insert a successor, `kind` CHANGED (deferred -> permanent)
+--   void     close, insert nothing
+--
+-- PROMOTE applies to `non_goal` only, and only to a row whose current
+-- `kind` is `deferred`; nothing else in this migration has a kind whose
+-- change is a resolution. A promote therefore leaves a current row, so
+-- the "no current revision" test above distinguishes it from BOTH void
+-- and retire, and its history lives in `non_goal_promotion` (migration
+-- 022) rather than in `void_event` -- a row with a live successor is not
+-- a tombstone, and recording it as one would block a later void of that
+-- same id. RETIRE is the third verb's other caller: it is a void of a
+-- `deferred` Non-Goal, and `void_event.outcome` (migration 022) is what
+-- tells the two apart in history.
 
 -- ============================================================================
 -- product -- spec axis, SCD2 (LB3)
@@ -279,6 +304,15 @@ CREATE UNIQUE INDEX persona_scope_product_name_current_idx ON persona(scope_id, 
 -- Void-able (FR d38d726e): amend closes this row and opens a successor
 -- under the same id; void closes it and opens nothing, tombstoning the
 -- entity while freeing its name. See the LB3 section above.
+--
+-- This is the one table where a `kind` change is a RESOLUTION rather
+-- than a reparent (FR d0021a0f). A `deferred` Non-Goal -- one held back
+-- as "explicitly not a non-goal" -- is settled either by PROMOTE (close
+-- + successor, `kind` re-kinded to `permanent`, body and name carried
+-- forward, so a citation already rendered for it still resolves) or by
+-- RETIRE (close, no successor: the same tombstone a void leaves, recorded
+-- in `void_event` with `outcome = 'retire'`). A `permanent` Non-Goal is
+-- the terminal state of both, and cannot be resolved again.
 -- ============================================================================
 -- `kind` distinguishes PRODUCT.md's two Non-goals buckets ("Permanent" vs
 -- "Explicitly *not* non-goals -- deferred, not foreclosed") -- the same

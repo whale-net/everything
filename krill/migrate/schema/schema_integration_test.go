@@ -198,18 +198,18 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(21), latest, "expected the latest migration source version to be 21 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(22), latest, "expected the latest migration source version to be 22 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event, 022_non_goal_promotion) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
 	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-021")
+	require.NoError(t, runner.Up(), "apply migrations 001-022")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(21), version)
+	assert.Equal(t, uint(22), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -233,6 +233,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.True(t, tableExists(t, ctx, db, "task_attempt"), "expected table \"task_attempt\" to exist after Up() (015_work_axis, issue #2719)")
 	assert.True(t, tableExists(t, ctx, db, "task_note"), "expected table \"task_note\" to exist after Up() (015_work_axis, issue #2719)")
 	assert.True(t, tableExists(t, ctx, db, "void_event"), "expected table \"void_event\" to exist after Up() (021_void_event)")
+	assert.True(t, tableExists(t, ctx, db, "non_goal_promotion"), "expected table \"non_goal_promotion\" to exist after Up() (022_non_goal_promotion)")
 
 	// -- Down: every table must be gone -------------------------------------
 	require.NoError(t, runner.Down(), "roll back every migration")
@@ -259,6 +260,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.False(t, tableExists(t, ctx, db, "task_attempt"), "expected table \"task_attempt\" to be dropped after Down() -- a clean database (015_work_axis, issue #2719)")
 	assert.False(t, tableExists(t, ctx, db, "task_note"), "expected table \"task_note\" to be dropped after Down() -- a clean database (015_work_axis, issue #2719)")
 	assert.False(t, tableExists(t, ctx, db, "void_event"), "expected table \"void_event\" to be dropped after Down() -- a clean database (021_void_event)")
+	assert.False(t, tableExists(t, ctx, db, "non_goal_promotion"), "expected table \"non_goal_promotion\" to be dropped after Down() -- a clean database (022_non_goal_promotion)")
 
 	// -- Up again: re-runnable from the clean state --------------------------
 	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
@@ -266,7 +268,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(21), version)
+	assert.Equal(t, uint(22), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -568,9 +570,15 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 		// no REFERENCES, because each void-able table is SCD2 and so has no
 		// table-wide unique id for a FK to target. See TestMigration021_SchemaContract.
 		"void_event",
+		// The PROMOTE register (022_non_goal_promotion). It is the same
+		// append-only audit shape as void_event and for the same reason
+		// carries no REFERENCES: a promote supersedes a spec-axis SCD2 row
+		// rather than parenting one, so non_goal_promotion.non_goal_id is a
+		// bare UUID. See TestMigration022_SchemaContract.
+		"non_goal_promotion",
 	}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + task_escalation_event/task_intervention_event/task_note_lifecycle_event (016_escalation_axis, issue #2868) + void_event (021_void_event) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + task_escalation_event/task_intervention_event/task_note_lifecycle_event (016_escalation_axis, issue #2868) + void_event (021_void_event) + non_goal_promotion (022_non_goal_promotion) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table EXCEPT feature and
 	// load_bearing_decision -- migration 017 (issue #2969) reversed LB2's
@@ -2893,4 +2901,132 @@ func TestMigration021_SchemaContract(t *testing.T) {
 	}
 	assert.True(t, hasIndexNamed(t, ctx, db, "feature", "feature_scope_featureset_name_current_idx"))
 	assert.True(t, hasIndexNamed(t, ctx, db, "load_bearing_decision", "load_bearing_decision_scope_fs_name_current_idx"))
+}
+
+// TestMigration022_SchemaContract asserts the shape migration 022 gives the
+// two resolution registers: non_goal_promotion records the PROMOTE outcome,
+// and void_event's new `outcome` column tells a RETIRE apart from a
+// mistaken-create void. The two claims worth pinning are that `outcome` is
+// a closed set (a third outcome cannot be introduced without a migration)
+// and that the promotion index makes a second promotion impossible in the
+// database rather than by store-layer convention.
+func TestMigration022_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- non_goal_promotion is a register of facts, not an SCD2 table
+	// (LB3), on the same terms as void_event --
+	for _, col := range []string{"valid_from", "valid_to", "revision_id"} {
+		assert.False(t, columnExists(t, ctx, db, "non_goal_promotion", col),
+			"non_goal_promotion must NOT carry a %s column -- a promotion is an append-only fact about one moment, not a value that changes over time", col)
+	}
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "non_goal_promotion", "id"))
+	assert.True(t, hasForeignKeyTo(t, ctx, db, "non_goal_promotion", "scope"),
+		"non_goal_promotion.scope_id must be a real DB-enforced FK, matching void_event (migration 002's LB1 note)")
+
+	// non_goal_id is a bare uuid, NOT a foreign key: non_goal went SCD2, so
+	// its `id` is not table-wide unique and Postgres cannot target a FK at
+	// it (migration 002's LB2 note).
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "non_goal_promotion", "non_goal"),
+		"non_goal_promotion.non_goal_id must NOT carry a DB-enforced FK to non_goal -- it holds the promoted row's immutable id, which is not table-wide unique on an SCD2 table; the store resolves the current row inside the resolve transaction")
+
+	// -- the kind CHECKs pin the ONE direction a resolution can move.
+	// Asserted by attempting the insert rather than by reading
+	// pg_get_constraintdef and pattern-matching SQL text: a check that
+	// merely LOOKS right in the catalog is not one the database enforces.
+	var scopeID, productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ($1, 'main') RETURNING id
+	`, "non-goal-promotion-022/repo").Scan(&scopeID))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (id, scope_id, name, vision) VALUES ($1, $2, 'Krill', 'vision') RETURNING id
+	`, uuid.New(), scopeID).Scan(&productID))
+
+	insertPromotion := `
+		INSERT INTO non_goal_promotion (
+			scope_id, non_goal_id, product_id, from_kind, to_kind,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, $4, $5, 'whale_net', 'alex', 'human', 'whale_net', 'alex', 'human')`
+
+	promotedID := uuid.New()
+	_, err = db.Pool.Exec(ctx, insertPromotion, scopeID, promotedID, productID, "deferred", "permanent")
+	require.NoError(t, err, "the one legal promotion, deferred to permanent, must be insertable")
+
+	_, err = db.Pool.Exec(ctx, insertPromotion, scopeID, uuid.New(), productID, "permanent", "deferred")
+	assert.Error(t, err,
+		"from_kind must be CHECK-constrained to 'deferred' -- a promotion may only ever move a Non-Goal ONTO permanent, and a register that accepted the reverse would record a resolution krill cannot perform")
+	_, err = db.Pool.Exec(ctx, insertPromotion, scopeID, uuid.New(), productID, "deferred", "deferred")
+	assert.Error(t, err,
+		"to_kind must be CHECK-constrained to 'permanent' -- a row claiming a promotion changed nothing is not a record of a resolution")
+
+	// -- a Non-Goal is promoted at most once, ever --
+	_, err = db.Pool.Exec(ctx, insertPromotion, scopeID, promotedID, productID, "deferred", "permanent")
+	assert.Error(t, err,
+		"non_goal_promotion_scope_non_goal_idx must reject a second promotion of the same Non-Goal id. The store refuses a permanent target before it writes, but the index is what makes the claim hold if that check were ever dropped")
+
+	// The index is scoped, so another scope's promotion of an
+	// identically-identified row is a different fact, not a collision.
+	otherScopeID := uuid.New()
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (id, repo_full_name, default_branch) VALUES ($1, $2, 'main') RETURNING id
+	`, otherScopeID, "non-goal-promotion-022/other").Scan(&otherScopeID))
+	_, err = db.Pool.Exec(ctx, insertPromotion, otherScopeID, promotedID, productID, "deferred", "permanent")
+	require.NoError(t, err, "promotions are per scope (LB1) -- another scope's promotion of the same id is not a collision")
+
+	assert.True(t, hasIndexNamed(t, ctx, db, "non_goal_promotion", "non_goal_promotion_scope_non_goal_idx"))
+	assert.True(t, hasIndexNamed(t, ctx, db, "non_goal_promotion", "non_goal_promotion_scope_product_idx"))
+
+	// -- void_event.outcome is a CLOSED two-value set, and defaults to
+	// 'void' so every row written before this migration keeps meaning what
+	// it already meant --
+	assert.True(t, columnExists(t, ctx, db, "void_event", "outcome"))
+
+	var outcomeNullable, outcomeDefault string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT is_nullable, column_default FROM information_schema.columns
+		WHERE table_name = 'void_event' AND column_name = 'outcome'
+	`).Scan(&outcomeNullable, &outcomeDefault))
+	assert.Equal(t, "NO", outcomeNullable,
+		"outcome must be NOT NULL -- a tombstone with no recorded outcome would be exactly the ambiguity this column exists to remove")
+	assert.Contains(t, outcomeDefault, "'void'",
+		"outcome must DEFAULT to 'void' so the backfill needs no data pass: every row written before this migration came from a void verb call, and that is what it already meant")
+
+	insertVoidEvent := `
+		INSERT INTO void_event (
+			scope_id, entity_kind, entity_id, product_id, outcome,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, 'non_goal', $2, $3, $4, 'whale_net', 'alex', 'human', 'whale_net', 'alex', 'human')`
+
+	var retireOutcome, defaultedOutcome string
+	retiredID := uuid.New()
+	require.NoError(t, db.Pool.QueryRow(ctx, insertVoidEvent+` RETURNING outcome`, scopeID, retiredID, productID, "retire").Scan(&retireOutcome))
+	assert.Equal(t, "retire", retireOutcome, "a settle must record itself as retire")
+
+	_, err = db.Pool.Exec(ctx, insertVoidEvent, scopeID, uuid.New(), productID, "promote")
+	assert.Error(t, err,
+		"a PROMOTE must never be writable here -- it leaves a current row, so a void_event entry would be a false tombstone, and it would consume the at-most-once index a later genuine void needs")
+
+	_, err = db.Pool.Exec(ctx, insertVoidEvent, scopeID, uuid.New(), productID, "delete")
+	assert.Error(t, err, "outcome must be CHECK-constrained to the two close-WITHOUT-successor outcomes, so a new one cannot be introduced without a migration")
+
+	// An insert that omits `outcome` entirely must land on 'void' -- the
+	// backfill guarantee, exercised rather than assumed.
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO void_event (
+			scope_id, entity_kind, entity_id, product_id,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, 'non_goal', $2, $3, 'whale_net', 'alex', 'human', 'whale_net', 'alex', 'human')
+		RETURNING outcome
+	`, scopeID, uuid.New(), productID).Scan(&defaultedOutcome))
+	assert.Equal(t, "void", defaultedOutcome, "an omitted outcome must default to void")
 }

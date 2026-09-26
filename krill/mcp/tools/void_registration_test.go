@@ -241,11 +241,15 @@ func TestListVoidEvents_ReadsTheAuditRegister(t *testing.T) {
 	var calls []voidCall
 	scopeID := uuid.New()
 	events := []store.VoidEvent{{
-		ID:                   uuid.New(),
-		ScopeID:              scopeID,
-		EntityKind:           store.VoidedFeature,
-		EntityID:             uuid.New(),
-		ProductID:            uuid.New(),
+		ID:         uuid.New(),
+		ScopeID:    scopeID,
+		EntityKind: store.VoidedFeature,
+		EntityID:   uuid.New(),
+		ProductID:  uuid.New(),
+		// Set explicitly: a Void* method always records VoidOutcomeVoid, so
+		// leaving this zero would make the fixture serialise an outcome no
+		// real void can produce (migration 022).
+		Outcome:              store.VoidOutcomeVoid,
 		RetiredDisplayNumber: intPtr(7),
 		CreatedByActing:      store.Subject{Iss: "whale_net", Sub: "alex", Kind: store.SubjectKindHuman},
 	}}
