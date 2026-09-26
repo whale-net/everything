@@ -54,6 +54,13 @@ These are required on both `bot run-slack-socket-app` and `bot run-taskpool`
 (the shared `fcm bot` callback reads them before either sub-command runs) and on
 `workflow run`. They are **not** required by `web` or `migration`.
 
+whagent-net's own `api` server has two settings that decide whether the
+delegated path is reachable at all — `GRPC_AUTH_MODE` and
+`WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS` — which fcm does not read and which
+are documented in [whagent_net/ENV.md](../whagent_net/ENV.md), not here. The
+allowlist ships empty, which fails closed; see
+[docs/oidc_link_e2e_verification.md](docs/oidc_link_e2e_verification.md).
+
 ## OIDC identity link web app (`web run`)
 
 The `web` app performs the browser OIDC login that links a Slack user to their
