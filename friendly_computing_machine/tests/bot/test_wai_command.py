@@ -39,12 +39,18 @@ than vacuous:
   * previous_context dropped from the prompt -> grounding-in-stored-rows,
                                                 influenced-by-previous-answer
   * insert_genai_text skipped               -> 12 tests, incl. the audit-row ones
-  * get_slack_channel_context returns []     -> the FR 00e4b7f8 xfail XPASSes
-                                                and strict-xfail fails it
+  * get_slack_channel_context returns []     -> the genaitext-memory tests
+                                                (FR 00e4b7f8 as amended)
+  * context sourced from slackmessage       -> 10 tests, incl. the memory and
+                                                slackmessage-source ones
+  * context window limit 10 -> 3            -> the window tests
+  * created_at.desc() -> created_at.asc()   -> the newest-first ordering test
 """
 
 import asyncio
+import contextlib
 import datetime
+import re
 from unittest.mock import Mock
 
 import pytest
@@ -78,6 +84,7 @@ app_mod._app_instance = _FakeApp()
 # imported after the fake app is installed -- see test_whagent_gating.py
 from friendly_computing_machine.src.friendly_computing_machine.bot.handlers import (  # noqa: E402
     commands,
+    poll as poll_handlers,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db import (  # noqa: E402
     util as db_util,
@@ -87,6 +94,11 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (  
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.genai import (  # noqa: E402
     GenAIText,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.poll import (  # noqa: E402
+    Poll,
+    PollOption,
+    PollVote,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (  # noqa: E402
     SlackChannel,
@@ -136,6 +148,9 @@ def db(monkeypatch):
         SlackUser.__table__,
         SlackThreadSession.__table__,
         SlackChannelAgentLink.__table__,
+        Poll.__table__,
+        PollOption.__table__,
+        PollVote.__table__,
     ]
     from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
 
@@ -243,6 +258,35 @@ def _seed_slack_message(engine, text, channel=CHANNEL):
             )
         )
         s.commit()
+
+
+@contextlib.contextmanager
+def _record_sql(engine, verb):
+    """Collect the SQL statements issued inside the block, by leading verb."""
+    seen: list[str] = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _record(conn, cursor, statement, _params, _ctx, _many):
+        if statement.lstrip().upper().startswith(verb):
+            seen.append(statement)
+
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+
+_TABLE_RE = re.compile(r"\b(?:FROM|INTO)\s+([\w.\"`()]+)", re.IGNORECASE)
+
+
+def _tables_touched(statements):
+    """The `fcm.*` table names a batch of SQL statements reads or writes."""
+    names = set()
+    for statement in statements:
+        for name in _TABLE_RE.findall(statement):
+            if name.startswith("fcm."):
+                names.add(name)
+    return names
 
 
 def _genaitexts(engine, channel=CHANNEL):
@@ -370,6 +414,27 @@ def test_wai_context_caps_at_the_last_ten_rows_for_the_channel(wai_env, db):
     assert "old question 0" not in summary_prompt
 
 
+def test_slack_channel_context_is_exactly_the_last_ten_rows_newest_first(db):
+    """The 10-row window and its `created_at DESC` order are the boundary.
+
+    FR e1201623 as amended: M1 must not widen, narrow, or reorder this, and it
+    must not move the source off `genaitext`.
+    """
+    for i in range(12):
+        _seed_genaitext(
+            db,
+            f"q{i}",
+            f"a{i}",
+            created_at=datetime.datetime(2026, 1, 1) + datetime.timedelta(hours=i),
+        )
+
+    rows = asyncio.run(get_slack_channel_context(CHANNEL))
+
+    assert len(rows) == 10
+    # newest first: q11 down to q2, and the two oldest fall off the end
+    assert [r.prompt for r in rows] == [f"q{i}" for i in range(11, 1, -1)]
+
+
 def test_wai_sees_its_own_audit_row_in_the_context_it_builds(wai_env, db):
     # The handler inserts the genaitext row BEFORE running the workflow, so the
     # invocation's own unanswered prompt is part of the context it then builds.
@@ -419,18 +484,16 @@ def test_wai_says_the_bad_response_notice_and_stamps_the_row_on_a_null_answer(
 
 # ---------------------------------------------------------------- 00e4b7f8
 #
-# FR 00e4b7f8, load-bearing under LB2, requires that `/wai` store NO
-# per-conversation transcript, turn history, or agent definition, and that
-# `genaitext` be "written as an audit log and NEVER read back as conversation
-# memory".
+# FR 00e4b7f8, load-bearing under LB2, as amended: FCM holds no whagent_net-
+# style conversation state -- no transcript, no turns, no tool-call record, no
+# per-user session. That half holds and is pinned below. But the same
+# Requirement now states outright that `genaitext` IS read back and functions
+# as a coarse, unpartitioned-by-user, no-turn-boundary per-channel memory, so
+# LB2's duplicate-memory intent is NOT discharged here; that is M2/M3 work.
 #
-# It does not hold on main@5473180b. get_slack_channel_context() reads the
-# channel's genaitext rows and generate_summary() folds their prompt/response
-# into the next answer's prompt, so genaitext IS read back as conversation
-# memory. That is what the tests below pin, as xfail(strict=True): they are the
-# requirement's own assertion, and it fails. When someone changes `/wai` so the
-# guarantee holds, they go xpass-strict and the suite goes red until the
-# requirement and these tests are updated together.
+# The tests below characterize the memory as it is. A change that alters it --
+# switching context to `fcm.slackmessage`, or dropping the genaitext read --
+# turns them red.
 
 
 def test_slack_channel_context_reads_back_the_channels_genaitext_rows(db):
@@ -457,46 +520,44 @@ def test_wai_answer_is_influenced_by_a_previous_wai_answer(wai_env, db):
     assert "SUMMARY" in answer_prompt
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FR 00e4b7f8 is not met on main: /wai reads its own genaitext audit "
-        "log back as conversation memory (temporal/slack/activity.py "
-        "get_slack_channel_context -> db/dal/genai_dal.py "
-        "get_genai_texts_by_slack_channel -> temporal/ai/activity.py "
-        "generate_summary). M1 is onboarding and must not change /wai, so this "
-        "is recorded as a violated guarantee, not a passing behavior."
-    ),
-)
-def test_wai_never_reads_genaitext_back_as_conversation_memory(wai_env, db):
+def test_wai_reads_genaitext_back_as_a_coarse_per_channel_memory(wai_env, db):
+    """genaitext is /wai's per-channel turn history, not a write-only audit log.
+
+    Both halves of the turn -- the earlier prompt and its answer -- are folded
+    into the summary the model is shown for the next question.
+    """
+    _seed_genaitext(db, "earlier question", "earlier answer")
+
+    _fire(wai_env, text="where are the oars?")
+
+    every_prompt = "\n".join(wai_env["prompts"])
+    assert "earlier question" in every_prompt
+    assert "earlier answer" in every_prompt
+
+    summary_prompt = _summary_prompts(wai_env["prompts"])[0]
+    assert "earlier question" in summary_prompt
+    assert "earlier answer" in summary_prompt
+
+
+def test_wai_never_reads_the_channels_stored_slack_messages(wai_env, db):
+    """/wai's context is genaitext only -- `fcm.slackmessage` is not consulted.
+
+    The message row is seeded in the same channel, so a read of either table
+    would show up. Only the genaitext side does.
+    """
     _seed_genaitext(db, "earlier question", "earlier answer")
     _seed_slack_message(db, "the oars are in the blue locker")
 
-    _fire(wai_env, text="where are the oars?")
+    with _record_sql(db, "SELECT") as selects:
+        _fire(wai_env, text="where are the oars?")
 
     every_prompt = "\n".join(wai_env["prompts"])
-    # FR 00e4b7f8: an audit log, never read back.
-    assert "earlier question" not in every_prompt
-    assert "earlier answer" not in every_prompt
+    assert "the oars are in the blue locker" not in every_prompt
+    assert "earlier question" in every_prompt
 
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FR 00e4b7f8's companion gap: /wai's context comes only from genaitext "
-        "rows, never from the channel's stored Slack messages (get_slack_"
-        "channel_context queries GenAIText, not SlackMessage)."
-    ),
-)
-def test_wai_answer_is_grounded_in_the_channels_stored_slack_messages(
-    wai_env, db
-):
-    _seed_slack_message(db, "the oars are in the blue locker")
-
-    _fire(wai_env, text="where are the oars?")
-
-    every_prompt = "\n".join(wai_env["prompts"])
-    assert "the oars are in the blue locker" in every_prompt
+    tables_read = _tables_touched(selects)
+    assert "fcm.genaitext" in tables_read
+    assert "fcm.slackmessage" not in tables_read
 
 
 def test_wai_stores_no_row_beyond_its_own_audit_rows(wai_env, db):
@@ -528,3 +589,53 @@ def test_wai_stores_no_row_beyond_its_own_audit_rows(wai_env, db):
         # nothing from the mention path was touched
         assert list(s.exec(select(SlackThreadSession)).all()) == []
         assert list(s.exec(select(SlackChannelAgentLink)).all()) == []
+
+
+# ---------------------------------------------------------------- /wpoll
+#
+# FR e1201623's /wpoll-survival claim is INDEPENDENT of the /wai path above:
+# /wpoll is not an AI command. It has its own handler, models, and Block Kit
+# renderer, and touches neither the Gemini model nor the genaitext memory.
+
+
+def test_wpoll_is_functional_and_shares_no_context_path_with_wai(wai_env, db):
+    _seed_genaitext(db, "where do we keep the spare oars?", "in the blue locker")
+
+    ack = Mock(name="poll_ack")
+    respond = Mock(name="poll_respond")
+    client = Mock(name="poll_client")
+    client.chat_postMessage.return_value = {"channel": CHANNEL, "ts": "171.1"}
+
+    with _record_sql(db, "INSERT") as inserts:
+        poll_handlers.handle_poll_command(
+            ack,
+            respond,
+            {
+                "user_id": USER,
+                "channel_id": CHANNEL,
+                "text": '"Lunch?" "Tacos" "Pizza"',
+                "trigger_id": "trigger-1",
+            },
+            client,
+        )
+
+    # functional: acked, posted, and persisted with its options
+    ack.assert_called_once()
+    respond.assert_not_called()
+    assert "Lunch?" in client.chat_postMessage.call_args.kwargs["text"]
+    with Session(db) as s:
+        polls = list(s.exec(select(Poll)).all())
+        options = list(s.exec(select(PollOption)).all())
+    assert [p_.question for p_ in polls] == ["Lunch?"]
+    assert sorted(o.text for o in options) == ["Pizza", "Tacos"]
+
+    # isolated: no AI call, and /wai's per-channel memory is left alone
+    assert wai_env["prompts"] == []
+    tables_written = _tables_touched(inserts)
+    assert "fcm.genaitext" not in tables_written
+    assert "fcm.poll" in tables_written
+    assert "oars" not in client.chat_postMessage.call_args.kwargs["text"]
+    # the seeded row is still the only one -- /wpoll neither read nor added to it
+    assert [r.prompt for r in _genaitexts(db)] == [
+        "where do we keep the spare oars?"
+    ]

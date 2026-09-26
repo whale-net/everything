@@ -67,8 +67,8 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
-# /wai slash command characterization: exactly-one-answer, grounding in the
-# channel's stored rows, and the FR 00e4b7f8 no-conversation-memory guarantee.
+# /wai slash command characterization: exactly-one-answer, the 10-row
+# genaitext context window, and /wpoll's isolation from that path.
 # Separate target from test_bot because it fakes the bolt App singleton
 # process-wide, which test_bot's own imports must not see.
 py_test(
