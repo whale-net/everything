@@ -1,9 +1,12 @@
 """Characterization of the hourly music-poll pickup chain and its window query.
 
-Asserts the behavior the pickup has today: a poll week that yields no responses
-is ordinary operation, because an instance's window has no upper bound until
-its successor is posted, so the open instance matches no messages and the
-pickup correctly leaves it alone. Voting is by posting a link, not by reacting.
+Pins the window (an instance's own creation time up to its successor's) and the
+eligibility query feeding the pickup: a closed window is eligible however many
+responses it already holds, because each pass re-reads the window and records
+only the messages it has not turned into response rows before. A poll week that
+yields no responses is ordinary operation and is re-selected on every pass, an
+open instance's window has no upper bound so it matches nothing, and voting is
+by posting a link, not by reacting.
 """
 
 import datetime
@@ -177,32 +180,43 @@ def test_instance_with_a_successor_and_no_responses_is_selected(session):
     channel, user = _channel(session), _user(session)
     opened, _closing = _window(session, channel, user, _poll(session, channel))
 
-    # the pickup is single-shot per instance: once a response row exists the
-    # instance drops out and is never picked up again
+    # a closed window is eligible; how many responses it already holds is not
+    # part of eligibility, so that a week is never retired by its first vote
     assert opened.id in [i.id for i in get_unprocessed_music_poll_instances()]
 
 
-def test_instance_that_already_has_a_response_is_not_selected(session):
+def test_instance_that_already_has_a_response_is_still_selected(session):
     channel, user = _channel(session), _user(session)
     opened, _closing = _window(session, channel, user, _poll(session, channel))
     _response(session, opened, channel, user, WINDOW_OPEN + datetime.timedelta(hours=1))
 
-    assert opened.id not in [i.id for i in get_unprocessed_music_poll_instances()]
+    # the votes later in the week are only found if the instance keeps being
+    # picked up after the first one lands
+    assert opened.id in [i.id for i in get_unprocessed_music_poll_instances()]
 
 
-def test_open_instance_without_a_successor_is_also_returned(session):
+def test_open_instance_without_a_successor_is_not_returned(session):
     channel, user = _channel(session), _user(session)
     opened, closing = _window(session, channel, user, _poll(session, channel))
+    statements: list[str] = []
+    engine = __GLOBALS["engine"]
 
-    # the successor clause reads `next_instance_id is not null()` -- a python
-    # identity test against the null() sql function, so it is always true and
-    # filters nothing. the newest instance is therefore returned alongside the
-    # one that does have a successor.
+    @event.listens_for(engine, "before_cursor_execute")
+    def _record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    try:
+        selected = [i.id for i in get_unprocessed_music_poll_instances()]
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+    # the newest instance has no successor, so its window is still open
     assert closing.next_instance_id is None
-    assert [i.id for i in get_unprocessed_music_poll_instances()] == [
-        closing.id,
-        opened.id,
-    ]
+    assert selected == [opened.id]
+    # and the successor clause reaches the sql: `next_instance_id.isnot(None)`
+    # compiles to IS NOT NULL, where a python identity test against the null()
+    # sql function compiles to nothing at all
+    assert any("next_instance_id IS NOT NULL" in statement for statement in statements)
 
 
 def test_open_instance_has_no_upper_bound_so_its_window_matches_nothing(session):
@@ -267,9 +281,78 @@ def test_pickup_creates_one_response_row_for_a_link_inside_the_window(session):
     assert responses[0].slack_user_id == user.id
     assert responses[0].url == SONG_URL
     assert responses[0].created_at is not None
-    # the instance now has a response, so a second pass adds nothing
+    # a second pass finds the same message and, having already turned it into a
+    # response row, adds nothing
     assert _run_pickup() is TaskInstanceStatus.OK
     assert len(session.exec(select(MusicPollResponse)).all()) == 1
+
+
+def test_pickup_accumulates_every_vote_of_the_week(session):
+    channel, user = _channel(session), _user(session)
+    second_voter = _user(session, slack_id="U2")
+    opened, _closing = _window(session, channel, user, _poll(session, channel))
+
+    # one vote per hourly pass, the way a week actually fills up
+    first = _message(
+        session,
+        channel,
+        user,
+        f"my pick {SONG_URL}",
+        WINDOW_OPEN + datetime.timedelta(hours=2),
+    )
+    assert _run_pickup() is TaskInstanceStatus.OK
+    second = _message(
+        session,
+        channel,
+        second_voter,
+        f"mine too {SONG_URL}",
+        WINDOW_OPEN + datetime.timedelta(hours=3, minutes=30),
+    )
+    assert _run_pickup() is TaskInstanceStatus.OK
+    third = _message(
+        session,
+        channel,
+        user,
+        f"and a third {SONG_URL}",
+        WINDOW_OPEN + datetime.timedelta(hours=5),
+    )
+    assert _run_pickup() is TaskInstanceStatus.OK
+
+    responses = session.exec(select(MusicPollResponse)).all()
+    assert {r.slack_message_id for r in responses} == {first.id, second.id, third.id}
+    assert [r.slack_user_id for r in responses] == [user.id, second_voter.id, user.id]
+    assert all(r.music_poll_instance_id == opened.id for r in responses)
+    # a further pass over the same window adds nothing, so the week is recorded
+    # once each and however many times it is re-read
+    assert _run_pickup() is TaskInstanceStatus.OK
+    assert len(session.exec(select(MusicPollResponse)).all()) == 3
+
+
+def test_a_week_with_no_links_is_reselected_until_one_is_posted(session):
+    channel, user = _channel(session), _user(session)
+    opened, _closing = _window(session, channel, user, _poll(session, channel))
+    _message(
+        session,
+        channel,
+        user,
+        "no song from me today",
+        WINDOW_OPEN + datetime.timedelta(hours=2),
+    )
+
+    assert _run_pickup() is TaskInstanceStatus.OK
+    assert session.exec(select(MusicPollResponse)).all() == []
+    # nothing marks a linkless week as read, so it stays eligible and a link
+    # that turns up later in the week is still picked up
+    assert opened.id in [i.id for i in get_unprocessed_music_poll_instances()]
+    _message(
+        session,
+        channel,
+        user,
+        f"changed my mind {SONG_URL}",
+        WINDOW_OPEN + datetime.timedelta(hours=4),
+    )
+    assert _run_pickup() is TaskInstanceStatus.OK
+    assert [r.url for r in session.exec(select(MusicPollResponse)).all()] == [SONG_URL]
 
 
 def test_pickup_is_a_no_op_when_there_is_nothing_to_process(session):
