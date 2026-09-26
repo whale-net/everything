@@ -344,6 +344,19 @@ templ FollowUpForm(page DesignSessionDetailPage) {
 					</p>
 				}
 			</fieldset>
+		} else if len(page.CheckedResolve) > 0 {
+			// The open questions could not be re-read, so there is nothing
+			// to show a checkbox against -- but the ids the operator ticked
+			// are still known, and a resubmit must not silently drop them.
+			// Carried as hidden inputs rather than fake checkboxes: the
+			// operator is not being asked to re-approve anything, we are
+			// preserving what they already chose.
+			<fieldset class="fieldset" data-krill="degraded-resolve">
+				<legend class="fieldset-legend">Still selected (this session's open questions could not be reloaded)</legend>
+				for qid := range page.CheckedResolve {
+					<input type="hidden" name="resolve" value={ qid }/>
+				}
+			</fieldset>
 		}
 		<p>
 			<label class="label" for="follow-up">Your follow-up</label>

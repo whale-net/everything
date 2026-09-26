@@ -191,6 +191,12 @@ func TestInterventionReturnToRejectsOpenRedirect(t *testing.T) {
 		"http://evil.example.com",
 		"//evil.example.com/steal",
 		"javascript:alert(1)",
+		// Same-origin, but not a view this binary serves. The guard
+		// matches at path-segment boundaries, so a raw-prefix check would
+		// admit this and 404 the operator instead of falling back to the
+		// console root.
+		"/opsarchive",
+		"/ops/../../etc/passwd",
 	}
 	for _, to := range hostile {
 		t.Run(to, func(t *testing.T) {

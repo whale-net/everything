@@ -292,6 +292,15 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := r.ParseForm(); err != nil {
+		logger.Error("could not parse the open-session form body", "product_id", productID, "error", err)
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
+				ProductID:  productID.String(),
+				FormAction: designProductSessionsPath(productID),
+				Error:      "The form could not be read, so nothing was submitted. Try again.",
+			}))
+			return
+		}
 		http.Error(w, "invalid form body", http.StatusBadRequest)
 		return
 	}
@@ -317,7 +326,7 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	id, err := parseUUIDOrFail(w, created.ID, "design session id")
+	id, err := parseUUIDOrFail(w, r, created.ID, "design session id")
 	if err != nil {
 		return
 	}
@@ -344,6 +353,15 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := r.ParseForm(); err != nil {
+		logger.Error("could not parse the follow-up form body", "design_session_id", id, "error", err)
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.FollowUpForm(pages.DesignSessionDetailPage{
+				ID:          id.String(),
+				AnswersPath: designAnswersPath(id),
+				Error:       "The form could not be read, so nothing was submitted. Try again.",
+			}))
+			return
+		}
 		http.Error(w, "invalid form body", http.StatusBadRequest)
 		return
 	}
@@ -431,9 +449,19 @@ func parseUUIDPathValue(w http.ResponseWriter, r *http.Request, name, what strin
 // parseUUIDOrFail parses an id api returned, writing a 500 and returning an
 // error if it is unusable. A malformed id in a 2xx is a contract break between
 // this binary and `api`, not something to redirect with.
-func parseUUIDOrFail(w http.ResponseWriter, value, what string) (uuid.UUID, error) {
+func parseUUIDOrFail(w http.ResponseWriter, r *http.Request, value, what string) (uuid.UUID, error) {
 	id, err := uuid.Parse(value)
 	if err != nil {
+		logger.Error("api returned an unusable id on a 2xx", "what", what, "error", err)
+		if isHXRequest(r) {
+			// The write landed; only the link back is unusable. Saying
+			// that is far more useful than a silent 500 the operator
+			// would resolve by resubmitting -- which would create a second
+			// session.
+			renderFragment(w, r, pages.OpsInlineError(
+				"The session was created, but krill returned an id this UI could not link to. Find it under Design sessions."))
+			return uuid.Nil, err
+		}
 		http.Error(w, fmt.Sprintf("api returned an unusable %s", what), http.StatusInternalServerError)
 		return uuid.Nil, err
 	}

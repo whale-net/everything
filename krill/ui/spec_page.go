@@ -68,6 +68,16 @@ func renderSpecError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	logger.Error("spec read failed", "error", err)
+	// Every spec page carries a Refresh button whose hx-get is this same
+	// route, so this path is reachable by htmx -- and htmx does not swap
+	// on a 500. A bare error page here would leave the operator clicking
+	// Refresh with no feedback at all, which is the one thing they most
+	// need to be told. Answer 200 with the message inline; the no-JS
+	// browser still gets the full status-coded page.
+	if r.Header.Get("HX-Request") != "" {
+		renderFragment(w, r, pages.SpecInlineError("Could not load the spec. The spec store could not be read; see the logs."))
+		return
+	}
 	renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
 		Title:    "Could not load the spec",
 		Detail:   "The spec store could not be read. See the logs.",

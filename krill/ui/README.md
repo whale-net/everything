@@ -221,14 +221,28 @@ Everything else gets a **manual Refresh button** (`hx-get` = its own
 path). A timer on a read-only spec page is pure cost, and it would swap
 content out from under an operator who is reading it.
 
-**A whole-content-region refresh must target a region id, not `this`.**
-`hx-target="this"` resolves to the *button*, so swapping a whole page
-body into it duplicates the page. The spec and delivery pages give their
-content region a stable id, put the Refresh button in the heading row
-*outside* that region (so a swap never destroys the button), and target
-the region. `hx-get` is the page's real path, carried on the view model
-as `Path` — not a relative `"."` — so it is correct regardless of
-trailing-slash handling.
+**A whole-content-region refresh must target a region id, not `this` —
+and the served fragment must be exactly that region.** `hx-target="this"`
+resolves to the *button*, so swapping a whole page body into it
+duplicates the page. The spec and delivery pages give their content
+region a stable id and target it.
+
+The second half is the subtle one, and it has bitten this codebase once.
+htmx `outerHTML` inserts **every top-level node of the response** into
+the target. So if a page's handler serves a fragment with more than one
+top-level element while `hx-target` names only one of them, each Refresh
+click splices the extras in — the heading and button duplicate, once per
+click, without bound. The converse is the reassuring half: a control
+*inside* the target is not destroyed by a swap, because the response
+carries a fresh one. So the rule is not "keep the button outside the
+region"; it is **"the served fragment's root element is the swap
+target."**
+
+`hx-get` is the page's real path, carried on the view model as `Path` —
+not a relative `"."` — so it is correct regardless of trailing-slash
+handling. `pages/refresh_test.go` asserts the fragment shape directly
+(top-level element count, and that its root carries the targeted id)
+rather than reasoning about DOM containment.
 
 **Byte-stability.** A polled fragment must produce identical bytes for
 unchanged state, or every poll becomes a visible swap that destroys

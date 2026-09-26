@@ -1,21 +1,10 @@
 package pages
 
 import (
-	"context"
-	"strings"
 	"testing"
 
-	"github.com/a-h/templ"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-func renderBody(t *testing.T, c templ.Component) string {
-	t.Helper()
-	var sb strings.Builder
-	require.NoError(t, c.Render(context.Background(), &sb))
-	return sb.String()
-}
 
 // TestCredentials_PreservesTheSelfServeContract is the regression guard
 // on the deliberate non-conversion in credentialsScript. The widget talks

@@ -172,12 +172,14 @@ go_test(
     srcs = [
         "ops_test.go",
         "ops_handlers_test.go",
+        "failure_paths_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
         "//krill/store",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
 

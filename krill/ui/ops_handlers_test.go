@@ -8,10 +8,10 @@
 // store's contract exactly where it matters to these views: it runs the
 // genuine store.DecodeContinuationToken gate against the request's scope,
 // so the cross-scope 400 is proven end-to-end through the view rather
-// than asserted on a stub. ListClaimedTasks is implemented here (returning
-// real rows) even though the production TaskStore.ListClaimedTasks is
-// still a not-implemented stub pending issue #2916 -- these tests exercise
-// the view's behavior, not the store's.
+// than asserted on a stub. The fake here returns real rows; the
+// production store's ListClaimedTasks is fully implemented
+// (krill/store/task_console.go), so these tests exercise the view's
+// behavior against a known shape rather than the store's own queries.
 package main
 
 import (

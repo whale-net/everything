@@ -110,6 +110,13 @@ type OpsResultsData struct {
 	NextHref string
 	// Error is a refusal to present inline above the table, empty when none.
 	Error string
+	// ReadFailed marks an Error that came from failing to re-read the view
+	// at all, rather than from a refused intervention. The error is then
+	// the whole content: rendering the table alongside it would show an
+	// EmptyState ("No claimed tasks.") that the operator cannot distinguish
+	// from a successful read that genuinely came back empty -- a confident,
+	// wrong answer immediately after their write landed.
+	ReadFailed bool
 	// Poll is the view's self-terminating poll wiring, nil for no timer.
 	Poll templ.Attributes
 }
@@ -138,6 +145,7 @@ type ClaimedData struct {
 	Error    string
 	Href     string
 	Polling  bool
+	ReadFailed bool
 }
 
 // EscalatedData is the escalated-task view's view-model.
@@ -146,6 +154,7 @@ type EscalatedData struct {
 	NextHref string
 	Error    string
 	Href     string
+	ReadFailed bool
 }
 
 // CancelledData is the cancelled-task view's view-model.
@@ -154,6 +163,7 @@ type CancelledData struct {
 	NextHref string
 	Error    string
 	Href     string
+	ReadFailed bool
 }
 
 // NotesData is the open-notes view's view-model.
@@ -162,6 +172,7 @@ type NotesData struct {
 	NextHref string
 	Error    string
 	Href     string
+	ReadFailed bool
 }
 
 // TaskActionControl is one control on a console row: an inline form for a
@@ -205,7 +216,9 @@ templ opsResults(d OpsResultsData) {
 		if d.Error != "" {
 			@htmxui.Alert(htmxui.AlertError, d.Error, nil)
 		}
-		@d.Table
+		if !d.ReadFailed {
+			@d.Table
+		}
 		if d.NextHref != "" {
 			<p class="mt-2">
 				<a href={ templ.URL(d.NextHref) } class="link">Next page →</a>
@@ -272,7 +285,8 @@ templ ClaimedResults(d ClaimedData) {
 	@opsResults(OpsResultsData{
 		Table:    claimedTable(d.Rows),
 		NextHref: d.NextHref,
-		Error:    d.Error,
+		Error:      d.Error,
+		ReadFailed: d.ReadFailed,
 		Poll:     claimedPollAttrs(d),
 	})
 }
@@ -347,7 +361,8 @@ templ EscalatedResults(d EscalatedData) {
 	@opsResults(OpsResultsData{
 		Table:    escalatedTable(d.Rows),
 		NextHref: d.NextHref,
-		Error:    d.Error,
+		Error:      d.Error,
+		ReadFailed: d.ReadFailed,
 	})
 }
 
@@ -427,7 +442,8 @@ templ CancelledResults(d CancelledData) {
 	@opsResults(OpsResultsData{
 		Table:    cancelledTable(d.Rows),
 		NextHref: d.NextHref,
-		Error:    d.Error,
+		Error:      d.Error,
+		ReadFailed: d.ReadFailed,
 	})
 }
 
@@ -483,7 +499,8 @@ templ NotesResults(d NotesData) {
 	@opsResults(OpsResultsData{
 		Table:    notesTable(d.Rows),
 		NextHref: d.NextHref,
-		Error:    d.Error,
+		Error:      d.Error,
+		ReadFailed: d.ReadFailed,
 	})
 }
 
