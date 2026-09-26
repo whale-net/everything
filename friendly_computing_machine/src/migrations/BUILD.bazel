@@ -2,6 +2,14 @@ load("@rules_python//python:defs.bzl", "py_library")
 
 package(default_visibility = ["//friendly_computing_machine:__subpackages__"])
 
+# The versioned migration chain as plain files, for tests that assert against
+# the migration source of truth rather than against a built schema.
+filegroup(
+    name = "migration_versions",
+    srcs = glob(["versions/*.py"]),
+    visibility = ["//friendly_computing_machine/tests:__pkg__"],
+)
+
 py_library(
     name = "migrations",
     srcs = glob(["**/*.py"]),
