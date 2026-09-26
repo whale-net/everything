@@ -40,6 +40,21 @@ func tableExists(t *testing.T, ctx context.Context, db *dbtest.Postgres, table s
 	return exists
 }
 
+// columnExists reports whether table carries column at all. Needed where the
+// assertion is that a column is ABSENT -- nullableColumn cannot express that,
+// because it requires a matching information_schema row.
+func columnExists(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, column string) bool {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+		)
+	`, table, column).Scan(&exists))
+	return exists
+}
+
 // nullableColumn returns column's data_type and is_nullable ("YES"/"NO") from
 // information_schema -- shared by every *_SchemaContract test below.
 func nullableColumn(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, column string) (dataType, nullable string) {
@@ -183,18 +198,18 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(20), latest, "expected the latest migration source version to be 20 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(21), latest, "expected the latest migration source version to be 21 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
 	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-020")
+	require.NoError(t, runner.Up(), "apply migrations 001-021")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(20), version)
+	assert.Equal(t, uint(21), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -217,6 +232,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.True(t, tableExists(t, ctx, db, "task_lease_event"), "expected table \"task_lease_event\" to exist after Up() (015_work_axis, issue #2719)")
 	assert.True(t, tableExists(t, ctx, db, "task_attempt"), "expected table \"task_attempt\" to exist after Up() (015_work_axis, issue #2719)")
 	assert.True(t, tableExists(t, ctx, db, "task_note"), "expected table \"task_note\" to exist after Up() (015_work_axis, issue #2719)")
+	assert.True(t, tableExists(t, ctx, db, "void_event"), "expected table \"void_event\" to exist after Up() (021_void_event)")
 
 	// -- Down: every table must be gone -------------------------------------
 	require.NoError(t, runner.Down(), "roll back every migration")
@@ -242,6 +258,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.False(t, tableExists(t, ctx, db, "task_lease_event"), "expected table \"task_lease_event\" to be dropped after Down() -- a clean database (015_work_axis, issue #2719)")
 	assert.False(t, tableExists(t, ctx, db, "task_attempt"), "expected table \"task_attempt\" to be dropped after Down() -- a clean database (015_work_axis, issue #2719)")
 	assert.False(t, tableExists(t, ctx, db, "task_note"), "expected table \"task_note\" to be dropped after Down() -- a clean database (015_work_axis, issue #2719)")
+	assert.False(t, tableExists(t, ctx, db, "void_event"), "expected table \"void_event\" to be dropped after Down() -- a clean database (021_void_event)")
 
 	// -- Up again: re-runnable from the clean state --------------------------
 	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
@@ -249,7 +266,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(20), version)
+	assert.Equal(t, uint(21), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -272,6 +289,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.True(t, tableExists(t, ctx, db, "task_lease_event"), "expected table \"task_lease_event\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "task_attempt"), "expected table \"task_attempt\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "task_note"), "expected table \"task_note\" to exist again after the second Up()")
+	assert.True(t, tableExists(t, ctx, db, "void_event"), "expected table \"void_event\" to exist again after the second Up()")
 }
 
 // TestMigration001_SchemaContract asserts the specific column shapes and
@@ -2737,4 +2755,136 @@ func TestMigration020_SchemaContract(t *testing.T) {
 	}
 	assert.False(t, hasForeignKeyTo(t, ctx, db, "milestone_ref", "milestone_ref"),
 		"milestone_ref.parent_milestone_id must NOT carry a DB-enforced self-FK, for the same reason")
+}
+
+// hasIndexNamed reports whether an index with the given name exists on the
+// given table -- the assertion shape the two 021 indexes need, since
+// neither is a primary key or a foreign key.
+func hasIndexNamed(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, index string) bool {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE schemaname = current_schema() AND tablename = $1 AND indexname = $2
+		)
+	`, table, index).Scan(&exists))
+	return exists
+}
+
+// TestMigration021_SchemaContract asserts the shape migration 021 gives the
+// void tombstone register: void_event exists and is append-only (no SCD2
+// pair), it can record one retirement per (kind, product, number) so a
+// retired display_number can never be reissued, and the two non-partial
+// parent indexes nextDisplayNumber depends on are present alongside -- not
+// instead of -- migration 002's partial ones.
+func TestMigration021_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- void_event is a register of facts, not an SCD2 table (LB3): it
+	// carries no valid_from/valid_to pair at all --
+	for _, col := range []string{"valid_from", "valid_to", "revision_id"} {
+		assert.False(t, columnExists(t, ctx, db, "void_event", col),
+			"void_event must NOT carry a %s column -- a void is an append-only fact about one moment, not a value that changes over time", col)
+	}
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "void_event", "id"))
+	assert.True(t, hasForeignKeyTo(t, ctx, db, "void_event", "scope"),
+		"void_event.scope_id must be a real DB-enforced FK -- scope is a plain mutable config row, so its id IS table-wide unique (migration 002's LB1 note)")
+
+	// entity_id is a bare uuid, NOT a foreign key to the voided table: each
+	// of the seven void-able tables has a different name, and their `id`
+	// columns are not table-wide unique since each went SCD2 (migration
+	// 002's LB2 note), so Postgres cannot target a FK at any of them.
+	for _, table := range []string{"product", "feature_set", "feature", "requirement", "load_bearing_decision", "persona", "non_goal"} {
+		assert.False(t, hasForeignKeyTo(t, ctx, db, "void_event", table),
+			"void_event.entity_id must NOT carry a DB-enforced FK to %s -- it holds the voided row's immutable id, which is not table-wide unique on an SCD2 table; the store validates the current row inside the void transaction", table)
+	}
+
+	// -- the entity_kind CHECK admits exactly the seven void-able tables --
+	var kindCheck string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		WHERE conrelid = 'void_event'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%entity_kind%'
+	`).Scan(&kindCheck))
+	for _, kind := range []string{"product", "feature_set", "feature", "requirement", "load_bearing_decision", "persona", "non_goal"} {
+		assert.Contains(t, kindCheck, "'"+kind+"'", "void_event's entity_kind CHECK must admit %q", kind)
+	}
+	var checkScopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('void-event-021-check/repo', 'main') RETURNING id
+	`).Scan(&checkScopeID))
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO void_event (scope_id, entity_kind, entity_id, product_id,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind)
+		VALUES ($1, 'milestone_ref', gen_random_uuid(), gen_random_uuid(),
+			'i', 's', 'human', 'i', 's', 'human')
+	`, checkScopeID)
+	assert.Error(t, err, "void_event's entity_kind CHECK must reject a kind that has no void verb -- milestone_ref is not void-able")
+
+	// -- the retirement invariant: one number, one entity, one product ------
+	var scopeID, productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('void-event-021/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+
+	const insertVoid = `
+		INSERT INTO void_event (scope_id, entity_kind, entity_id, product_id, retired_display_number,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind)
+		VALUES ($1, 'feature', $2, $3, $4, 'i', 's', 'human', 'i', 's', 'human')`
+
+	_, err = db.Pool.Exec(ctx, insertVoid, scopeID, uuid.New(), productID, 7)
+	require.NoError(t, err, "the first retirement of display_number 7 in a product must succeed")
+	_, err = db.Pool.Exec(ctx, insertVoid, scopeID, uuid.New(), productID, 7)
+	assert.Error(t, err,
+		"void_event_scope_kind_product_number_idx must reject a second retirement of display_number 7 -- a retired number is never reissued (LB2)")
+	// The same number in a DIFFERENT product is fine: numbering is per
+	// product (migration 017), so two products' C7 do not collide.
+	_, err = db.Pool.Exec(ctx, insertVoid, scopeID, uuid.New(), uuid.New(), 7)
+	require.NoError(t, err, "display_number is unique per product, not scope-wide (migration 017) -- 7 may be retired once per product")
+	// A NULL number (every kind but feature/load_bearing_decision) never
+	// collides at all, which is what the partial predicate buys.
+	for i := range 2 {
+		_, err = db.Pool.Exec(ctx, insertVoid, scopeID, uuid.New(), productID, nil)
+		require.NoError(t, err, "a void of a kind with no stored display_number must never collide on the retirement index (row %d)", i)
+	}
+
+	// -- one void per entity, ever --
+	var onceID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, insertVoid+" RETURNING entity_id", scopeID, func() uuid.UUID { onceID = uuid.New(); return onceID }(), productID, nil).Scan(&onceID))
+	_, err = db.Pool.Exec(ctx, insertVoid, scopeID, onceID, productID, nil)
+	assert.Error(t, err, "void_event_scope_kind_entity_idx must reject a second void of the same entity id")
+
+	// -- the non-partial parent indexes are present ALONGSIDE migration
+	// 002's partial ones, because nextDisplayNumber must count closed rows
+	// (a voided row's number is retired precisely because the row is still
+	// there) while name uniqueness must still be current-rows-only --
+	for table, index := range map[string]string{
+		"feature":               "feature_feature_set_all_idx",
+		"load_bearing_decision": "load_bearing_decision_feature_set_all_idx",
+	} {
+		assert.True(t, hasIndexNamed(t, ctx, db, table, index),
+			"%s must exist -- nextDisplayNumber counts every row the product has ever had, current or closed", index)
+	}
+	for table, index := range map[string]string{
+		"feature":               "feature_feature_set_current_idx",
+		"load_bearing_decision": "load_bearing_decision_feature_set_current_idx",
+	} {
+		assert.True(t, hasIndexNamed(t, ctx, db, table, index),
+			"%s must still exist -- 021 supplements it, it does not replace it: name uniqueness is current-rows-only so a voided row stops blocking its freed name", index)
+	}
+	assert.True(t, hasIndexNamed(t, ctx, db, "feature", "feature_scope_featureset_name_current_idx"))
+	assert.True(t, hasIndexNamed(t, ctx, db, "load_bearing_decision", "load_bearing_decision_scope_fs_name_current_idx"))
 }

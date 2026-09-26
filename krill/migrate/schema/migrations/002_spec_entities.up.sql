@@ -74,15 +74,43 @@
 -- claimed (tools/app_registry's `writeback_outbox` precedent, cited in
 -- PRODUCT.md's LB3).
 --
--- The write path this migration's shape supports (not implemented until
--- the amend task, per issue #2488):
+-- The write path this migration's shape supports:
 --   UPDATE <table> SET valid_to = NOW() WHERE id = $1 AND valid_to IS NULL;
 --   INSERT INTO <table> (id, scope_id, ..., valid_from) VALUES ($1, ...);
 -- i.e. the new row's `id` is the SAME value the closed row carried -- a
--- supersession, never a new logical entity.
+-- supersession, never a new logical entity. That is AMEND (store/amend.go).
+--
+-- VOID (FR d38d726e) is the other half of the same boundary call, and it
+-- is the first line WITHOUT the second:
+--   UPDATE <table> SET valid_to = NOW() WHERE id = $1 AND valid_to IS NULL;
+--   -- and nothing else. No successor revision is inserted.
+-- A close-WITHOUT-successor. The row is tombstoned: excluded from every
+-- current read and from render, still present and still audit-readable
+-- under its original `id` and its original `display_number`, with its
+-- unique name freed for a later create (every name index below is partial
+-- on `valid_to IS NULL`, so a closed row stops occupying its name).
+--
+-- The distinction from amend is the whole of LB3 here, and it is
+-- observable: after an amend the id has a current revision again; after a
+-- void it never does. That is also why void refuses an entity that is
+-- already delivered or is the parent of a live child (FR 2a3a8eef) --
+-- the alternative to a tombstone that orphans a reference is supersession
+-- or voiding the children first, never a hard delete.
+--
+-- What a void does NOT do is release the row's `display_number`. That
+-- number is retired, permanently: nextDisplayNumber (store/position.go)
+-- counts every row the product has ever had, current or closed, so a
+-- create that reuses a freed NAME is handed a FRESH number. A `C7`
+-- citation already rendered for the voided entity therefore can never
+-- silently repoint to its name-reusing replacement -- the renumbering-
+-- migration failure LB2 exists to prevent. The audit record of which
+-- number each void retired lives in `void_event` (migration 021).
 
 -- ============================================================================
 -- product -- spec axis, SCD2 (LB3)
+-- Void-able (FR d38d726e): amend closes this row and opens a successor
+-- under the same id; void closes it and opens nothing, tombstoning the
+-- entity while freeing its name. See the LB3 section above.
 -- ============================================================================
 CREATE TABLE product (
     revision_id  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -102,6 +130,9 @@ CREATE UNIQUE INDEX product_scope_name_current_idx ON product(scope_id, lower(na
 
 -- ============================================================================
 -- feature_set -- spec axis, SCD2 (LB3)
+-- Void-able (FR d38d726e): amend closes this row and opens a successor
+-- under the same id; void closes it and opens nothing, tombstoning the
+-- entity while freeing its name. See the LB3 section above.
 -- ============================================================================
 CREATE TABLE feature_set (
     revision_id  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -121,6 +152,9 @@ CREATE UNIQUE INDEX feature_set_scope_product_name_current_idx ON feature_set(sc
 
 -- ============================================================================
 -- feature -- spec axis, SCD2 (LB3)
+-- Void-able (FR d38d726e): amend closes this row and opens a successor
+-- under the same id; void closes it and opens nothing, tombstoning the
+-- entity while freeing its name. See the LB3 section above.
 -- ============================================================================
 -- Also the entity a capability-map entry (`Cn`) resolves onto -- see the
 -- note at the bottom of this file and krill/ARCHITECTURE.md's "Capability
@@ -146,6 +180,9 @@ CREATE UNIQUE INDEX feature_scope_featureset_name_current_idx ON feature(scope_i
 
 -- ============================================================================
 -- requirement -- spec axis, SCD2 (LB3)
+-- Void-able (FR d38d726e): amend closes this row and opens a successor
+-- under the same id; void closes it and opens nothing, tombstoning the
+-- entity while freeing its name. See the LB3 section above.
 -- ============================================================================
 -- Carries a `kind` discriminator for FR vs NFR rather than being split into
 -- two tables: FR and NFR share every other column and every constraint
@@ -173,6 +210,9 @@ CREATE UNIQUE INDEX requirement_scope_feature_name_current_idx ON requirement(sc
 
 -- ============================================================================
 -- load_bearing_decision -- spec axis, SCD2 (LB3)
+-- Void-able (FR d38d726e): amend closes this row and opens a successor
+-- under the same id; void closes it and opens nothing, tombstoning the
+-- entity while freeing its name. See the LB3 section above.
 -- ============================================================================
 -- Attaches to the FeatureSet it constrains (FR4's persistence) rather than
 -- living in one global list, per PRODUCT.md's C2 -- "so whoever touches
@@ -214,6 +254,9 @@ CREATE UNIQUE INDEX load_bearing_decision_scope_fs_name_current_idx ON load_bear
 
 -- ============================================================================
 -- persona -- spec axis, SCD2 (LB3)
+-- Void-able (FR d38d726e): amend closes this row and opens a successor
+-- under the same id; void closes it and opens nothing, tombstoning the
+-- entity while freeing its name. See the LB3 section above.
 -- ============================================================================
 CREATE TABLE persona (
     revision_id  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -233,6 +276,9 @@ CREATE UNIQUE INDEX persona_scope_product_name_current_idx ON persona(scope_id, 
 
 -- ============================================================================
 -- non_goal -- spec axis, SCD2 (LB3)
+-- Void-able (FR d38d726e): amend closes this row and opens a successor
+-- under the same id; void closes it and opens nothing, tombstoning the
+-- entity while freeing its name. See the LB3 section above.
 -- ============================================================================
 -- `kind` distinguishes PRODUCT.md's two Non-goals buckets ("Permanent" vs
 -- "Explicitly *not* non-goals -- deferred, not foreclosed") -- the same
