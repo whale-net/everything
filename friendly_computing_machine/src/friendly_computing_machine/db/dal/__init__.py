@@ -12,14 +12,6 @@ from .genai_dal import (
     insert_genai_text,
     update_genai_text_response,
 )
-from .manman_dal import (
-    delete_manman_status_update,
-    get_manman_status_update_by_id,
-    get_manman_status_update_from_create,
-    get_manman_status_updates,
-    insert_manman_status_update,
-    update_manman_status_update,
-)
 from .music_poll_dal import (
     delete_music_poll,
     delete_music_poll_instance,
@@ -147,11 +139,4 @@ __all__ = [
     "get_poll_snapshot",
     "cast_poll_vote",
     "close_poll",
-    # ManMan functions
-    "insert_manman_status_update",
-    "get_manman_status_update_by_id",
-    "get_manman_status_updates",
-    "update_manman_status_update",
-    "delete_manman_status_update",
-    "get_manman_status_update_from_create",
 ]

@@ -5,8 +5,6 @@ from opentelemetry import trace
 from slack_bolt import Ack, Say
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import app
-from friendly_computing_machine.src.friendly_computing_machine.bot.modal_builder import build_server_select_modal
-from friendly_computing_machine.src.friendly_computing_machine.bot.slack_client import SlackWebClientFCM
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     insert_genai_text,
     insert_slack_command,
@@ -122,29 +120,3 @@ def handle_whale_ai_command(ack: Ack, say: Say, command):
             logger.exception("Error handling /wai command")
             # Reraise exception to be caught by global handler
             raise
-
-
-@app.command("/test")
-def handle_test_command(ack: Ack, say: Say, command, client: SlackWebClientFCM):
-    with tracer.start_as_current_span("handle_test_command") as span:
-        try:
-            ack()
-            logger.info("slack-ack")
-            span.set_attribute("slack.command", "/test")
-            span.set_attribute("slack.command.text", command["text"])
-            # modal = ServerSelectModal(options=DUMMY_SERVERS)
-            modal = build_server_select_modal()
-            client.views_open(
-                trigger_id=command["trigger_id"],
-                view=modal.build(),
-            )
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
-            logger.exception("Error handling /test command")
-            # Reraise exception to be caught by global handler
-            raise
-        finally:
-            # This block will always run
-            logger.info("Finished handling /test command")
-            span.end()

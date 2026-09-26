@@ -9,11 +9,9 @@ py_library(
     deps = [
         "//friendly_computing_machine/src/friendly_computing_machine:util",
         "//friendly_computing_machine/src/friendly_computing_machine/db",
-        "//friendly_computing_machine/src/friendly_computing_machine/manman",
         "//friendly_computing_machine/src/friendly_computing_machine/models",
         "//friendly_computing_machine/src/friendly_computing_machine/temporal",
         "//friendly_computing_machine/src/friendly_computing_machine/whagent",
-        "//libs/python/rmq",
         "@pypi//:opentelemetry-api",
         "@pypi//:slack-bolt",
         "@pypi//:slack-sdk",

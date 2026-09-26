@@ -9,7 +9,6 @@ from libs.python.cli.params import (
     temporal_params,
     gemini_params,
     logging_params,
-    ManManExperienceApiUrl,
     WhagentApiUrl,
     WhagentUiPublicUrl,
     WhagentKeycloakTokenUrl,
@@ -25,9 +24,6 @@ from libs.python.cli.providers.postgres import (
 from libs.python.cli.providers.slack import SlackContext, create_slack_context
 from friendly_computing_machine.src.friendly_computing_machine.gemini.client import (
     init_gemini_client,
-)
-from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
-    ManManExperienceAPI,
 )
 from friendly_computing_machine.src.friendly_computing_machine.whagent.client import (
     init_whagent_client,
@@ -52,7 +48,6 @@ app = typer.Typer()
 @app_env_params  # Injects app_env from APP_ENV environment variable
 def callback(
     ctx: typer.Context,
-    manman_experience_api_url: ManManExperienceApiUrl,
     whagent_api_url: WhagentApiUrl,
     whagent_ui_public_url: WhagentUiPublicUrl,
     whagent_keycloak_token_url: WhagentKeycloakTokenUrl,
@@ -80,11 +75,6 @@ def callback(
     # Initialize Gemini
     init_gemini_client(api_key=gemini_config['api_key'])
     
-    # Initialize ManMan Experience API with its dedicated URL
-    experience_url = manman_experience_api_url.strip().rstrip("/")
-    ManManExperienceAPI.init(experience_url)
-    logger.info(f"ManMan Experience API initialized with host: {experience_url}")
-
     # Initialize the whagent-net client (service-account auth)
     init_whagent_client(
         api_url=whagent_api_url,
@@ -99,7 +89,6 @@ def callback(
     ctx.obj['slack'] = slack_ctx
     ctx.obj['temporal_host'] = temporal_config['host']
     ctx.obj['app_env'] = app_env
-    ctx.obj['manman_experience_api_url'] = experience_url
     
     logger.debug("CLI callback complete")
 

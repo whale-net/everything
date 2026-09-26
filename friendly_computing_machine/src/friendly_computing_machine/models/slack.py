@@ -177,9 +177,12 @@ class SlackCommandCreate(SlackCommandBase):
 # TODO - reference this enum in thhe migrations when appropriate
 # but don't make alemibc maintain it because that is probably not a good idea
 class SlackSpecialChannelTypeEnum(Enum):
-    """Corresponds to the SlackSpecialChannelType table's type_name field."""
+    """Corresponds to the SlackSpecialChannelType table's type_name field.
 
-    MANMAN_DEV = "manman_dev"
+    The vocabulary is deliberately left empty: the route types these tables
+    become are the next milestone's to choose, and an empty enum here is not a
+    defect. The `slackspecialchanneltype` rows are inserted out of band.
+    """
 
 
 class SlackSpecialChannelTypeBase(Base):
