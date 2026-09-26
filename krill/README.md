@@ -394,9 +394,22 @@ Behind that sign-in, `ui` serves the persistent nav shell: a home page
 plus one root per top-level area -- the ops console (`/ops`), the
 design-session browser (`/design`), the spec+delivery browser (`/spec`) --
 plus the credential widget at `/account/credentials`, all rendered inside
-one shared chrome (`krill/ui/nav.go`), which marks the link for the area
-being viewed. Each area's real read surface is its own task; today each
-root renders the shell with a placeholder body.
+one shared chrome, which marks the link for the area being viewed. The
+chrome is [`//libs/go/htmxui`](../../libs/go/htmxui)'s `Shell` (daisyUI 5
++ Tailwind 4 over pinned CDN tags, no bundler) wrapped by krill's own
+`krill/ui/components/layout.templ`; `krill/ui/nav.go` keeps only the
+nav-area table and the segment-boundary active-path rule, because
+`htmxui.Shell` hardcodes no nav of its own.
+
+Each area's real read surface has landed: the ops console's four read
+views (claimed / escalated / cancelled / open notes) with the four task
+interventions; the design-session browser (a product's session list, one
+session's revision-event log and open questions) with the open-session and
+follow-up writes; and the spec browser (product index, capability map,
+load-bearing decisions, personas, non-goals, and the delivery/roadmap
+view). Every view is a `templ` component under `krill/ui/pages/`, and
+every mutating form is doubled so it works with and without JavaScript.
+[`ui/README.md`](ui/README.md) is the guide to adding the next one.
 
 `ui` also serves the two mutating actions an operator can perform -- `POST
 /tasks/{id}/escalate` and `POST /design-sessions` -- each mounted behind

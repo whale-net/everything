@@ -14,8 +14,10 @@ filegroup(
 # identity. `migrate` (job) + `api` (external HTTP: /healthz + DB
 # connectivity check only, no spec endpoints yet -- issue #2487) + `mcp`
 # (external HTTP: the FR10/NFR1 spec surface at /mcp/spec, issue #2494) +
-# `ui` (external HTTP: the barebones Keycloak sign-in shell backing
-# auth's `/authorize` SignInURL -- see krill/ui/main.go's package doc).
+# `ui` (external HTTP: the Keycloak sign-in shell backing auth's
+# `/authorize` SignInURL, plus the operator shell behind it -- templ on
+# the shared //libs/go/htmxui stack; see krill/ui/main.go's package doc
+# and krill/ui/README.md).
 release_helm_chart(
     name = "krill_chart",
     apps = [
