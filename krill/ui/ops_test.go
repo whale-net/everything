@@ -5,7 +5,10 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -70,4 +73,73 @@ func TestNewNoteRowNamesTargetByID(t *testing.T) {
 	entity := newNoteRow(store.OpenNoteRow{EntityContext: &store.OpenNoteEntityContext{EntityID: entityID, Title: "a req"}})
 	assert.Contains(t, entity.Target, entityID.String())
 	assert.Contains(t, entity.Target, "a req")
+}
+
+// TestClaimedPollingDueOnlyFiresNearExpiry covers the rule that decides
+// whether the claimed view keeps polling: it fires while any claim on the
+// page is inside its lease's near-expiry window, and stops once none is.
+// An empty page never polls, and a lapsed lease still counts as near
+// expiry -- the operator watching for a row to disappear is exactly the
+// case the poll exists for.
+func TestClaimedPollingDueOnlyFiresNearExpiry(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	row := func(lease time.Time) store.ClaimedTaskRow {
+		return store.ClaimedTaskRow{TaskID: uuid.New(), LeaseExpiresAt: lease}
+	}
+
+	assert.False(t, claimedPollingDue(nil, now), "an empty page has nothing transient to watch")
+	assert.False(t, claimedPollingDue([]store.ClaimedTaskRow{row(now.Add(24 * time.Hour))}, now),
+		"a comfortably held lease is settled, not transient")
+	assert.True(t, claimedPollingDue([]store.ClaimedTaskRow{row(now.Add(time.Minute))}, now),
+		"a lease about to lapse is the one transient state the console watches")
+	assert.True(t, claimedPollingDue([]store.ClaimedTaskRow{
+		row(now.Add(24 * time.Hour)), row(now.Add(-time.Minute)),
+	}, now), "one transient claim on the page is enough to keep the whole view live")
+}
+
+// TestClaimedPollingHorizonIsAFractionOfTheLease is the guard against the
+// horizon being a whole lease, which makes the predicate vacuous.
+//
+// ClaimTask sets lease_expires_at to now+DefaultLeaseDuration and
+// HeartbeatTask resets it to the same, so EVERY row the store can return
+// satisfies LeaseExpiresAt-now <= DefaultLeaseDuration. With a
+// whole-lease horizon the poll would therefore be `len(rows) > 0`: any
+// deployment with a claimed task -- including a swarm that heartbeats
+// forever and never actually nears expiry -- would re-query Postgres
+// every 3 seconds, indefinitely.
+//
+// The original version of this test passed only because it fed the
+// function a lease 24 hours out, which the store cannot produce.
+func TestClaimedPollingHorizonIsAFractionOfTheLease(t *testing.T) {
+	assert.Less(t, claimedPollingHorizon, store.DefaultLeaseDuration,
+		"a whole-lease horizon makes the predicate len(rows) > 0")
+	assert.Greater(t, claimedPollingHorizon, time.Duration(0),
+		"the horizon must still be a real window, not zero")
+
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	// The state the store actually produces: a claim made right now, or
+	// one heartbeated a moment ago. Neither is near expiry, and neither
+	// may arm the poll.
+	fresh := store.ClaimedTaskRow{TaskID: uuid.New(), LeaseExpiresAt: now.Add(store.DefaultLeaseDuration)}
+	heartbeated := store.ClaimedTaskRow{TaskID: uuid.New(), LeaseExpiresAt: now.Add(store.DefaultLeaseDuration - time.Minute)}
+
+	assert.False(t, claimedPollingDue([]store.ClaimedTaskRow{fresh}, now),
+		"a claim that has barely been made is settled; polling it forever is the bug this guards")
+	assert.False(t, claimedPollingDue([]store.ClaimedTaskRow{heartbeated}, now),
+		"a claim heartbeated a minute ago is settled too")
+}
+
+// TestOpsSelfPathCarriesPagingParams guards the poll and the manual
+// Refresh against resetting a paged operator back to page one. A refresh
+// must re-request the view the operator is actually looking at, query
+// string included.
+func TestOpsSelfPathCarriesPagingParams(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/ops/claimed?page_size=50&page_token=abc123", nil)
+	assert.Equal(t, "/ops/claimed?page_size=50&page_token=abc123", opsSelfPath(r),
+		"a paged operator's refresh and poll must carry page_size and page_token")
+
+	plain := httptest.NewRequest(http.MethodGet, "/ops/claimed", nil)
+	assert.Equal(t, "/ops/claimed", opsSelfPath(plain))
+
+	assert.Equal(t, "/", opsSelfPath(nil), "a nil request must not panic the renderer")
 }

@@ -17,13 +17,18 @@
 // Reads are ungated (NFR6's gate is write-only), so -- unlike the write
 // path in writes.go -- no krill session is minted and no operator identity
 // is required beyond sign-in.
+//
+// Each view is one route in two modes. This file holds the data half --
+// the loaders that turn a store page into a view-model -- and the
+// HX-Request branch; krill/ui/pages/ops.templ holds the rendering half.
+// A request derives its view-model exactly once and both modes render it,
+// so a fragment can never drift from the page it was swapped out of.
 package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -32,6 +37,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // The ops console's read-view routes, each hanging off the ops area root
@@ -68,6 +74,21 @@ func parseOpsPageParams(r *http.Request) (store.PageParams, error) {
 	return page, nil
 }
 
+// opsSelfPath is the view's own request URI -- path plus query -- which
+// is what a view's poll and its manual Refresh must re-request.
+//
+// Not the bare route constant: an operator who has paged forward is on
+// ?page_size=&page_token=, and a refresh that drops those would silently
+// snap them back to page one. The poll re-reads from the store, so this
+// also has to be the URI the handler itself was called with, not one
+// rebuilt from the defaults.
+func opsSelfPath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return "/"
+	}
+	return r.URL.RequestURI()
+}
+
 // soleScopeID resolves the one scope this deployment's seeder guarantees --
 // the same resolution the write path's withKrillSession does -- so a view
 // never takes a scope from the browser.
@@ -79,34 +100,35 @@ func (app *App) soleScopeID(ctx context.Context) (uuid.UUID, error) {
 	return scope.ID, nil
 }
 
-// writeOpsQueryError maps a console query's store error onto an HTML page,
-// mirroring api/handlers' writeConsoleQueryError: a cross-scope or
-// malformed continuation token is the caller's error (400), never a
-// genuine store failure (500).
-func writeOpsQueryError(w http.ResponseWriter, err error) {
+// writeOpsQueryError maps a console query's store error onto the
+// response: a cross-scope or malformed continuation token is the
+// caller's error (400), never a genuine store failure (500).
+//
+// An htmx caller gets 200 with the message inline instead. htmx does not
+// swap on a non-2xx, so a bare http.Error here would leave the operator
+// looking at an unchanged table with no explanation -- and on the claimed
+// view this path is reached by the always-on poll, so a database blip
+// would silently freeze the console while the poll kept firing.
+func writeOpsQueryError(w http.ResponseWriter, r *http.Request, err error) {
+	message := err.Error()
 	switch {
 	case errors.Is(err, store.ErrTokenScopeMismatch), errors.Is(err, store.ErrInvalidContinuationToken):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// The caller's own bad token; saying so is useful, not sensitive.
 	default:
 		logger.Error("failed to load an ops console view", "error", err)
-		http.Error(w, "failed to load console data", http.StatusInternalServerError)
+		message = "Failed to load console data. Try again."
 	}
-}
 
-// opsPage is the furniture every read view renders inside the shell: the
-// view's heading and one-line description, its own rendered table, and a
-// "Next page" link present exactly when the store's page carried a
-// continuation token.
-type opsPage struct {
-	Heading     string
-	Description string
-	Table       template.HTML
-	NextHref    string
+	if isHtmxRequest(r) {
+		renderFragment(w, r, pages.OpsInlineError(message))
+		return
+	}
+	status := http.StatusInternalServerError
+	if errors.Is(err, store.ErrTokenScopeMismatch) || errors.Is(err, store.ErrInvalidContinuationToken) {
+		status = http.StatusBadRequest
+	}
+	http.Error(w, message, status)
 }
-
-var opsPageTemplate = template.Must(template.New("opspage").Parse(`<h2>{{.Heading}}</h2>
-<p>{{.Description}}</p>
-{{.Table}}{{if .NextHref}}<p><a href="{{.NextHref}}">Next page &rarr;</a></p>{{end}}`))
 
 // opsNextHref builds a view's "next page" link, carrying the page size
 // forward and the store-issued token as page_token. Empty when the page
@@ -123,8 +145,21 @@ func opsNextHref(path, nextToken string, pageSize int) string {
 	return path + "?" + q.Encode()
 }
 
+// isHtmxRequest reports whether this request came from htmx rather than a
+// full page load. It is the one branch every read view and every
+// intervention takes: the htmx half answers 200 with a bare fragment, the
+// browser half answers with the shell.
+func isHtmxRequest(r *http.Request) bool {
+	return r.Header.Get("HX-Request") != ""
+}
+
 // Display helpers. Subjects and timestamps are pre-formatted here so the
 // templates stay free of pointer/reach-into-store logic.
+//
+// opsTime is load-bearing beyond display: the claimed view's results
+// block is polled, and a timestamp that shifted between two polls for no
+// state change would make the fragment non-byte-stable. Absolute RFC3339
+// only, never a relative "in 3m".
 
 // opsSubject renders one subject triple readably. An unset subject (a
 // claim taken with no on-behalf-of, or a cancelled-by that is itself the
@@ -150,52 +185,74 @@ func opsActor(s store.Subject) string {
 
 func opsTime(t time.Time) string { return t.Format(time.RFC3339) }
 
-// handleClaimedTasks renders the claimed-task console view (FR4): every
-// currently-claimed task, its claim, and claimed-since, equivalent to
-// list_claimed_tasks / GET /console/claimed.
-func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
-	page, err := parseOpsPageParams(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+// ---------------------------------------------------------------------------
+// claimed view
+// ---------------------------------------------------------------------------
+
+// claimedPollingHorizon is how close to expiry a lease has to be for the
+// claimed view to keep polling.
+//
+// This must be a FRACTION of the lease, not the lease itself. ClaimTask
+// sets lease_expires_at to now+DefaultLeaseDuration and HeartbeatTask
+// resets it to now+DefaultLeaseDuration, so every row the store can
+// return satisfies LeaseExpiresAt-now <= DefaultLeaseDuration. A horizon
+// of a whole lease would therefore make this predicate `len(rows) > 0`:
+// any deployment with a claimed task -- including a swarm that heartbeats
+// forever and never actually nears expiry -- would re-query Postgres
+// every 3 seconds indefinitely.
+//
+// A third of the lease is the point at which an operator who is watching
+// a claim wants to see it resolve, while a healthy heartbeat (well
+// inside the window) keeps the poll off.
+const claimedPollingHorizon = store.DefaultLeaseDuration / 3
+
+// claimedPollingDue reports whether any claim on this page is inside its
+// lease's near-expiry window -- the one transient state the ops console
+// watches. It is decided here, server-side, from the freshly-read store
+// rows; the browser contributes nothing to it.
+func claimedPollingDue(rows []store.ClaimedTaskRow, now time.Time) bool {
+	for _, r := range rows {
+		// A lease already past expiry has a negative remaining time and so
+		// matches here too: the task is still claimed, the row really is
+		// about to disappear, and the operator should see that happen
+		// rather than stare at a stale claim.
+		if r.LeaseExpiresAt.Sub(now) <= claimedPollingHorizon {
+			return true
+		}
 	}
-	scopeID, err := app.soleScopeID(r.Context())
+	return false
+}
+
+// claimedResults reads one page of the claimed-task view (FR4) and returns
+// its view-model -- every currently-claimed task, its claim, and
+// claimed-since, equivalent to list_claimed_tasks / GET /console/claimed.
+//
+// It is the single derivation of this view's data: the GET handler, the
+// poll, and the intervention handlers' post-write re-derivation all call
+// it, so none of them can render a view the others would not.
+func (app *App) claimedResults(ctx context.Context, page store.PageParams, selfPath string) (pages.ClaimedData, error) {
+	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
-		writeOpsQueryError(w, err)
-		return
+		return pages.ClaimedData{}, err
 	}
-	result, err := app.tasks.ListClaimedTasks(r.Context(), store.ListClaimedTasksParams{ScopeID: scopeID, Page: page})
+	result, err := app.tasks.ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, Page: page})
 	if err != nil {
-		writeOpsQueryError(w, err)
-		return
+		return pages.ClaimedData{}, err
 	}
-	rows := make([]claimedRow, len(result.Items))
+	rows := make([]pages.ClaimedRow, len(result.Items))
 	for i, row := range result.Items {
 		rows[i] = newClaimedRow(row)
 	}
-	renderShell(w, r, "Claimed tasks", opsClaimedPath, renderPage(opsPageTemplate, opsPage{
-		Heading:     "Claimed tasks",
-		Description: "Every task that currently holds a claim, with its claimant, lane, and lease expiry.",
-		Table:       renderPage(claimedTableTemplate, rows),
-		NextHref:    opsNextHref(opsClaimedPath, result.NextToken, page.PageSize),
-	}))
+	return pages.ClaimedData{
+		Rows:     rows,
+		NextHref: opsNextHref(opsClaimedPath, result.NextToken, page.PageSize),
+		Href:     selfPath,
+		Polling:  claimedPollingDue(result.Items, time.Now()),
+	}, nil
 }
 
-type claimedRow struct {
-	TaskID     string
-	Title      string
-	Delivery   string
-	Session    string
-	Claimant   string
-	OnBehalfOf string
-	Lane       string
-	Lease      string
-	Attempts   int
-	Actions    template.HTML
-}
-
-func newClaimedRow(r store.ClaimedTaskRow) claimedRow {
-	return claimedRow{
+func newClaimedRow(r store.ClaimedTaskRow) pages.ClaimedRow {
+	return pages.ClaimedRow{
 		TaskID:     r.TaskID.String(),
 		Title:      r.Title,
 		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
@@ -212,60 +269,55 @@ func newClaimedRow(r store.ClaimedTaskRow) claimedRow {
 	}
 }
 
-var claimedTableTemplate = template.Must(template.New("claimed").Parse(`<table>
-<thead><tr><th>Task</th><th>Delivery</th><th>Claimant</th><th>On behalf of</th><th>Lane</th><th>Lease expires</th><th>Attempts</th><th>Actions</th></tr></thead>
-<tbody>
-{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Claimant}}<br><small>session {{.Session}}</small></td><td>{{.OnBehalfOf}}</td><td>{{.Lane}}</td><td>{{.Lease}}</td><td>{{.Attempts}}</td><td>{{.Actions}}</td></tr>
-{{else}}<tr><td colspan="8">No claimed tasks.</td></tr>
-{{end}}</tbody></table>`))
-
-// handleEscalatedTasks renders the escalated-task console view (FR5): every
-// escalated task and its escalation_reason, equivalent to
-// list_escalated_tasks / GET /console/escalated.
-func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
+// handleClaimedTasks serves the claimed-task view in both of its modes:
+// the whole page in the shell, or -- when htmx asked, which is also how
+// the view's own poll reaches it -- the bare results fragment at 200.
+func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 	page, err := parseOpsPageParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	scopeID, err := app.soleScopeID(r.Context())
+	d, err := app.claimedResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, err)
+		writeOpsQueryError(w, r, err)
 		return
 	}
-	result, err := app.tasks.ListEscalatedTasks(r.Context(), store.ListEscalatedTasksParams{ScopeID: scopeID, Page: page})
-	if err != nil {
-		writeOpsQueryError(w, err)
+	if isHtmxRequest(r) {
+		renderFragment(w, r, pages.ClaimedResults(d))
 		return
 	}
-	rows := make([]escalatedRow, len(result.Items))
+	renderShell(w, r, "Claimed tasks", opsClaimedPath, pages.ClaimedPage(d))
+}
+
+// ---------------------------------------------------------------------------
+// escalated view
+// ---------------------------------------------------------------------------
+
+// escalatedResults reads one page of the escalated-task view (FR5):
+// every escalated task and its escalation_reason, equivalent to
+// list_escalated_tasks / GET /console/escalated.
+func (app *App) escalatedResults(ctx context.Context, page store.PageParams, selfPath string) (pages.EscalatedData, error) {
+	scopeID, err := app.soleScopeID(ctx)
+	if err != nil {
+		return pages.EscalatedData{}, err
+	}
+	result, err := app.tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, Page: page})
+	if err != nil {
+		return pages.EscalatedData{}, err
+	}
+	rows := make([]pages.EscalatedRow, len(result.Items))
 	for i, row := range result.Items {
 		rows[i] = newEscalatedRow(row)
 	}
-	renderShell(w, r, "Escalated tasks", opsEscalatedPath, renderPage(opsPageTemplate, opsPage{
-		Heading:     "Escalated tasks",
-		Description: "Every task with an active escalation, and why it escalated.",
-		Table:       renderPage(escalatedTableTemplate, rows),
-		NextHref:    opsNextHref(opsEscalatedPath, result.NextToken, page.PageSize),
-	}))
+	return pages.EscalatedData{
+		Rows:     rows,
+		NextHref: opsNextHref(opsEscalatedPath, result.NextToken, page.PageSize),
+		Href:     selfPath,
+	}, nil
 }
 
-type escalatedRow struct {
-	TaskID     string
-	Title      string
-	Delivery   string
-	Reason     string
-	Counter    string
-	Lane       string
-	At         string
-	Actor      string
-	OnBehalfOf string
-	Summary    string
-	Verdict    string
-	Actions    template.HTML
-}
-
-func newEscalatedRow(r store.EscalatedTaskRow) escalatedRow {
+func newEscalatedRow(r store.EscalatedTaskRow) pages.EscalatedRow {
 	counter := "-"
 	if r.CounterValue != nil && r.CapValue != nil {
 		counter = fmt.Sprintf("%d/%d", *r.CounterValue, *r.CapValue)
@@ -274,7 +326,7 @@ func newEscalatedRow(r store.EscalatedTaskRow) escalatedRow {
 	if r.MostRecentVerdict != nil {
 		verdict = string(*r.MostRecentVerdict)
 	}
-	return escalatedRow{
+	return pages.EscalatedRow{
 		TaskID:     r.TaskID.String(),
 		Title:      r.Title,
 		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
@@ -294,54 +346,53 @@ func newEscalatedRow(r store.EscalatedTaskRow) escalatedRow {
 	}
 }
 
-var escalatedTableTemplate = template.Must(template.New("escalated").Parse(`<table>
-<thead><tr><th>Task</th><th>Delivery</th><th>Reason</th><th>Counter/cap</th><th>Lane</th><th>Escalated</th><th>By</th><th>On behalf of</th><th>Summary</th><th>Last verdict</th><th>Actions</th></tr></thead>
-<tbody>
-{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Reason}}</td><td>{{.Counter}}</td><td>{{.Lane}}</td><td>{{.At}}</td><td>{{.Actor}}</td><td>{{.OnBehalfOf}}</td><td>{{.Summary}}</td><td>{{.Verdict}}</td><td>{{.Actions}}</td></tr>
-{{else}}<tr><td colspan="11">No escalated tasks.</td></tr>
-{{end}}</tbody></table>`))
-
-// handleCancelledTasks renders the cancelled-task console view (FR10),
-// equivalent to list_cancelled_tasks / GET /console/cancelled.
-func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
+// handleEscalatedTasks serves the escalated-task view in both of its modes.
+func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 	page, err := parseOpsPageParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	scopeID, err := app.soleScopeID(r.Context())
+	d, err := app.escalatedResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, err)
+		writeOpsQueryError(w, r, err)
 		return
 	}
-	result, err := app.tasks.ListCancelledTasks(r.Context(), store.ListCancelledTasksParams{ScopeID: scopeID, Page: page})
-	if err != nil {
-		writeOpsQueryError(w, err)
+	if isHtmxRequest(r) {
+		renderFragment(w, r, pages.EscalatedResults(d))
 		return
 	}
-	rows := make([]cancelledRow, len(result.Items))
+	renderShell(w, r, "Escalated tasks", opsEscalatedPath, pages.EscalatedPage(d))
+}
+
+// ---------------------------------------------------------------------------
+// cancelled view
+// ---------------------------------------------------------------------------
+
+// cancelledResults reads one page of the cancelled-task view (FR10),
+// equivalent to list_cancelled_tasks / GET /console/cancelled.
+func (app *App) cancelledResults(ctx context.Context, page store.PageParams, selfPath string) (pages.CancelledData, error) {
+	scopeID, err := app.soleScopeID(ctx)
+	if err != nil {
+		return pages.CancelledData{}, err
+	}
+	result, err := app.tasks.ListCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, Page: page})
+	if err != nil {
+		return pages.CancelledData{}, err
+	}
+	rows := make([]pages.CancelledRow, len(result.Items))
 	for i, row := range result.Items {
 		rows[i] = newCancelledRow(row)
 	}
-	renderShell(w, r, "Cancelled tasks", opsCancelledPath, renderPage(opsPageTemplate, opsPage{
-		Heading:     "Cancelled tasks",
-		Description: "Every cancelled (dead-lettered) task, and who cancelled it.",
-		Table:       renderPage(cancelledTableTemplate, rows),
-		NextHref:    opsNextHref(opsCancelledPath, result.NextToken, page.PageSize),
-	}))
+	return pages.CancelledData{
+		Rows:     rows,
+		NextHref: opsNextHref(opsCancelledPath, result.NextToken, page.PageSize),
+		Href:     selfPath,
+	}, nil
 }
 
-type cancelledRow struct {
-	TaskID     string
-	Title      string
-	Delivery   string
-	By         string
-	OnBehalfOf string
-	At         string
-}
-
-func newCancelledRow(r store.CancelledTaskRow) cancelledRow {
-	return cancelledRow{
+func newCancelledRow(r store.CancelledTaskRow) pages.CancelledRow {
+	return pages.CancelledRow{
 		TaskID:     r.TaskID.String(),
 		Title:      r.Title,
 		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
@@ -351,53 +402,53 @@ func newCancelledRow(r store.CancelledTaskRow) cancelledRow {
 	}
 }
 
-var cancelledTableTemplate = template.Must(template.New("cancelled").Parse(`<table>
-<thead><tr><th>Task</th><th>Delivery</th><th>Cancelled by</th><th>On behalf of</th><th>Cancelled at</th></tr></thead>
-<tbody>
-{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.By}}</td><td>{{.OnBehalfOf}}</td><td>{{.At}}</td></tr>
-{{else}}<tr><td colspan="5">No cancelled tasks.</td></tr>
-{{end}}</tbody></table>`))
-
-// handleOpenNotes renders the open-notes console view (FR12): every task
-// note still in an open lifecycle status, equivalent to list_open_notes /
-// GET /console/notes.
-func (app *App) handleOpenNotes(w http.ResponseWriter, r *http.Request) {
+// handleCancelledTasks serves the cancelled-task view in both of its modes.
+func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 	page, err := parseOpsPageParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	scopeID, err := app.soleScopeID(r.Context())
+	d, err := app.cancelledResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, err)
+		writeOpsQueryError(w, r, err)
 		return
 	}
-	result, err := app.tasks.ListOpenNotes(r.Context(), store.ListOpenNotesParams{ScopeID: scopeID, Page: page})
-	if err != nil {
-		writeOpsQueryError(w, err)
+	if isHtmxRequest(r) {
+		renderFragment(w, r, pages.CancelledResults(d))
 		return
 	}
-	rows := make([]noteRow, len(result.Items))
+	renderShell(w, r, "Cancelled tasks", opsCancelledPath, pages.CancelledPage(d))
+}
+
+// ---------------------------------------------------------------------------
+// open-notes view
+// ---------------------------------------------------------------------------
+
+// openNotesResults reads one page of the open-notes view (FR12): every
+// task note still in an open lifecycle status, equivalent to
+// list_open_notes / GET /console/notes.
+func (app *App) openNotesResults(ctx context.Context, page store.PageParams, selfPath string) (pages.NotesData, error) {
+	scopeID, err := app.soleScopeID(ctx)
+	if err != nil {
+		return pages.NotesData{}, err
+	}
+	result, err := app.tasks.ListOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, Page: page})
+	if err != nil {
+		return pages.NotesData{}, err
+	}
+	rows := make([]pages.NoteRow, len(result.Items))
 	for i, row := range result.Items {
 		rows[i] = newNoteRow(row)
 	}
-	renderShell(w, r, "Open notes", opsNotesPath, renderPage(opsPageTemplate, opsPage{
-		Heading:     "Open notes",
-		Description: "Every note still at 'noted', and the task or spec entity it targets.",
-		Table:       renderPage(notesTableTemplate, rows),
-		NextHref:    opsNextHref(opsNotesPath, result.NextToken, page.PageSize),
-	}))
+	return pages.NotesData{
+		Rows:     rows,
+		NextHref: opsNextHref(opsNotesPath, result.NextToken, page.PageSize),
+		Href:     selfPath,
+	}, nil
 }
 
-type noteRow struct {
-	NoteID    string
-	Kind      string
-	Target    string
-	CreatedAt string
-	Body      string
-}
-
-func newNoteRow(r store.OpenNoteRow) noteRow {
+func newNoteRow(r store.OpenNoteRow) pages.NoteRow {
 	// Exactly one of TaskContext/EntityContext is set (task_note's own
 	// exactly-one-target CHECK), so at most one branch fills Target. The
 	// target's id is rendered next to its title so the row names the same
@@ -408,7 +459,7 @@ func newNoteRow(r store.OpenNoteRow) noteRow {
 	} else if r.EntityContext != nil {
 		target = string(r.EntityContext.EntityKind) + ": " + r.EntityContext.Title + " (" + r.EntityContext.EntityID.String() + ")"
 	}
-	return noteRow{
+	return pages.NoteRow{
 		NoteID:    r.NoteID.String(),
 		Kind:      string(r.Kind),
 		Target:    target,
@@ -417,9 +468,21 @@ func newNoteRow(r store.OpenNoteRow) noteRow {
 	}
 }
 
-var notesTableTemplate = template.Must(template.New("notes").Parse(`<table>
-<thead><tr><th>Note</th><th>Kind</th><th>Target</th><th>Created</th><th>Body</th></tr></thead>
-<tbody>
-{{range .}}<tr><td>{{.NoteID}}</td><td>{{.Kind}}</td><td>{{.Target}}</td><td>{{.CreatedAt}}</td><td>{{.Body}}</td></tr>
-{{else}}<tr><td colspan="5">No open notes.</td></tr>
-{{end}}</tbody></table>`))
+// handleOpenNotes serves the open-notes view in both of its modes.
+func (app *App) handleOpenNotes(w http.ResponseWriter, r *http.Request) {
+	page, err := parseOpsPageParams(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	d, err := app.openNotesResults(r.Context(), page, opsSelfPath(r))
+	if err != nil {
+		writeOpsQueryError(w, r, err)
+		return
+	}
+	if isHtmxRequest(r) {
+		renderFragment(w, r, pages.NotesResults(d))
+		return
+	}
+	renderShell(w, r, "Open notes", opsNotesPath, pages.NotesPage(d))
+}

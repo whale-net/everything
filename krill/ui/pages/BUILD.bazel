@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+# krill's page bodies: one .templ per operator-facing area, composed into
+# the shared chrome by krill/ui/components. Each page's view-model struct
+# is declared in its own .templ file, beside the component that renders
+# it; the pure builders that populate them stay in //krill/ui (package
+# main), so the existing package-main tests keep compiling unchanged.
+templ_library(
+    name = "pages",
+    srcs = glob(["*.templ"]),
+    # go_srcs is HAND-MAINTAINED (htmxui ARCHITECTURE §12): gazelle
+    # will not add a plain .go file here. It is empty because every
+    # type this package owns is declared inside a .templ, the way
+    # libs/go/htmxui/badge.templ declares BadgeVariant.
+    go_srcs = [],
+    visibility = ["//krill/ui:__pkg__"],
+    deps = [
+        "//krill/store",
+        "//krill/ui/components",
+        "//libs/go/htmxui",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+go_test(
+    name = "pages_test",
+    size = "small",
+    srcs = glob(["*_test.go"]),
+    embed = [":pages"],
+    deps = [
+        "//krill/store",
+        "//krill/ui/components",
+        "//libs/go/htmxui",
+        "@com_github_a_h_templ//:templ",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+# templ_library, not go_library, for the same reason libs/go/htmxui is
+# one: krill's shell wrapper is authored as .templ. See
+# libs/go/htmxui/BUILD.bazel.
+templ_library(
+    name = "components",
+    srcs = glob(["*.templ"]),
+    # go_srcs is HAND-MAINTAINED (htmxui ARCHITECTURE §12): gazelle
+    # will not add a plain .go file here. status.go is the milestone
+    # status vocabulary -- a pure Go mapper with no markup, so it is a
+    # .go rather than a .templ. Adding another hand-written .go means
+    # adding it here by hand, or the build fails with a confusing
+    # "undefined".
+    go_srcs = ["status.go"],
+    visibility = [
+        "//krill/ui:__pkg__",
+        "//krill/ui/pages:__pkg__",
+    ],
+    deps = [
+        "//libs/go/htmxui",
+    ],
+)
+
+go_test(
+    name = "components_test",
+    size = "small",
+    srcs = [
+        "layout_test.go",
+        "status_test.go",
+    ],
+    embed = [":components"],
+    deps = [
+        "//libs/go/htmxui",
+        "@com_github_a_h_templ//:templ",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

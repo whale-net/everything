@@ -26,6 +26,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // newInterventionMux registers exactly the intervention routes setupRoutes
@@ -189,6 +191,18 @@ func TestInterventionReturnToRejectsOpenRedirect(t *testing.T) {
 		"http://evil.example.com",
 		"//evil.example.com/steal",
 		"javascript:alert(1)",
+		// Same-origin, but not a view this binary serves. The guard
+		// matches at path-segment boundaries, so a raw-prefix check would
+		// admit this and 404 the operator instead of falling back to the
+		// console root.
+		"/opsarchive",
+		"/ops/../../etc/passwd",
+		// The percent-encoded spelling of the same traversal. The ".."
+		// check has to run on the DECODED path; testing the raw string
+		// would pass this straight through and the browser would then
+		// normalise it to a path outside /ops.
+		"/ops/%2e%2e/%2e%2e/etc/passwd",
+		"/ops/%2E%2E/secret",
 	}
 	for _, to := range hostile {
 		t.Run(to, func(t *testing.T) {
@@ -251,7 +265,7 @@ func TestInterventionRejectionRendersInShellErrorPage(t *testing.T) {
 // confirms), never as a form that posts to the cancel route directly.
 func TestCancelRendersAsConfirmLinkNotForm(t *testing.T) {
 	taskID := uuid.NewString()
-	html := string(renderTaskActions(taskID, "/ops/claimed", "cancel"))
+	html := mustRenderComponent(renderTaskActions(taskID, "/ops/claimed", "cancel"))
 	assert.Contains(t, html, fmt.Sprintf(`<a href="/ops/tasks/%s/cancel/confirm?`, taskID),
 		"cancel renders as a link to its confirm page")
 	assert.Contains(t, html, "Cancel")
@@ -267,7 +281,7 @@ func TestNonDestructiveVerbsRenderInlineForms(t *testing.T) {
 	placeholders := map[string]string{}
 	for _, verb := range []string{"release", "requeue", "escalate"} {
 		t.Run(verb, func(t *testing.T) {
-			html := string(renderTaskActions(taskID, "/ops/claimed", verb))
+			html := mustRenderComponent(renderTaskActions(taskID, "/ops/claimed", verb))
 			assert.Contains(t, html, "<form method=\"post\"")
 			assert.Contains(t, html, fmt.Sprintf(`action="/ops/tasks/%s/%s"`, taskID, verb))
 			assert.Contains(t, html, `name="return_to" value="/ops/claimed"`)
@@ -278,6 +292,43 @@ func TestNonDestructiveVerbsRenderInlineForms(t *testing.T) {
 	// The reason prompt is per-verb, not one shared string.
 	assert.NotEqual(t, placeholders["release"], placeholders["requeue"])
 	assert.NotEqual(t, placeholders["requeue"], placeholders["escalate"])
+}
+
+// TestNonDestructiveFormsAreDoubled requires each inline row form to carry
+// BOTH halves of the doubled-form rule: the no-JS branch (method="post" +
+// action=) and the htmx branch (hx-post + hx-target + hx-swap). A form
+// missing either half would silently break one of the two browsers.
+func TestNonDestructiveFormsAreDoubled(t *testing.T) {
+	taskID := uuid.NewString()
+	action := "/ops/tasks/" + taskID + "/release"
+	html := mustRenderComponent(renderTaskActions(taskID, "/ops/claimed", "release"))
+
+	assert.Contains(t, html, `<form method="post" action="`+action+`"`,
+		"the no-JS half posts to the same route it always did")
+	assert.Contains(t, html, `hx-post="`+action+`"`,
+		"the htmx half posts to the same route, not a second one")
+	assert.Contains(t, html, `hx-target="#ops-results"`,
+		"the htmx half swaps the view's whole results block")
+	assert.Contains(t, html, `hx-swap="outerHTML"`)
+}
+
+// TestCancelConfirmFormIsDoubled requires the confirm card's form to be
+// doubled the same way, targeting the card itself so a refusal can be
+// re-rendered into it.
+func TestCancelConfirmFormIsDoubled(t *testing.T) {
+	taskID := uuid.NewString()
+	action := "/ops/tasks/" + taskID + "/cancel"
+	html := mustRenderComponent(pages.CancelConfirmCard(pages.CancelConfirmData{
+		TaskID:   taskID,
+		Action:   action,
+		ReturnTo: "/ops/claimed",
+	}))
+
+	assert.Contains(t, html, `id="cancel-confirm"`, "the card is the fragment's own swap target")
+	assert.Contains(t, html, `<form method="post" action="`+action+`"`)
+	assert.Contains(t, html, `hx-post="`+action+`"`)
+	assert.Contains(t, html, `hx-target="#cancel-confirm"`)
+	assert.Contains(t, html, `hx-swap="outerHTML"`)
 }
 
 // placeholderOf extracts a rendered input's placeholder attribute value.
@@ -333,4 +384,217 @@ func TestCancelConfirmPageRequiresReasonAndPostsToCancel(t *testing.T) {
 	require.Len(t, recorded, 2)
 	assert.Equal(t, "/tasks/"+taskID+"/cancel", recorded[1].Path)
 	assert.JSONEq(t, `{"reason":"dead-lettered after confirmation"}`, string(recorded[1].Body))
+}
+
+// ---------------------------------------------------------------------------
+// 7. the htmx branch: one route, two modes
+// ---------------------------------------------------------------------------
+
+// fakeFragmentTasks is the minimum console-query surface the htmx branch
+// of an intervention needs: after a write, the handler re-derives the whole
+// results block of the view the operator acted from, which means re-reading
+// it. It embeds store.TaskStore so any other List method the re-derivation
+// ever grew would nil-panic rather than pass unnoticed -- these tests must
+// not depend on store surface the console does not use.
+type fakeFragmentTasks struct {
+	store.TaskStore
+
+	claimed []store.ClaimedTaskRow
+	// escalated is distinct from claimed so a test can tell which view the
+	// re-derivation actually read.
+	escalated []store.EscalatedTaskRow
+}
+
+func (f *fakeFragmentTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
+	return store.Page[store.ClaimedTaskRow]{Items: f.claimed}, nil
+}
+
+func (f *fakeFragmentTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{Items: f.escalated}, nil
+}
+
+// newHtmxInterventionApp wires a signed-in operator to a fake api AND to the
+// console-query surface, so an intervention can be driven all the way
+// through to the fragment its htmx response renders. It returns the fake
+// IdP's issuer so attribution can be asserted the same fresh way the
+// no-HX cases assert it.
+func newHtmxInterventionApp(t *testing.T, api *fakeAPI, operatorSub string) (*App, *http.Cookie, string) {
+	t.Helper()
+	idp := newFakeIDP(t, operatorSub)
+	authenticator, sessionCookie := newSignedInOperator(t, idp)
+	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app.tasks = &fakeFragmentTasks{
+		claimed:   []store.ClaimedTaskRow{{TaskID: uuid.New(), Title: "a still-claimed task"}},
+		escalated: []store.EscalatedTaskRow{{TaskID: uuid.New(), Title: "a still-escalated task"}},
+	}
+	return app, sessionCookie, idp.server.URL
+}
+
+// hxFormPost issues the same form POST with the HX-Request header htmx
+// sets -- the one difference between the route's two branches.
+func hxFormPost(mux *http.ServeMux, target string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestInterventionHTMXAnswersResultsFragmentNotRedirect requires that an
+// htmx intervention answers 200 with the whole results block of the view
+// the operator acted from, re-derived from freshly observed state. Never a
+// 303, never a 4xx, never an assumed "success" render: a swap target's
+// HTTP status is not surfaced to the operator, so anything that matters
+// has to ride inside the fragment.
+func TestInterventionHTMXAnswersResultsFragmentNotRedirect(t *testing.T) {
+	for _, tc := range []struct {
+		verb     string
+		returnTo string
+		wantRow  string
+	}{
+		{"release", "/ops/claimed", "a still-claimed task"},
+		{"escalate", "/ops/claimed", "a still-claimed task"},
+		{"requeue", "/ops/escalated", "a still-escalated task"},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			operatorSub := uuid.NewString()
+			api := newFakeAPI(t)
+			app, sessionCookie, _ := newHtmxInterventionApp(t, api, operatorSub)
+			mux := newInterventionMux(app)
+
+			taskID := uuid.NewString()
+			rec := hxFormPost(mux, "/ops/tasks/"+taskID+"/"+tc.verb,
+				url.Values{"reason": {"x"}, "return_to": {tc.returnTo}}, sessionCookie)
+
+			assert.Equal(t, http.StatusOK, rec.Code, "an htmx intervention never answers non-200")
+			assert.Empty(t, rec.Header().Get("Location"), "an htmx intervention never redirects")
+			got := rec.Body.String()
+			assert.Contains(t, got, `id="ops-results"`, "the response is the view's results block")
+			assert.Contains(t, got, tc.wantRow, "the block is re-derived from the view return_to names")
+			assert.NotContains(t, got, "<html", "the fragment carries no shell chrome")
+		})
+	}
+}
+
+// TestInterventionHTMXReDerivesFromTheViewReturnToNames is the other half
+// of the same rule, stated as its own case: the re-derivation follows
+// return_to rather than always landing on the claimed view, so a requeue
+// out of /ops/escalated refreshes the escalated table the operator was
+// looking at instead of swapping another view's rows into it.
+func TestInterventionHTMXReDerivesFromTheViewReturnToNames(t *testing.T) {
+	operatorSub := uuid.NewString()
+	api := newFakeAPI(t)
+	app, sessionCookie, _ := newHtmxInterventionApp(t, api, operatorSub)
+	mux := newInterventionMux(app)
+
+	rec := hxFormPost(mux, "/ops/tasks/"+uuid.NewString()+"/requeue",
+		url.Values{"reason": {"x"}, "return_to": {"/ops/escalated"}}, sessionCookie)
+
+	got := rec.Body.String()
+	assert.Contains(t, got, "a still-escalated task")
+	assert.NotContains(t, got, "a still-claimed task",
+		"the claimed view's rows must not be swapped into the escalated view")
+}
+
+// TestInterventionHTMXRefusalRendersInlineAlert requires a refused write
+// to reach the operator as a readable message inside the 200 fragment --
+// never as a status code the swap would discard, and never as the raw api
+// JSON.
+func TestInterventionHTMXRefusalRendersInlineAlert(t *testing.T) {
+	for _, verb := range []string{"release", "escalate", "requeue"} {
+		t.Run(verb, func(t *testing.T) {
+			operatorSub := uuid.NewString()
+			api := newFakeAPI(t)
+			api.rejectWrite(http.StatusConflict, `{"error":"task is already cancelled"}`)
+			app, sessionCookie, _ := newHtmxInterventionApp(t, api, operatorSub)
+			mux := newInterventionMux(app)
+
+			rec := hxFormPost(mux, "/ops/tasks/"+uuid.NewString()+"/"+verb,
+				url.Values{"reason": {"force"}, "return_to": {"/ops/claimed"}}, sessionCookie)
+
+			assert.Equal(t, http.StatusOK, rec.Code, "a refusal is presented, not status-coded")
+			got := rec.Body.String()
+			assert.Contains(t, got, "task is already cancelled", "the api's own message reaches the operator")
+			assert.Contains(t, got, `role="alert"`, "the refusal rides inline in the fragment")
+			assert.Contains(t, got, "alert-error")
+			assert.NotContains(t, got, `{"error"`, "the raw api JSON must not leak to the browser")
+			assert.Contains(t, got, `id="ops-results"`, "the results block is still re-derived under the refusal")
+		})
+	}
+}
+
+// TestCancelConfirmHTMXSuccessSetsRedirectHeader requires the one legitimate
+// redirect on an htmx path: a confirmed cancel navigates back to the console
+// view it came from. It is a navigation, not a swap, so it is carried by
+// HX-Redirect rather than by a status code.
+func TestCancelConfirmHTMXSuccessSetsRedirectHeader(t *testing.T) {
+	operatorSub := uuid.NewString()
+	api := newFakeAPI(t)
+	app, sessionCookie, issuer := newHtmxInterventionApp(t, api, operatorSub)
+	mux := newInterventionMux(app)
+
+	taskID := uuid.NewString()
+	rec := hxFormPost(mux, "/ops/tasks/"+taskID+"/cancel",
+		url.Values{"reason": {"dead-lettered"}, "return_to": {"/ops/claimed"}}, sessionCookie)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "/ops/claimed", rec.Header().Get("HX-Redirect"),
+		"a confirmed cancel navigates back to the view it came from")
+	assert.Empty(t, rec.Header().Get("Location"),
+		"only an htmx request gets HX-Redirect; a full browser still gets the 303")
+
+	// The write is still exactly the MCP tool's, attributed to the real
+	// signed-in operator: doubling the form changed the response, not the write.
+	assertInterventionAttribution(t, api, issuer, operatorSub)
+	recorded := api.recorded()
+	require.Len(t, recorded, 2)
+	assert.Equal(t, "/tasks/"+taskID+"/cancel", recorded[1].Path)
+	assert.JSONEq(t, `{"reason":"dead-lettered"}`, string(recorded[1].Body))
+}
+
+// TestCancelConfirmHTMXRefusalReRendersTheCard requires a refused confirm
+// to re-render the confirm card at 200 with the reason inline: the operator
+// keeps their card and learns why, rather than the card vanishing behind a
+// 4xx the swap never surfaces.
+func TestCancelConfirmHTMXRefusalReRendersTheCard(t *testing.T) {
+	operatorSub := uuid.NewString()
+	api := newFakeAPI(t)
+	api.rejectWrite(http.StatusConflict, `{"error":"task is already cancelled"}`)
+	app, sessionCookie, _ := newHtmxInterventionApp(t, api, operatorSub)
+	mux := newInterventionMux(app)
+
+	rec := hxFormPost(mux, "/ops/tasks/"+uuid.NewString()+"/cancel",
+		url.Values{"reason": {"force"}, "return_to": {"/ops/claimed"}}, sessionCookie)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	got := rec.Body.String()
+	assert.Contains(t, got, `id="cancel-confirm"`, "the card is re-rendered into its own target")
+	assert.Contains(t, got, "task is already cancelled", "the refusal is explained inline")
+	assert.Contains(t, got, `role="alert"`)
+	assert.NotContains(t, got, `{"error"`, "the raw api JSON must not leak to the browser")
+	assert.Empty(t, rec.Header().Get("HX-Redirect"), "a refused cancel must not navigate away")
+}
+
+// TestInterventionHTMXKeepsTheOpenRedirectGuard requires the guard to run
+// before the htmx branch picks a view, exactly as it runs before the no-JS
+// branch picks a redirect: a hostile return_to must never re-derive a view
+// the operator was not on, and never navigate off-site.
+func TestInterventionHTMXKeepsTheOpenRedirectGuard(t *testing.T) {
+	operatorSub := uuid.NewString()
+	api := newFakeAPI(t)
+	app, sessionCookie, _ := newHtmxInterventionApp(t, api, operatorSub)
+	mux := newInterventionMux(app)
+
+	rec := hxFormPost(mux, "/ops/tasks/"+uuid.NewString()+"/release",
+		url.Values{"reason": {"x"}, "return_to": {"https://evil.example.com/steal"}}, sessionCookie)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Header().Get("Location"), "the htmx path never navigates at all")
+	got := rec.Body.String()
+	assert.NotContains(t, got, "evil.example.com", "a hostile return_to never reaches the response")
+	assert.Contains(t, got, `id="ops-results"`, "the guard falls back to the ops root, which still renders a view")
 }

@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // ── wire types ───────────────────────────────────────────────────────────────
@@ -134,59 +135,143 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 	return nil
 }
 
-// renderOpenFormFailure re-renders a product's session list in-shell after a
-// rejected "open a session" write, with the operator's opening text preserved
-// so a rejection is never a data-loss event. A *writeRejection is shown inline
-// as the api's status + named message; anything else (no resolved operator,
-// unresolvable scope, unreachable api) never reached krill and falls back to
-// writeWriteError's 502. If the page's own read fails to re-render, fall back
-// to a plain status page.
+// renderOpenFormFailure re-renders the "open a session" form after a
+// rejected write, with the operator's opening text preserved so a rejection
+// is never a data-loss event. A *writeRejection is shown inline as the
+// api's status + named message; anything else (no resolved operator,
+// unresolvable scope, unreachable api) never reached krill and falls back
+// to writeWriteError's 502. If the page's own read fails to re-render,
+// fall back to a plain status page.
+//
+// Both modes answer 200, never the rejection's status: the no-JS path
+// re-renders the whole page in-shell, and the htmx path answers the form
+// fragment alone so hx-swap="outerHTML" can drop the error in place.
 func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, productID uuid.UUID, opening string, err error) {
 	var rejection *writeRejection
 	if !errors.As(err, &rejection) {
+		// A transport failure (api unreachable, session mint failed) is
+		// not a rejection and has no status to render. An htmx caller
+		// must still see something: htmx does not swap on a non-2xx, so
+		// writeWriteError's 401/502 would leave the operator with a form
+		// that appears to do nothing at all -- the one case they most
+		// need to be told about. Re-render the form with the message and
+		// their typed submission intact.
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
+				ProductID:         productID.String(),
+				OpeningSubmission: opening,
+				FormAction:        designProductSessionsPath(productID),
+				Error:             "Could not reach krill: " + transportFailureMessage(err),
+			}))
+			return
+		}
 		writeWriteError(w, err)
 		return
 	}
 	sessions, listErr := app.listDesignSessions(r.Context(), productID)
 	if listErr != nil {
 		logger.Error("failed to re-render open-session form after rejection", "product_id", productID, "error", listErr)
+		if isHXRequest(r) {
+			// The session list could not be re-read, so it is genuinely
+			// unavailable -- but the operator's typed submission is still
+			// known, and handing the form back with it costs nothing.
+			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
+				ProductID:         productID.String(),
+				OpeningSubmission: opening,
+				FormAction:        designProductSessionsPath(productID),
+				Error:             fmt.Sprintf("%d: %s (the session list could not be reloaded)", rejection.status, rejection.message),
+			}))
+			return
+		}
 		http.Error(w, rejection.message, rejection.status)
 		return
 	}
-	renderShell(w, r, "Design sessions", designPath, renderPage(designSessionListTemplate, designSessionListPage{
+	page := pages.DesignSessionListPage{
 		ProductID:         productID.String(),
 		Sessions:          sessions,
 		Error:             fmt.Sprintf("%d: %s", rejection.status, rejection.message),
 		OpeningSubmission: opening,
-	}))
+		FormAction:        designProductSessionsPath(productID),
+	}
+	if isHXRequest(r) {
+		renderFragment(w, r, pages.OpenSessionForm(page))
+		return
+	}
+	renderShell(w, r, "Design sessions", designPath, pages.DesignSessionList(page))
 }
 
-// renderAnswerFormFailure re-renders a session's detail page in-shell after a
-// rejected "submit follow-up" write, preserving the follow-up text and which
-// resolve boxes were ticked. A *writeRejection is shown inline as the api's
-// status + named message; anything else never reached krill and falls back to
-// writeWriteError's 502. If the page's own read fails to re-render, fall back
-// to a plain status page.
+// transportFailureMessage is the operator-facing half of a non-rejection
+// write failure. The specific cause is logged, not rendered: it can carry
+// an internal api URL or a driver message.
+func transportFailureMessage(err error) string {
+	logger.Error("design write failed before reaching krill", "error", err)
+	return "the request did not complete. Check the logs, then try again."
+}
+
+// renderAnswerFormFailure re-renders the "submit follow-up" form after a
+// rejected write, preserving the follow-up text and which resolve boxes
+// were ticked. Same 200-both-modes rule as renderOpenFormFailure.
 func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, id uuid.UUID, err error, followUp string, resolved []string) {
+	checked := make(map[string]bool, len(resolved))
+	for _, qid := range resolved {
+		checked[qid] = true
+	}
+	// degradedForm is the form handed back when the detail read behind it
+	// failed: the open questions are genuinely unavailable, but the
+	// follow-up text and the ticked question ids are still known, so the
+	// operator's work is not lost.
+	degradedForm := func(message string) pages.DesignSessionDetailPage {
+		return pages.DesignSessionDetailPage{
+			ID:             id.String(),
+			Error:          message,
+			FollowUp:       followUp,
+			CheckedResolve: checked,
+			AnswersPath:    designAnswersPath(id),
+			OpenQuestions:  nil,
+		}
+	}
+
 	var rejection *writeRejection
 	if !errors.As(err, &rejection) {
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.FollowUpForm(degradedForm("Could not reach krill: "+transportFailureMessage(err))))
+			return
+		}
 		writeWriteError(w, err)
 		return
 	}
 	detail, detailErr := app.buildDesignSessionDetail(r.Context(), id)
 	if detailErr != nil {
 		logger.Error("failed to re-render answer form after rejection", "design_session_id", id, "error", detailErr)
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.FollowUpForm(degradedForm(
+				fmt.Sprintf("%d: %s (this session's open questions could not be reloaded)", rejection.status, rejection.message))))
+			return
+		}
 		http.Error(w, rejection.message, rejection.status)
 		return
-	}
-	checked := make(map[string]bool, len(resolved))
-	for _, qid := range resolved {
-		checked[qid] = true
 	}
 	detail.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
 	detail.FollowUp = followUp
 	detail.CheckedResolve = checked
-	renderShell(w, r, "Design session", designPath, renderPage(designSessionDetailTemplate, detail))
+	if isHXRequest(r) {
+		renderFragment(w, r, pages.FollowUpForm(detail))
+		return
+	}
+	renderShell(w, r, "Design session", designPath, pages.DesignSessionDetail(detail))
+}
+
+// hxRedirect answers a successful doubled-form write for an htmx caller:
+// 200 with an HX-Redirect, so the browser performs the same
+// POST/Redirect/Get navigation the no-JS branch performs with a 303. This
+// is the one HX-Redirect in this surface, and it earns its place -- the
+// success outcome navigates to a different page (the new session's detail
+// page), which an hx-swap fragment cannot express. The no-HX branch is
+// untouched, so its 303 + Location behaviour is unchanged.
+func hxRedirect(w http.ResponseWriter, to string) {
+	w.Header().Set("HX-Redirect", to)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
 }
 
 // ── handlers ─────────────────────────────────────────────────────────────────
@@ -197,12 +282,25 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 // (POST/Redirect/Get) to the new session's detail page, so a refresh cannot
 // re-open the session. A rejected write re-renders the list in-shell with the
 // operator's text preserved (renderOpenFormFailure).
+//
+// The form is doubled, so one route serves both a no-JS browser and an htmx
+// one; the no-HX half of that pair is the 303 + Location below, left
+// exactly as it was.
 func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Request) {
 	productID, err := parseUUIDPathValue(w, r, "productID", "product")
 	if err != nil {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
+		logger.Error("could not parse the open-session form body", "product_id", productID, "error", err)
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
+				ProductID:  productID.String(),
+				FormAction: designProductSessionsPath(productID),
+				Error:      "The form could not be read, so nothing was submitted. Try again.",
+			}))
+			return
+		}
 		http.Error(w, "invalid form body", http.StatusBadRequest)
 		return
 	}
@@ -228,8 +326,12 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	id, err := parseUUIDOrFail(w, created.ID, "design session id")
+	id, err := parseUUIDOrFail(w, r, created.ID, "design session id")
 	if err != nil {
+		return
+	}
+	if isHXRequest(r) {
+		hxRedirect(w, designSessionPath(id))
 		return
 	}
 	http.Redirect(w, r, designSessionPath(id), http.StatusSeeOther)
@@ -241,12 +343,25 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 // session's detail page (POST/Redirect/Get). A rejected write re-renders the
 // detail page in-shell with the operator's text and ticks preserved
 // (renderAnswerFormFailure).
+//
+// Doubled form, one route: the no-HX half answers the 303 + Location below,
+// untouched; the HX half answers 200 and either HX-Redirects on success or
+// re-renders this form with the error inline.
 func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUIDPathValue(w, r, "id", "design session")
 	if err != nil {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
+		logger.Error("could not parse the follow-up form body", "design_session_id", id, "error", err)
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.FollowUpForm(pages.DesignSessionDetailPage{
+				ID:          id.String(),
+				AnswersPath: designAnswersPath(id),
+				Error:       "The form could not be read, so nothing was submitted. Try again.",
+			}))
+			return
+		}
 		http.Error(w, "invalid form body", http.StatusBadRequest)
 		return
 	}
@@ -302,6 +417,10 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if isHXRequest(r) {
+		hxRedirect(w, designSessionPath(id))
+		return
+	}
 	http.Redirect(w, r, designSessionPath(id), http.StatusSeeOther)
 }
 
@@ -330,9 +449,19 @@ func parseUUIDPathValue(w http.ResponseWriter, r *http.Request, name, what strin
 // parseUUIDOrFail parses an id api returned, writing a 500 and returning an
 // error if it is unusable. A malformed id in a 2xx is a contract break between
 // this binary and `api`, not something to redirect with.
-func parseUUIDOrFail(w http.ResponseWriter, value, what string) (uuid.UUID, error) {
+func parseUUIDOrFail(w http.ResponseWriter, r *http.Request, value, what string) (uuid.UUID, error) {
 	id, err := uuid.Parse(value)
 	if err != nil {
+		logger.Error("api returned an unusable id on a 2xx", "what", what, "error", err)
+		if isHXRequest(r) {
+			// The write landed; only the link back is unusable. Saying
+			// that is far more useful than a silent 500 the operator
+			// would resolve by resubmitting -- which would create a second
+			// session.
+			renderFragment(w, r, pages.OpsInlineError(
+				"The session was created, but krill returned an id this UI could not link to. Find it under Design sessions."))
+			return uuid.Nil, err
+		}
 		http.Error(w, fmt.Sprintf("api returned an unusable %s", what), http.StatusInternalServerError)
 		return uuid.Nil, err
 	}

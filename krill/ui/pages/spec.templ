@@ -1,0 +1,382 @@
+package pages
+
+// The spec browser's page bodies: the product index, and a product's
+// capability map, load-bearing decisions, personas, and non-goals -- each
+// a templ component the shell seam composes into either the full chrome
+// (renderShell) or a bare fragment (renderFragment).
+//
+// Each view-model struct is declared here, beside the component that
+// renders it; the pure builders that populate them stay in //krill/ui
+// (package main), so the field-parity tests keep exercising the same
+// functions the HTTP handlers call.
+//
+// Path is the page's own URL, carried on the view model rather than
+// recomputed in the component: it is what the manual Refresh button
+// re-requests, and a component that rebuilt its own route would be
+// guessing at the routing table's spelling.
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/krill/ui/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// Stable DOM ids each spec page's content region carries, so that page's
+// own Refresh button can target the region it replaces. Only one product
+// page renders at a time, so the ids need not be per-product.
+const (
+	ProductsAnchor     = "krill-spec-products"
+	CapabilityMapAnchor = "krill-spec-capability-map"
+	DecisionsAnchor    = "krill-spec-decisions"
+	PersonasAnchor     = "krill-spec-personas"
+	NonGoalsAnchor     = "krill-spec-non-goals"
+)
+
+// ProductHeader is the common "which product am I looking at" banner the
+// per-product pages show.
+type ProductHeader struct {
+	Name   string
+	Vision string
+	Href   string // the product's capability-map page
+}
+
+// ProductListItem is one row of the product index.
+type ProductListItem struct {
+	Name        string
+	Vision      string
+	CapabilityH string // /spec/products/{id} -- the capability map
+}
+
+// ProductsPage is the product index: every current product an operator
+// can browse into.
+type ProductsPage struct {
+	Path  string
+	Items []ProductListItem
+}
+
+// CapabilityFeatureSet is one FeatureSet and the Features nested under it.
+type CapabilityFeatureSet struct {
+	ID          string // EntityRef.ID -- the surrogate id, as get_product_slice returns it
+	Name        string
+	Description string
+	Features    []CapabilityFeature
+}
+
+// CapabilityFeature is one Feature and the Requirements nested under it.
+type CapabilityFeature struct {
+	ID           string // EntityRef.ID
+	Number       int    // Cn -- the stored DisplayNumber, the number a reader cites
+	Name         string
+	Description  string
+	Requirements []CapabilityRequirement
+}
+
+// CapabilityRequirement is one FR or NFR under a Feature.
+type CapabilityRequirement struct {
+	ID   string // EntityRef.ID -- the surrogate id, so a reader can cite the exact row
+	Kind string // "FR" or "NFR"
+	Name string
+	Body string
+}
+
+// CapabilityPage is one product's capability map, nested by parent.
+type CapabilityPage struct {
+	Product     ProductHeader
+	Nav         []components.NavLink
+	Path        string
+	FeatureSets []CapabilityFeatureSet
+}
+
+// DecisionItem is one load-bearing decision row.
+type DecisionItem struct {
+	ID     string // EntityRef.ID
+	Number int    // LBn -- the stored DisplayNumber
+	Name   string
+	Body   string
+}
+
+// DecisionsPage is one product's load-bearing decisions.
+type DecisionsPage struct {
+	Product   ProductHeader
+	Nav       []components.NavLink
+	Path      string
+	Decisions []DecisionItem
+}
+
+// PersonaItem is one persona row.
+type PersonaItem struct {
+	ID          string // the surrogate id, as list_personas returns it
+	Name        string
+	Description string
+}
+
+// PersonasPage is one product's personas.
+type PersonasPage struct {
+	Product  ProductHeader
+	Nav      []components.NavLink
+	Path     string
+	Personas []PersonaItem
+}
+
+// NonGoalItem is one non-goal row.
+type NonGoalItem struct {
+	ID   string // the surrogate id, as list_non_goals returns it
+	Kind string // "permanent" or "deferred"
+	Name string
+	Body string
+}
+
+// NonGoalGroup is one kind's worth of non-goals, split so the page shows
+// the permanent vs deferred distinction the brief makes load-bearing.
+type NonGoalGroup struct {
+	Kind     string // "permanent" or "deferred"
+	Heading  string // the human-facing label for that kind
+	NonGoals []NonGoalItem
+}
+
+// NonGoalsPage is one product's non-goals, bucketed by kind.
+type NonGoalsPage struct {
+	Product ProductHeader
+	Nav     []components.NavLink
+	Path    string
+	Groups  []NonGoalGroup
+}
+
+// StatusPage is the spec area's error body: a heading, a detail line, and
+// a way back. The HTTP status itself stays with the render seam
+// (renderShellStatus), which owns the response.
+type StatusPage struct {
+	Title    string
+	Detail   string
+	BackHref string
+	BackText string
+}
+
+// specRefresh is the manual refresh control every read-only spec page
+// carries. It is deliberately not a timer: these are pages an operator
+// may be reading a spec from, and a poll would swap the content out from
+// under them mid-read. hx-swap is outerHTML because the fragment the
+// handler serves is the page's whole content region, so the target is
+// that region rather than the button itself.
+templ specRefresh(anchor, selfPath string) {
+	<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
+		hx-get={ templ.URL(selfPath) }
+		hx-target={ "#" + anchor }
+		hx-swap="outerHTML">
+		Refresh
+	</button>
+}
+
+// pageHeader is the heading row every data page opens with: the h2, the
+// product's vision, and the manual Refresh button.
+templ pageHeader(anchor, selfPath, title, vision string) {
+	<div class="flex items-start justify-between gap-4 mb-2">
+		<div>
+			<h2 class="text-xl font-semibold" data-krill="page-title">{ title }</h2>
+			if vision != "" {
+				<p class="mt-1 text-sm text-base-content/70 max-w-3xl">{ vision }</p>
+			}
+		</div>
+		@specRefresh(anchor, selfPath)
+	</div>
+}
+
+// entityID renders a surrogate id as the citable anchor an operator
+// quotes when citing a row. data-krill is the stable hook; the classes
+// are presentation only. The left margin is what separates the id from
+// the name before it -- templ drops the whitespace between two elements,
+// so a literal space would not survive.
+templ entityID(id string) {
+	<code data-krill="entity-id" class="ml-1 font-mono text-xs opacity-70">{ id }</code>
+}
+
+// Products is the product index an operator browses into.
+templ Products(page ProductsPage) {
+	<section id={ ProductsAnchor } data-krill="products">
+		@pageHeader(ProductsAnchor, page.Path, "Products", "")
+		if len(page.Items) == 0 {
+			@htmxui.EmptyState("No products yet.", "Every product an operator can browse into.", "", "", templ.Attributes{})
+		} else {
+			<ul class="mt-4 space-y-2">
+				for _, it := range page.Items {
+					<li class="text-sm">
+						<a href={ templ.URL(it.CapabilityH) } class="link link-primary">{ it.Name }</a>
+						if it.Vision != "" {
+							<span class="text-base-content/70"> — { it.Vision }</span>
+						}
+					</li>
+				}
+			</ul>
+		}
+	</section>
+}
+
+// CapabilityMap renders a product's FeatureSets, Features, and
+// Requirements (current revisions only) as a navigable capability map --
+// get_product_slice's shape, nested by parent. FR 638a7e5f.
+templ CapabilityMap(page CapabilityPage) {
+	<section id={ CapabilityMapAnchor } data-krill="capability-map">
+		@pageHeader(CapabilityMapAnchor, page.Path, page.Product.Name+" — capability map", page.Product.Vision)
+		@components.SubNav(page.Nav)
+		if len(page.FeatureSets) == 0 {
+			@htmxui.EmptyState("No feature sets yet.", "The FeatureSets, Features, and Requirements recorded for this product.", "", "", templ.Attributes{})
+		} else {
+			for _, fs := range page.FeatureSets {
+				<div class="mt-6">
+					<h3 id={ fs.ID } class="text-lg font-semibold">{ fs.Name }</h3>
+					if fs.Description != "" {
+						<p class="mt-1 text-sm text-base-content/70">{ fs.Description }</p>
+					}
+					if len(fs.Features) > 0 {
+						<ul class="mt-3 list-disc pl-5 space-y-4">
+							for _, f := range fs.Features {
+								<li>
+									<strong>C{ strconv.Itoa(f.Number) } — { f.Name }</strong>
+									@entityID(f.ID)
+									if f.Description != "" {
+										<div class="text-sm text-base-content/70">{ f.Description }</div>
+									}
+									if len(f.Requirements) > 0 {
+										<ul class="mt-2 list-disc pl-5 space-y-2">
+											for _, rq := range f.Requirements {
+												<li>
+													<strong>{ rq.Kind }</strong>: { rq.Name }
+													@entityID(rq.ID)
+													if rq.Body != "" {
+														<div class="text-sm text-base-content/70">{ rq.Body }</div>
+													}
+												</li>
+											}
+										</ul>
+									}
+								</li>
+							}
+						</ul>
+					}
+				</div>
+			}
+		}
+	</section>
+}
+
+// Decisions lists a product's current LoadBearingDecisions with their
+// full body text -- get_product_slice's decisions, unchanged (FR
+// 6aa70e3a).
+templ Decisions(page DecisionsPage) {
+	<section id={ DecisionsAnchor } data-krill="decisions">
+		@pageHeader(DecisionsAnchor, page.Path, page.Product.Name+" — load-bearing decisions", page.Product.Vision)
+		@components.SubNav(page.Nav)
+		if len(page.Decisions) == 0 {
+			@htmxui.EmptyState("No load-bearing decisions yet.", "The decisions later capabilities of this product depend on.", "", "", templ.Attributes{})
+		} else {
+			<ol class="mt-4 list-decimal pl-5 space-y-4">
+				for _, d := range page.Decisions {
+					<li id={ d.ID }>
+						<strong>LB{ strconv.Itoa(d.Number) } — { d.Name }</strong>
+						@entityID(d.ID)
+						if d.Body != "" {
+							<div class="text-sm text-base-content/70">{ d.Body }</div>
+						}
+					</li>
+				}
+			</ol>
+		}
+	</section>
+}
+
+// Personas lists a product's current Personas -- list_personas' shape
+// (FR b4c1c77f).
+templ Personas(page PersonasPage) {
+	<section id={ PersonasAnchor } data-krill="personas">
+		@pageHeader(PersonasAnchor, page.Path, page.Product.Name+" — personas", page.Product.Vision)
+		@components.SubNav(page.Nav)
+		if len(page.Personas) == 0 {
+			@htmxui.EmptyState("No personas yet.", "Who this product serves.", "", "", templ.Attributes{})
+		} else {
+			<ul class="mt-4 list-disc pl-5 space-y-4">
+				for _, p := range page.Personas {
+					<li id={ p.ID }>
+						<strong>{ p.Name }</strong>
+						@entityID(p.ID)
+						if p.Description != "" {
+							<div class="text-sm text-base-content/70">{ p.Description }</div>
+						}
+					</li>
+				}
+			</ul>
+		}
+	</section>
+}
+
+// NonGoals lists a product's current Non-Goals, both the permanent and
+// deferred kinds -- list_non_goals' shape (FR b4c1c77f).
+templ NonGoals(page NonGoalsPage) {
+	<section id={ NonGoalsAnchor } data-krill="non-goals">
+		@pageHeader(NonGoalsAnchor, page.Path, page.Product.Name+" — non-goals", page.Product.Vision)
+		@components.SubNav(page.Nav)
+		if len(page.Groups) == 0 {
+			@htmxui.EmptyState("No non-goals yet.", "What this product deliberately will not do.", "", "", templ.Attributes{})
+		} else {
+			for _, g := range page.Groups {
+				if len(g.NonGoals) > 0 {
+					<div class="mt-6">
+						<h3 class="text-lg font-semibold">{ g.Heading }</h3>
+						<ul class="mt-3 list-disc pl-5 space-y-4">
+							for _, n := range g.NonGoals {
+								<li id={ n.ID }>
+									<strong>{ n.Name }</strong>
+									@entityID(n.ID)
+									if n.Body != "" {
+										<div class="text-sm text-base-content/70">{ n.Body }</div>
+									}
+								</li>
+							}
+						</ul>
+					</div>
+				}
+			}
+		}
+	</section>
+}
+
+// SpecStatus is the spec area's error body: a heading, the detail, and a
+// way back to the product index. The 400 / 404 / 500 that goes with it
+// is applied by renderShellStatus, which owns the response.
+// SpecInlineError is the fragment an htmx caller gets when a spec read
+// fails. Every spec page's Refresh button re-requests its own route, so
+// this is reachable by htmx, and htmx does not swap on a non-2xx -- a
+// status-coded page here would leave the operator clicking Refresh with
+// no feedback at all.
+//
+// anchor must be the id the requesting page's Refresh button targets.
+// htmx's outerHTML inserts the response in place of the target and then
+// REMOVES the target, so a fragment without that id would delete the swap
+// target itself -- and the next Refresh would find no target, at which
+// point htmx returns before issuing the request. The page would freeze
+// with no request ever reaching the server.
+//
+// One component serves all six spec/delivery pages, which is why the
+// anchor is a parameter rather than hardcoded: the fragment has to land on
+// the id of whichever page asked for it.
+templ SpecInlineError(anchor, message string) {
+	<section id={ anchor } data-krill="spec-status">
+		@htmxui.Alert(htmxui.AlertError, message, templ.Attributes{
+			"data-krill": "spec-status-detail",
+		})
+	</section>
+}
+
+templ SpecStatus(page StatusPage) {
+	<section data-krill="spec-status">
+		<h2 class="text-xl font-semibold" data-krill="page-title">{ page.Title }</h2>
+		@htmxui.Alert(htmxui.AlertError, page.Detail, templ.Attributes{
+			"data-krill": "spec-status-detail",
+		})
+		if page.BackHref != "" && page.BackText != "" {
+			<div class="mt-4">
+				<a href={ templ.URL(page.BackHref) } class="btn btn-secondary btn-sm">{ page.BackText }</a>
+			</div>
+		}
+	</section>
+}

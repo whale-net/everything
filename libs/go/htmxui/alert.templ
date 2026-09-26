@@ -1,0 +1,59 @@
+package htmxui
+
+import "strings"
+
+// AlertVariant selects an Alert's daisyUI colour semantic class. The
+// constant IS the class it emits, matching ButtonVariant/BadgeVariant
+// (ARCHITECTURE §5).
+type AlertVariant string
+
+const (
+	AlertInfo    AlertVariant = "alert-info"
+	AlertSuccess AlertVariant = "alert-success"
+	AlertWarning AlertVariant = "alert-warning"
+	AlertError   AlertVariant = "alert-error"
+)
+
+func alertClasses(variant AlertVariant) string {
+	classes := []string{"alert"}
+	if variant != "" {
+		classes = append(classes, string(variant))
+	}
+	return strings.Join(classes, " ")
+}
+
+// alertRole is the ARIA role an Alert carries, derived from its variant
+// rather than taken as a parameter. This is the drift the primitive
+// exists to remove: the surveyed call sites (ARCHITECTURE §13) chose
+// role="status" for success and role="alert" for error, independently,
+// in five domains. daisyUI pairs the calm variants (info, success) with
+// the polite live region and the urgent ones (warning, error) with the
+// assertive one, so deriving it makes the choice correct everywhere
+// instead of leaving it to drift. A caller that genuinely needs the
+// other role passes it through the attrs escape hatch (§9).
+func alertRole(variant AlertVariant) string {
+	if variant == AlertInfo || variant == AlertSuccess {
+		return "status"
+	}
+	return "alert"
+}
+
+// Alert is htmxui's shared flash / inline-message primitive: a daisyUI
+// alert box carrying one message, plus an optional children slot for
+// anything richer (an action link, a retry button).
+//
+// It is net-new consolidation rather than an extraction (§8): the same
+// shape was independently written in every surveyed domain — and had
+// already begun to drift (ARCHITECTURE §13).
+//
+// message is a parameter rather than a children-only slot because every
+// surveyed call site passes exactly one string; children is for the
+// minority that need more. Neither is the <form> element: that stays
+// app-owned (§9), so one Alert serves a form, a bare flash, and a
+// fragment's inline error without htmxui knowing which.
+templ Alert(variant AlertVariant, message string, attrs templ.Attributes) {
+	<div class={ alertClasses(variant) } role={ alertRole(variant) } { attrs... }>
+		<span class="text-sm">{ message }</span>
+		{ children... }
+	</div>
+}

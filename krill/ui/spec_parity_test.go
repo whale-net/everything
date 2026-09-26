@@ -19,9 +19,9 @@ package main
 //     as carried, grouped, or structural, forcing a decision on every new
 //     field the wire grows.
 //
-// The render under test is the pure builder + template -- the same
-// capabilityPageOf/decisionsPageOf/personasPageOf/nonGoalsPageOf the HTTP
-// handlers call -- so the whole HTML the browser receives is exercised
+// The render under test is the pure builder + its templ component -- the
+// same capabilityPageOf/decisionsPageOf/personasPageOf/nonGoalsPageOf the
+// HTTP handlers call -- so the whole HTML the browser receives is exercised
 // without a database. The builders take the wire/store structs directly,
 // which is exactly what the MCP tools marshal, so the two are proven to
 // agree field-for-field on the same source rows.
@@ -38,6 +38,7 @@ import (
 	"github.com/whale-net/everything/krill/mcp/tools"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // wireFieldClass is how one leaf field of an MCP wire struct relates to the
@@ -354,7 +355,7 @@ func TestCapabilityMapCarriesEveryWireField(t *testing.T) {
 		},
 	}
 
-	html := string(renderPage(capabilityTemplate, capabilityPageOf(doc, productID)))
+	html := mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID)))
 
 	requireCarried(t, "FeatureSetEntity", fs, html)
 	requireCarried(t, "FeatureEntity", feat, html)
@@ -389,7 +390,7 @@ func TestDecisionsCarryEveryWireField(t *testing.T) {
 		Decisions: []slice.DecisionEntity{d},
 	}
 
-	html := string(renderPage(decisionsTemplate, decisionsPageOf(doc, productID)))
+	html := mustRenderComponent(pages.Decisions(decisionsPageOf(doc, productID)))
 	requireCarried(t, "DecisionEntity", d, html)
 
 	// Full body, not a truncated prefix: the whole uniqueBody, tail included.
@@ -414,7 +415,7 @@ func TestPersonasCarryEveryWireField(t *testing.T) {
 	// The wire list_personas would return for this row.
 	wire := tools.PersonaSummary{ID: persona.ID.String(), Name: persona.Name, Description: persona.Description}
 
-	html := string(renderPage(personasTemplate, personasPageOf(product, []store.Persona{persona}, productID)))
+	html := mustRenderComponent(pages.Personas(personasPageOf(product, []store.Persona{persona}, productID)))
 	requireCarried(t, "PersonaSummary", wire, html)
 }
 
@@ -433,7 +434,7 @@ func TestNonGoalsCarryEveryWireField(t *testing.T) {
 	permWire := tools.NonGoalSummary{ID: perm.ID.String(), Kind: string(perm.Kind), Name: perm.Name, Body: perm.Body}
 	defWire := tools.NonGoalSummary{ID: def.ID.String(), Kind: string(def.Kind), Name: def.Name, Body: def.Body}
 
-	html := string(renderPage(nonGoalsTemplate, nonGoalsPageOf(product, []store.NonGoal{perm, def}, productID)))
+	html := mustRenderComponent(pages.NonGoals(nonGoalsPageOf(product, []store.NonGoal{perm, def}, productID)))
 	requireCarried(t, "NonGoalSummary", permWire, html)
 	requireCarried(t, "NonGoalSummary", defWire, html)
 
@@ -468,7 +469,7 @@ func TestCarriedWireFieldPresenceIsNonVacuous(t *testing.T) {
 	fr := slice.RequirementEntity{EntityRef: slice.EntityRef{ID: frID}, FeatureID: featID, Kind: "FR", Name: "granularity", Body: ptr("returns every child")}
 	doc := slice.Document{Product: &slice.ProductEntity{Name: "krill"}, FeatureSets: []slice.FeatureSetEntity{fs}, Features: []slice.FeatureEntity{feat}, Requirements: []slice.RequirementEntity{fr}}
 
-	html := string(renderPage(capabilityTemplate, capabilityPageOf(doc, productID)))
+	html := mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID)))
 
 	// Rename a field's value in the wire but keep the rendered HTML from the
 	// original: requireCarried must now report the mismatch. We assert this

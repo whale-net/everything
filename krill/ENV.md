@@ -105,6 +105,14 @@ migration `006_mcpauth_credential`).
 | `KRILL_MCP_PUBLIC_URL` | *(required)* | `mcp`'s own externally reachable URL -- `auth.ProviderConfig.Resource`. Must be byte-identical to `mcp`'s own `KRILL_MCP_PUBLIC_URL`. |
 | `KRILL_API_URL` | *(required)* | `api`'s base URL, the target `ui`'s app write client mints krill sessions against (`POST <KRILL_API_URL>/sessions/init`) and issues every mutating request to. Unset fails `ui`'s boot: a UI with no configured `api` cannot attribute a write to a real operator identity. |
 
+The UI ships no bundler assets and no Node/npm toolchain: Tailwind and
+daisyUI reach the browser from pinned CDN `<link>`/`<script>` tags
+hard-coded in `krill/ui/templ_render.go`'s `buildHead`, exactly as
+`manmanv2/ui` does. There is deliberately **no** environment variable to
+override them — a deployment that needs a different asset origin would
+need a code change, matching every other htmxui-adopting UI in the repo.
+See `ui/README.md`.
+
 ## M5 (escalation/intervention/console axis, issues #2867-#2877)
 
 No new environment variable. Every M5 tunable — `store.DefaultThrashCap`,

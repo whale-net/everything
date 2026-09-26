@@ -159,8 +159,23 @@ func newDesignWriteEnv(t *testing.T) *designWriteEnv {
 // submitForm posts a real browser form -- urlencoded, as an HTML <form>
 // sends -- through mux with the operator's session cookie attached.
 func submitForm(mux *http.ServeMux, target string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	return postForm(mux, target, form, false, cookies...)
+}
+
+// submitFormHX is the same submit as an htmx form post: the identical
+// urlencoded body plus the HX-Request header htmx sets on every request it
+// issues. Both write forms are doubled (method+action and hx-post), so
+// this exercises the half a no-JS browser never reaches.
+func submitFormHX(mux *http.ServeMux, target string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	return postForm(mux, target, form, true, cookies...)
+}
+
+func postForm(mux *http.ServeMux, target string, form url.Values, hx bool, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if hx {
+		req.Header.Set("HX-Request", "true")
+	}
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -183,6 +198,14 @@ func (e *designWriteEnv) submitOpen(form url.Values) *httptest.ResponseRecorder 
 
 func (e *designWriteEnv) submitAnswer(form url.Values) *httptest.ResponseRecorder {
 	return submitForm(e.Mux, e.answerPath(), form, e.Cookie)
+}
+
+func (e *designWriteEnv) submitOpenHX(form url.Values) *httptest.ResponseRecorder {
+	return submitFormHX(e.Mux, e.openPath(), form, e.Cookie)
+}
+
+func (e *designWriteEnv) submitAnswerHX(form url.Values) *httptest.ResponseRecorder {
+	return submitFormHX(e.Mux, e.answerPath(), form, e.Cookie)
 }
 
 // ---------------------------------------------------------------------------
@@ -301,12 +324,15 @@ func assertEntityDeltasAlwaysEmpty(t *testing.T, where string, raw []byte) {
 }
 
 // assertInShell fails unless body is a full shell page (not a bare status
-// page) -- a rejected write must land the operator back in the UI.
+// page) -- a rejected write must land the operator back in the UI. The
+// landmarks are matched on the tag prefix because the shared nav/main
+// elements carry attributes (aria-label, class) now that they are templ
+// components rather than hand-written tags.
 func assertInShell(t *testing.T, body string) {
 	t.Helper()
 	assert.Contains(t, body, "<!DOCTYPE html>", "the re-render must be in-shell, not a bare status page")
-	assert.Contains(t, body, "<nav>")
-	assert.Contains(t, body, "<main>")
+	assert.Contains(t, body, "<nav")
+	assert.Contains(t, body, "<main")
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +539,7 @@ func TestDesignWrite_RejectedOpen_RerendersFormInShell(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "a rejected write re-renders the page, not a status code: %s", body)
 	assertInShell(t, body)
 
-	assert.Contains(t, body, `<p class="form-error" role="alert">`, "the message must render as an inline alert")
+	assert.Contains(t, body, `class="alert alert-error"`, "the message must render as an inline alert")
 	assert.Contains(t, body, "422: product is in another scope", "api's status and named message are shown")
 	assert.NotContains(t, body, `{"error":`, "the raw JSON rejection must not leak into the page")
 	assert.NotContains(t, body, `"error":`)
@@ -544,7 +570,7 @@ func TestDesignWrite_RejectedAnswer_RerendersFormInShell(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "a rejected write re-renders the page, not a status code: %s", body)
 	assertInShell(t, body)
 
-	assert.Contains(t, body, `<p class="form-error" role="alert">`)
+	assert.Contains(t, body, `class="alert alert-error"`)
 	assert.Contains(t, body, "409: question q-flag-store was never opened")
 	assert.NotContains(t, body, `{"error":`, "the raw JSON rejection must not leak into the page")
 	assert.NotContains(t, body, `"error":`)
@@ -574,7 +600,7 @@ func TestDesignWrite_RejectsEmptySubmissionBeforeApi(t *testing.T) {
 			body := rec.Body.String()
 			require.Equal(t, http.StatusOK, rec.Code, "validation must re-render in-shell, not answer a bare 400: %s", body)
 			assertInShell(t, body)
-			assert.Contains(t, body, `<p class="form-error" role="alert">`)
+			assert.Contains(t, body, `class="alert alert-error"`)
 			assert.Contains(t, body, "Describe your idea in plain language before opening the session.")
 			assert.Empty(t, env.API.recorded(), "an empty submission must never reach krill")
 		})
@@ -587,7 +613,7 @@ func TestDesignWrite_RejectsEmptySubmissionBeforeApi(t *testing.T) {
 			body := rec.Body.String()
 			require.Equal(t, http.StatusOK, rec.Code, "validation must re-render in-shell, not answer a bare 400: %s", body)
 			assertInShell(t, body)
-			assert.Contains(t, body, `<p class="form-error" role="alert">`)
+			assert.Contains(t, body, `class="alert alert-error"`)
 			assert.Contains(t, body, "Write a follow-up, or tick an open question your answer closes.")
 			assert.Empty(t, env.API.recorded(), "an empty answer must never reach krill")
 		})
@@ -643,4 +669,128 @@ func TestDesignWrite_IdentityComesOnlyFromTheSignedInSession(t *testing.T) {
 			"event_type", "entity_deltas", "open_questions_delta", "verified_against", "signoff_status")
 		assertNoForbiddenKeys(t, "answer body", write.Body)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// the doubled form: the htmx half of each write
+//
+// Both write forms carry method+action AND hx-post+hx-target+hx-swap, so
+// one route serves a no-JS browser (303 + Location) and an htmx one
+// (200 + HX-Redirect, or 200 with the form fragment carrying the error
+// inline). The no-HX half is pinned by every test above; these cover the
+// other half.
+// ---------------------------------------------------------------------------
+
+// TestDesignWrite_OpenSession_HXSuccessRedirects is the open form's htmx
+// success: a 200 with HX-Redirect to the new session's detail page. The
+// write itself is byte-identical to the no-HX round trip -- one route, one
+// handler, one body.
+func TestDesignWrite_OpenSession_HXSuccessRedirects(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	const submission = "Operators need to bulk-export their incident list as CSV."
+
+	rec := env.submitOpenHX(url.Values{"opening_submission": {submission}})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, designSessionPath(uuid.MustParse(env.API.createdSessionID)), rec.Header().Get("HX-Redirect"),
+		"the htmx success must navigate to the new session's detail page")
+	assert.Empty(t, rec.Header().Get("Location"), "an htmx write redirects with HX-Redirect, not Location")
+
+	write := env.API.writeRequest(t)
+	assert.JSONEq(t, fmt.Sprintf(`{"product_id":%q,"opening_submission":%q}`, env.ProductID.String(), submission), string(write.Body))
+	assertFreshOperatorAttribution(t, env.API, env.Iss, env.Sub)
+}
+
+// TestDesignWrite_RejectedOpen_HXReRendersFormInline is the open form's
+// htmx refusal: 200 with the bare form fragment (no shell chrome), the
+// api's status and named message inline, and the operator's typed text
+// preserved. A swap target's HTTP status is not surfaced to the operator,
+// so the error has to ride inside the fragment.
+func TestDesignWrite_RejectedOpen_HXReRendersFormInline(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	env.API.onRequest(func(req recordedRequest) (int, string) {
+		if req.Path == "/design-sessions" {
+			return http.StatusUnprocessableEntity, `{"error":"product is in another scope"}`
+		}
+		return 0, ""
+	})
+	const submission = "Operators need to bulk-export their incident list as CSV."
+
+	rec := env.submitOpenHX(url.Values{"opening_submission": {submission}})
+	body := rec.Body.String()
+	require.Equal(t, http.StatusOK, rec.Code, "a refusal is 200, never the rejection's status: %s", body)
+	assert.Empty(t, rec.Header().Get("HX-Redirect"), "a refusal must not navigate away")
+	assert.NotContains(t, body, "<main", "the htmx half answers the fragment alone, with no shell chrome")
+	assert.Contains(t, body, `class="alert alert-error"`, "the error rides inline in the swapped fragment")
+	assert.Contains(t, body, "422: product is in another scope")
+	assert.NotContains(t, body, `"error":`, "the raw JSON rejection must not leak into the fragment")
+
+	// The operator's text and the form's own wiring both survive.
+	assert.Contains(t, body, ">"+submission+"</textarea>", "the submitted text must be preserved")
+	assert.Contains(t, body, `action="`+env.openPath()+`"`, "the form still posts to its own action")
+	assert.Contains(t, body, `hx-post="`+env.openPath()+`"`, "the doubled form keeps its htmx wiring across a re-render")
+}
+
+// TestDesignWrite_RejectedAnswer_HXReRendersFormInline is the answer
+// form's htmx refusal: 200 with the bare follow-up form, the error
+// inline, and both the typed text and the ticked resolve box preserved
+// per-id.
+func TestDesignWrite_RejectedAnswer_HXReRendersFormInline(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	env.API.onRequest(func(req recordedRequest) (int, string) {
+		if strings.HasSuffix(req.Path, "/revision-events") {
+			return http.StatusConflict, `{"error":"question q-flag-store was never opened"}`
+		}
+		return 0, ""
+	})
+	const followUp = "It should read the postgres flag table, not the env file."
+
+	rec := env.submitAnswerHX(url.Values{
+		"follow_up": {followUp},
+		"resolve":   {testClosedQuestion},
+	})
+	body := rec.Body.String()
+	require.Equal(t, http.StatusOK, rec.Code, "a refusal is 200, never the rejection's status: %s", body)
+	assert.Empty(t, rec.Header().Get("HX-Redirect"), "a refusal must not navigate away")
+	assert.NotContains(t, body, "<main", "the htmx half answers the fragment alone, with no shell chrome")
+	assert.Contains(t, body, `class="alert alert-error"`)
+	assert.Contains(t, body, "409: question q-flag-store was never opened")
+	assert.NotContains(t, body, `"error":`)
+
+	// Text and ticks survive; only the ticked box comes back checked.
+	assert.Contains(t, body, ">"+followUp+"</textarea>", "the submitted follow-up must be preserved")
+	assert.Contains(t, body, `value="`+testClosedQuestion+`" checked`, "the ticked resolve box must stay ticked")
+	assert.NotContains(t, body, `value="`+testKeptQuestion+`" checked`, "an unticked box must not come back ticked")
+	assert.Contains(t, body, `hx-post="`+env.answerPath()+`"`, "the doubled form keeps its htmx wiring across a re-render")
+}
+
+// TestDesignWrite_HXRejectsEmptySubmissionBeforeApi is the htmx half of
+// the empty-submission rule: the server refusal is answered inline in the
+// swapped fragment, and nothing at all reaches krill.
+func TestDesignWrite_HXRejectsEmptySubmissionBeforeApi(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	rec := env.submitOpenHX(url.Values{"opening_submission": {"   "}})
+	body := rec.Body.String()
+	require.Equal(t, http.StatusOK, rec.Code, "validation is 200 inline, not a bare 400: %s", body)
+	assert.Contains(t, body, `class="alert alert-error"`)
+	assert.Contains(t, body, "Describe your idea in plain language before opening the session.")
+	assert.Empty(t, env.API.recorded(), "an empty submission must never reach krill")
+}
+
+// TestDesignWrite_Answer_HXSuccessRedirects is the answer form's htmx
+// success: 200 with HX-Redirect back to the session's own detail page,
+// which is the same navigation the no-HX branch performs with a 303.
+func TestDesignWrite_Answer_HXSuccessRedirects(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	env.API.onRequest(func(req recordedRequest) (int, string) {
+		if strings.HasSuffix(req.Path, "/revision-events") {
+			return http.StatusCreated, `{"id":"` + uuid.NewString() + `","seq_no":4}`
+		}
+		return 0, ""
+	})
+
+	rec := env.submitAnswerHX(url.Values{"follow_up": {"here is the missing detail"}})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, designSessionPath(env.SessionID), rec.Header().Get("HX-Redirect"),
+		"the htmx success navigates back to the session's detail page")
+	assert.Empty(t, rec.Header().Get("Location"), "an htmx write redirects with HX-Redirect, not Location")
 }

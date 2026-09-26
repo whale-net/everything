@@ -13,19 +13,24 @@
 // (krill/ARCHITECTURE/12-design-session-revision-event-http.md). These
 // pages are behind the sign-in gate only, exactly like the rest of the
 // nav shell.
+//
+// The view models themselves (pages.DesignSessionListPage and friends) are
+// declared in krill/ui/pages/design.templ beside the components that
+// render them; the pure builders that populate them stay here.
 package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"html/template"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // designSessionPath is one session's detail page.
@@ -38,90 +43,13 @@ func designProductSessionsPath(productID uuid.UUID) string {
 	return designPath + "/products/" + productID.String() + "/design-sessions"
 }
 
-// ── view models ──────────────────────────────────────────────────────────────
-
-// designSessionRow is one row of a product's session list. SignedOff marks a
-// session whose log ends in an approved signoff, so the list shows both the
-// open and the signed-off sessions the contributor can navigate back into.
-type designSessionRow struct {
-	ID                string
-	OpeningSubmission string
-	CreatedAt         string
-	SignedOff         bool
-	DetailPath        string
+// designAnswersPath is one session's follow-up answer action.
+func designAnswersPath(id uuid.UUID) string {
+	return designSessionPath(id) + "/answers"
 }
 
-// designSessionListPage is the product-scoped session list. Error and
-// OpeningSubmission are set only when an "open a session" submission is
-// rejected and the form is re-rendered in-shell: Error is the readable
-// api status + message shown inline, and OpeningSubmission is the operator's
-// typed text, preserved so a rejection is not a data-loss event.
-type designSessionListPage struct {
-	ProductID         string
-	Sessions          []designSessionRow
-	Error             string
-	OpeningSubmission string
-}
-
-// entityDeltaRow is one spec entity a revision event touched.
-type entityDeltaRow struct {
-	EntityID    string
-	Change      string
-	SummaryLine string
-}
-
-// openQuestionDeltaRow is one question a revision event opened.
-type openQuestionDeltaRow struct {
-	QuestionID string
-	Text       string
-	Blocking   string // "blocking" or "non-blocking"
-}
-
-// revisionEventRow is one round of a session's ordered log, carrying every
-// field get_design_session's own log exposes for that round.
-type revisionEventRow struct {
-	ID                string
-	SeqNo             int
-	EventType         string
-	Acting            string
-	OnBehalfOf        string
-	VerifiedAgainst   string
-	SignoffStatus     string
-	CreatedAt         string
-	EntityDeltas      []entityDeltaRow
-	OpenedQuestions   []openQuestionDeltaRow
-	ResolvedQuestions []string
-}
-
-// openQuestionRow is one currently-open question, tagged blocking or
-// non-blocking exactly as list_open_questions tags it.
-type openQuestionRow struct {
-	QuestionID    string
-	Text          string
-	Blocking      string // "blocking" or "non-blocking"
-	OpenedAtSeqNo int
-}
-
-// designSessionDetailPage is one session: its row, its full ordered
-// revision-event log, and its currently-open questions. Error, FollowUp, and
-// CheckedResolve are set only when a "submit follow-up" round is rejected and
-// the form is re-rendered in-shell: Error is the readable api status +
-// message, FollowUp is the operator's typed text, and CheckedResolve holds
-// the question ids whose resolve box was ticked, all preserved so a
-// rejection is not a data-loss event.
-type designSessionDetailPage struct {
-	ID                     string
-	ProductID              string
-	OpeningSubmission      string
-	OpenedByKrillSessionID string
-	CreatedAt              string
-	ProductSessionsPath    string
-	Events                 []revisionEventRow
-	OpenQuestions          []openQuestionRow
-	Error                  string
-	FollowUp               string
-	CheckedResolve         map[string]bool
-}
+// designGoPath is the design root's product-id browse target.
+const designGoPath = designPath + "/go"
 
 // ── read helpers ─────────────────────────────────────────────────────────────
 
@@ -130,18 +58,18 @@ type designSessionDetailPage struct {
 // row's signed-off state is derived from that session's own revision-event
 // log, the one source of truth for a session's current state (the
 // design_session row itself is never updated -- FR1's boundary comment).
-func (app *App) listDesignSessions(ctx context.Context, productID uuid.UUID) ([]designSessionRow, error) {
+func (app *App) listDesignSessions(ctx context.Context, productID uuid.UUID) ([]pages.DesignSessionRow, error) {
 	sessions, err := app.designSessions.ListByProduct(ctx, productID)
 	if err != nil {
 		return nil, err
 	}
-	rows := make([]designSessionRow, 0, len(sessions))
+	rows := make([]pages.DesignSessionRow, 0, len(sessions))
 	for _, ds := range sessions {
 		events, err := app.revisionEvents.ListBySession(ctx, ds.ID)
 		if err != nil {
 			return nil, err
 		}
-		rows = append(rows, designSessionRow{
+		rows = append(rows, pages.DesignSessionRow{
 			ID:                ds.ID.String(),
 			OpeningSubmission: ds.OpeningSubmission,
 			CreatedAt:         formatTime(ds.CreatedAt),
@@ -166,29 +94,23 @@ func isSignedOff(events []store.RevisionEvent) bool {
 	return signedOff
 }
 
-// IsChecked reports whether a resolve box for the given question id was
-// ticked, so a rejected follow-up round re-renders the form with the
-// operator's original ticks intact. A nil CheckedResolve reads every id as
-// unticked, which is the GET handler's normal case.
-func (p designSessionDetailPage) IsChecked(id string) bool { return p.CheckedResolve[id] }
-
 // buildDesignSessionDetail assembles one session's read view from the same
 // three store reads get_design_session (GetByID + ListBySession) and
 // list_open_questions (GetByID + ListOpenQuestions) perform.
-func (app *App) buildDesignSessionDetail(ctx context.Context, id uuid.UUID) (designSessionDetailPage, error) {
+func (app *App) buildDesignSessionDetail(ctx context.Context, id uuid.UUID) (pages.DesignSessionDetailPage, error) {
 	ds, err := app.designSessions.GetByID(ctx, id)
 	if err != nil {
-		return designSessionDetailPage{}, err
+		return pages.DesignSessionDetailPage{}, err
 	}
 	events, err := app.revisionEvents.ListBySession(ctx, id)
 	if err != nil {
-		return designSessionDetailPage{}, err
+		return pages.DesignSessionDetailPage{}, err
 	}
 	questions, err := app.revisionEvents.ListOpenQuestions(ctx, id)
 	if err != nil {
-		return designSessionDetailPage{}, err
+		return pages.DesignSessionDetailPage{}, err
 	}
-	return designSessionDetailPage{
+	return pages.DesignSessionDetailPage{
 		ID:                     ds.ID.String(),
 		ProductID:              ds.ProductID.String(),
 		OpeningSubmission:      ds.OpeningSubmission,
@@ -197,29 +119,30 @@ func (app *App) buildDesignSessionDetail(ctx context.Context, id uuid.UUID) (des
 		ProductSessionsPath:    designProductSessionsPath(ds.ProductID),
 		Events:                 revisionEventRows(events),
 		OpenQuestions:          openQuestionRows(questions),
+		AnswersPath:            designAnswersPath(ds.ID),
 	}, nil
 }
 
-func revisionEventRows(events []store.RevisionEvent) []revisionEventRow {
-	rows := make([]revisionEventRow, 0, len(events))
+func revisionEventRows(events []store.RevisionEvent) []pages.RevisionEventRow {
+	rows := make([]pages.RevisionEventRow, 0, len(events))
 	for _, ev := range events {
-		deltas := make([]entityDeltaRow, 0, len(ev.EntityDeltas))
+		deltas := make([]pages.EntityDeltaRow, 0, len(ev.EntityDeltas))
 		for _, d := range ev.EntityDeltas {
-			deltas = append(deltas, entityDeltaRow{
+			deltas = append(deltas, pages.EntityDeltaRow{
 				EntityID:    d.EntityID.String(),
 				Change:      string(d.Change),
 				SummaryLine: d.SummaryLine,
 			})
 		}
-		opened := make([]openQuestionDeltaRow, 0, len(ev.OpenQuestionsDelta.Opened))
+		opened := make([]pages.OpenQuestionDeltaRow, 0, len(ev.OpenQuestionsDelta.Opened))
 		for _, q := range ev.OpenQuestionsDelta.Opened {
-			opened = append(opened, openQuestionDeltaRow{
+			opened = append(opened, pages.OpenQuestionDeltaRow{
 				QuestionID: q.QuestionID,
 				Text:       q.Text,
 				Blocking:   blockingTag(q.Blocking),
 			})
 		}
-		rows = append(rows, revisionEventRow{
+		rows = append(rows, pages.RevisionEventRow{
 			ID:                ev.ID.String(),
 			SeqNo:             ev.SeqNo,
 			EventType:         string(ev.EventType),
@@ -236,10 +159,10 @@ func revisionEventRows(events []store.RevisionEvent) []revisionEventRow {
 	return rows
 }
 
-func openQuestionRows(questions []store.OpenQuestion) []openQuestionRow {
-	rows := make([]openQuestionRow, 0, len(questions))
+func openQuestionRows(questions []store.OpenQuestion) []pages.OpenQuestionRow {
+	rows := make([]pages.OpenQuestionRow, 0, len(questions))
 	for _, q := range questions {
-		rows = append(rows, openQuestionRow{
+		rows = append(rows, pages.OpenQuestionRow{
 			QuestionID:    q.QuestionID,
 			Text:          q.Text,
 			Blocking:      blockingTag(q.Blocking),
@@ -283,155 +206,32 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04 UTC")
 }
 
-// ── templates ────────────────────────────────────────────────────────────────
-
-// designRootTemplate is the design root's landing body (routes.go's
-// handleDesign): it takes a product id and navigates to that product's
-// session list -- the entry point a Requirement Contributor needs to reach a
-// session without already holding its id.
-var designRootTemplate = template.Must(template.New("design-root").Parse(`<h2>Design sessions</h2>
-<p>Browse a product's design sessions. Enter the product's id to open its session list.</p>
-<p>
-  <label for="product-id">Product id</label>
-  <input id="product-id" type="text" placeholder="00000000-0000-0000-0000-000000000000" style="font-family: monospace;">
-  <button id="browse-btn" type="button">Browse sessions</button>
-</p>
-<script>
-document.getElementById('browse-btn').addEventListener('click', function () {
-  var v = document.getElementById('product-id').value.trim();
-  if (v) { window.location = '/design/products/' + encodeURIComponent(v) + '/design-sessions'; }
-});
-</script>`))
-
-// designSessionListTemplate renders a product's sessions, each linking into
-// its detail page.
-var designSessionListTemplate = template.Must(template.New("design-session-list").Parse(`<h2>Design sessions</h2>
-<p>Product <code>{{.ProductID}}</code></p>
-
-<h3>Open a new design session</h3>
-<p>Describe your idea in plain language. krill records it as the session's opening submission; it does not create or change any spec entity here.</p>
-{{if .Error}}
-<p class="form-error" role="alert"><strong>Not saved:</strong> {{.Error}}</p>
-{{end}}
-<form method="post" action="/design/products/{{.ProductID}}/design-sessions">
-  <p><label for="opening-submission">Your idea or user story</label><br>
-  <textarea id="opening-submission" name="opening_submission" rows="4" cols="60" required placeholder="Users need to bulk-export their data as CSV">{{.OpeningSubmission}}</textarea></p>
-  <p><button type="submit">Open design session</button></p>
-</form>
-
-{{if .Sessions}}
-<table>
-  <thead><tr><th>Session</th><th>Opening submission</th><th>Status</th><th>Created</th></tr></thead>
-  <tbody>
-  {{range .Sessions}}
-  <tr>
-    <td><a href="{{.DetailPath}}"><code>{{.ID}}</code></a></td>
-    <td>{{.OpeningSubmission}}</td>
-    <td>{{if .SignedOff}}signed off{{else}}open{{end}}</td>
-    <td>{{.CreatedAt}}</td>
-  </tr>
-  {{end}}
-  </tbody>
-</table>
-{{else}}
-<p>No design sessions for this product yet.</p>
-{{end}}`))
-
-// designSessionDetailTemplate renders one session's full ordered
-// revision-event log and its currently-open questions.
-var designSessionDetailTemplate = template.Must(template.New("design-session-detail").Parse(`<h2>Design session</h2>
-<dl>
-  <dt>ID</dt><dd><code>{{.ID}}</code></dd>
-  <dt>Product</dt><dd><code>{{.ProductID}}</code></dd>
-  <dt>Opening submission</dt><dd>{{.OpeningSubmission}}</dd>
-  <dt>Opened by krill session</dt><dd><code>{{.OpenedByKrillSessionID}}</code></dd>
-  <dt>Created</dt><dd>{{.CreatedAt}}</dd>
-</dl>
-
-<h3>Revision events</h3>
-{{if .Events}}
-<ol>
-{{range .Events}}
-  <li>
-    <strong>#{{.SeqNo}} {{.EventType}}</strong>{{if .SignoffStatus}} &mdash; signoff: {{.SignoffStatus}}{{end}}
-    <br><small>acting: {{.Acting}} &middot; on behalf of: {{.OnBehalfOf}} &middot; {{.CreatedAt}}</small>
-    <br><small>event id: <code>{{.ID}}</code></small>
-    {{if .VerifiedAgainst}}<br><small>verified against: {{.VerifiedAgainst}}</small>{{end}}
-    {{if .EntityDeltas}}
-    <ul>
-    {{range .EntityDeltas}}<li>{{.Change}} <code>{{.EntityID}}</code> &mdash; {{.SummaryLine}}</li>
-    {{end}}</ul>
-    {{end}}
-    {{if .OpenedQuestions}}
-    <p>Opened questions:</p>
-    <ul>
-    {{range .OpenedQuestions}}<li><code>{{.QuestionID}}</code> ({{.Blocking}}): {{.Text}}</li>
-    {{end}}</ul>
-    {{end}}
-    {{if .ResolvedQuestions}}
-    <p>Resolved questions:
-    {{range .ResolvedQuestions}}<code>{{.}}</code> {{end}}</p>
-    {{end}}
-  </li>
-{{end}}
-</ol>
-{{else}}
-<p>No revision events yet.</p>
-{{end}}
-
-<h3>Open questions</h3>
-{{if .OpenQuestions}}
-<table>
-  <thead><tr><th>Question</th><th>Tag</th><th>Opened at</th></tr></thead>
-  <tbody>
-  {{range .OpenQuestions}}
-  <tr><td><code>{{.QuestionID}}</code> &mdash; {{.Text}}</td><td>{{.Blocking}}</td><td>#{{.OpenedAtSeqNo}}</td></tr>
-  {{end}}
-  </tbody>
-</table>
-{{else}}
-<p>No open questions.</p>
-{{end}}
-<p><a href="{{.ProductSessionsPath}}">Back to this product's sessions</a></p>
-
-<h3>Submit follow-up</h3>
-<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
-{{if .Error}}
-<p class="form-error" role="alert"><strong>Not saved:</strong> {{.Error}}</p>
-{{end}}
-<form method="post" action="/design/design-sessions/{{.ID}}/answers" id="follow-up-form">
-  {{if .OpenQuestions}}
-  <fieldset>
-    <legend>Open questions this answer closes</legend>
-    {{range .OpenQuestions}}
-    <p><label><input type="checkbox" name="resolve" value="{{.QuestionID}}"{{if $.IsChecked .QuestionID}} checked{{end}}> <code>{{.QuestionID}}</code> ({{.Blocking}}): {{.Text}}</label></p>
-    {{end}}
-  </fieldset>
-  {{end}}
-  <p><label for="follow-up">Your follow-up</label><br>
-  <textarea id="follow-up" name="follow_up" rows="4" cols="60" placeholder="It should use the postgres flag table.">{{.FollowUp}}</textarea></p>
-  <p><button type="submit">Submit follow-up</button></p>
-</form>
-<script>
-// An answer round is meaningful with either follow-up text or at least one
-// ticked resolve box; an empty round is rejected client-side so the operator
-// sees the requirement before a round-trip. The textarea is therefore not
-// marked required on its own.
-document.getElementById('follow-up-form').addEventListener('submit', function (e) {
-  var text = document.getElementById('follow-up').value.trim();
-  var anyBox = this.querySelectorAll('input[name="resolve"]:checked').length > 0;
-  if (!text && !anyBox) {
-    e.preventDefault();
-    window.alert('Write a follow-up, or tick an open question your answer closes.');
-  }
-});
-</script>`))
-
 // ── handlers ─────────────────────────────────────────────────────────────────
+
+// handleDesignGo is the design root's product-id browse target: a JS-free
+// GET /design/go?product_id=X that validates the id and 302s to that
+// product's session list. It replaces an inline <script> that read a text
+// input and assigned window.location, duplicating in the browser a rule
+// the server owns.
+//
+// The only user-controlled path segment is the product id, and it is
+// parsed as a UUID before it is interpolated into a path this package
+// builds -- so a malformed or hostile value is a 400, and there is no
+// open-redirect surface.
+func (app *App) handleDesignGo(w http.ResponseWriter, r *http.Request) {
+	productID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("product_id")))
+	if err != nil {
+		http.Error(w, "invalid product id: must be a UUID", http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, designProductSessionsPath(productID), http.StatusFound)
+}
 
 // handleDesignSessionList renders a product's design sessions -- the
 // open and signed-off ones alike -- so a contributor can navigate into one
-// without already holding its id.
+// without already holding its id. One route, two modes: an htmx request
+// gets the page body as a bare fragment at 200, everything else gets it
+// inside the shell.
 func (app *App) handleDesignSessionList(w http.ResponseWriter, r *http.Request) {
 	productID, err := uuid.Parse(r.PathValue("productID"))
 	if err != nil {
@@ -444,14 +244,21 @@ func (app *App) handleDesignSessionList(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "failed to list design sessions", http.StatusInternalServerError)
 		return
 	}
-	renderShell(w, r, "Design sessions", designPath, renderPage(designSessionListTemplate, designSessionListPage{
-		ProductID: productID.String(),
-		Sessions:  sessions,
-	}))
+	page := pages.DesignSessionListPage{
+		ProductID:  productID.String(),
+		Sessions:   sessions,
+		FormAction: designProductSessionsPath(productID),
+	}
+	if isHXRequest(r) {
+		renderFragment(w, r, pages.DesignSessionList(page))
+		return
+	}
+	renderShell(w, r, "Design sessions", designPath, pages.DesignSessionList(page))
 }
 
 // handleDesignSessionDetail renders one session's full ordered
-// revision-event log and its currently-open questions.
+// revision-event log and its currently-open questions. One route, two
+// modes, exactly as handleDesignSessionList.
 func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -468,5 +275,15 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		http.Error(w, "failed to load design session", http.StatusInternalServerError)
 		return
 	}
-	renderShell(w, r, "Design session", designPath, renderPage(designSessionDetailTemplate, detail))
+	if isHXRequest(r) {
+		renderFragment(w, r, pages.DesignSessionDetail(detail))
+		return
+	}
+	renderShell(w, r, "Design session", designPath, pages.DesignSessionDetail(detail))
+}
+
+// isHXRequest reports whether the caller is htmx. One route serves both
+// modes: the header is what selects chrome vs. bare fragment.
+func isHXRequest(r *http.Request) bool {
+	return r.Header.Get("HX-Request") != ""
 }

@@ -11,7 +11,7 @@ package main
 // on a wire type fails here until someone decides what the page does
 // with it.
 //
-// The pure deliveryPageOf + deliveryTemplate are exercised for parity and
+// The pure deliveryPageOf + pages.Delivery are exercised for parity and
 // status/breakdown shape (no database). The handler-level cases -- a
 // single container's breakdown read failing, the empty product, and the
 // unknown-id 404 -- run against an in-memory fake spec reader through the
@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -29,11 +30,36 @@ import (
 
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/components"
+	"github.com/whale-net/everything/krill/ui/pages"
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
 // ---------------------------------------------------------------------------
 // fake spec reader
 // ---------------------------------------------------------------------------
+
+// deliveryBreakdownHook is the stable data-krill attribute the breakdown
+// block carries. It is what these tests detect a breakdown by: the block's
+// daisyUI classes are presentation and free to change (htmxui
+// ARCHITECTURE §14), so coupling to them would break for a cosmetic edit.
+const deliveryBreakdownHook = `data-krill="delivery-breakdown"`
+
+// hasClassToken reports whether html carries token as a whole class on
+// some element. A substring check would be wrong here: "badge-warning" is
+// a substring of nothing else today, but a future class such as
+// "badge-warning-outline" would satisfy one, and daisyUI renders the
+// variant in the middle of a multi-class attribute, never alone.
+func hasClassToken(html, token string) bool {
+	for _, attr := range regexp.MustCompile(`class="([^"]*)"`).FindAllStringSubmatch(html, -1) {
+		for _, c := range strings.Fields(attr[1]) {
+			if c == token {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // deliveryPair is one container's canned shipped/unshipped breakdown, the
 // two slice.Documents get_delivery_breakdown returns.
@@ -109,12 +135,12 @@ func deliveryReadMux(reader specReadClient) *http.ServeMux {
 }
 
 // renderDelivery renders one delivery page from a listing + breakdown map.
-func renderDelivery(t *testing.T, listing slice.DeliveryListing, breakdowns map[uuid.UUID]deliveryBreakdown) string {
+func renderDelivery(t *testing.T, listing slice.DeliveryListing, breakdowns map[uuid.UUID]pages.DeliveryBreakdown) string {
 	t.Helper()
 	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
 	product := store.Product{ID: productID, Name: "krill", Vision: "the substrate"}
 	page := deliveryPageOf(product, listing, breakdowns, productID)
-	return string(renderPage(deliveryTemplate, page))
+	return mustRenderComponent(pages.Delivery(page))
 }
 
 // milestoneEntry builds one milestone row at a given status, with a nested
@@ -151,8 +177,8 @@ func budgetPtr(n int) *int { return &n }
 
 // breakdownOf flattens a shipped/unshipped pair into the page's breakdown
 // map entry, exactly as deliveryBreakdowns does for a successful read.
-func breakdownOf(shipped, unshipped slice.Document) deliveryBreakdown {
-	return deliveryBreakdown{
+func breakdownOf(shipped, unshipped slice.Document) pages.DeliveryBreakdown {
+	return pages.DeliveryBreakdown{
 		Shipped:   deliveryEntitiesOf(shipped),
 		Unshipped: deliveryEntitiesOf(unshipped),
 	}
@@ -294,7 +320,7 @@ func TestDeliveryBreakdownCarriesEveryWireEntity(t *testing.T) {
 
 	html := renderDelivery(t,
 		slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{m}},
-		map[uuid.UUID]deliveryBreakdown{mID: breakdownOf(shipped, unshipped)},
+		map[uuid.UUID]pages.DeliveryBreakdown{mID: breakdownOf(shipped, unshipped)},
 	)
 
 	// Both list headings render.
@@ -331,7 +357,7 @@ func TestDeliveryBreakdownRendersFRKind(t *testing.T) {
 
 	html := renderDelivery(t,
 		slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{m}},
-		map[uuid.UUID]deliveryBreakdown{mID: breakdownOf(requirementDoc(fr), slice.Document{})},
+		map[uuid.UUID]pages.DeliveryBreakdown{mID: breakdownOf(requirementDoc(fr), slice.Document{})},
 	)
 	if !strings.Contains(html, "FR -- product granularity") {
 		t.Errorf("breakdown missing shipped FR in Kind -- Name form (missing %q)", "FR -- product granularity")
@@ -432,10 +458,22 @@ func TestDeliveryPresenceFailsOnEmptyPage(t *testing.T) {
 // 6. all eight statuses render, distinct classes, neutral fallback
 // ---------------------------------------------------------------------------
 
+// deliveryNeutralStyle is the tuple components.MilestoneStatusStyle returns
+// for a value it does not know. Spelled out here rather than derived from
+// the mapper so a change to the fallback is a deliberate test edit.
+var deliveryNeutralStyle = components.StatusStyle{Variant: htmxui.BadgeNeutral, Size: htmxui.BadgeSizeSM, Soft: false}
+
 // TestDeliveryAllStatusesRenderDistinctBadge (FR 4398c532): every one of
-// store.MilestoneStatus's eight values renders its human label and a
-// non-empty, non-neutral CSS class, so no status silently falls through to
-// the fallback badge.
+// store.MilestoneStatus's eight values renders its human label inside a
+// daisyUI badge carrying exactly the variant (and soft treatment) that
+// components.MilestoneStatusStyle assigns it, so the page actually shows
+// the distinction the mapper makes.
+//
+// The mapper's own contract -- every status distinct, none falling through
+// to the neutral fallback -- is covered at the components level by
+// components/status_test.go. What only this page can prove is that the
+// rendered row carries those classes as exact tokens, so a future edit that
+// swapped the badge for a hand-rolled span would fail here.
 func TestDeliveryAllStatusesRenderDistinctBadge(t *testing.T) {
 	all := []store.MilestoneStatus{
 		store.MilestoneStatusNotStarted,
@@ -451,53 +489,63 @@ func TestDeliveryAllStatusesRenderDistinctBadge(t *testing.T) {
 		t.Fatalf("expected the eight-value MilestoneStatus set, listed %d", len(all))
 	}
 
-	seen := map[string]store.MilestoneStatus{}
+	seen := map[[2]any]store.MilestoneStatus{}
 	for _, s := range all {
-		m, _, mID, _ := milestoneEntry(t,
-			"Container", "outcome", budgetPtr(1), s,
-			"child", "child outcome", store.MilestoneStatusShipped)
+		// The fixture is deliberately homogeneous: the nested milepebble
+		// carries the same status, and the milestone carries no FR budget.
+		// Both would otherwise contribute a second badge, and the budget
+		// badge is ghost -- the same class "not started" maps to -- which
+		// would satisfy the variant assertion without the status badge
+		// ever rendering.
+		m, _, _, _ := milestoneEntry(t,
+			"Container", "outcome", nil, s,
+			"child", "child outcome", s)
 		html := renderDelivery(t, slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{m}}, nil)
 
-		class := statusClass(s)
-		if class == "" {
-			t.Errorf("status %q maps to an empty CSS class", s)
+		style := components.MilestoneStatusStyle(string(s))
+		if style == deliveryNeutralStyle {
+			t.Errorf("known status %q fell through to the neutral fallback", s)
 			continue
 		}
-		if class == "status-other" {
-			t.Errorf("known status %q fell through to the neutral status-other fallback", s)
+		// The variant and soft treatment are exact class tokens on the
+		// rendered badge -- not merely substrings of a longer class list.
+		if !hasClassToken(html, string(style.Variant)) {
+			t.Errorf("status %q rendered without the %q class token", s, style.Variant)
 		}
-		// The rendered row carries the class and the label.
-		if !strings.Contains(html, `class="status `+class+`"`) {
-			t.Errorf("status %q rendered without its %q class", s, class)
+		if gotSoft := hasClassToken(html, "badge-soft"); gotSoft != style.Soft {
+			t.Errorf("status %q soft treatment rendered as %v, want %v", s, gotSoft, style.Soft)
 		}
 		if !strings.Contains(html, string(s)) {
 			t.Errorf("status %q label not rendered", s)
 		}
-		_ = mID
-		// Distinct classes keep the eight states visually distinct.
-		if prev, dup := seen[class]; dup {
-			t.Errorf("statuses %q and %q share the class %q; they must be visually distinct", prev, s, class)
+		// Distinct (variant, soft) tuples keep the eight states visually
+		// distinct -- notably shipped versus partially complete, which
+		// share a hue and are separated only by the soft treatment.
+		key := [2]any{style.Variant, style.Soft}
+		if prev, dup := seen[key]; dup {
+			t.Errorf("statuses %q and %q render identically (variant %q, soft %v); they must be visually distinct", prev, s, style.Variant, style.Soft)
 		}
-		seen[class] = s
+		seen[key] = s
 	}
 }
 
 // TestDeliveryUnknownStatusUsesNeutralFallback pins that a genuinely
 // unknown status value (one outside the eight-value set) renders with the
-// neutral status-other class, so adding a new status without a mapping is
-// caught rather than rendering an empty badge.
+// neutral badge, so adding a new status without a mapping is caught rather
+// than rendering an empty badge.
 func TestDeliveryUnknownStatusUsesNeutralFallback(t *testing.T) {
 	unknown := store.MilestoneStatus("some-future-status")
-	if got := statusClass(unknown); got != "status-other" {
-		t.Errorf("unknown status %q mapped to %q, want the neutral status-other fallback", unknown, got)
+	style := components.MilestoneStatusStyle(string(unknown))
+	if style != deliveryNeutralStyle {
+		t.Errorf("unknown status %q mapped to %+v, want the neutral fallback %+v", unknown, style, deliveryNeutralStyle)
 	}
 	// And it renders with that class, so the badge is never empty.
 	m, _, _, _ := milestoneEntry(t,
 		"Container", "outcome", budgetPtr(1), unknown,
 		"child", "child outcome", store.MilestoneStatusShipped)
 	html := renderDelivery(t, slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{m}}, nil)
-	if !strings.Contains(html, `class="status status-other"`) {
-		t.Errorf("unknown status did not render the neutral status-other badge")
+	if !hasClassToken(html, string(htmxui.BadgeNeutral)) {
+		t.Errorf("unknown status did not render the neutral badge")
 	}
 }
 
@@ -535,7 +583,7 @@ func TestDeliveryBreakdownOnlyForPartiallyComplete(t *testing.T) {
 		Name:          "shipped feature",
 		DisplayNumber: 4,
 	}
-	breakdowns := map[uuid.UUID]deliveryBreakdown{
+	breakdowns := map[uuid.UUID]pages.DeliveryBreakdown{
 		partialMID:  breakdownOf(featureDoc(feat), slice.Document{}),
 		partialMPID: breakdownOf(featureDoc(feat), slice.Document{}),
 	}
@@ -545,11 +593,11 @@ func TestDeliveryBreakdownOnlyForPartiallyComplete(t *testing.T) {
 	html := renderDelivery(t, listing, breakdowns)
 
 	// Both partial containers render a breakdown. Detect the breakdown by its
-	// own block marker (class="breakdown"), not the word "Shipped" -- a
-	// container's own name may contain that word.
+	// stable data-krill hook, not the word "Shipped" -- a container's own
+	// name may contain that word.
 	for _, id := range []uuid.UUID{partialMID, partialMPID} {
 		block := containerBlock(html, id)
-		if !strings.Contains(block, `class="breakdown"`) {
+		if !strings.Contains(block, deliveryBreakdownHook) {
 			t.Errorf("partially-complete container %s did not render a breakdown block", id)
 			continue
 		}
@@ -558,11 +606,11 @@ func TestDeliveryBreakdownOnlyForPartiallyComplete(t *testing.T) {
 		}
 	}
 	// The shipped milestone renders no breakdown block.
-	if block := containerBlock(html, shippedMID); strings.Contains(block, `class="breakdown"`) {
+	if block := containerBlock(html, shippedMID); strings.Contains(block, deliveryBreakdownHook) {
 		t.Errorf("shipped container %s rendered a breakdown block; only partially-complete containers get one", shippedMID)
 	}
 	// The in-progress milepebble renders no breakdown block.
-	if block := containerBlock(html, inProgMPID); strings.Contains(block, `class="breakdown"`) {
+	if block := containerBlock(html, inProgMPID); strings.Contains(block, deliveryBreakdownHook) {
 		t.Errorf("in-progress milepebble %s rendered a breakdown block; only partially-complete containers get one", inProgMPID)
 	}
 	_ = partialMP
@@ -579,7 +627,7 @@ func TestDeliveryEmptyShippedListReadsAsNothingShipped(t *testing.T) {
 	// Both lists empty.
 	html := renderDelivery(t,
 		slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{m}},
-		map[uuid.UUID]deliveryBreakdown{mID: breakdownOf(slice.Document{}, slice.Document{})},
+		map[uuid.UUID]pages.DeliveryBreakdown{mID: breakdownOf(slice.Document{}, slice.Document{})},
 	)
 	block := containerBlock(html, mID)
 	if !strings.Contains(block, "Shipped") {
@@ -710,14 +758,22 @@ func TestDeliverySingleBreakdownFailureDegradesGracefully(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// The broken container still renders status-only: its name and status
-	// label appear, but its breakdown entity does not.
+	// The broken container still renders its row: its name and status
+	// label appear, its own breakdown block carries an inline error
+	// rather than a fabricated entity list, and the entity it could not
+	// read is absent.
 	badBlock := containerBlock(body, badMID)
 	if !strings.Contains(badBlock, "Broken container") {
 		t.Errorf("failing container did not render its name (status-only expected)")
 	}
 	if !strings.Contains(badBlock, string(store.MilestoneStatusPartiallyComplete)) {
 		t.Errorf("failing container did not render its status label")
+	}
+	if !strings.Contains(badBlock, deliveryBreakdownHook) {
+		t.Errorf("failing container dropped its breakdown block entirely; it should degrade to an inline error in place of the block")
+	}
+	if !hasClassToken(badBlock, "alert-error") {
+		t.Errorf("failing container's breakdown block did not render an error alert")
 	}
 	if strings.Contains(badBlock, "broken shipped feature") {
 		t.Errorf("failing container rendered a breakdown it could not read")
@@ -762,7 +818,7 @@ func TestDeliveryEmptyProductRendersEmptyState(t *testing.T) {
 		t.Errorf("empty product did not render the %q empty state", "No milestones yet.")
 	}
 	// Rendered inside the shell, not a blank page.
-	for _, want := range []string{"<html", "<nav>", "</html>"} {
+	for _, want := range []string{"<html", "<nav", "</html>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("empty delivery page missing %q from the shell chrome", want)
 		}
@@ -788,7 +844,7 @@ func TestDeliveryUnknownProductIsNotFound(t *testing.T) {
 		t.Errorf("GET delivery (unknown id) = %d, want 404", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"<html", "<nav>", "</html>", "Not found"} {
+	for _, want := range []string{"<html", "<nav", "</html>", "Not found"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("unknown-id page missing %q", want)
 		}

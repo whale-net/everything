@@ -18,20 +18,31 @@
 // one uniform {reason} forwarding is the faithful shape for all four, not a
 // shortcut. ScopeID and both subjects come from the gated session on both
 // sides (NFR6).
+//
+// Every form here is doubled -- method="post" + action= AND hx-post +
+// hx-target + hx-swap -- so the two branches below are the same route
+// serving two modes rather than two routes. The no-JS branch is the
+// Post/Redirect/Get the console has always taken and is unchanged. The
+// htmx branch always answers 200 with the whole results block of the view
+// the operator acted from, re-derived from freshly observed state, because
+// the intervention moves a row between views (release removes it from
+// /ops/claimed) and a status code or a row-level swap would leave a stale
+// row behind.
 package main
 
 import (
 	"context"
 	"encoding/json"
-	"html/template"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // The four intervention verbs, named exactly as the krill api endpoints and
@@ -116,6 +127,12 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			return
 		}
 
+		// The open-redirect guard runs first, on both branches: it decides
+		// where a no-JS browser is redirected to and which view an htmx
+		// browser has re-derived underneath it, so it is settled before the
+		// write rather than after.
+		returnTo := interventionReturnTo(r)
+
 		// A form POST carries the rationale as an optional urlencoded field.
 		// An empty reason is sent as a null, which the api handler accepts
 		// (its Reason is a *string) exactly as an omitted reason would.
@@ -124,33 +141,125 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			req.Reason = &reason
 		}
 
+		card := cancelConfirmData(taskID.String(), returnTo, "")
+
 		var resp *http.Response
 		if err := app.withKrillSession(r.Context(), func(ctx context.Context, sessionID store.SessionID) error {
 			var err error
 			resp, err = app.writes.Write(ctx, sessionID, http.MethodPost, "tasks/"+taskID.String()+"/"+action, req)
 			return err
 		}); err != nil {
+			// The write never reached krill api. htmx still gets a 200 the
+			// operator can read -- a refusal rides inside the fragment,
+			// never in a status code a swap target would discard -- but it
+			// says exactly what the no-JS branch says, and the detail is
+			// logged rather than shown, so a transport error never leaks
+			// an internal URL into the page.
+			logger.Error("failed to issue an operator write", "error", err)
+			if isHtmxRequest(r) {
+				app.renderInterventionResults(w, r, returnTo, "the write could not be issued as the signed-in operator")
+				return
+			}
 			writeWriteError(w, err)
 			return
 		}
 
-		// A success is the Post/Redirect/Get the browser needs: the operator
-		// lands back on the console view they acted from, re-read fresh, so a
-		// refresh cannot replay the write. A rejection is api's own status and
-		// message, but rendered as a page in the shell rather than raw JSON,
-		// so the operator reads the same refusal a direct api caller would.
+		// A success is the Post/Redirect/Get the no-JS browser needs: the
+		// operator lands back on the console view they acted from, re-read
+		// fresh, so a refresh cannot replay the write. The htmx browser gets
+		// the same view re-derived in place.
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			resp.Body.Close() //nolint:errcheck
-			http.Redirect(w, r, interventionReturnTo(r), http.StatusSeeOther)
+			if isHtmxRequest(r) {
+				app.renderInterventionSuccess(w, r, action, card)
+				return
+			}
+			http.Redirect(w, r, returnTo, http.StatusSeeOther)
 			return
 		}
+
+		// A rejection is api's own status and message. The no-JS browser
+		// reads it as a page in the shell, so the operator sees the same
+		// refusal a direct api caller would; the htmx browser reads it
+		// inline, because it is swapping a fragment and never sees a status.
 		status, message := interventionRejection(resp)
-		renderShellStatus(w, r, "Intervention rejected", opsPath, renderPage(interventionErrorTemplate, interventionErrorPage{
+		if isHtmxRequest(r) {
+			refusal := "krill rejected the " + actionLabel(action) + ". " + message
+			if action == actionCancel {
+				card.Error = refusal
+				renderFragment(w, r, pages.CancelConfirmCard(card))
+				return
+			}
+			app.renderInterventionResults(w, r, returnTo, refusal)
+			return
+		}
+		renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{
 			Heading:  "krill rejected the " + actionLabel(action) + ".",
 			Detail:   message,
-			ReturnTo: interventionReturnTo(r),
+			ReturnTo: returnTo,
 		}), status)
 	}
+}
+
+// renderInterventionSuccess answers a successful htmx intervention, always
+// at 200 and never with a redirect, by re-deriving the view the operator
+// acted from. Cancelling is the one verb that navigates instead of
+// swapping.
+//
+// HX-Redirect is the single legitimate redirect on an htmx path, and the
+// reason it is not the rule the other three follow is that it is a
+// navigation, not a swap: the operator has left the cancel-confirm card
+// for the console view named by return_to, and htmx performs a full page
+// load there. A release or escalate has nowhere to navigate to -- the row
+// it acted on is still on the page -- so those swap the results block in
+// place, which is also what removes the row a release just orphaned.
+// (An HX-Redirect is keyed on the verb, not on where the request came
+// from, because cancel is the only verb whose hx-post originates on the
+// confirm card: its console-row control is a link, never a form.)
+func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request, action string, card pages.CancelConfirmData) {
+	if action == actionCancel {
+		w.Header().Set("HX-Redirect", card.ReturnTo)
+		renderFragment(w, r, pages.CancelConfirmCard(card))
+		return
+	}
+	app.renderInterventionResults(w, r, card.ReturnTo, "")
+}
+
+// renderInterventionResults re-reads the console view the operator acted
+// from and writes its results block at 200, with any message carried
+// inline above the rows.
+//
+// The whole block, deliberately not a single row: release removes the task
+// from /ops/claimed and requeue removes it from /ops/escalated, so a
+// row-level swap would leave the operator looking at a row the store no
+// longer has. The re-read is always page one -- an intervention's whole
+// effect is on the first page, and the POST carries no continuation token
+// to resume from.
+func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo, message string) {
+	ctx := r.Context()
+	if returnTo == opsEscalatedPath {
+		d, err := app.escalatedResults(ctx, store.PageParams{}, returnTo)
+		if err != nil {
+			logger.Error("failed to reload the escalated view after an intervention", "error", err)
+			// A read failure must not render as an empty view: the
+			// intervention itself may well have succeeded, and "nothing
+			// escalated" would be a confident, wrong answer. Say the view
+			// could not be reloaded instead.
+			d = pages.EscalatedData{Href: returnTo, Error: "The intervention was applied, but this view could not be reloaded.", ReadFailed: true}
+		} else {
+			d.Error = message
+		}
+		renderFragment(w, r, pages.EscalatedResults(d))
+		return
+	}
+	d, err := app.claimedResults(ctx, store.PageParams{}, returnTo)
+	if err != nil {
+		logger.Error("failed to reload the claimed view after an intervention", "error", err)
+		d = pages.ClaimedData{Href: returnTo, Error: "The intervention was applied, but this view could not be reloaded.", ReadFailed: true}
+	} else {
+		d.Error = message
+	}
+	renderFragment(w, r, pages.ClaimedResults(d))
 }
 
 // apiError mirrors api/handlers' jsonError: the single {"error": "..."} shape
@@ -179,62 +288,63 @@ func interventionRejection(resp *http.Response) (int, string) {
 	return status, e.Error
 }
 
-var interventionErrorTemplate = template.Must(template.New("interventionerror").Parse(`<h2>{{.Heading}}</h2>
-<p>{{.Detail}}</p>
-<p><a href="{{.ReturnTo}}">Back to the console</a></p>`))
-
-type interventionErrorPage struct {
-	Heading  string
-	Detail   string
-	ReturnTo string
-}
-
 // interventionReturnTo is the console view a successful intervention
-// redirects back to, read from the form's return_to field. Only this
-// binary's own ops paths are honored: an open redirect needs a value
-// starting with a scheme or "//", neither of which starts with opsPath, so a
-// crafted return_to can never bounce the operator off-site. Anything
-// unrecognized (or absent) falls back to the ops root.
+// returns to, read from the form's return_to field. Only this binary's own
+// ops paths are honored. Anything unrecognized (or absent) falls back to
+// the ops root.
 func interventionReturnTo(r *http.Request) string {
-	to := r.FormValue("return_to")
-	if to == "" || !strings.HasPrefix(to, opsPath) {
-		return opsPath
+	fallback := opsPath
+	to := strings.TrimSpace(r.FormValue("return_to"))
+	if to == "" {
+		return fallback
+	}
+	// Only a path this binary actually serves is honoured, and it must
+	// still be one after the browser has percent-decoded and
+	// path-normalised it. Three checks, because each alone misses a case:
+	//
+	//   - Rejecting an absolute or host-bearing URL rejects off-site
+	//     values outright.
+	//   - Rejecting ".." in the DECODED path rejects
+	//     "/ops/../../etc/passwd" and its percent-encoded spelling
+	//     "/ops/%2e%2e/%2e%2e/etc/passwd". The check has to run on
+	//     u.Path, which url.Parse has already decoded -- testing the raw
+	//     string would pass the encoded form straight through, and the
+	//     browser would then normalise it to a path outside /ops.
+	//   - Matching at segment boundaries rejects "/opsarchive", which
+	//     shares the raw prefix but is not a view this binary serves.
+	//
+	// None of these is an open-redirect defence on its own: the value is
+	// only ever used as a same-origin Location or HX-Redirect. They are
+	// here so a return_to resolves to a view the operator asked for
+	// rather than a 404 or somewhere else on this origin.
+	u, err := url.Parse(to)
+	if err != nil || u.IsAbs() || u.Host != "" || u.Scheme != "" {
+		return fallback
+	}
+	if strings.Contains(u.Path, "..") {
+		return fallback
+	}
+	if u.Path != opsPath && !strings.HasPrefix(u.Path, opsPath+"/") {
+		return fallback
 	}
 	return to
 }
 
-// taskActionControl is one rendered control on a console row: either an
-// inline non-destructive form (Kind "form") or a link to a destructive
-// verb's confirmation page (Kind "confirm"). Rendering the destructive verb
-// as a link rather than a form is the confirm affordance -- nothing posts
-// until the operator confirms on the next page.
-type taskActionControl struct {
-	Kind       string
-	Label      string
-	Action     string
-	ReasonHint string
-	ReturnTo   string
-}
-
-var taskActionsTemplate = template.Must(template.New("taskactions").Parse(`{{range .}}{{if eq .Kind "form"}}<form method="post" action="{{.Action}}" style="display:inline">
-<input type="hidden" name="return_to" value="{{.ReturnTo}}">
-<input type="text" name="reason" placeholder="{{.ReasonHint}}" size="18" aria-label="{{.ReasonHint}}">
-<button type="submit">{{.Label}}</button>
-</form>{{else}}<a href="{{.Action}}" class="danger">{{.Label}}&hellip;</a>{{end}} {{end}}`))
-
 // renderTaskActions renders the intervention controls for one console row, in
 // the order the verbs are passed. A non-destructive verb renders as an inline
-// form carrying its own reason prompt; a destructive verb renders as a link
-// to its confirmation page. reason is the free-text rationale the four ops
-// record; scope and identity never appear in a form.
-func renderTaskActions(taskID, returnTo string, actions ...string) template.HTML {
-	controls := make([]taskActionControl, 0, len(actions))
+// doubled form carrying its own reason prompt; a destructive verb renders as
+// a link to its confirmation page. reason is the free-text rationale the four
+// ops record; scope and identity never appear in a form, because the write
+// resolves the operator's real (iss, sub) server-side from the gated krill
+// session (withKrillSession), not from anything the browser sent.
+func renderTaskActions(taskID, returnTo string, actions ...string) templ.Component {
+	controls := make([]pages.TaskActionControl, 0, len(actions))
 	for _, action := range actions {
 		a, ok := interventionActions[action]
 		if !ok {
 			continue
 		}
-		control := taskActionControl{
+		control := pages.TaskActionControl{
 			Label:      a.Label,
 			ReasonHint: a.ReasonHint,
 			ReturnTo:   returnTo,
@@ -248,7 +358,7 @@ func renderTaskActions(taskID, returnTo string, actions ...string) template.HTML
 		}
 		controls = append(controls, control)
 	}
-	return renderPage(taskActionsTemplate, controls)
+	return pages.TaskActions(controls)
 }
 
 // cancelConfirmHref builds the link to a task's cancel confirmation page,
@@ -267,33 +377,27 @@ func cancelConfirmHref(taskID, returnTo string) string {
 // optional, matching the MCP tool; this is a console-side guard on the
 // irreversible path). Mounted behind operatorRoute like every other
 // operator-only route.
+//
+// This stays a GET page. Its card's form is doubled, so an htmx browser
+// posts the same route a no-JS browser does and gets the card back at 200
+// with a refusal inline, or HX-Redirect to the console view on success.
 func (app *App) handleCancelConfirm(w http.ResponseWriter, r *http.Request) {
 	taskID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "invalid task id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	returnTo := interventionReturnTo(r)
-	renderShell(w, r, "Confirm cancel", opsPath, renderPage(cancelConfirmTemplate, cancelConfirmPage{
-		TaskID:   taskID.String(),
-		Action:   opsTaskActionBase + taskID.String() + "/" + actionCancel,
+	renderShell(w, r, "Confirm cancel", opsPath, pages.CancelConfirmCard(cancelConfirmData(taskID.String(), interventionReturnTo(r), "")))
+}
+
+// cancelConfirmData builds the confirm card's view-model. It carries only
+// the task's id and the routes the form posts to -- never an identity,
+// which withKrillSession resolves server-side.
+func cancelConfirmData(taskID, returnTo, refusal string) pages.CancelConfirmData {
+	return pages.CancelConfirmData{
+		TaskID:   taskID,
+		Action:   opsTaskActionBase + taskID + "/" + actionCancel,
 		ReturnTo: returnTo,
-	}))
+		Error:    refusal,
+	}
 }
-
-type cancelConfirmPage struct {
-	TaskID   string
-	Action   string
-	ReturnTo string
-}
-
-var cancelConfirmTemplate = template.Must(template.New("cancelconfirm").Parse(`<h2>Cancel task {{.TaskID}}?</h2>
-<p>Canceling dead-letters this task. It is never claimable again and a later
-requeue cannot reopen it. This cannot be undone.</p>
-<form method="post" action="{{.Action}}">
-<input type="hidden" name="return_to" value="{{.ReturnTo}}">
-<p><label for="reason">Reason (required):<br>
-<textarea id="reason" name="reason" rows="3" cols="48" required></textarea></label></p>
-<button type="submit">Confirm cancel</button>
-</form>
-<p><a href="{{.ReturnTo}}">Back to the console</a></p>`))

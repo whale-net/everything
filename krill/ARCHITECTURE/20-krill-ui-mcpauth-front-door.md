@@ -16,7 +16,16 @@ defers a real web UI to "Later" (C19).
 binary that does nothing but (1) Keycloak sign-in via `//libs/go/htmxauth`
 (migration `007_ui_sessions`) and (2) construct and mount an
 `auth.Provider` (migration `006_mcpauth_credential`, shared with `mcp`)
-with `SignInURL: "/login"`. `krill/ui/auth.go`'s `mcpCallerResolver`
+with `SignInURL: "/login"`.
+
+> `krill/ui` has since grown well past that minimum. The persistent nav
+> shell and its four areas — ops console, design-session browser,
+> spec+delivery browser, credential widget — now live behind the sign-in,
+> rendered with `templ` on the shared `//libs/go/htmxui` + daisyUI stack
+> (`krill/ui/README.md`). The OAuth2 path described below is unchanged and
+> must stay completable regardless of what the shell behind it grows.
+
+`krill/ui/auth.go`'s `mcpCallerResolver`
 reads the signed-in operator's session and encodes their `(iss, sub)` pair
 via the new `//krill/identity` package (mirroring
 `whagent_net/mcpidentity`'s encoding exactly) — krill has no person/user

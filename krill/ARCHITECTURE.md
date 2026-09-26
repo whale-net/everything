@@ -31,10 +31,13 @@ the new path.
         ▲            ▲            ▲
         │            │            │
         │            │       external-api: Keycloak sign-in plus the
-        │            │       operator nav shell behind it; mounts auth's
-        │            │       /authorize, /token, /register, and
-        │            │       discovery -- the SignInURL mcp's auth front
-        │            │       door redirects to
+        │            │       operator shell behind it (ops console,
+        │            │       design-session browser, spec+delivery
+        │            │       browser, credential widget -- templ on the
+        │            │       shared //libs/go/htmxui + daisyUI stack, no
+        │            │       bundler); mounts auth's /authorize, /token,
+        │            │       /register, and discovery -- the SignInURL
+        │            │       mcp's auth front door redirects to
         │            │
         │       external-api: the FR10/NFR1 spec surface -- /mcp/spec,
         │       the same FR5-FR9 slice query as `api`'s /slices/...

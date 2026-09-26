@@ -1,0 +1,36 @@
+package htmxui
+
+// EmptyState is htmxui's shared "nothing here yet" message: a card with
+// an optional title, description, and a single call-to-action link.
+//
+// The opacity of the descriptive line was actively drifting between call
+// sites — ARCHITECTURE §13 records /50, /60, and /70 all in use, 20+
+// times in one domain alone — so the fraction is fixed here at /60
+// rather than at each call site.
+//
+// Every field follows §4's "empty means render nothing": an empty Title
+// omits the heading, an empty Description omits the paragraph, and the
+// action renders only when BOTH ActionText and ActionHref are set, so a
+// caller cannot produce a link with no label or a label with no
+// destination.
+//
+// No icon: §13's "Confirmed non-issues" records that no surveyed domain
+// uses icons (all text/daisyUI-only), and an inline SVG here would make
+// htmxui the first.
+templ EmptyState(title, description, actionText, actionHref string, attrs templ.Attributes) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm" { attrs... }>
+		<div class="card-body items-center text-center py-12">
+			if title != "" {
+				<h3 class="text-sm font-medium text-base-content">{ title }</h3>
+			}
+			if description != "" {
+				<p class="mt-1 text-sm text-base-content/60">{ description }</p>
+			}
+			if actionText != "" && actionHref != "" {
+				<div class="mt-6">
+					<a href={ templ.URL(actionHref) } class="btn btn-primary btn-sm">{ actionText }</a>
+				</div>
+			}
+		</div>
+	</div>
+}

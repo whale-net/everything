@@ -1,0 +1,29 @@
+package pages
+
+// AreaLink is one "go here" row on an area's landing page: a link and
+// the one-line description of what it leads to.
+type AreaLink struct {
+	Path  string
+	Label string
+	Blurb string
+}
+
+// AreaIndex is the shared link-and-blurb list the home page, the ops
+// root, and the spec landing all render. The three were three separate
+// near-identical html/template strings; they are one component now
+// because the difference between them was a heading, not a shape.
+templ AreaIndex(heading string, links []AreaLink) {
+	<section data-krill="area-index">
+		<h2 class="text-lg font-semibold">{ heading }</h2>
+		if len(links) > 0 {
+			<ul class="mt-3 space-y-2">
+				for _, l := range links {
+					<li>
+						<a href={ templ.URL(l.Path) } class="link link-primary font-medium">{ l.Label }</a>
+						<span class="text-sm text-base-content/70">{ l.Blurb }</span>
+					</li>
+				}
+			</ul>
+		}
+	</section>
+}
