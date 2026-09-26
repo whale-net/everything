@@ -705,3 +705,40 @@ go_test(
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
+
+# Real-Postgres coverage for LogReferenceRepository -- the one repository in
+# this package that is mostly query logic (time-range filtering, min/max
+# bounds, a bucketed histogram) rather than CRUD. Replays the real shipped
+# migrations via //manmanv2/migrate/schema. Same build-tag/target conventions
+# as game_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:log_reference_integration_test --test_output=all
+go_test(
+    # keep
+    name = "log_reference_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "log_reference_integration_test.go",
+        "migrations_harness_integration_test.go",
+    ],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
