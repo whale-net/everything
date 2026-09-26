@@ -55,6 +55,20 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# /wai slash command characterization: exactly-one-answer, the 10-row
+# genaitext context window, and /wpoll's isolation from that path.
+# Separate target from test_bot because it fakes the bolt App singleton
+# process-wide, which test_bot's own imports must not see.
+py_test(
+    name = "test_wai",
+    size = "small",
+    srcs = [
+        "bot/test_wai_command.py",
+        "conftest.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # /poll parsing, rendering, and DAL (SQLite-backed)
 py_test(
     name = "test_poll",
