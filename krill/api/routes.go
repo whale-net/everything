@@ -22,8 +22,9 @@ import (
 // entity
 // create/attach endpoint (issue #2490, FR1/FR2/FR4), the amend
 // endpoints below (FR12, issue #2493; generalised to every spec-axis kind
-// by issue #2958/#2966) and the seven void endpoints below (FR d38d726e,
-// FR 2a3a8eef), the pointer-artifact create
+// by issue #2958/#2966), the seven void endpoints below (FR d38d726e,
+// FR 2a3a8eef), the Non-Goal resolve endpoint below (FR d0021a0f), the
+// pointer-artifact create
 // endpoint (issue #2496, FR20), POST /design-sessions and POST
 // /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8), POST
 // /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2), the five
@@ -293,6 +294,13 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /personas/{id}/void", gate(handlers.VoidPersonaHandler(entities.Void())))
 	mux.Handle("POST /non-goals/{id}/void", gate(handlers.VoidNonGoalHandler(entities.Void())))
 	mux.Handle("POST /load-bearing-decisions/{id}/void", gate(handlers.VoidLoadBearingDecisionHandler(entities.Void())))
+
+	// resolve: settling a `deferred` Non-Goal (FR d0021a0f). One route,
+	// because a Non-Goal is the only kind with a resolution and the two
+	// outcomes are a body field rather than a path segment. It is NOT part
+	// of the amend family above: amend never re-kinds (FR f0f6bc18), and
+	// promoting one IS a re-kind. A `permanent` target returns 409.
+	mux.Handle("POST /non-goals/{id}/resolve", gate(handlers.ResolveNonGoalHandler(entities.Resolve())))
 
 	mux.HandleFunc("GET /requirements/{id}/as-of", handlers.GetRequirementAsOfHandler(entities.History()))
 	mux.HandleFunc("GET /requirements/{id}/versions", handlers.ListRequirementVersionsHandler(entities.History()))

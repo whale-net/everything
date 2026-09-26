@@ -164,7 +164,9 @@ func run() error {
 	// creation tools that previously existed only over HTTP -- plus
 	// create_persona/create_non_goal), tools.RegisterAmendAll,
 	// tools.RegisterVoidAll (void_entity, the tombstone verb, plus its
-	// list_void_events audit read),
+	// list_void_events audit read), tools.RegisterResolveAll
+	// (resolve_non_goal, settling a `deferred` Non-Goal, plus its
+	// list_non_goal_promotions audit read),
 	// tools.RegisterListProducts, tools.RegisterListPersonas/
 	// RegisterListNonGoals, tools.RegisterDesignAll (issue #2547),
 	// tools.RegisterMilestoneAll (milestone authoring, issue #2683),
@@ -204,6 +206,11 @@ func run() error {
 	// POST /{kind}/{id}/void routes, with the kind as an argument rather
 	// than a path segment.
 	tools.RegisterVoidAll(designReg, sessions, entities.Void())
+	// resolve_non_goal: settles a `deferred` Non-Goal by promote or retire
+	// (FR d0021a0f), plus list_non_goal_promotions, its audit read. The MCP
+	// twin of POST /non-goals/{id}/resolve, with the outcome as an argument
+	// rather than a body field.
+	tools.RegisterResolveAll(designReg, sessions, entities.Resolve())
 	// list_products: ungated Product discovery, the entry point for every get_*_slice product_id.
 	tools.RegisterListProducts(designReg, entities.Products())
 	// list_personas/list_non_goals: ungated discovery for the two entity kinds create_persona/create_non_goal mint, with no other MCP-reachable read path (not part of the slice.Document either).

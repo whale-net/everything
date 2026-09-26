@@ -114,6 +114,12 @@ func (s *Store) Amend() AmendStore { return amendStore{pool: s.pool} }
 // the row's name while retiring its display number for good.
 func (s *Store) Void() VoidStore { return voidStore{pool: s.pool} }
 
+// Resolve returns the ResolveStore implementation -- settling a `deferred`
+// Non-Goal (FR d0021a0f). It is the one verb that may change an entity's
+// `kind`, which neither Amend (by contract, FR f0f6bc18) nor Void (no
+// successor to re-kind) can express.
+func (s *Store) Resolve() ResolveStore { return resolveStore{pool: s.pool} }
+
 // History returns the HistoryStore implementation -- as-of reads and
 // version lists (FR11, issue #2493) for Requirement and
 // LoadBearingDecision.

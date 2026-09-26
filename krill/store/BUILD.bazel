@@ -54,6 +54,7 @@ go_library(
         "product.go",
         "recut.go",
         "requirement.go",
+        "resolve.go",
         "revision_event.go",
         "scope.go",
         "session.go",

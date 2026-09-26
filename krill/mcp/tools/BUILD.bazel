@@ -24,6 +24,7 @@ go_library(
         "persona_nongoal.go",
         "product.go",
         "recut.go",
+        "resolve.go",
         "session.go",
         "slice.go",
         "task.go",

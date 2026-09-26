@@ -94,6 +94,8 @@ func isUniqueViolation(err error) bool {
 //     violation                                                  -> 409
 //   - store.ErrEntityDelivered / store.ErrHasLiveChildren (void's two
 //     refusals, FR 2a3a8eef) -- the target is spoken for         -> 409
+//   - store.ErrNotDeferred (resolve's refusal, FR d0021a0f) -- the target
+//     is not a `deferred` Non-Goal                            -> 409
 //   - anything else (a genuine store failure)                         -> 500
 //
 // Every create handler below funnels its store call's error through this
@@ -117,9 +119,16 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrNameConflict),
 		// Void's two refusals (FR 2a3a8eef). Both are conflicts, not bad
 		// requests: the request was well-formed, but the target is spoken
-		// for. Each error body names the correct next step.
+		// for. Each error body names the correct next step. A RETIRE
+		// inherits both by running void's own close, which is why resolve.go
+		// needs no mapping of its own.
 		errors.Is(err, store.ErrEntityDelivered),
 		errors.Is(err, store.ErrHasLiveChildren),
+		// Resolve's own refusal (FR d0021a0f): a `permanent` Non-Goal is
+		// already settled, so there is nothing to resolve. A conflict for
+		// the same reason the two above are -- the request was well-formed
+		// and the row is in the wrong state for it.
+		errors.Is(err, store.ErrNotDeferred),
 		errors.Is(err, store.ErrEntityDeliveredByCompetingMilestone):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case isUniqueViolation(err):

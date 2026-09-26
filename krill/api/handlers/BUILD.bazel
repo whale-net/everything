@@ -75,6 +75,7 @@ go_library(
         "pointer.go",
         "product.go",
         "recut.go",
+        "resolve.go",
         "requirement.go",
         "revision_event.go",
         "session.go",
