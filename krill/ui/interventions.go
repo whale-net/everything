@@ -238,21 +238,27 @@ func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request
 func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo, message string) {
 	ctx := r.Context()
 	if returnTo == opsEscalatedPath {
-		d, err := app.escalatedResults(ctx, store.PageParams{})
+		d, err := app.escalatedResults(ctx, store.PageParams{}, returnTo)
 		if err != nil {
 			logger.Error("failed to reload the escalated view after an intervention", "error", err)
-			d = pages.EscalatedData{Href: opsEscalatedPath}
+			// A read failure must not render as an empty view: the
+			// intervention itself may well have succeeded, and "nothing
+			// escalated" would be a confident, wrong answer. Say the view
+			// could not be reloaded instead.
+			d = pages.EscalatedData{Href: returnTo, Error: "The intervention was applied, but this view could not be reloaded."}
+		} else {
+			d.Error = message
 		}
-		d.Error = message
 		renderFragment(w, r, pages.EscalatedResults(d))
 		return
 	}
-	d, err := app.claimedResults(ctx, store.PageParams{})
+	d, err := app.claimedResults(ctx, store.PageParams{}, returnTo)
 	if err != nil {
 		logger.Error("failed to reload the claimed view after an intervention", "error", err)
-		d = pages.ClaimedData{Href: opsClaimedPath}
+		d = pages.ClaimedData{Href: returnTo, Error: "The intervention was applied, but this view could not be reloaded."}
+	} else {
+		d.Error = message
 	}
-	d.Error = message
 	renderFragment(w, r, pages.ClaimedResults(d))
 }
 
@@ -290,7 +296,13 @@ func interventionRejection(resp *http.Response) (int, string) {
 // (or absent) falls back to the ops root.
 func interventionReturnTo(r *http.Request) string {
 	to := r.FormValue("return_to")
-	if to == "" || !strings.HasPrefix(to, opsPath) {
+	// Matched at path-segment boundaries, not by raw prefix: "/ops" is a
+	// prefix of "/ops/claimed" but also of "/opsarchive", which is not a
+	// view this binary serves. There is no open-redirect risk either way
+	// -- the value only ever becomes a same-origin Location or HX-Redirect
+	// -- but a return_to that resolves to a 404 is a worse answer than
+	// falling back to the console root.
+	if to == "" || (to != opsPath && !strings.HasPrefix(to, opsPath+"/")) {
 		return opsPath
 	}
 	return to

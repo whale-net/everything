@@ -564,6 +564,18 @@ templ TaskActions(controls []TaskActionControl) {
 	}
 }
 
+// OpsInlineError is the whole fragment an htmx caller gets when a console
+// query fails before a view could even be built -- a scope lookup or a
+// store read that errored out. It is view-agnostic on purpose: the failure
+// happened before the handler knew which view it was assembling, and
+// rendering a plausible-looking empty table would be worse than saying so.
+// The message is generic by design; the detail is logged, not shown.
+templ OpsInlineError(message string) {
+	<div data-krill="ops-inline-error">
+		@htmxui.Alert(htmxui.AlertError, message, nil)
+	</div>
+}
+
 // InterventionError is the in-shell page a refused intervention renders
 // for a no-JS browser. The htmx path never reaches it: a refusal rides
 // inside the re-derived results block as an inline Alert instead, because

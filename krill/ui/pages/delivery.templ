@@ -121,8 +121,8 @@ templ breakdownBlock(b *DeliveryBreakdown) {
 // shape, with get_delivery_breakdown's per-item detail inlined for each
 // partially-complete container (FR 4398c532).
 templ Delivery(page DeliveryPage) {
+	@pageHeader(DeliveryAnchor, page.Path, page.Product.Name+" — delivery & roadmap", page.Product.Vision)
 	<section id={ DeliveryAnchor } data-krill="delivery">
-		@pageHeader(DeliveryAnchor, page.Path, page.Product.Name+" — delivery & roadmap", page.Product.Vision)
 		@components.SubNav(page.Nav)
 		if len(page.Milestones) == 0 {
 			@htmxui.EmptyState("No milestones yet.", "Every milestone and milepebble this product is planned to deliver.", "", "", templ.Attributes{})

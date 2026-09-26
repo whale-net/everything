@@ -109,11 +109,24 @@ func renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath
 // The status is always 200: an htmx swap target's HTTP status is not
 // surfaced to the operator, so a failure has to ride inside the fragment
 // rather than in a status code. See the agent guide's error rule.
+//
+// The component is buffered before the status is committed, for the same
+// reason renderShellStatus buffers: a component that fails partway
+// through would otherwise leave a truncated fragment swapped into the
+// page at 200, silently corrupting it. Once a byte is on the wire there is
+// no way to take it back, so the render has to succeed first.
 func renderFragment(w http.ResponseWriter, r *http.Request, c templ.Component) {
+	var buf bytes.Buffer
+	if err := c.Render(r.Context(), &buf); err != nil {
+		// The component is compiled by templ and every value is this
+		// package's own, so a failure here is a programming mistake, not
+		// a runtime condition -- the same reasoning as the page path.
+		panic(err)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	if err := c.Render(r.Context(), w); err != nil {
-		logger.Error("failed to render fragment", "error", err)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		logger.Error("failed to write fragment", "error", err)
 	}
 }
 

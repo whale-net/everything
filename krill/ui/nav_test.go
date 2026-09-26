@@ -125,10 +125,31 @@ func TestShellRendersOnEveryRoute(t *testing.T) {
 		// unauthenticated. htmxui's UserMenu renders the bare
 		// preferred username rather than a "Signed in as ..." sentence,
 		// so the dev user's name is the signal.
-		if !strings.Contains(body, "developer") {
+		//
+		// Scoped to the user-menu region, not the whole body: the
+		// previous assertion matched a unique phrase, but a bare
+		// first name could plausibly appear in page content (a task
+		// titled "developer", a product named "developer") and satisfy
+		// the check on an unauthenticated page. Same reasoning as
+		// primaryNavRegion above.
+		if !strings.Contains(userMenuRegion(body), "developer") {
 			t.Errorf("GET %s rendered no signed-in identity", path)
 		}
 	}
+}
+
+// userMenuRegion slices htmxui's UserMenu -- the chrome element that
+// carries the signed-in identity -- out of a page.
+func userMenuRegion(body string) string {
+	start := strings.Index(body, `data-htmxui-user-menu`)
+	if start < 0 {
+		return ""
+	}
+	rest := body[start:]
+	if end := strings.Index(rest, "</div>"); end >= 0 {
+		return rest[:end]
+	}
+	return rest
 }
 
 // TestActiveLinkPerRoute is the per-route table: exactly one nav link is
@@ -171,7 +192,7 @@ func TestNavIsActive(t *testing.T) {
 		path string
 		want bool
 	}{
-		{opsPath, true},        // the area root itself
+		{opsPath, true},              // the area root itself
 		{opsPath + "/claimed", true}, // a sub-page the area owns
 		{opsPath + "/a/b/c", true},   // a deeper sub-page
 		{opsPath + "archive", false}, // shares a prefix, is not under it

@@ -149,12 +149,40 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, productID uuid.UUID, opening string, err error) {
 	var rejection *writeRejection
 	if !errors.As(err, &rejection) {
+		// A transport failure (api unreachable, session mint failed) is
+		// not a rejection and has no status to render. An htmx caller
+		// must still see something: htmx does not swap on a non-2xx, so
+		// writeWriteError's 401/502 would leave the operator with a form
+		// that appears to do nothing at all -- the one case they most
+		// need to be told about. Re-render the form with the message and
+		// their typed submission intact.
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
+				ProductID:         productID.String(),
+				OpeningSubmission: opening,
+				FormAction:        designProductSessionsPath(productID),
+				Error:             "Could not reach krill: " + transportFailureMessage(err),
+			}))
+			return
+		}
 		writeWriteError(w, err)
 		return
 	}
 	sessions, listErr := app.listDesignSessions(r.Context(), productID)
 	if listErr != nil {
 		logger.Error("failed to re-render open-session form after rejection", "product_id", productID, "error", listErr)
+		if isHXRequest(r) {
+			// The session list could not be re-read, so it is genuinely
+			// unavailable -- but the operator's typed submission is still
+			// known, and handing the form back with it costs nothing.
+			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
+				ProductID:         productID.String(),
+				OpeningSubmission: opening,
+				FormAction:        designProductSessionsPath(productID),
+				Error:             fmt.Sprintf("%d: %s (the session list could not be reloaded)", rejection.status, rejection.message),
+			}))
+			return
+		}
 		http.Error(w, rejection.message, rejection.status)
 		return
 	}
@@ -172,24 +200,56 @@ func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, pr
 	renderShell(w, r, "Design sessions", designPath, pages.DesignSessionList(page))
 }
 
+// transportFailureMessage is the operator-facing half of a non-rejection
+// write failure. The specific cause is logged, not rendered: it can carry
+// an internal api URL or a driver message.
+func transportFailureMessage(err error) string {
+	logger.Error("design write failed before reaching krill", "error", err)
+	return "the request did not complete. Check the logs, then try again."
+}
+
 // renderAnswerFormFailure re-renders the "submit follow-up" form after a
 // rejected write, preserving the follow-up text and which resolve boxes
 // were ticked. Same 200-both-modes rule as renderOpenFormFailure.
 func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, id uuid.UUID, err error, followUp string, resolved []string) {
+	checked := make(map[string]bool, len(resolved))
+	for _, qid := range resolved {
+		checked[qid] = true
+	}
+	// degradedForm is the form handed back when the detail read behind it
+	// failed: the open questions are genuinely unavailable, but the
+	// follow-up text and the ticked question ids are still known, so the
+	// operator's work is not lost.
+	degradedForm := func(message string) pages.DesignSessionDetailPage {
+		return pages.DesignSessionDetailPage{
+			ID:             id.String(),
+			Error:          message,
+			FollowUp:       followUp,
+			CheckedResolve: checked,
+			AnswersPath:    designAnswersPath(id),
+			OpenQuestions:  nil,
+		}
+	}
+
 	var rejection *writeRejection
 	if !errors.As(err, &rejection) {
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.FollowUpForm(degradedForm("Could not reach krill: "+transportFailureMessage(err))))
+			return
+		}
 		writeWriteError(w, err)
 		return
 	}
 	detail, detailErr := app.buildDesignSessionDetail(r.Context(), id)
 	if detailErr != nil {
 		logger.Error("failed to re-render answer form after rejection", "design_session_id", id, "error", detailErr)
+		if isHXRequest(r) {
+			renderFragment(w, r, pages.FollowUpForm(degradedForm(
+				fmt.Sprintf("%d: %s (this session's open questions could not be reloaded)", rejection.status, rejection.message))))
+			return
+		}
 		http.Error(w, rejection.message, rejection.status)
 		return
-	}
-	checked := make(map[string]bool, len(resolved))
-	for _, qid := range resolved {
-		checked[qid] = true
 	}
 	detail.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
 	detail.FollowUp = followUp

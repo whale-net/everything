@@ -193,8 +193,8 @@ templ entityID(id string) {
 
 // Products is the product index an operator browses into.
 templ Products(page ProductsPage) {
+	@pageHeader(ProductsAnchor, page.Path, "Products", "")
 	<section id={ ProductsAnchor } data-krill="products">
-		@pageHeader(ProductsAnchor, page.Path, "Products", "")
 		if len(page.Items) == 0 {
 			@htmxui.EmptyState("No products yet.", "Every product an operator can browse into.", "", "", templ.Attributes{})
 		} else {
@@ -216,8 +216,8 @@ templ Products(page ProductsPage) {
 // Requirements (current revisions only) as a navigable capability map --
 // get_product_slice's shape, nested by parent. FR 638a7e5f.
 templ CapabilityMap(page CapabilityPage) {
+	@pageHeader(CapabilityMapAnchor, page.Path, page.Product.Name+" — capability map", page.Product.Vision)
 	<section id={ CapabilityMapAnchor } data-krill="capability-map">
-		@pageHeader(CapabilityMapAnchor, page.Path, page.Product.Name+" — capability map", page.Product.Vision)
 		@components.SubNav(page.Nav)
 		if len(page.FeatureSets) == 0 {
 			@htmxui.EmptyState("No feature sets yet.", "The FeatureSets, Features, and Requirements recorded for this product.", "", "", templ.Attributes{})
@@ -264,8 +264,8 @@ templ CapabilityMap(page CapabilityPage) {
 // full body text -- get_product_slice's decisions, unchanged (FR
 // 6aa70e3a).
 templ Decisions(page DecisionsPage) {
+	@pageHeader(DecisionsAnchor, page.Path, page.Product.Name+" — load-bearing decisions", page.Product.Vision)
 	<section id={ DecisionsAnchor } data-krill="decisions">
-		@pageHeader(DecisionsAnchor, page.Path, page.Product.Name+" — load-bearing decisions", page.Product.Vision)
 		@components.SubNav(page.Nav)
 		if len(page.Decisions) == 0 {
 			@htmxui.EmptyState("No load-bearing decisions yet.", "The decisions later capabilities of this product depend on.", "", "", templ.Attributes{})
@@ -288,8 +288,8 @@ templ Decisions(page DecisionsPage) {
 // Personas lists a product's current Personas -- list_personas' shape
 // (FR b4c1c77f).
 templ Personas(page PersonasPage) {
+	@pageHeader(PersonasAnchor, page.Path, page.Product.Name+" — personas", page.Product.Vision)
 	<section id={ PersonasAnchor } data-krill="personas">
-		@pageHeader(PersonasAnchor, page.Path, page.Product.Name+" — personas", page.Product.Vision)
 		@components.SubNav(page.Nav)
 		if len(page.Personas) == 0 {
 			@htmxui.EmptyState("No personas yet.", "Who this product serves.", "", "", templ.Attributes{})
@@ -312,8 +312,8 @@ templ Personas(page PersonasPage) {
 // NonGoals lists a product's current Non-Goals, both the permanent and
 // deferred kinds -- list_non_goals' shape (FR b4c1c77f).
 templ NonGoals(page NonGoalsPage) {
+	@pageHeader(NonGoalsAnchor, page.Path, page.Product.Name+" — non-goals", page.Product.Vision)
 	<section id={ NonGoalsAnchor } data-krill="non-goals">
-		@pageHeader(NonGoalsAnchor, page.Path, page.Product.Name+" — non-goals", page.Product.Vision)
 		@components.SubNav(page.Nav)
 		if len(page.Groups) == 0 {
 			@htmxui.EmptyState("No non-goals yet.", "What this product deliberately will not do.", "", "", templ.Attributes{})

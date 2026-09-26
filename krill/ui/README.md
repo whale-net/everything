@@ -143,6 +143,28 @@ the error inline via `htmxui.Alert`.**
 When a *list* call fails, render the error in place of the list rather
 than 500-ing the page.
 
+**Every path an `hx-*` attribute can reach needs this branch — including
+the ones that look unreachable.** A doubled form's no-JS branch and its
+htmx branch share a handler, so it is easy to leave `http.Error` on a
+transport-failure path and have it become silent the moment htmx is
+driving. The dangerous ones are the failures an operator most needs to see:
+api unreachable, session mint failed, the re-read behind a form
+re-render failing. A 401/502 there means the operator's submit appears to
+do nothing at all.
+
+**Re-render the form, not a bare error, and keep what the operator
+typed.** If the read behind the form also failed, the form can still be
+handed back with its error set and the typed text and ticked ids intact —
+`renderOpenFormFailure` / `renderAnswerFormFailure` do exactly this, with
+a `degradedForm` closure for the case where the page body itself could not
+be re-read. Losing someone's paragraph because a list call blipped is a
+worse outcome than showing them a list that is missing its rows.
+
+**Never render a read failure as an empty view.** An empty `Rows` renders
+a confident, wrong "No claimed tasks." — indistinguishable from success.
+Set `Error` on the fallback branch so the operator is told the view could
+not be reloaded.
+
 ## The doubled-form rule
 
 Every mutating form carries **`method` + `action` *and* `hx-post` +
@@ -177,6 +199,23 @@ endpoint's response *is* the same fragment, a settled view comes back
 without them and the loop stops by itself — no client-side timer
 bookkeeping. Model it on `deploymentRowPollAttrs` in
 `manmanv2/ui/pages/deployment_row.templ`.
+
+**The "near expiry" window must be a fraction of the lease, never the
+lease.** `ClaimTask` sets `lease_expires_at` to `now + DefaultLeaseDuration`
+and `HeartbeatTask` resets it to the same, so *every* row the store can
+return satisfies `LeaseExpiresAt - now <= DefaultLeaseDuration`. A
+whole-lease horizon therefore makes the predicate `len(rows) > 0`, and any
+deployment with a claimed task — including a swarm that heartbeats
+forever and never actually nears expiry — re-queries Postgres every three
+seconds, indefinitely. `krill/ui/ops.go` uses
+`DefaultLeaseDuration / 3`; `TestClaimedPollingHorizonIsAFractionOfTheLease`
+pins it, feeding the predicate the states the store actually produces.
+
+**A poll and a Refresh must re-request the operator's actual URI, not the
+route constant.** An operator who has paged forward is on
+`?page_size=&page_token=`; a refresh that drops those silently snaps them
+back to page one. `opsSelfPath(r)` carries `r.URL.RequestURI()` onto the
+view model for exactly this.
 
 Everything else gets a **manual Refresh button** (`hx-get` = its own
 path). A timer on a read-only spec page is pure cost, and it would swap

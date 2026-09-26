@@ -74,6 +74,21 @@ func parseOpsPageParams(r *http.Request) (store.PageParams, error) {
 	return page, nil
 }
 
+// opsSelfPath is the view's own request URI -- path plus query -- which
+// is what a view's poll and its manual Refresh must re-request.
+//
+// Not the bare route constant: an operator who has paged forward is on
+// ?page_size=&page_token=, and a refresh that drops those would silently
+// snap them back to page one. The poll re-reads from the store, so this
+// also has to be the URI the handler itself was called with, not one
+// rebuilt from the defaults.
+func opsSelfPath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return "/"
+	}
+	return r.URL.RequestURI()
+}
+
 // soleScopeID resolves the one scope this deployment's seeder guarantees --
 // the same resolution the write path's withKrillSession does -- so a view
 // never takes a scope from the browser.
@@ -85,18 +100,34 @@ func (app *App) soleScopeID(ctx context.Context) (uuid.UUID, error) {
 	return scope.ID, nil
 }
 
-// writeOpsQueryError maps a console query's store error onto an HTML page,
-// mirroring api/handlers' writeConsoleQueryError: a cross-scope or
-// malformed continuation token is the caller's error (400), never a
-// genuine store failure (500).
-func writeOpsQueryError(w http.ResponseWriter, err error) {
+// writeOpsQueryError maps a console query's store error onto the
+// response: a cross-scope or malformed continuation token is the
+// caller's error (400), never a genuine store failure (500).
+//
+// An htmx caller gets 200 with the message inline instead. htmx does not
+// swap on a non-2xx, so a bare http.Error here would leave the operator
+// looking at an unchanged table with no explanation -- and on the claimed
+// view this path is reached by the always-on poll, so a database blip
+// would silently freeze the console while the poll kept firing.
+func writeOpsQueryError(w http.ResponseWriter, r *http.Request, err error) {
+	message := err.Error()
 	switch {
 	case errors.Is(err, store.ErrTokenScopeMismatch), errors.Is(err, store.ErrInvalidContinuationToken):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// The caller's own bad token; saying so is useful, not sensitive.
 	default:
 		logger.Error("failed to load an ops console view", "error", err)
-		http.Error(w, "failed to load console data", http.StatusInternalServerError)
+		message = "Failed to load console data. Try again."
 	}
+
+	if isHtmxRequest(r) {
+		renderFragment(w, r, pages.OpsInlineError(message))
+		return
+	}
+	status := http.StatusInternalServerError
+	if errors.Is(err, store.ErrTokenScopeMismatch) || errors.Is(err, store.ErrInvalidContinuationToken) {
+		status = http.StatusBadRequest
+	}
+	http.Error(w, message, status)
 }
 
 // opsNextHref builds a view's "next page" link, carrying the page size
@@ -159,10 +190,21 @@ func opsTime(t time.Time) string { return t.Format(time.RFC3339) }
 // ---------------------------------------------------------------------------
 
 // claimedPollingHorizon is how close to expiry a lease has to be for the
-// claimed view to keep polling. One full lease duration: the poll exists
-// to show an operator a claim they are about to lose, and every claim in
-// the view is by construction at most one lease old.
-const claimedPollingHorizon = store.DefaultLeaseDuration
+// claimed view to keep polling.
+//
+// This must be a FRACTION of the lease, not the lease itself. ClaimTask
+// sets lease_expires_at to now+DefaultLeaseDuration and HeartbeatTask
+// resets it to now+DefaultLeaseDuration, so every row the store can
+// return satisfies LeaseExpiresAt-now <= DefaultLeaseDuration. A horizon
+// of a whole lease would therefore make this predicate `len(rows) > 0`:
+// any deployment with a claimed task -- including a swarm that heartbeats
+// forever and never actually nears expiry -- would re-query Postgres
+// every 3 seconds indefinitely.
+//
+// A third of the lease is the point at which an operator who is watching
+// a claim wants to see it resolve, while a healthy heartbeat (well
+// inside the window) keeps the poll off.
+const claimedPollingHorizon = store.DefaultLeaseDuration / 3
 
 // claimedPollingDue reports whether any claim on this page is inside its
 // lease's near-expiry window -- the one transient state the ops console
@@ -170,6 +212,10 @@ const claimedPollingHorizon = store.DefaultLeaseDuration
 // rows; the browser contributes nothing to it.
 func claimedPollingDue(rows []store.ClaimedTaskRow, now time.Time) bool {
 	for _, r := range rows {
+		// A lease already past expiry has a negative remaining time and so
+		// matches here too: the task is still claimed, the row really is
+		// about to disappear, and the operator should see that happen
+		// rather than stare at a stale claim.
 		if r.LeaseExpiresAt.Sub(now) <= claimedPollingHorizon {
 			return true
 		}
@@ -184,7 +230,7 @@ func claimedPollingDue(rows []store.ClaimedTaskRow, now time.Time) bool {
 // It is the single derivation of this view's data: the GET handler, the
 // poll, and the intervention handlers' post-write re-derivation all call
 // it, so none of them can render a view the others would not.
-func (app *App) claimedResults(ctx context.Context, page store.PageParams) (pages.ClaimedData, error) {
+func (app *App) claimedResults(ctx context.Context, page store.PageParams, selfPath string) (pages.ClaimedData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.ClaimedData{}, err
@@ -200,7 +246,7 @@ func (app *App) claimedResults(ctx context.Context, page store.PageParams) (page
 	return pages.ClaimedData{
 		Rows:     rows,
 		NextHref: opsNextHref(opsClaimedPath, result.NextToken, page.PageSize),
-		Href:     opsClaimedPath,
+		Href:     selfPath,
 		Polling:  claimedPollingDue(result.Items, time.Now()),
 	}, nil
 }
@@ -232,9 +278,9 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.claimedResults(r.Context(), page)
+	d, err := app.claimedResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, err)
+		writeOpsQueryError(w, r, err)
 		return
 	}
 	if isHtmxRequest(r) {
@@ -251,7 +297,7 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 // escalatedResults reads one page of the escalated-task view (FR5):
 // every escalated task and its escalation_reason, equivalent to
 // list_escalated_tasks / GET /console/escalated.
-func (app *App) escalatedResults(ctx context.Context, page store.PageParams) (pages.EscalatedData, error) {
+func (app *App) escalatedResults(ctx context.Context, page store.PageParams, selfPath string) (pages.EscalatedData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.EscalatedData{}, err
@@ -267,7 +313,7 @@ func (app *App) escalatedResults(ctx context.Context, page store.PageParams) (pa
 	return pages.EscalatedData{
 		Rows:     rows,
 		NextHref: opsNextHref(opsEscalatedPath, result.NextToken, page.PageSize),
-		Href:     opsEscalatedPath,
+		Href:     selfPath,
 	}, nil
 }
 
@@ -307,9 +353,9 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.escalatedResults(r.Context(), page)
+	d, err := app.escalatedResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, err)
+		writeOpsQueryError(w, r, err)
 		return
 	}
 	if isHtmxRequest(r) {
@@ -325,7 +371,7 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 
 // cancelledResults reads one page of the cancelled-task view (FR10),
 // equivalent to list_cancelled_tasks / GET /console/cancelled.
-func (app *App) cancelledResults(ctx context.Context, page store.PageParams) (pages.CancelledData, error) {
+func (app *App) cancelledResults(ctx context.Context, page store.PageParams, selfPath string) (pages.CancelledData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.CancelledData{}, err
@@ -341,7 +387,7 @@ func (app *App) cancelledResults(ctx context.Context, page store.PageParams) (pa
 	return pages.CancelledData{
 		Rows:     rows,
 		NextHref: opsNextHref(opsCancelledPath, result.NextToken, page.PageSize),
-		Href:     opsCancelledPath,
+		Href:     selfPath,
 	}, nil
 }
 
@@ -363,9 +409,9 @@ func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.cancelledResults(r.Context(), page)
+	d, err := app.cancelledResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, err)
+		writeOpsQueryError(w, r, err)
 		return
 	}
 	if isHtmxRequest(r) {
@@ -382,7 +428,7 @@ func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 // openNotesResults reads one page of the open-notes view (FR12): every
 // task note still in an open lifecycle status, equivalent to
 // list_open_notes / GET /console/notes.
-func (app *App) openNotesResults(ctx context.Context, page store.PageParams) (pages.NotesData, error) {
+func (app *App) openNotesResults(ctx context.Context, page store.PageParams, selfPath string) (pages.NotesData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.NotesData{}, err
@@ -398,7 +444,7 @@ func (app *App) openNotesResults(ctx context.Context, page store.PageParams) (pa
 	return pages.NotesData{
 		Rows:     rows,
 		NextHref: opsNextHref(opsNotesPath, result.NextToken, page.PageSize),
-		Href:     opsNotesPath,
+		Href:     selfPath,
 	}, nil
 }
 
@@ -429,9 +475,9 @@ func (app *App) handleOpenNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.openNotesResults(r.Context(), page)
+	d, err := app.openNotesResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, err)
+		writeOpsQueryError(w, r, err)
 		return
 	}
 	if isHtmxRequest(r) {
