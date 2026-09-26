@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"os"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -223,4 +224,69 @@ func TestSeedDevCredential_DoesNotRevokeAnOperatorRotation(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "the operator's token_hash must not be overwritten or revoked")
+}
+
+// TestSeeder_DoesNotSeedTheDevCredentialWithoutOptIn is the security
+// property, and the reason this is gated at all: `migrate` runs on every
+// deployment, prod included, and the dev-local token is committed in a
+// public repository. Seeding it unconditionally would make that public
+// token a valid credential against any krill instance that ran migrate.
+func TestSeeder_DoesNotSeedTheDevCredentialWithoutOptIn(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	// No KRILL_ALLOW_DEV_CREDENTIAL set -- exactly how a deployment runs.
+	require.NoError(t, seed.Seeder()(ctx, db))
+
+	rows := readCredentialRows(t, ctx, db)
+	assert.Empty(t, rows, "Seeder must not create a credential when the opt-in is absent")
+
+	// The scope row still seeds -- the gate covers only the credential.
+	var n int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM scope`).Scan(&n))
+	assert.Equal(t, 1, n, "the gate must not affect scope seeding")
+}
+
+// TestSeeder_SeedsTheDevCredentialWithOptIn is the positive half: the
+// Tiltfile sets KRILL_ALLOW_DEV_CREDENTIAL=true, and with it the local dev
+// loop gets a working MCP mount from a clean database.
+func TestSeeder_SeedsTheDevCredentialWithOptIn(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	t.Setenv("KRILL_ALLOW_DEV_CREDENTIAL", "true")
+
+	require.NoError(t, seed.Seeder()(ctx, db))
+
+	rows := readCredentialRows(t, ctx, db)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "dev-local", rows[0].Identity)
+	assert.Equal(t, "32f6050ffbc1d8c0b7d607d81dd2c14b6fdab2d2bb1ff345e21fcc3f76c008ce", rows[0].TokenHash)
+}
+
+// TestAllowDevCredential_OnlyTrueOptsIn pins the parsing: anything that is
+// not an explicit true is a no, so a typo or a half-set value fails closed.
+func TestAllowDevCredential_OnlyTrueOptsIn(t *testing.T) {
+	for _, tc := range []struct {
+		set  bool
+		val  string
+		want bool
+	}{
+		{false, "", false},
+		{true, "", false},
+		{true, "false", false},
+		{true, "0", false},
+		{true, "1", false},
+		{true, "yes", false},
+		{true, "true", true},
+		{true, "TRUE", true},
+		{true, "  True  ", true},
+	} {
+		if tc.set {
+			t.Setenv("KRILL_ALLOW_DEV_CREDENTIAL", tc.val)
+		} else {
+			os.Unsetenv("KRILL_ALLOW_DEV_CREDENTIAL")
+		}
+		assert.Equal(t, tc.want, seed.AllowDevCredential(), "KRILL_ALLOW_DEV_CREDENTIAL=%q", tc.val)
+	}
 }

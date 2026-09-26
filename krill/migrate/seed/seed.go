@@ -25,6 +25,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"os"
+	"strings"
 )
 
 // repoFullName and defaultBranch are krill's own forge coordinates
@@ -44,9 +46,31 @@ const (
 	// mcp_config.json). Nothing else provisions one, so without this row
 	// every /mcp/spec, /mcp/work and /mcp/design call 401s with "auth:
 	// invalid or revoked credential" against a freshly migrated database.
+	//
+	// SECURITY: this token is committed in a PUBLIC repository, so it is
+	// readable by anyone. It is only ever usable when
+	// allowDevCredential is true, which requires an operator to opt in
+	// explicitly (see below) -- never by default, and never in a deployed
+	// environment.
 	devCredentialIdentity = "dev-local"
 	devCredentialToken    = "dev-local"
 )
+
+// AllowDevCredential reports whether the dev-credential opt-in is set.
+//
+// `migrate` runs on every deployment, prod included, so seeding an
+// unconditionally-known token would be an authentication bypass on the MCP
+// surface in any environment that has not thought to remove it. The gate
+// reads KRILL_ALLOW_DEV_CREDENTIAL, which the Tiltfile sets for the local
+// cluster and no deployment sets -- so the failure mode is "the local dev
+// loop needs one line of config", never "prod accepts a public token".
+//
+// The value is read from the process environment rather than inferred from
+// anything about the database, because nothing about a connection string
+// reliably distinguishes dev from prod.
+func AllowDevCredential() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("KRILL_ALLOW_DEV_CREDENTIAL")), "true")
+}
 
 // Seeder returns a libs/go/migrate.Seeder-compatible function that ensures
 // krill's one `scope` row exists, per this package's doc comment.
@@ -58,6 +82,9 @@ func Seeder() func(ctx context.Context, db *sql.DB) error {
 	return func(ctx context.Context, db *sql.DB) error {
 		if err := SeedScope(ctx, db); err != nil {
 			return err
+		}
+		if !AllowDevCredential() {
+			return nil
 		}
 		return SeedDevCredential(ctx, db)
 	}
@@ -90,8 +117,11 @@ func SeedScope(ctx context.Context, db *sql.DB) error {
 // Idempotent via the UNIQUE token_hash constraint: a later run is a
 // no-op, and it never clobbers or revokes a credential an operator
 // rotated. This is a development convenience only — the token is
-// committed in the repo, so it must never be trusted in a deployed
-// environment, where a real credential is minted out of band.
+// committed in a public repository, so it must never be reachable in a
+// deployed environment. Seeder calls it ONLY when allowDevCredential() is
+// true, so `migrate` run without KRILL_ALLOW_DEV_CREDENTIAL never creates
+// it. Call this function directly only in a context that has established
+// the same thing.
 func SeedDevCredential(ctx context.Context, db *sql.DB) error {
 	sum := sha256.Sum256([]byte(devCredentialToken))
 	_, err := db.ExecContext(ctx, `
