@@ -1,0 +1,28 @@
+"""Monty sandbox wire protocol -- the parent/worker message schema.
+
+Vendored verbatim from https://github.com/pydantic/monty (MIT, Copyright (c)
+Pydantic Services Inc.), crates/monty-proto/proto/monty/v1/monty.proto. Monty
+publishes the schema specifically so a parent can be implemented in any
+language; vendoring it keeps the wire contract reviewable in-tree and pins the
+protocol version this client speaks.
+
+Regenerate by re-copying the upstream file -- the header comment carries the
+protocol rules (framing, alternation, version evolution) that the Go client
+depends on, so do not strip it.
+"""
+
+load("@rules_go//proto:def.bzl", "go_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+proto_library(
+    name = "monty_proto",
+    srcs = ["monty.proto"],
+    visibility = ["//visibility:private"],
+)
+
+go_proto_library(
+    name = "montypb",
+    importpath = "github.com/whale-net/everything/libs/go/monty/protos",
+    proto = ":monty_proto",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,63 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "remote",
+    srcs = ["remote.go"],
+    importpath = "github.com/whale-net/everything/libs/go/monty/remote",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/monty",
+        "//libs/go/monty/protos:montypb",
+        "@com_github_gorilla_websocket//:websocket",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+go_test(
+    name = "remote_test",
+    size = "small",
+    srcs = ["remote_test.go"],
+    embed = [":remote"],
+    deps = [
+        "//libs/go/monty",
+        "//libs/go/monty/protos:montypb",
+        "@com_github_gorilla_websocket//:websocket",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# keep
+#
+# The remote transport against a real worker, reached through an in-test
+# WebSocket relay that reproduces what monty-server does. Gazelle skips
+# build-tagged files, so this rule is hand-written and marked `# keep` --
+# same shape and tag set as //libs/go/s3:s3_integration_test.
+#
+# Needs the worker binary:
+#   uv tool install pydantic-monty-runtime
+#   export MONTY_BIN=$(command -v monty)
+#   bazel test //libs/go/monty/remote:remote_integration_test --test_output=all
+go_test(
+    name = "remote_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["remote_integration_test.go"],
+    embed = [":remote"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/monty",
+        "@com_github_gorilla_websocket//:websocket",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

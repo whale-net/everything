@@ -1,0 +1,72 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "monty",
+    srcs = [
+        "arena.go",
+        "client.go",
+        "errors.go",
+        "frame.go",
+        "local.go",
+        "oscall.go",
+        "session.go",
+        "transport.go",
+        "value.go",
+    ],
+    importpath = "github.com/whale-net/everything/libs/go/monty",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/monty/protos:montypb",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+go_test(
+    name = "monty_test",
+    size = "small",
+    srcs = [
+        "arena_test.go",
+        "client_test.go",
+        "frame_test.go",
+        "session_test.go",
+    ],
+    embed = [":monty"],
+    deps = [
+        "//libs/go/monty/protos:montypb",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# keep
+#
+# Real sandboxed Python against a real `monty subprocess` worker, and the
+# same worker reached through an in-test WebSocket relay. Gazelle skips
+# build-tagged files, so this rule is hand-written and marked `# keep` --
+# same shape and tag set as //libs/go/s3:s3_integration_test.
+#
+# Needs the worker binary:
+#   uv tool install pydantic-monty-runtime
+#   export MONTY_BIN=$(command -v monty)
+#   bazel test //libs/go/monty:monty_integration_test --test_output=all
+go_test(
+    name = "monty_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["monty_integration_test.go"],
+    embed = [":monty"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
