@@ -176,11 +176,15 @@ func outcomePtr(s string) *string {
 func budgetPtr(n int) *int { return &n }
 
 // breakdownOf flattens a shipped/unshipped pair into the page's breakdown
-// map entry, exactly as deliveryBreakdowns does for a successful read.
+// map entry, exactly as deliveryBreakdowns does for a successful read --
+// including the StatusDisagrees an empty unshipped list carries under a
+// partially-complete badge.
 func breakdownOf(shipped, unshipped slice.Document) pages.DeliveryBreakdown {
+	unshippedEntities := deliveryEntitiesOf(unshipped)
 	return pages.DeliveryBreakdown{
-		Shipped:   deliveryEntitiesOf(shipped),
-		Unshipped: deliveryEntitiesOf(unshipped),
+		Shipped:         deliveryEntitiesOf(shipped),
+		Unshipped:       unshippedEntities,
+		StatusDisagrees: len(unshippedEntities) == 0,
 	}
 }
 

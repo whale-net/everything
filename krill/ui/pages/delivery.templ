@@ -33,10 +33,17 @@ type DeliveryEntity struct {
 // Error is set instead of the two lists when that container's breakdown
 // read failed: one unreadable container degrades to an inline error in
 // place of its own block rather than taking the whole page down.
+//
+// StatusDisagrees is set when the container's own status is
+// "partially complete" yet its breakdown lists nothing outstanding -- the
+// badge and the list beside it reading two different stories. Only the
+// caller that has read the container's status may set it, and it is never
+// set alongside Error.
 type DeliveryBreakdown struct {
-	Shipped   []DeliveryEntity
-	Unshipped []DeliveryEntity
-	Error     string
+	Shipped         []DeliveryEntity
+	Unshipped       []DeliveryEntity
+	StatusDisagrees bool
+	Error           string
 }
 
 // DeliveryMilepebble is one milepebble row: its own status and, when
@@ -77,6 +84,25 @@ templ statusBadge(status string) {
 	@htmxui.Badge(status, s.Variant, s.Size, s.Soft, nil)
 }
 
+// deliveryStatusDisagreement names, in the operator's own terms, the one
+// case where a container's status badge and its breakdown cannot both be
+// true: the container reads "partially complete" while nothing in its
+// breakdown is outstanding. Rendered inside that container's own block,
+// directly under the badge, because the defect IS a badge and a list
+// disagreeing in the same view.
+//
+// The copy asserts no cause. Whether the status or the delivery scope is
+// the wrong one is not observable from here, so it says so rather than
+// guessing.
+const deliveryStatusDisagreement = "Status and breakdown disagree: this container reads partially complete, but nothing in its breakdown is outstanding -- every item it delivers has a shipment record, or it delivers none. Read the delivery scope, not the badge, for what is left."
+
+// deliveryUnshippedLabel is what every member of the Unshipped bucket
+// is: delivered to this container, with no delivery_shipment row against
+// it. It states no cause -- a skipped recording step is not observable
+// anywhere in krill, and the same sentence is true of a planned
+// milestone's entire scope.
+const deliveryUnshippedLabel = "Delivered to this container, no shipment record."
+
 // breakdownBlock is the shared shipped/unshipped block, rendered for
 // both a milestone and its milepebbles so the two look identical.
 //
@@ -87,6 +113,11 @@ templ breakdownBlock(b *DeliveryBreakdown) {
 		if b.Error != "" {
 			@htmxui.Alert(htmxui.AlertError, b.Error, nil)
 		} else {
+			if b.StatusDisagrees {
+				<div class="mb-2" data-krill="delivery-status-disagreement">
+					@htmxui.Alert(htmxui.AlertWarning, deliveryStatusDisagreement, nil)
+				</div>
+			}
 			<strong>Shipped</strong>
 			if len(b.Shipped) > 0 {
 				<ul class="mt-1 list-disc pl-5 space-y-1">
@@ -101,6 +132,7 @@ templ breakdownBlock(b *DeliveryBreakdown) {
 				<p class="mt-1">Nothing shipped yet.</p>
 			}
 			<strong class="mt-2 block">Unshipped</strong>
+			<p class="mt-1 text-base-content/70">{ deliveryUnshippedLabel }</p>
 			if len(b.Unshipped) > 0 {
 				<ul class="mt-1 list-disc pl-5 space-y-1">
 					for _, e := range b.Unshipped {
