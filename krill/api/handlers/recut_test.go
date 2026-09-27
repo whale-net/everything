@@ -178,20 +178,45 @@ func TestMoveScopeHandler_NoSessionHeader_Returns401_NoStoreCall(t *testing.T) {
 	assert.False(t, recut.moveScopeCalled)
 }
 
-// TestGetBacklogHandler_ReturnsDocument proves the ungated read endpoint
-// returns the querier's Document as-is.
-func TestGetBacklogHandler_ReturnsDocument(t *testing.T) {
+// TestGetBacklogHandler_ReturnsBucket proves the ungated read endpoint
+// returns the bucket's own id alongside the querier's entities.
+func TestGetBacklogHandler_ReturnsBucket(t *testing.T) {
 	backlogged := slice.FeatureEntity{EntityRef: slice.EntityRef{ID: uuid.New()}, Name: "backlogged-feature"}
-	querier := &fakeBacklogQuerier{doc: slice.Document{Features: []slice.FeatureEntity{backlogged}}}
+	bucketID := uuid.New()
+	querier := &fakeBacklogQuerier{backlog: slice.Backlog{
+		Document:       slice.Document{Features: []slice.FeatureEntity{backlogged}},
+		MilestoneRefID: bucketID,
+	}}
 	productID := uuid.New()
 
 	rec := doGetBacklogRequest(t, handlers.GetBacklogHandler(querier), productID.String())
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	var resp slice.Document
+	var resp slice.Backlog
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, bucketID, resp.MilestoneRefID)
 	require.Len(t, resp.Features, 1)
 	assert.Equal(t, backlogged.ID, resp.Features[0].ID)
+}
+
+// TestGetBacklogHandler_EmptyBucket_StillReturnsBucketID proves an
+// existing-but-empty bucket and a never-created one are the same response
+// shape: the caller gets a nameable id either way, never a 404 on one and
+// an empty list on the other.
+func TestGetBacklogHandler_EmptyBucket_StillReturnsBucketID(t *testing.T) {
+	querier := &fakeBacklogQuerier{backlog: slice.Backlog{
+		Document:       slice.Document{SchemaVersion: slice.SchemaVersion},
+		MilestoneRefID: uuid.New(),
+	}}
+
+	rec := doGetBacklogRequest(t, handlers.GetBacklogHandler(querier), uuid.New().String())
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var resp slice.Backlog
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.NotEqual(t, uuid.Nil, resp.MilestoneRefID)
+	assert.Empty(t, resp.Features)
+	assert.Empty(t, resp.Requirements)
 }
 
 // TestGetBacklogHandler_NotFound_Returns404 proves store.ErrNotFound maps

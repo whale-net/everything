@@ -113,14 +113,16 @@ func MoveScopeHandler(recut store.RecutStore) http.HandlerFunc {
 // deliveryBreakdownQuerier is (slice.go's own note on
 // deliveryBreakdownQuerier applies here too).
 type backlogQuerier interface {
-	GetBacklog(ctx context.Context, productID uuid.UUID) (slice.Document, error)
+	GetBacklog(ctx context.Context, productID uuid.UUID) (slice.Backlog, error)
 }
 
 var _ backlogQuerier = (*slice.Querier)(nil)
 
 // GetBacklogHandler returns the backlog-bucket read endpoint (FR5/FR6):
 // GET /products/{id}/backlog, ungated like every other read endpoint in
-// this package.
+// this package. The response carries the bucket's own milestone_ref id
+// alongside its entities, so a caller holding no session can hand that id
+// to POST /delivery/move as `to`.
 func GetBacklogHandler(querier backlogQuerier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		productID, err := uuid.Parse(r.PathValue("id"))
@@ -129,7 +131,7 @@ func GetBacklogHandler(querier backlogQuerier) http.HandlerFunc {
 			return
 		}
 
-		doc, err := querier.GetBacklog(r.Context(), productID)
+		backlog, err := querier.GetBacklog(r.Context(), productID)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				writeJSONError(w, http.StatusNotFound, "not found")
@@ -139,6 +141,6 @@ func GetBacklogHandler(querier backlogQuerier) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, doc)
+		writeJSON(w, http.StatusOK, backlog)
 	}
 }

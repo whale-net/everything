@@ -78,7 +78,7 @@ read) unless noted otherwise.
 | `POST /milestones/{id}/shipped` | Records that a specific delivered entity has shipped as part of this container (FR10, issue #2686). Gated. |
 | `GET /milestones/{id}/delivery` | Returns the shipped/unshipped breakdown of a container's Delivers set, as typed entities (FR10). Never gated. |
 | `POST /delivery/move` | Re-cuts not-yet-shipped scope between milestones, milepebbles, or the backlog bucket (FR5, issue #2687) — refuses (writing nothing) if any entity is already shipped in its from-container. Gated. |
-| `GET /products/{id}/backlog` | Returns a product's backlog bucket contents, as typed entities. Never gated. |
+| `GET /products/{id}/backlog` | Returns a product's backlog bucket: its `milestone_ref` id (usable as `POST /delivery/move`'s `to`) plus its contents as typed entities. Creating the bucket on a product's first read, so the id is nameable before anything has been moved in. Never gated. |
 | `POST /milestones/{id}/abandon` | Marks a milestone or milepebble abandoned, sweeping its not-yet-shipped scope into the backlog bucket in one transaction; cascades to every live milepebble when the target is a milestone (FR6, issue #2688). Not reversible — there is no un-abandon endpoint. Gated. |
 | `GET /products/{id}/delivery` | Returns every milestone and milepebble under a product, filtered by status (FR11, issue #2689) — an empty filter means "all". Never gated. |
 

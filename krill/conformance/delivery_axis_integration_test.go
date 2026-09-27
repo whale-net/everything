@@ -272,9 +272,10 @@ func TestDeliveryAxis_EndToEndLifecycle_EveryStepReassertsCapturedIDs(t *testing
 	`, features[3].ID, mp2.ID).Scan(&shipmentIDAfter))
 	assert.Equal(t, shipmentIDBefore, shipmentIDAfter, "NFR3: the shipped half's delivery_shipment row must be byte-identical before and after an abandon")
 
-	backlogDoc, err := q.GetBacklog(ctx, product.ID)
+	backlog, err := q.GetBacklog(ctx, product.ID)
 	require.NoError(t, err)
-	backlogIDs := documentEntityIDs(backlogDoc)
+	assert.NotEqual(t, uuid.Nil, backlog.MilestoneRefID, "the backlog read names the bucket, so a caller can retract scope into it")
+	backlogIDs := documentEntityIDs(backlog.Document)
 	assert.Contains(t, backlogIDs, features[2].ID)
 	assert.Contains(t, backlogIDs, discovered.EntityID)
 	assert.NotContains(t, backlogIDs, features[3].ID, "the shipped Feature stays on mp2, never the backlog")

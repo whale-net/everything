@@ -261,34 +261,65 @@ func (q *Querier) GetMilestoneDeliversSlice(ctx context.Context, milestoneID uui
 	return doc, nil
 }
 
-// GetBacklog is FR5/FR6 (issue #2687): productID's backlog bucket
-// contents, as the same typed entities (FeatureEntity/RequirementEntity)
+// Backlog is FR5's backlog-bucket read: the bucket's own milestone_ref id
+// alongside its contents. The id is what makes the bucket nameable as
+// move_delivery_scope's `to`, so a producer can retract planned scope from
+// a milestone before anything has ever been abandoned or moved -- the one
+// destination the re-cut path could not otherwise be given. Document is
+// embedded rather than reshaped, so the payload is the same typed
+// document (LB7) every other granularity in this package returns, with one
+// field added.
+type Backlog struct {
+	Document
+
+	// MilestoneRefID is the `milestone_ref` row this product's bucket IS
+	// -- created by this call when the product has never had one, and the
+	// same row every later read resolves.
+	MilestoneRefID uuid.UUID `json:"milestone_ref_id"`
+}
+
+// BacklogBucketSubject is the LB4 subject pair a backlog read attributes
+// its resolve-or-create to: iss "krill", kind "service", written to both
+// slots. The read is ungated, so there is no caller identity to name, and
+// the row it may create is permanent history -- an append-only row must
+// never carry a fabricated attribution. One shared value, reached by both
+// published readers through this one method, so the recorded history does
+// not depend on which surface a producer happened to hit first. Supplied
+// here rather than inside the store's shared resolve-or-create core, which
+// Abandon reaches with a real caller's own subject.
+var BacklogBucketSubject = store.Subject{
+	Iss:  "krill",
+	Sub:  "backlog-bucket-resolve",
+	Kind: store.SubjectKindService,
+}
+
+// GetBacklog is FR5/FR6 (issue #2687): productID's backlog bucket --
+// contents as the same typed entities (FeatureEntity/RequirementEntity)
 // every other granularity in this package returns, via GetEntitySetSlice
 // (LB7) -- mirroring GetDeliveryBreakdown's own composition of a
 // store-layer raw id list (RecutStore.ListBacklog here, DeliveryBreakdown
-// there) into a Document, rather than a second, id-only projection.
-// Resolves productID's scope_id from its own current `product` row
-// (store.Products().GetCurrentByID) -- same shape as GetProductSlice,
-// which also takes only a product id, not a scope id, since the caller
-// (an ungated read) has no session to read scope_id from. A product with
-// no backlog bucket yet returns an empty Document, not an error --
-// RecutStore.ListBacklog's own empty-input contract, unchanged here.
-func (q *Querier) GetBacklog(ctx context.Context, productID uuid.UUID) (Document, error) {
+// there) into a Document, rather than a second, id-only projection --
+// plus the bucket's own id, so a caller holding no session can name it as
+// a move destination. Resolves productID's scope_id from its own current
+// `product` row (store.Products().GetCurrentByID) -- same shape as
+// GetProductSlice, which also takes only a product id, not a scope id,
+// since the caller (an ungated read) has no session to read scope_id from.
+func (q *Querier) GetBacklog(ctx context.Context, productID uuid.UUID) (Backlog, error) {
 	product, err := q.store.Products().GetCurrentByID(ctx, productID)
 	if err != nil {
-		return Document{}, fmt.Errorf("get product: %w", err)
+		return Backlog{}, fmt.Errorf("get product: %w", err)
 	}
 
 	entityIDs, err := q.store.Recut().ListBacklog(ctx, product.ScopeID, productID)
 	if err != nil {
-		return Document{}, fmt.Errorf("list backlog: %w", err)
+		return Backlog{}, fmt.Errorf("list backlog: %w", err)
 	}
 
 	doc, err := q.GetEntitySetSlice(ctx, entityIDs)
 	if err != nil {
-		return Document{}, fmt.Errorf("backlog entity set slice: %w", err)
+		return Backlog{}, fmt.Errorf("backlog entity set slice: %w", err)
 	}
-	return doc, nil
+	return Backlog{Document: doc}, nil
 }
 
 // -- as-of assembly (FR11 x FR5-FR8, issue #2493) ------------------------

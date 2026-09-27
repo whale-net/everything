@@ -65,16 +65,22 @@ type sliceQueryFunc func(ctx context.Context, id uuid.UUID) (slice.Document, err
 // so the fix here corrects the advertised schema instead, via
 // jsonschema.ForOptions.TypeSchemas overriding just the uuid.UUID leaf
 // to match its real wire shape.
-var sliceDocumentOutputSchema = mustSliceDocumentOutputSchema()
+var sliceDocumentOutputSchema = mustSliceOutputSchema[slice.Document]("slice.Document")
 
-func mustSliceDocumentOutputSchema() *jsonschema.Schema {
-	s, err := jsonschema.For[slice.Document](&jsonschema.ForOptions{
+// mustSliceOutputSchema builds T's advertised output schema with the one
+// leaf override every slice-shaped response needs (uuid.UUID as a string,
+// for the reason sliceDocumentOutputSchema's comment gives). A tool whose
+// response is not itself a slice.Document -- get_backlog's, which adds
+// the bucket's own id -- needs its own schema built this way rather than
+// pointing at a schema that does not describe what it returns.
+func mustSliceOutputSchema[T any](name string) *jsonschema.Schema {
+	s, err := jsonschema.For[T](&jsonschema.ForOptions{
 		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
 			reflect.TypeFor[uuid.UUID](): {Type: "string"},
 		},
 	})
 	if err != nil {
-		panic(fmt.Errorf("krill/mcp/tools: building slice.Document output schema: %w", err))
+		panic(fmt.Errorf("krill/mcp/tools: building %s output schema: %w", name, err))
 	}
 	return s
 }

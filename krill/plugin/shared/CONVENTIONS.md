@@ -269,7 +269,9 @@ as the read-only tools below (`get_milestone`/`list_milepebbles`/
 - `move_delivery_scope {krill_session_id, entity_ids[], from, to}` and
   `get_backlog {product_id}` — re-cuts not-yet-shipped scope between
   milestones/milepebbles/the backlog bucket; refuses (writes nothing) if
-  any entity is already shipped in its `from` container.
+  any entity is already shipped in its `from` container. `get_backlog`
+  returns the bucket's own `milestone_ref` id alongside its contents, so
+  `to` can be that id on a product whose bucket has never been used.
 - `abandon_milestone {krill_session_id, milestone_id, note?}` — marks a
   milestone or milepebble abandoned and sweeps its not-yet-shipped scope
   into the backlog in one transaction. **Not reversible.**
