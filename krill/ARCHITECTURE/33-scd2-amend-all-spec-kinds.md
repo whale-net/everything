@@ -29,15 +29,20 @@ a generic unknown-field decode: every amend request body embeds
 fields a caller might reach for, which no handler or tool ever applies.
 `Refuse` turns a submitted value that *differs* from the entity's own
 current placement into `store.ErrPlacementChange` naming the field and
-pointing at the operation that does move or re-kind an entity -- the
-reparent verb below (for a Feature's `feature_set_id`), the create path,
-or the resolution path for a kind change. A value equal to the placement
-already there is not a change, so a client that echoes back the parent
-and kind it read amends normally (FR b62ed47a); a field the kind has no
-column for has no current value, so anything sent for it differs. That is
-why the guard is not decidable from the request body alone: each surface
-reads the entity's current row with `CurrentPlacement` in the same
-request, before any supersede runs.
+the operation that does move or re-kind an entity. The advice is per
+(kind, field), because only some pairs have a verb: a Feature's
+`feature_set_id` names `reparent_feature`, a Non-Goal's `kind` names
+`resolve_non_goal`, a kind that is genuinely parented but has no move
+verb is told to create-then-void, and a field that is not that kind's
+parent column at all is told so -- a Milestone carrying
+`feature_set_id` is not pointed at a Feature's verb, because a Milestone
+has no FeatureSet parent and there would be nothing to move. A value
+equal to the placement already there is not a change, so a client that
+echoes back the parent and kind it read amends normally (FR b62ed47a); a
+field the kind has no column for has no current value, so anything sent
+for it differs. That is why the guard is not decidable from the request
+body alone: each surface reads the entity's current row with
+`CurrentPlacement` in the same request, before any supersede runs.
 
 **Name uniqueness is create's, unchanged** (FR b2767a89). Every spec-axis
 table's scope-qualified name index is partial on `valid_to IS NULL`, so
@@ -167,6 +172,13 @@ that read side, and for why the as-of slice assembly's "Product,
 FeatureSet, and Feature have no write path that supersedes a row yet"
 note now needs the qualifier this file supplies.
 
-**`ReparentStore` has no surface yet.** It is store-only; the HTTP
-endpoint and the MCP tool that reach it are separate work, so nothing on
-the amend surfaces above gains a reparent sibling by this change.
+**`ReparentStore` is reached by one MCP tool, no HTTP endpoint.**
+`reparent_feature` (krill/mcp/tools/amend.go, registered by the same
+`RegisterAmendAll` fan-out as the eight amends) takes `feature_id` and
+the new `feature_set_id` and returns the unchanged id, the same
+`amendPersonas` list and `krillSessionInput` gate as the amends -- it is
+registered there because the refusal above names it, and a refusal that
+points at a verb the mount lacks is a dead end. There is still no HTTP
+twin, so an HTTP amend refusal names a verb that route does not expose;
+the two surfaces' message is the same one, and closing that gap is
+separate work.

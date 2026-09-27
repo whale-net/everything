@@ -295,9 +295,48 @@ func (p AmendPlacementChange) Sent() bool {
 }
 
 // ErrPlacementChange is the named refusal an amend returns when a caller
-// asks to reparent or re-kind. Moving an entity is a create/move
-// operation and re-kinding is a resolution operation; amend never is one.
+// asks to reparent or re-kind. A move is its own verb where one exists and
+// a create-then-void pair where one does not; amend never is one.
 var ErrPlacementChange = errors.New("krill/store: amend cannot reparent or re-kind an entity")
+
+// parentColumn names the column that holds each kind's parent, or "" for a
+// kind that is not parented inside a Product. A field that is not this
+// kind's parent column is not a placement of the kind at all, which is a
+// different -- and more useful -- refusal than "you cannot move this".
+var parentColumn = map[string]string{
+	"feature set":           "product_id",
+	"feature":               "feature_set_id",
+	"requirement":           "feature_id",
+	"load-bearing decision": "feature_set_id",
+	"persona":               "product_id",
+	"non-goal":              "product_id",
+	"milestone":             "product_id",
+}
+
+// placementAdvice names the operation to use instead of the refused
+// change, per (entityKind, field). The verb is named only where one
+// exists: a Feature has reparent_feature and a Non-Goal has
+// resolve_non_goal, and telling a Milestone to use a Feature's verb would
+// be false in both halves.
+func placementAdvice(entityKind, field string) string {
+	switch {
+	case entityKind == "feature" && field == "feature_set_id":
+		return "reparent it with reparent_feature, which moves a feature between feature sets of the same product under the same id"
+	case entityKind == "non-goal" && field == "kind":
+		return "re-kind a non_goal with resolve_non_goal, which settles a deferred non-goal by promoting it to permanent or retiring it"
+	case entityKind == "requirement" && field == "kind":
+		return "a requirement's FR/NFR kind is fixed at creation -- create the requirement with the kind you want, then void this one"
+	case parentColumn[entityKind] == field:
+		if entityKind == "milestone" {
+			return "a milestone's parent is fixed at create, and a milepebble's parent is set by the cut that made it -- create the milestone under the parent you want, then abandon_milestone this one"
+		}
+		return fmt.Sprintf("a %s has no reparent verb -- create the %s under the parent you want, then void this one", entityKind, entityKind)
+	case entityKind == "milestone" && field == "parent_milestone_id":
+		return "only a milepebble is parented to a milestone, and that parent is set by the cut that created it -- create the milepebble under the milestone you want, then abandon_milestone this one"
+	default:
+		return fmt.Sprintf("%s is not a placement of a %s, so there is nothing here to reparent", field, entityKind)
+	}
+}
 
 // Refuse reports ErrPlacementChange naming entityKind and the first field
 // whose SUBMITTED value differs from current, the entity's own placement as
@@ -319,8 +358,8 @@ func (p AmendPlacementChange) Refuse(entityKind string, current AmendPlacementCh
 		{"kind", p.Kind, current.Kind},
 	} {
 		if placementDiffers(field.submitted, field.current) {
-			return fmt.Errorf("%w: %s cannot change %s on amend -- reparent through the create/move path and re-kind through the resolution path",
-				ErrPlacementChange, entityKind, field.name)
+			return fmt.Errorf("%w: %s cannot change %s on amend -- %s",
+				ErrPlacementChange, entityKind, field.name, placementAdvice(entityKind, field.name))
 		}
 	}
 	return nil
