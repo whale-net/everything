@@ -31,9 +31,12 @@ import (
 // krill/mcp/tools' init_session tool can reuse it, and ParseSubject below,
 // rather than a second MCP-local copy of the same validation (LB7).
 type SubjectRequest struct {
-	Iss  string `json:"iss"`
-	Sub  string `json:"sub"`
-	Kind string `json:"kind"`
+	Iss string `json:"iss"`
+	Sub string `json:"sub"`
+	// The description is the only place a caller reading the published
+	// init_session tool schema learns agent is accepted, so it names all
+	// three kinds ParseSubject below validates.
+	Kind string `json:"kind" jsonschema:"Either human, service or agent."`
 }
 
 // initSessionRequest is InitSessionHandler's request body. Acting and
@@ -108,8 +111,8 @@ func InitSessionHandler(sessions store.SessionStore) http.HandlerFunc {
 
 // ParseSubject validates and converts a SubjectRequest into a store.Subject.
 // iss and sub must both be non-empty (LB4: both real columns, never
-// defaulted); kind must be one of store.SubjectKindHuman/SubjectKindService
-// -- there is no third kind in M1 (see 003_session.up.sql's CHECK comment).
+// defaulted); kind must be one of store.SubjectKindHuman,
+// store.SubjectKindService or store.SubjectKindAgent.
 // Exported (issue #2827) so krill/mcp/tools' init_session tool validates a
 // caller-supplied Subject identically to this handler (LB7).
 func ParseSubject(s SubjectRequest) (store.Subject, error) {
