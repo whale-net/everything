@@ -1,9 +1,12 @@
 // This file is the SCD2 close-and-open write path AGENTS.md's "SCD2"
 // section describes, applied to every spec-axis entity kind: Product,
 // FeatureSet, Feature, Requirement, Persona, NonGoal, LoadBearingDecision,
-// and Milestone. Migration 002 already shipped every column the seven
-// spec-axis tables need; migration 020 gave `milestone_ref` the same shape
-// so a milestone's authoring fields are amendable too (FR 39373553).
+// Milestone, and a milestone's Deferral. Migration 002 already shipped
+// every column the seven spec-axis tables need; migration 020 gave
+// `milestone_ref` the same shape so a milestone's authoring fields are
+// amendable too (FR 39373553), and migration 024 gave `milestone_deferral`
+// the same shape so a deferral's body and destination are correctable in
+// place.
 package store
 
 import (
@@ -27,9 +30,12 @@ import (
 // A Milestone's amend is the one that has to say what it does not touch:
 // kind, product, parent milestone, position, and FR budget are carried
 // forward unchanged, and the delivery axis (status transitions, Delivers,
-// must-not-foreclose, deferrals) lives in separate append-only tables
-// keyed on the same immutable id, so a supersession never reaches them
-// (FR 39373553).
+// must-not-foreclose) lives in separate append-only tables keyed on the
+// same immutable id, so a supersession never reaches them (FR 39373553).
+// Deferrals used to be in that untouchable set; migration 024 moved them
+// out of it, but only as far as AmendDeferral, which supersedes a single
+// deferral's own text and still leaves every sibling deferral, the
+// milestone's other axis, and the deferral's existence alone.
 type AmendStore interface {
 	// AmendProduct closes the current row for id and inserts a successor
 	// carrying the closed row's id, scope_id, and position, with name and
@@ -87,6 +93,14 @@ type AmendStore interface {
 	// consults it: the guard stays a refusal the surface decides before any
 	// supersede runs.
 	CurrentPlacement(ctx context.Context, entityKind string, id uuid.UUID) (AmendPlacementChange, error)
+
+	// AmendDeferral closes the deferral's current row and inserts a
+	// successor carrying the closed row's id, scope_id, milestone_id,
+	// position, created_at, and LB4 subject pair unchanged, with body and
+	// destination as given. An empty destination is refused, exactly as
+	// AddDeferral refuses one (FR1). Returns ErrNotFound if id has no
+	// current row.
+	AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string) (MilestoneDeferral, error)
 }
 
 type amendStore struct{ pool *pgxpool.Pool }
@@ -255,6 +269,47 @@ func (s amendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name strin
 				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 				RETURNING `+milestoneRefColumns, args...))
 			return amended, errNameConflict("milestone_ref", "insert amended milestone_ref", err)
+		})
+}
+
+// AmendDeferral supersedes one deferral's text under its unchanged id
+// (migration 024, which made `milestone_deferral` SCD2 so this path could
+// exist at all). FR1's destination rule is enforced up front, the same
+// refusal AddDeferral gives, so an amend can never write the one row shape
+// AddDeferral would have rejected.
+//
+// The successor carries the closed row's `created_by_acting` /
+// `created_by_on_behalf_of` forward rather than recording the amender's
+// own subject pair, and that is the same choice AmendMilestone makes: the
+// columns name who deferred the item, which is a fact about when it was
+// deferred and does not change when its wording is corrected. Overwriting
+// them would make "when, and by whom, was this deferred" unreadable, which
+// is the exact provenance delete-and-recreate already destroyed. So a
+// corrected deferral keeps its original authorship and reads as a revision
+// of it, while the superseded row beside it retains the pre-correction text
+// in full.
+func (s amendStore) AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string) (MilestoneDeferral, error) {
+	if destination == "" {
+		return MilestoneDeferral{}, fmt.Errorf("destination: required -- every deferred entry must cite where it went (FR1)")
+	}
+	return supersede(ctx, s.pool, "milestone_deferral", milestoneDeferralColumns, scanMilestoneDeferral, id,
+		func(ctx context.Context, q txQuerier, current MilestoneDeferral) (MilestoneDeferral, error) {
+			amended, err := scanMilestoneDeferral(q.QueryRow(ctx, `
+				INSERT INTO milestone_deferral (
+					id, scope_id, milestone_id, body, destination, position,
+					created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+					created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind,
+					created_at
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+				RETURNING `+milestoneDeferralColumns,
+				current.ID, current.ScopeID, current.MilestoneID, body, destination, current.Position,
+				current.CreatedByActing.Iss, current.CreatedByActing.Sub, string(current.CreatedByActing.Kind),
+				current.CreatedByOnBehalfOf.Iss, current.CreatedByOnBehalfOf.Sub, string(current.CreatedByOnBehalfOf.Kind),
+				current.CreatedAt))
+			if err != nil {
+				return MilestoneDeferral{}, fmt.Errorf("insert amended milestone_deferral: %w", err)
+			}
+			return amended, nil
 		})
 }
 

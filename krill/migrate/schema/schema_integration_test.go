@@ -20,7 +20,9 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -199,7 +201,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(23), latest, "expected the latest migration source version to be 23 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event, 022_non_goal_promotion, 023_single_delivery_parent) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(24), latest, "expected the latest migration source version to be 24 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event, 022_non_goal_promotion, 023_single_delivery_parent, 024_milestone_deferral_scd2) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
@@ -207,12 +209,12 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	// must exist, version must land clean at the latest. 023 adds no table
 	// -- it is a data fix over rows 004/010 already created, covered on its
 	// own by TestMigration023_*.
-	require.NoError(t, runner.Up(), "apply migrations 001-023")
+	require.NoError(t, runner.Up(), "apply migrations 001-024")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(23), version)
+	assert.Equal(t, uint(24), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -271,7 +273,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(23), version)
+	assert.Equal(t, uint(24), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -968,9 +970,10 @@ func TestMigration010_SchemaContract(t *testing.T) {
 	`, scopeID, productID).Scan(&milestoneID))
 
 	// -- milestone_deferral: destination NOT NULL, subject pair mandatory, real FK --
-	deferralCols := columnNames(t, ctx, db, "milestone_deferral")
-	assert.NotContains(t, deferralCols, "valid_from", "milestone_deferral must not be SCD2 (LB3) -- it is a plain append-only fact table")
-	assert.NotContains(t, deferralCols, "valid_to", "milestone_deferral must not be SCD2 (LB3) -- it is a plain append-only fact table")
+	// NB: 010's own "not SCD2" boundary assertion for this table used to live
+	// here. Migration 023 deliberately reversed that call, so that assertion
+	// moved (and inverted) to TestMigration023_SchemaContract -- see that
+	// test's own header for why.
 
 	_, nullable = nullableColumn(t, ctx, db, "milestone_deferral", "destination")
 	assert.Equal(t, "NO", nullable, "milestone_deferral.destination must be NOT NULL (FR1: every deferred entry cites where it went)")
@@ -982,7 +985,7 @@ func TestMigration010_SchemaContract(t *testing.T) {
 		"created_by_on_behalf_of_iss", "created_by_on_behalf_of_sub", "created_by_on_behalf_of_kind",
 	} {
 		_, nullable := nullableColumn(t, ctx, db, "milestone_deferral", col)
-		assert.Equal(t, "NO", nullable, "milestone_deferral.%s must be NOT NULL -- every write path onto this table (AddDeferral) always has a real caller session", col)
+		assert.Equal(t, "NO", nullable, "milestone_deferral.%s must be NOT NULL -- every write path onto this table (AddDeferral, and AmendDeferral since 023) always has a real caller session", col)
 	}
 
 	dataType, nullable := nullableColumn(t, ctx, db, "milestone_deferral", "scope_id")
@@ -3056,6 +3059,8 @@ func TestMigration023_SingleDeliveryParent(t *testing.T) {
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Migrate(22), "apply every migration through exactly 022 -- the state that predates the fix")
 
+	require.NoError(t, runner.Migrate(22), "apply every migration through exactly 022 -- the state that predates the fix")
+
 	var scopeID uuid.UUID
 	require.NoError(t, db.Pool.QueryRow(ctx, `
 		INSERT INTO scope (repo_full_name, default_branch) VALUES ('single-delivery-023/repo', 'main') RETURNING id
@@ -3259,4 +3264,239 @@ func TestMigration023_SingleDeliveryParent(t *testing.T) {
 	assert.Equal(t, []uuid.UUID{m1}, deliversTo(c6), "the up/down round trip is stable at the fixed state")
 	assert.Equal(t, 4, countDeliveredBy(m7), "M7's four Requirements survive the round trip")
 	assert.Equal(t, shipmentsBefore, shipmentCount(), "the round trip writes no shipment row")
+}
+
+// indexCoversCurrentRowsOnly reports whether the named index's definition
+// carries the `WHERE valid_to IS NULL` predicate. An SCD2 table whose
+// lookup indexes are not scoped to current rows still answers every query
+// correctly -- it just returns superseded revisions to a reader who forgot
+// to filter, and serves them from a larger index than it needs to -- so
+// this is a shape assertion, not a correctness one. It is stated on the
+// catalog rather than inferred from behaviour because the alternative is a
+// test that cannot fail for a closed-then-superseded row (a table with no
+// current-row index still returns exactly the right rows from a query that
+// filters).
+func indexCoversCurrentRowsOnly(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, index string) bool {
+	t.Helper()
+	var def string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = current_schema() AND tablename = $1 AND indexname = $2
+	`, table, index).Scan(&def))
+	return strings.Contains(def, "valid_to IS NULL")
+}
+
+// TestMigration024_SchemaContract asserts the shape migration 024 gives
+// `milestone_deferral`, and the shape assertion's inversion IS the
+// migration's point: TestMigration010_SchemaContract used to assert this
+// table has no `valid_from`/`valid_to` at all, so the two tests are the
+// before-and-after of a deliberate LB3 reversal rather than two
+// descriptions of a stable table.
+//
+// What is worth pinning: the SCD2 triple with migration 002's types,
+// `revision_id` as the row key (two revisions of one deferral legitimately
+// share an `id`, which is what an amend reuses), the `(id) WHERE valid_to
+// IS NULL` index that makes concurrent amends serialize, both of 010's
+// indexes re-issued as current-rows-only, and -- the one that is easy to
+// get wrong and hard to notice -- the `valid_from = created_at` backfill,
+// asserted against a row inserted while the database was still on the
+// pre-024 schema.
+func TestMigration024_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- the SCD2 triple, with the same types migration 002 uses --
+	for _, col := range []struct{ name, dataType string }{
+		{"revision_id", "uuid"},
+		{"valid_from", "timestamp with time zone"},
+		{"valid_to", "timestamp with time zone"},
+	} {
+		dataType, _ := nullableColumn(t, ctx, db, "milestone_deferral", col.name)
+		assert.Equal(t, col.dataType, dataType, "milestone_deferral.%s must carry the SCD2 type every other spec-axis table uses", col.name)
+	}
+	_, nullable := nullableColumn(t, ctx, db, "milestone_deferral", "valid_from")
+	assert.Equal(t, "NO", nullable, "milestone_deferral.valid_from must be NOT NULL")
+	_, nullable = nullableColumn(t, ctx, db, "milestone_deferral", "valid_to")
+	assert.Equal(t, "YES", nullable, "milestone_deferral.valid_to must be nullable -- NULL marks the current revision")
+
+	// -- revision_id is the primary key now, id no longer is --
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "milestone_deferral", "revision_id"),
+		"milestone_deferral's primary key must be revision_id, not id -- multiple revisions of one deferral legitimately share an id (LB2)")
+	assert.False(t, hasPrimaryKeyOn(t, ctx, db, "milestone_deferral", "id"),
+		"milestone_deferral.id must no longer be the primary key once the table is SCD2")
+
+	// -- both of 010's indexes are re-issued as current-rows-only, and the
+	// new (id) partial unique index exists alongside them --
+	for _, index := range []string{
+		"milestone_deferral_milestone_idx",
+		"milestone_deferral_scope_idx",
+		"milestone_deferral_current_id_idx",
+	} {
+		assert.True(t, hasIndexNamed(t, ctx, db, "milestone_deferral", index), "expected index %s to exist", index)
+		assert.True(t, indexCoversCurrentRowsOnly(t, ctx, db, "milestone_deferral", index),
+			"%s must be scoped to current rows -- unfiltered, it hands a superseded revision's text to ListDeferrals, GetMilestone, and the renderer alongside the current one", index)
+	}
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('milestone-deferral-scd2-024/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+
+	insertDeferral := `
+		INSERT INTO milestone_deferral (
+			id, scope_id, milestone_id, body, destination,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, $4, $5, 'iss', 'sub', 'human', 'iss', 'sub', 'human')`
+
+	deferralID := uuid.New()
+	require.NoError(t, db.Pool.QueryRow(ctx, insertDeferral+` RETURNING id`, deferralID, scopeID, milestoneID, "the UI rewrite", "Later").Scan(&deferralID))
+
+	// -- a row this migration finds must become a current revision, with
+	// valid_from its own created_at and valid_to NULL --
+	var validFrom, createdAt time.Time
+	var validTo sql.NullTime
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT valid_from, created_at, valid_to FROM milestone_deferral WHERE id = $1
+	`, deferralID).Scan(&validFrom, &createdAt, &validTo))
+	assert.False(t, validTo.Valid, "024 supersedes no deferral -- every row it finds stays current, so no rendered roadmap line changes")
+	assert.WithinDuration(t, createdAt, validFrom, time.Second,
+		"valid_from must be backfilled from created_at, not from the migration's own wall clock -- otherwise a point-in-time read reports a deferral as having started when the schema was migrated rather than when it was authored")
+
+	// -- closing a row and opening its successor under the same id is what
+	// an amend does, and the partial unique index must tolerate it --
+	_, err = db.Pool.Exec(ctx, `UPDATE milestone_deferral SET valid_to = NOW() WHERE id = $1`, deferralID)
+	require.NoError(t, err)
+	var successorID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, insertDeferral+` RETURNING id`, deferralID, scopeID, milestoneID, "the UI rewrite (scoped down)", "M2").Scan(&successorID))
+	assert.Equal(t, deferralID, successorID, "a supersession reuses the immutable id (LB2)")
+
+	// A second current row for the same id is what the SCD2 index forbids.
+	_, err = db.Pool.Exec(ctx, `UPDATE milestone_deferral SET valid_to = NULL WHERE id = $1`, deferralID)
+	assert.Error(t, err, "milestone_deferral_current_id_idx must reject a second current revision for one id")
+
+	// -- the reversal is narrow: `destination` is still NOT NULL on every
+	// revision, so an amended deferral cannot lose the citation FR1 requires
+	// and "valid_to set" still cannot mean "no longer deferred" --
+	_, nullable = nullableColumn(t, ctx, db, "milestone_deferral", "destination")
+	assert.Equal(t, "NO", nullable, "milestone_deferral.destination must still be NOT NULL (FR1) -- 024 makes the body amendable, not the deferral withdrawable")
+}
+
+// TestMigration024_BackfillsValidFromCreatedAt migrates up to exactly
+// version 23 (Migrate(23), not Up()/latest) so a deferral row can be
+// written while the table is still on its pre-024 shape, then applies 024
+// and checks the backfill against that row. Run against the fully-migrated
+// schema this assertion cannot exist: every row would carry the migration's
+// own wall clock, which is exactly the bug the `UPDATE ... SET valid_from =
+// created_at` in 024's up migration prevents.
+func TestMigration024_BackfillsValidFromCreatedAt(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(23), "apply every migration through exactly 023")
+
+	assert.False(t, columnExists(t, ctx, db, "milestone_deferral", "valid_from"),
+		"the pre-024 schema must not have a valid_from column, or this test is not exercising the backfill")
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('deferral-scd2-024-backfill/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+
+	// An authored-in-the-past timestamp, so "valid_from was backfilled from
+	// created_at" and "valid_from was defaulted to NOW()" cannot both hold.
+	authoredAt := time.Now().Add(-72 * time.Hour)
+	var deferralID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_deferral (
+			scope_id, milestone_id, body, destination, created_at,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, 'stale capability number', 'M4', $3, 'iss', 'sub', 'human', 'iss', 'sub', 'human')
+		RETURNING id
+	`, scopeID, milestoneID, authoredAt).Scan(&deferralID))
+
+	require.NoError(t, runner.Steps(1), "apply migration 024 on its own")
+
+	var validFrom time.Time
+	var validTo sql.NullTime
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT valid_from, valid_to FROM milestone_deferral WHERE id = $1
+	`, deferralID).Scan(&validFrom, &validTo))
+	assert.WithinDuration(t, authoredAt, validFrom, time.Second,
+		"024 must backfill valid_from from created_at -- a row whose revision starts when the schema was migrated is a false history")
+	assert.False(t, validTo.Valid, "every pre-existing row must land current (valid_to NULL): 024 retires no deferral and supersedes no id")
+}
+
+// TestMigration024_UpDownRoundTrip applies 024 on its own and rolls it
+// back, asserting the table is byte-for-byte back to its pre-024 shape --
+// `id` is the primary key again, the SCD2 triple is gone, and 010's two
+// indexes carry no `valid_to IS NULL` predicate. The partial unique index
+// is dropped with the rest: leaving it behind would make a re-applied 024
+// fail on its own `CREATE UNIQUE INDEX`.
+func TestMigration024_UpDownRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(23), "apply every migration through exactly 023")
+
+	require.NoError(t, runner.Steps(1), "apply migration 024")
+	require.NoError(t, runner.Steps(-1), "roll back exactly migration 024")
+
+	for _, col := range []string{"revision_id", "valid_from", "valid_to"} {
+		assert.False(t, columnExists(t, ctx, db, "milestone_deferral", col),
+			"024's Down() must drop milestone_deferral.%s -- it is entirely 024's own addition", col)
+	}
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "milestone_deferral", "id"),
+		"024's Down() must restore milestone_deferral's id primary key")
+	assert.False(t, hasIndexNamed(t, ctx, db, "milestone_deferral", "milestone_deferral_current_id_idx"),
+		"024's Down() must drop the partial unique index, or re-applying 024 fails on its own CREATE INDEX")
+	for _, index := range []string{"milestone_deferral_milestone_idx", "milestone_deferral_scope_idx"} {
+		assert.True(t, hasIndexNamed(t, ctx, db, "milestone_deferral", index),
+			"024's Down() must restore %s, not leave 010's table without a lookup index", index)
+		assert.False(t, indexCoversCurrentRowsOnly(t, ctx, db, "milestone_deferral", index),
+			"024's Down() must restore %s without its valid_to IS NULL predicate -- the column it filtered on no longer exists", index)
+	}
+
+	require.NoError(t, runner.Steps(1), "re-apply migration 024 after Down() -- must be re-runnable")
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "milestone_deferral", "revision_id"),
+		"a re-applied 024 must put revision_id back as the primary key")
+	assert.True(t, hasIndexNamed(t, ctx, db, "milestone_deferral", "milestone_deferral_current_id_idx"),
+		"a re-applied 024 must re-create the partial unique index")
+
+	// The whole schema is back where it started.
+	require.NoError(t, runner.Down(), "roll the whole migration set back -- 024's Down must hand 023's Down a table it can still reverse")
 }

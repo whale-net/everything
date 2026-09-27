@@ -285,13 +285,23 @@ const (
 // issue #2683, FR1) -- one deliberately-deferred item cited under a
 // milestone's authoring content. Single parent: MilestoneRef.ID -- a
 // plain UUID column since migration 020, because milestone_ref is SCD2
-// now and its immutable `id` is no longer table-wide unique for a FK to
+// and its immutable `id` is no longer table-wide unique for a FK to
 // target (same boundary migration 002 draws for every spec-axis parent
-// link). Not SCD2 (LB3): a deferral is a fact, not a value
-// that changes over time -- see migration 010's comment. Destination is
-// never empty: FR1 requires every deferred entry to cite where it went.
+// link). Destination is never empty: FR1 requires every deferred entry to
+// cite where it went, on every revision.
+//
+// SCD2 (LB3) since migration 024, which reverses migration 010's own
+// boundary call that this table must not be SCD2. The reversal is narrow:
+// a deferral is still never withdrawn, and a non-NULL ValidTo means only
+// "this revision's text was corrected" (AmendDeferral), never "this item
+// is no longer deferred" -- there is still no un-defer verb. What SCD2
+// buys is that a stale body citing retired capability numbers is
+// correctable by supersession under the same immutable ID instead of by
+// delete-and-recreate, which would mint a new ID and lose the original's
+// created_at/subject provenance. So only current rows belong in a read.
 type MilestoneDeferral struct {
 	ID          uuid.UUID `json:"id"`
+	RevisionID  uuid.UUID `json:"revision_id"` // SCD2 row key; two revisions of one deferral share ID
 	ScopeID     uuid.UUID `json:"scope_id"`
 	MilestoneID uuid.UUID `json:"milestone_id"`
 	Body        string    `json:"body"`        // what was deferred
@@ -299,9 +309,15 @@ type MilestoneDeferral struct {
 	Position    int       `json:"position"`
 	CreatedAt   time.Time `json:"created_at"`
 
+	// ValidFrom/ValidTo are the SCD2 pair (migration 024). ValidTo nil
+	// marks the current revision -- the only one any read returns.
+	ValidFrom time.Time  `json:"valid_from"`
+	ValidTo   *time.Time `json:"valid_to"`
+
 	// CreatedByActing/CreatedByOnBehalfOf are always populated (NFR4) --
-	// every write path onto this table is the new AddDeferral method,
-	// which always has a real caller session.
+	// every write path onto this table is AddDeferral or AmendDeferral, and
+	// both always have a real caller session. An amend carries the original
+	// pair forward rather than recording the amender's.
 	CreatedByActing     Subject `json:"created_by_acting"`
 	CreatedByOnBehalfOf Subject `json:"created_by_on_behalf_of"`
 }
