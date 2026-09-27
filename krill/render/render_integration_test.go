@@ -113,7 +113,10 @@ func seedProduct(t *testing.T, ctx context.Context, entities *store.Store, scope
 	_, err = entities.Requirements().Create(ctx, scopeID, f1.ID, store.RequirementKindNFR, "Stay one-way", nil)
 	require.NoError(t, err)
 
-	lb1, err := entities.Decisions().Create(ctx, scopeID, featureSet.ID, "Keep it simple", nil)
+	// A decision whose body cross-references the note recorded below --
+	// the shape whagent_net's three LoadBearingDecisions have, and the
+	// dangling-reference defect this milepebble's guard test exists for.
+	lb1, err := entities.Decisions().Create(ctx, scopeID, featureSet.ID, "Keep it simple", strPtr2("Simplicity beats cleverness. See the mapping note on this Product."))
 	require.NoError(t, err)
 	_, err = entities.Decisions().Create(ctx, scopeID, featureSet.ID, "Ship fast", strPtr2("velocity over polish"))
 	require.NoError(t, err)
@@ -215,6 +218,13 @@ func TestRender_SeededProduct_ProducesFourFileLayout(t *testing.T) {
 		assert.Contains(t, content, render.GeneratedMarker, "file %s must carry the non-hand-editable marker", name)
 		assert.Contains(t, content, `Product "Widgets"`, "file %s must name the product it was rendered from", name)
 	}
+
+	// The dangling-reference guard, against a realistic product slice
+	// built through the real store: LB1's body points at the note, and the
+	// note really is rendered, so the reference resolves. The unit half
+	// (dangling_reference_test.go) proves the guard fails when it does not.
+	assert.Contains(t, files.ProductMD, "See the mapping note on this Product")
+	assertNoDanglingReferences(t, files)
 }
 
 // TestRender_ReadOnlyDatabaseHandle_Succeeds is FR15's proof: Render
