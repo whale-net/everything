@@ -59,3 +59,9 @@ func (s *StoreSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uu
 func (s *StoreSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error) {
 	return s.store.MilestoneStatus().CurrentStatuses(ctx, milestoneIDs)
 }
+
+// ListProductNotes is a read of `task_note` narrowed to this Product, and
+// nothing else.
+func (s *StoreSource) ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error) {
+	return s.store.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindProduct, productID)
+}

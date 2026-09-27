@@ -107,3 +107,27 @@ committed hand-authored files on the assumption a re-render will preserve
 it — it won't. Re-rendering on top of those files today would silently
 drop it, per this doc's "A hand edit... is silently lost" rule above,
 applied to prose rather than a hand edit.
+
+## Notes render into `PRODUCT.md`
+
+`Source.ListProductNotes` reads the notes recorded against the Product
+itself (`task_note`, entity kind `product`) and `renderProductMD` emits
+them under a `## Notes` section, oldest first, each labelled with its kind,
+its own id, and its lifecycle status, with the **body verbatim**.
+
+Two reasons this section exists rather than being considered optional:
+
+- Some entity bodies point at it. whagent_net's three
+  LoadBearingDecisions each end "See the mapping note on this Product", and
+  the renumbering mapping that sentence means exists nowhere but note
+  `bd9197eb`. A rendered brief that omits the section actively sends a
+  reader to content the document does not contain — worse than silence.
+- A note body is a forensic record, not prose to summarize. The mapping is a
+  multi-line table; a one-line summary of it is not the mapping.
+
+The lifecycle status is rendered on every note because a `closed` or
+`deferred` note is history. Presenting its body as current fact would be a
+lie; the section's own preamble says so as well.
+
+Notes on a Feature, FeatureSet, Requirement, or LoadBearingDecision do not
+render — only the Product's own notes do.

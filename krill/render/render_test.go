@@ -544,3 +544,111 @@ func TestRender_RoadmapStatusBatchExcludesNonMilestoneRefs(t *testing.T) {
 	require.Len(t, src.StatusCalls, 1)
 	assert.Equal(t, []uuid.UUID{real}, src.StatusCalls[0])
 }
+
+// mappingNoteFixture is the known-positive shape behind ce860827's guard
+// test: the exact sentence whagent_net's three LoadBearingDecisions carry
+// ("See the mapping note on this Product") plus the renumbering body that
+// only exists as a note. It is the real defect, not a hypothetical.
+const mappingNoteBody = "CAPABILITY RENUMBERING. krill C5 = brief C12 (/wpoll ad-hoc polls) Now."
+
+func mappingNoteSrc() *fakeSource {
+	productID := uuid.New()
+	return &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "whagent_net", Vision: "v"},
+			Decisions: []slice.DecisionEntity{{
+				EntityRef:     newRef(),
+				Name:          "Capability numbering is krill's, not the brief's",
+				DisplayNumber: 1,
+				Body:          strPtr("The C-numbers changed at onboarding. See the mapping note on this Product."),
+			}},
+		},
+		Notes: []store.Note{{
+			ID:            uuid.MustParse("bd9197eb-2b84-469a-b112-bfbd134fc67e"),
+			Kind:          store.NoteKindComment,
+			CurrentStatus: store.NoteLifecycleStatusNoted,
+			Body:          mappingNoteBody,
+		}},
+	}
+}
+
+func TestRender_ProductNotesRenderVerbatim(t *testing.T) {
+	src := mappingNoteSrc()
+	productID := src.Doc.Product.ID
+
+	files, err := render.Render(context.Background(), src, uuid.New(), productID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, "## Notes")
+	assert.Contains(t, files.ProductMD, "bd9197eb-2b84-469a-b112-bfbd134fc67e", "a note's own id must be citable")
+	assert.Contains(t, files.ProductMD, "comment", "the note's kind must be visible")
+	assert.Contains(t, files.ProductMD, "status: noted", "the note's lifecycle status must be visible")
+	assert.Contains(t, files.ProductMD, mappingNoteBody,
+		"a body must render verbatim -- a renumbering mapping is useless as a summary")
+}
+
+// A note whose body is a whole forensic record (paragraphs, a table, a
+// multi-line mapping) must survive intact, not be flattened to a line.
+func TestRender_ProductNoteMultilineBodyRendersIntact(t *testing.T) {
+	body := "Line one.\n\n  krill C1  = brief C1   (/wai)   Now\n  krill C5  = brief C12  (/wpoll) Now\n\nLine four."
+	src := mappingNoteSrc()
+	src.Notes[0].Body = body
+
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, body)
+}
+
+// A note in a terminal or transitional lifecycle state must not read as
+// current fact. `closed` in particular means the note is history.
+func TestRender_ProductNoteLifecycleStatusIsRendered(t *testing.T) {
+	for _, status := range []store.NoteLifecycleStatus{
+		store.NoteLifecycleStatusNoted,
+		store.NoteLifecycleStatusCarriedOver,
+		store.NoteLifecycleStatusDeferred,
+		store.NoteLifecycleStatusClosed,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			src := mappingNoteSrc()
+			src.Notes[0].CurrentStatus = status
+
+			files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+			require.NoError(t, err)
+
+			assert.Contains(t, files.ProductMD, "status: "+string(status))
+		})
+	}
+}
+
+func TestRender_ProductWithNoNotesRendersEmptySection(t *testing.T) {
+	src := mappingNoteSrc()
+	src.Notes = nil
+
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, "## Notes")
+	assert.Contains(t, files.ProductMD, "_No notes are recorded against this Product in krill._",
+		"an empty section must say so rather than render a bare heading")
+}
+
+// The whole point of the section: the "See the mapping note on this
+// Product" sentences in the rendered LB bodies must lead somewhere that
+// exists in the same document.
+func TestRender_MappingNotePointerResolves(t *testing.T) {
+	src := mappingNoteSrc()
+
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+
+	pointer := "See the mapping note on this Product"
+	require.Contains(t, files.ProductMD, pointer, "the fixture must carry the real pointer sentence")
+	notesAt := strings.Index(files.ProductMD, "## Notes")
+	pointerAt := strings.Index(files.ProductMD, pointer)
+	require.NotEqual(t, -1, notesAt)
+	assert.Greater(t, notesAt, pointerAt, "the pointer must not point forward past the end of the document")
+	assert.Contains(t, files.ProductMD[notesAt:], "CAPABILITY RENUMBERING",
+		"the section the pointer names must actually contain the mapping")
+}
