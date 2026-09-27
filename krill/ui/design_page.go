@@ -57,41 +57,33 @@ const designGoPath = designPath + "/go"
 // oldest-first exactly as DesignSessionStore.ListByProduct returns them. Each
 // row's signed-off state is derived from that session's own revision-event
 // log, the one source of truth for a session's current state (the
-// design_session row itself is never updated -- FR1's boundary comment).
+// design_session row itself is never updated -- FR1's boundary comment) --
+// via one ListLatestSignoffBySessionIDs call across every session, never a
+// per-session ListBySession fetch of the full log.
 func (app *App) listDesignSessions(ctx context.Context, productID uuid.UUID) ([]pages.DesignSessionRow, error) {
 	sessions, err := app.designSessions.ListByProduct(ctx, productID)
 	if err != nil {
 		return nil, err
 	}
+	ids := make([]uuid.UUID, len(sessions))
+	for i, ds := range sessions {
+		ids[i] = ds.ID
+	}
+	signoffs, err := app.revisionEvents.ListLatestSignoffBySessionIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]pages.DesignSessionRow, 0, len(sessions))
 	for _, ds := range sessions {
-		events, err := app.revisionEvents.ListBySession(ctx, ds.ID)
-		if err != nil {
-			return nil, err
-		}
 		rows = append(rows, pages.DesignSessionRow{
 			ID:                ds.ID.String(),
 			OpeningSubmission: ds.OpeningSubmission,
 			CreatedAt:         formatTime(ds.CreatedAt),
-			SignedOff:         isSignedOff(events),
+			SignedOff:         signoffs[ds.ID] == store.SignoffStatusApproved,
 			DetailPath:        designSessionPath(ds.ID),
 		})
 	}
 	return rows, nil
-}
-
-// isSignedOff reports whether a session's log ends in an approved signoff --
-// FR4's closed outcome, read last-signoff-wins. A later changes_requested
-// signoff reopens the session.
-func isSignedOff(events []store.RevisionEvent) bool {
-	signedOff := false
-	for _, ev := range events {
-		if ev.EventType != store.EventTypeSignoff {
-			continue
-		}
-		signedOff = ev.SignoffStatus != nil && *ev.SignoffStatus == store.SignoffStatusApproved
-	}
-	return signedOff
 }
 
 // buildDesignSessionDetail assembles one session's read view from the same

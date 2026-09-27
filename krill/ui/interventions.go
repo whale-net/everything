@@ -47,12 +47,14 @@ import (
 
 // The four intervention verbs, named exactly as the krill api endpoints and
 // the ops-mount MCP tools name them, so the path segment the browser posts to
-// is the operation it performs.
+// is the operation it performs. Derived from store.InterventionAction* rather
+// than redeclared as their own string literals, so this package can never
+// drift from task_escalation.go's enum.
 const (
-	actionRelease  = "release"
-	actionRequeue  = "requeue"
-	actionEscalate = "escalate"
-	actionCancel   = "cancel"
+	actionRelease  = string(store.InterventionActionRelease)
+	actionRequeue  = string(store.InterventionActionRequeue)
+	actionEscalate = string(store.InterventionActionEscalate)
+	actionCancel   = string(store.InterventionActionCancel)
 )
 
 // interventionAction describes one verb's console affordance: the button or

@@ -540,7 +540,7 @@ templ notesTable(rows []NoteRow) {
 							</td>
 							<td class="text-sm">{ row.Target }</td>
 							<td class="text-sm">{ row.CreatedAt }</td>
-							<td class="text-sm">{ row.Body }</td>
+							<td class="text-sm krill-md">@templ.Raw(renderMarkdown(row.Body))</td>
 						</tr>
 					}
 				</tbody>

@@ -200,7 +200,12 @@ func TestDecisionsRenderFullBodyAndFields(t *testing.T) {
 	}
 
 	body := mustRenderComponent(pages.Decisions(decisionsPageOf(doc, productID)))
-	for _, want := range []string{"One document type", "LB1", dID.String(), fullBody} {
+	// fullBody's trailing space is checked separately with TrimSpace: Body is
+	// markdown-rendered (renderMarkdown), and CommonMark trims a paragraph's
+	// trailing whitespace -- invisible in the rendered HTML, but it would
+	// otherwise make this exact-substring check fail on a cosmetic difference
+	// that isn't the "not truncated" regression this test exists to catch.
+	for _, want := range []string{"One document type", "LB1", dID.String(), strings.TrimSpace(fullBody)} {
 		if !strings.Contains(body, want) {
 			t.Errorf("decisions page missing %q", want)
 		}
