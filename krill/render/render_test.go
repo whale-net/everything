@@ -108,6 +108,18 @@ func TestRender_ProducesFourFileLayout(t *testing.T) {
 	assert.NotContains(t, files.CapabilityMapMD, "## Vision")
 	assert.NotContains(t, files.RoadmapMD, "## Vision")
 
+	// The placeholder has to tell a reader where current-state content
+	// actually lives, and must not read as "krill dropped it" or promise
+	// that a future entity type will fill the file.
+	assert.Contains(t, files.CurrentStateMD, "This section is intentionally not rendered.")
+	assert.Contains(t, files.CurrentStateMD, "ARCHITECTURE.md",
+		"a reader must be told where the survey is, not merely that it is absent")
+	assert.Contains(t, files.CurrentStateMD, "Nothing was lost in migrating")
+	assert.NotContains(t, files.CurrentStateMD, "No entity in krill's model backs this section",
+		"that wording reads as a gap in krill's model and invites a new entity type")
+	assert.NotContains(t, files.CurrentStateMD, "will be filled",
+		"the placeholder must not promise a future entity type")
+
 	// Every generated file carries the provenance header (LB5) and NFR3's
 	// non-hand-editable marker, naming the Product and the exact revision
 	// it was rendered from.
