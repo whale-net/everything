@@ -28,7 +28,10 @@
 // as-of assembles from the historical revisions, and its as-of revisions
 // metadata reflects them"): TestGetRequirementSliceAsOf_* and
 // TestGetFeatureSetSliceAsOf_* below, exercising query.go's *AsOf methods
-// against krill/store's real AmendStore/HistoryStore.
+// against krill/store's real AmendStore/HistoryStore -- and the read side
+// of ReparentStore: TestGetProductSlice_AfterFeatureReparent below, which
+// moves a Feature between FeatureSets and checks the product slice groups
+// it under the new one, once, with its Requirements and its `Cn` intact.
 package slice_test
 
 import (
@@ -474,4 +477,82 @@ func TestGetFeatureSetSliceAsOf_AssemblesFromHistoricalRevisions(t *testing.T) {
 
 	_, err = q.GetFeatureSetSliceAsOf(ctx, w.FeatureSetA.ID, beforeCreation)
 	assert.ErrorIs(t, err, store.ErrNotFound, "an as-of read before the FeatureSet existed must be not-found")
+}
+
+// TestGetProductSlice_AfterFeatureReparent is the read-side half of
+// ReparentStore: a Feature moved from FeatureSetA to FeatureSetB appears
+// under FeatureSetB in the product slice exactly once, has left
+// FeatureSetA's slice with its Requirements, and still carries the `Cn`
+// it was numbered with. A move that duplicated the Feature across both
+// FeatureSets, or dropped its Requirements, would fail here.
+func TestGetProductSlice_AfterFeatureReparent(t *testing.T) {
+	ctx := context.Background()
+	entities, pool := newTestStore(t)
+	scopeID := createScope(t, ctx, pool, "whale-net/slice-reparent-test")
+	w := seedWorld(t, ctx, entities, scopeID)
+	q := slice.NewQuerier(entities)
+
+	before, err := q.GetProductSlice(ctx, w.Product.ID)
+	require.NoError(t, err)
+	require.Len(t, featureIDs(before), 2, "the fixture must start with both Features under FeatureSetA")
+	numberBefore := displayNumberOf(t, before, w.FeatureA1.ID)
+
+	_, err = entities.Reparent().ReparentFeature(ctx, w.FeatureA1.ID, w.FeatureSetB.ID)
+	require.NoError(t, err)
+
+	after, err := q.GetProductSlice(ctx, w.Product.ID)
+	require.NoError(t, err)
+
+	gotFeatures := featureIDs(after)
+	assert.Equal(t, 1, countOf(gotFeatures, w.FeatureA1.ID),
+		"the moved Feature must appear exactly once in the product slice, never under both FeatureSets")
+	assert.Equal(t, 1, countOf(gotFeatures, w.FeatureA2.ID))
+	assert.Equal(t, 2, len(gotFeatures), "a move must add no row and drop no row")
+	assert.Equal(t, numberBefore, displayNumberOf(t, after, w.FeatureA1.ID),
+		"the `Cn` a caller already cites must survive the move")
+
+	// The grouping is the part a naive per-FeatureSet fan-out gets wrong:
+	// the moved Feature belongs to FeatureSetB's slice now, and its
+	// Requirements went with it.
+	for _, f := range after.Features {
+		if f.ID == w.FeatureA1.ID {
+			assert.Equal(t, w.FeatureSetB.ID, f.FeatureSetID,
+				"the moved Feature must be reported under the FeatureSet it now lives in")
+		}
+	}
+
+	oldSlice, err := q.GetFeatureSetSlice(ctx, w.FeatureSetA.ID)
+	require.NoError(t, err)
+	assert.NotContains(t, featureIDs(oldSlice), w.FeatureA1.ID)
+	assert.NotContains(t, requirementIDs(oldSlice), w.RequirementA1FR.ID,
+		"the moved Feature's Requirements must not be left behind in the old FeatureSet's slice")
+
+	newSlice, err := q.GetFeatureSetSlice(ctx, w.FeatureSetB.ID)
+	require.NoError(t, err)
+	assert.Contains(t, featureIDs(newSlice), w.FeatureA1.ID)
+	assert.Contains(t, requirementIDs(newSlice), w.RequirementA1FR.ID)
+	assert.Contains(t, requirementIDs(newSlice), w.RequirementA1NFR.ID)
+	assert.NotContains(t, decisionIDs(newSlice), w.DecisionA.ID,
+		"a decision belongs to its FeatureSet and must not follow a Feature out of one")
+}
+
+func countOf(ids []uuid.UUID, want uuid.UUID) int {
+	n := 0
+	for _, id := range ids {
+		if id == want {
+			n++
+		}
+	}
+	return n
+}
+
+func displayNumberOf(t *testing.T, doc slice.Document, featureID uuid.UUID) int {
+	t.Helper()
+	for _, f := range doc.Features {
+		if f.ID == featureID {
+			return f.DisplayNumber
+		}
+	}
+	t.Fatalf("feature %s not present in slice", featureID)
+	return 0
 }
