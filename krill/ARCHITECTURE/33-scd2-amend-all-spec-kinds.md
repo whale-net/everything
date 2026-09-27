@@ -30,13 +30,14 @@ fields a caller might reach for, which no handler or tool ever applies.
 `Refuse` turns a submitted value that *differs* from the entity's own
 current placement into `store.ErrPlacementChange` naming the field and
 pointing at the operation that does move or re-kind an entity -- the
-create/move path, or the resolution path for a kind change. A value equal
-to the placement already there is not a change, so a client that echoes
-back the parent and kind it read amends normally (FR b62ed47a); a field
-the kind has no column for has no current value, so anything sent for it
-differs. That is why the guard is not decidable from the request body
-alone: each surface reads the entity's current row with
-`CurrentPlacement` in the same request, before any supersede runs.
+reparent verb below (for a Feature's `feature_set_id`), the create path,
+or the resolution path for a kind change. A value equal to the placement
+already there is not a change, so a client that echoes back the parent
+and kind it read amends normally (FR b62ed47a); a field the kind has no
+column for has no current value, so anything sent for it differs. That is
+why the guard is not decidable from the request body alone: each surface
+reads the entity's current row with `CurrentPlacement` in the same
+request, before any supersede runs.
 
 **Name uniqueness is create's, unchanged** (FR b2767a89). Every spec-axis
 table's scope-qualified name index is partial on `valid_to IS NULL`, so
@@ -46,6 +47,69 @@ same index Create trips. The store maps that violation onto
 `store.ErrNameConflict` (errors.go) so the caller gets the collision named
 rather than a raw Postgres error; `writeStoreError` maps it to 409, the
 same status a create's collision gets.
+
+## The move verb, where one kind has one
+
+`krill/store/reparent.go`'s `ReparentStore` is `supersede` again, used to
+change WHERE a `Feature` sits rather than what it says: it closes the
+current row and opens a successor under a different `feature_set_id`,
+carrying the id, `scope_id`, name, description, `position`, and
+`display_number` forward. It is a separate store, not another
+`AmendStore` method, precisely so the contract above stays true of
+`AmendStore`.
+
+**Why `display_number` must survive.** A Feature's `Cn` is the token a
+rendered brief, a rendered roadmap, and a human all cite; it is frozen at
+creation (`nextDisplayNumber`, position.go) and frozen numbers are the
+whole point of the column. A move that renumbered would silently repoint
+every citation of the Feature, which is the same class of damage
+`nextDisplayNumber`'s counting of voided rows exists to prevent.
+
+**Why the target is same-scope AND same-Product.** A scope holds many
+Products, so a same-scope check alone would permit a move that crosses a
+Product boundary -- and two things break there. `Cn` is numbered
+product-wide, so the number lands in a second numbering space; and
+`renderMilestones` (krill/render) resolves a milestone's `Delivers: Cn`
+line by looking the entity up in the product slice it is rendering, so a
+Feature that left the product would vanish from the `Delivers` line of the
+milestone that delivers it, with no error anywhere. The move is refused
+by name (`ErrReparentAcrossProduct`) rather than allowed, because
+crossing Products is a different operation from moving a Feature between
+two FeatureSets of the same Product. A move to the parent the Feature
+already has is refused too (`ErrReparentNoOp`): it would spend a revision
+on a change that changed nothing.
+
+**Position is carried forward, not renumbered.** Every read orders by
+`(position, name)`, so a position that collides with a sibling in the
+target set falls through to `name` deterministically -- no error, no lost
+row. The cost is that a moved Feature can land at an arbitrary point in
+the target set's rendered order rather than at the end of it; appending
+instead would discard the ordering a caller chose when they created the
+Feature.
+
+**What follows the Feature and what does not.** Requirements key on
+`feature_id`, the Feature's immutable id, so they follow for free -- the
+slice reads join through it (`ListRequirementsByFeatureSet`). A
+LoadBearingDecision is FeatureSet-scoped (`feature_set_id`), so it belongs
+to the FeatureSet and stays with the FeatureSet the Feature moved out of.
+
+**The delivery axis is untouched, structurally.** `entity_milestone` keys
+on `(entity_id, milestone_id, relation)` and a move reuses that same
+`entity_id` while changing no `milestone_id`, so the single-delivery-parent
+rule in [`34-single-delivery-parent.md`](34-single-delivery-parent.md) --
+which is enforced entirely in terms of `entity_id` and `product_id`, and
+never mentions a FeatureSet -- cannot be reached by a move at all. A
+Feature a milestone delivers keeps its `Delivers` and must-not-foreclose
+rows, and a competing milestone is refused exactly as before. Both halves
+are pinned by `TestReparentFeature_DeliveredFeature_KeepsItsSingleDeliveryOwner`
+and `TestReparentFeature_CompetingDeliveryStillRefusedAfterMove` in
+`krill/store/reparent_integration_test.go`, rather than left to be
+discovered in production.
+
+Feature is the only kind with this verb. Milestone and Requirement
+reparenting is a separate open question, not a gap this file forecloses;
+`supersede` takes its table, columns, and scan as arguments and hard-codes
+nothing about any one kind, so the others can reuse it as they are.
 
 ## Milestone: the one kind that needed a migration
 
@@ -102,3 +166,7 @@ and LoadBearingDecision only (FR 11/12) -- see
 that read side, and for why the as-of slice assembly's "Product,
 FeatureSet, and Feature have no write path that supersedes a row yet"
 note now needs the qualifier this file supplies.
+
+**`ReparentStore` has no surface yet.** It is store-only; the HTTP
+endpoint and the MCP tool that reach it are separate work, so nothing on
+the amend surfaces above gains a reparent sibling by this change.
