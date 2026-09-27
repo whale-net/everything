@@ -81,6 +81,17 @@ type Source interface {
 	// milestoneID (migration 010, issue #2683, FR1) -- the rows a
 	// `Deliberately deferred:` line is reconstructed from.
 	ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error)
+
+	// ListMilestoneStatuses returns each id's *current* delivery status --
+	// the latest `milestone_status_event` row per id, batched, because a
+	// whole-product roadmap renders every milestone in one pass and a
+	// per-milestone round trip is the wrong shape (migration 012, issue
+	// #2685, FR11). An id with no status history is expected to be
+	// present in the map as store.MilestoneStatusNotStarted: krill
+	// derives "not started" from the absence of history rather than
+	// seeding a row (FR8). A Source that omits an id entirely is still
+	// read honestly by the renderer -- see milestoneStatusLabel.
+	ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error)
 }
 
 // GeneratedMarker is the exact sentence NFR3's AGENTS.md carve-out and
@@ -317,6 +328,7 @@ type milestoneEntry struct {
 	Number           int
 	ID               string // "M1".."Mn"
 	Outcome          *string
+	Status           store.MilestoneStatus
 	FRBudget         *int
 	Delivers         []string
 	MustNotForeclose []string
@@ -345,6 +357,7 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 	}
 
 	entries := make([]milestoneEntry, 0, len(refs))
+	rendered := make([]store.MilestoneRef, 0, len(refs))
 	for _, ref := range refs {
 		// A later kind (milepebble, backlog bucket -- migration 010,
 		// issue #2683) must never silently render as a roadmap milestone
@@ -354,7 +367,22 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		if ref.Kind != store.MilestoneKindMilestone {
 			continue
 		}
+		rendered = append(rendered, ref)
+	}
 
+	// One batched status read for the whole roadmap, not one round trip
+	// per milestone -- a product's roadmap renders every milestone in one
+	// pass, so the set form is the right shape (FR11).
+	ids := make([]uuid.UUID, len(rendered))
+	for i, ref := range rendered {
+		ids[i] = ref.ID
+	}
+	statuses, err := src.ListMilestoneStatuses(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list milestone statuses: %w", err)
+	}
+
+	for _, ref := range rendered {
 		associations, err := src.ListMilestoneAssociations(ctx, ref.ID)
 		if err != nil {
 			return nil, fmt.Errorf("list associations for milestone %s: %w", ref.Name, err)
@@ -386,6 +414,7 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			Number:           num,
 			ID:               ref.Name,
 			Outcome:          ref.Outcome,
+			Status:           milestoneStatusLabel(statuses, ref.ID),
 			FRBudget:         ref.FRBudget,
 			Delivers:         prefixEach("C", delivers),
 			MustNotForeclose: prefixEach("LB", mustNot),
@@ -395,6 +424,19 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Number < entries[j].Number })
 	return entries, nil
+}
+
+// milestoneStatusLabel reads one milestone's current status honestly.
+// store.MilestoneStatusEventStore.CurrentStatuses already returns
+// MilestoneStatusNotStarted for an id with no status history (FR8: "not
+// started" is derived from absence, never seeded), so the missing-key and
+// empty-value cases collapse to the same honest answer rather than
+// rendering an empty `Status:` line or implying a status nobody recorded.
+func milestoneStatusLabel(statuses map[uuid.UUID]store.MilestoneStatus, id uuid.UUID) store.MilestoneStatus {
+	if s, ok := statuses[id]; ok && s != "" {
+		return s
+	}
+	return store.MilestoneStatusNotStarted
 }
 
 func prefixEach(prefix string, nums []int) []string {
@@ -412,6 +454,7 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Roadmap\n\n")
+	b.WriteString("_`Status` is each milestone's **current** delivery status, derived from krill's append-only `milestone_status_event` history (`store.MilestoneStatusEventStore.CurrentStatuses`). A milestone with no recorded transition is `not started` — that is krill's own derivation from the absence of history, not a rendered default._\n\n")
 
 	for _, m := range milestones {
 		b.WriteString("### ")
@@ -421,6 +464,9 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 			b.WriteString(*m.Outcome)
 		}
 		b.WriteString("\n\n")
+		b.WriteString("Status: ")
+		b.WriteString(string(m.Status))
+		b.WriteString("\n")
 		if len(m.Delivers) > 0 {
 			b.WriteString("Delivers: ")
 			b.WriteString(strings.Join(m.Delivers, ", "))

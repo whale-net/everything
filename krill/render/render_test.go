@@ -423,3 +423,124 @@ func TestRender_NoProductRow_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), productID.String())
 }
+
+// TestRender_RoadmapCarriesCurrentStatus is the status signal the roadmap
+// used to be blind to: a rendered M1..M3 must each say where they are, so
+// a reader can tell shipped from in-progress from not-started without
+// opening krill.
+func TestRender_RoadmapCarriesCurrentStatus(t *testing.T) {
+	ctx := context.Background()
+	productID := uuid.New()
+	scopeID := uuid.New()
+
+	m1, m2, m3 := uuid.New(), uuid.New(), uuid.New()
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "Widgets", Vision: "v"},
+		},
+		MilestoneRefs: []store.MilestoneRef{
+			{ID: m1, Name: "M1", Kind: store.MilestoneKindMilestone},
+			{ID: m2, Name: "M2", Kind: store.MilestoneKindMilestone},
+			{ID: m3, Name: "M3", Kind: store.MilestoneKindMilestone},
+		},
+		Statuses: map[uuid.UUID]store.MilestoneStatus{
+			m1: store.MilestoneStatusShipped,
+			m2: store.MilestoneStatusInProgress,
+			m3: store.MilestoneStatusNotStarted,
+		},
+	}
+
+	files, err := render.Render(ctx, src, scopeID, productID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.RoadmapMD, "### M1\n\nStatus: shipped\n")
+	assert.Contains(t, files.RoadmapMD, "### M2\n\nStatus: in progress\n")
+	assert.Contains(t, files.RoadmapMD, "### M3\n\nStatus: not started\n")
+	assert.Contains(t, files.RoadmapMD, "**current** delivery status",
+		"the rendered status must be unambiguous that it is the current one, not history")
+}
+
+// A milestone with no recorded transition has no current status at all.
+// CurrentStatuses already answers "not started" for it (FR8 derives it
+// from the absence of history); a Source that omits the id entirely must
+// land on the same honest answer rather than an empty `Status:` line.
+func TestRender_MilestoneWithNoTransitionsRendersHonestStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		statuses func(milestoneID uuid.UUID) map[uuid.UUID]store.MilestoneStatus
+	}{
+		{"store reports not started explicitly", func(id uuid.UUID) map[uuid.UUID]store.MilestoneStatus {
+			return map[uuid.UUID]store.MilestoneStatus{id: store.MilestoneStatusNotStarted}
+		}},
+		{"source omits the id entirely", func(uuid.UUID) map[uuid.UUID]store.MilestoneStatus { return map[uuid.UUID]store.MilestoneStatus{} }},
+		{"source returns a nil map", func(uuid.UUID) map[uuid.UUID]store.MilestoneStatus { return nil }},
+		{"source returns an empty-string value", func(id uuid.UUID) map[uuid.UUID]store.MilestoneStatus {
+			return map[uuid.UUID]store.MilestoneStatus{id: ""}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			milestoneID := uuid.New()
+			src := &fakeSource{
+				Doc: slice.Document{
+					SchemaVersion: slice.SchemaVersion,
+					Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+				},
+				MilestoneRefs: []store.MilestoneRef{{ID: milestoneID, Name: "M1", Kind: store.MilestoneKindMilestone}},
+				Statuses:      tc.statuses(milestoneID),
+			}
+
+			files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+			require.NoError(t, err)
+
+			assert.Contains(t, files.RoadmapMD, "Status: not started")
+			assert.NotContains(t, files.RoadmapMD, "Status: \n", "an empty status line would tell a reader nothing")
+		})
+	}
+}
+
+// A whole-product roadmap is one pass over every milestone, so statuses
+// must be read in a single batched call -- a per-milestone round trip is
+// the wrong shape (FR11).
+func TestRender_RoadmapReadsStatusesInOneBatch(t *testing.T) {
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+		},
+		MilestoneRefs: []store.MilestoneRef{
+			{ID: ids[0], Name: "M1", Kind: store.MilestoneKindMilestone},
+			{ID: ids[1], Name: "M2", Kind: store.MilestoneKindMilestone},
+			{ID: ids[2], Name: "M3", Kind: store.MilestoneKindMilestone},
+		},
+	}
+
+	_, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	require.Len(t, src.StatusCalls, 1, "statuses must be read in one batch, not one call per milestone")
+	assert.ElementsMatch(t, ids, src.StatusCalls[0])
+}
+
+// A milepebble or backlog bucket never reaches the roadmap, so its id
+// must not be dragged into the status read either.
+func TestRender_RoadmapStatusBatchExcludesNonMilestoneRefs(t *testing.T) {
+	real, cut := uuid.New(), uuid.New()
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+		},
+		MilestoneRefs: []store.MilestoneRef{
+			{ID: real, Name: "M1", Kind: store.MilestoneKindMilestone},
+			{ID: cut, Name: "cut 1", Kind: store.MilestoneKindMilepebble},
+		},
+	}
+
+	_, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	require.Len(t, src.StatusCalls, 1)
+	assert.Equal(t, []uuid.UUID{real}, src.StatusCalls[0])
+}

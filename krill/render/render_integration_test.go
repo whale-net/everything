@@ -122,6 +122,18 @@ func seedProduct(t *testing.T, ctx context.Context, entities *store.Store, scope
 	require.NoError(t, entities.Milestones().AddAssociation(ctx, scopeID, f1.ID, milestone.ID))
 	require.NoError(t, entities.Milestones().AddAssociation(ctx, scopeID, lb1.ID, milestone.ID))
 
+	// A second milestone with real status history, and M1 deliberately
+	// left untransitioned, so the rendered roadmap covers both the
+	// recorded-status and the derived-"not started" paths end to end
+	// through the real milestone_status_event table.
+	self := store.Subject{Iss: "https://issuer.example.com", Sub: "render-test", Kind: store.SubjectKindService}
+	m2, err := entities.Milestones().GetOrCreateRef(ctx, scopeID, product.ID, "M2")
+	require.NoError(t, err)
+	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, m2.ID, store.MilestoneStatusPlanned, nil, self, self)
+	require.NoError(t, err)
+	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, m2.ID, store.MilestoneStatusShipped, nil, self, self)
+	require.NoError(t, err)
+
 	return seededProduct{ScopeID: scopeID, ProductID: product.ID}
 }
 
@@ -154,6 +166,12 @@ func TestRender_SeededProduct_ProducesFourFileLayout(t *testing.T) {
 	assert.Contains(t, files.RoadmapMD, "### M1")
 	assert.Contains(t, files.RoadmapMD, "Delivers: C1")
 	assert.Contains(t, files.RoadmapMD, "Must not foreclose: LB1")
+
+	// M1 has no milestone_status_event row at all; M2 shipped. Both must
+	// render an honest current status, the first from the absence of
+	// history rather than from a default the renderer invented.
+	assert.Contains(t, files.RoadmapMD, "### M1\n\nStatus: not started")
+	assert.Contains(t, files.RoadmapMD, "### M2\n\nStatus: shipped")
 
 	for name, content := range files.FileMap() {
 		assert.Contains(t, content, render.GeneratedMarker, "file %s must carry the non-hand-editable marker", name)
