@@ -131,3 +131,36 @@ lie; the section's own preamble says so as well.
 
 Notes on a Feature, FeatureSet, Requirement, or LoadBearingDecision do not
 render — only the Product's own notes do.
+
+## Requirement numbering: `FRn` / `NFRn`
+
+A Requirement is **not** numbered by a stored display number. Migration 017
+gave `Cn` and `LBn` one; it did not give a Requirement one. So `FRn` /
+`NFRn` are assigned at render time, per LB2, from **sibling position** —
+counted per kind, so `FR` and `NFR` have independent sequences and an
+`NFR3` is never an `FR3`.
+
+The sibling order is the one `slice.Document.Requirements` already arrives
+in — `feature_set.position, feature_set.name, feature.position,
+feature.name, requirement.kind, requirement.position, requirement.name`
+(`krill/store/slice.go`'s `ListRequirementsByProduct`) — which is exactly
+the order `product/02-capability-map.md` walks: FeatureSets in order,
+Features in order, each Feature's requirements beneath it. Counting down
+the file therefore reproduces the numbers.
+
+This is worth stating plainly because it differs from `Cn`/`LBn`: those are
+stored and stable across a reorder, `FRn` renumbers when a requirement is
+inserted above an existing one. The rendered file says so, and prints each
+requirement's own id beside the citation so a lookup resolves exactly
+rather than by position.
+
+Requirements render under their parent Feature in
+`product/02-capability-map.md` — not as a fifth file. A Feature with no
+Requirements keeps the compact `- **Cn** — Name` bullet; one with
+Requirements becomes a `### Cn — Name` heading so the bodies can follow at
+the top level unindented (indenting would rewrite them, and a body is a
+record, not formatting). Bodies are verbatim and never truncated — they
+carry the prohibitions and the refuted-hypothesis records, which is the
+whole reason Requirements are rendered at all. A Requirement with a nil or
+whitespace-only body renders its name plus an explicit `_No body
+recorded._`, rather than being dropped or looking truncated.

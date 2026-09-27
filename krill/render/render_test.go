@@ -652,3 +652,138 @@ func TestRender_MappingNotePointerResolves(t *testing.T) {
 	assert.Contains(t, files.ProductMD[notesAt:], "CAPABILITY RENUMBERING",
 		"the section the pointer names must actually contain the mapping")
 }
+
+// reqDoc builds a whole-product slice with one FeatureSet, the given
+// Features, and the given Requirements -- the shape renderCapabilityMapMD
+// walks.
+func reqDoc(features []slice.FeatureEntity, reqs []slice.RequirementEntity) slice.Document {
+	fsID := uuid.New()
+	for i := range features {
+		features[i].FeatureSetID = fsID
+	}
+	return slice.Document{
+		SchemaVersion: slice.SchemaVersion,
+		Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+		FeatureSets:   []slice.FeatureSetEntity{{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core", Position: 1}},
+		Features:      features,
+		Requirements:  reqs,
+	}
+}
+
+func req(featureID uuid.UUID, kind, name string, body *string) slice.RequirementEntity {
+	return slice.RequirementEntity{EntityRef: newRef(), FeatureID: featureID, Kind: kind, Name: name, Body: body}
+}
+
+// The bodies are the deliverable. krill's richest forensic content --
+// prohibitions, refuted-hypothesis records, mandatory-ordering
+// constraints -- lives only in a Requirement body, so an elided body
+// reproduces the exact problem this rendering exists to fix.
+func TestRender_RequirementBodiesRenderInFull(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	body := "A requirement body with:\n\n- a prohibition: never do X\n- a refuted hypothesis: we tried Y, it does not work\n- a mandatory ordering: Z must precede W\n"
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1},
+		[]slice.RequirementEntity{req(f1.ID, "FR", "Handle the thing", &body)},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "**FR1** — Handle the thing")
+	assert.Contains(t, files.CapabilityMapMD, body, "the body must render in full, not summarized")
+	assert.Contains(t, files.CapabilityMapMD, "a refuted hypothesis: we tried Y, it does not work")
+}
+
+// FRs and NFRs are counted separately -- an NFR3 must not be FR3, and a
+// product's first NFR must be NFR1 however many FRs precede it.
+func TestRender_RequirementsNumberPerKind(t *testing.T) {
+	f1, f2 := newFeature("F1", 1), newFeature("F2", 2)
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1, f2},
+		[]slice.RequirementEntity{
+			req(f1.ID, "FR", "first", nil),
+			req(f1.ID, "NFR", "a non-functional one", nil),
+			req(f1.ID, "FR", "second", nil),
+			req(f2.ID, "FR", "third", nil),
+			req(f2.ID, "NFR", "another non-functional one", nil),
+		},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	cap := files.CapabilityMapMD
+	assert.Contains(t, cap, "**FR1** — first")
+	assert.Contains(t, cap, "**FR2** — second")
+	assert.Contains(t, cap, "**FR3** — third")
+	assert.Contains(t, cap, "**NFR1** — a non-functional one")
+	assert.Contains(t, cap, "**NFR2** — another non-functional one")
+	assert.NotContains(t, cap, "**FR4**")
+}
+
+// The rendered number has to be reconstructible by a reader. krill stores
+// no Requirement display number, so the document has to say where this one
+// comes from -- and carry the id that resolves it exactly.
+func TestRender_RequirementNumberingIsDocumentedAndResolvable(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	r := req(f1.ID, "FR", "Handle the thing", strPtr("body"))
+	src := &fakeSource{Doc: reqDoc([]slice.FeatureEntity{f1}, []slice.RequirementEntity{r})}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "krill stores no display number for a Requirement",
+		"the file must say where FRn comes from, or the citation does not resolve")
+	assert.Contains(t, files.CapabilityMapMD, "counting down this file")
+	assert.Contains(t, files.CapabilityMapMD, r.ID.String(), "a citation must resolve exactly, not just by position")
+}
+
+// A Requirement with no body still names itself. Dropping it would hide a
+// requirement krill holds; a broken heading would look like a render bug.
+func TestRender_RequirementWithNoBodyRendersCleanly(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1},
+		[]slice.RequirementEntity{
+			req(f1.ID, "FR", "nil body", nil),
+			req(f1.ID, "FR", "whitespace body", strPtr("   \n\t  ")),
+		},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "**FR1** — nil body")
+	assert.Contains(t, files.CapabilityMapMD, "**FR2** — whitespace body")
+	assert.Equal(t, 2, strings.Count(files.CapabilityMapMD, "_No body recorded._"),
+		"a bodiless requirement must say so rather than look truncated")
+}
+
+// A Requirement imported or hand-created with its own "FR7 — " prefix in
+// Name must not render that stale prefix next to the recomputed citation.
+func TestRender_RequirementNamePrefixStripped(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1},
+		[]slice.RequirementEntity{req(f1.ID, "FR", "FR7 — Handle the thing", strPtr("body"))},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "**FR1** — Handle the thing")
+	assert.NotContains(t, files.CapabilityMapMD, "FR7 — Handle the thing",
+		"the stored prefix is not the citation; the render-time number is")
+}
+
+// A product with no requirements keeps the compact one-line-per-capability
+// form and does not carry a numbering preamble it has nothing to number.
+func TestRender_ProductWithNoRequirementsKeepsBulletForm(t *testing.T) {
+	src := &fakeSource{Doc: reqDoc([]slice.FeatureEntity{newFeature("F1", 1)}, nil)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "- **C1** — F1")
+	assert.NotContains(t, files.CapabilityMapMD, "krill stores no display number for a Requirement")
+}

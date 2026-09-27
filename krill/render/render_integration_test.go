@@ -104,6 +104,15 @@ func seedProduct(t *testing.T, ctx context.Context, entities *store.Store, scope
 	_, err = entities.Features().Create(ctx, scopeID, featureSet.ID, "F2", nil)
 	require.NoError(t, err)
 
+	// Real Requirements against F1, with the kind of body krill actually
+	// holds -- a prohibition and a refuted-hypothesis record. A summary of
+	// either would reproduce the problem rendering Requirements exists to
+	// fix, so the integration path asserts the full text survives.
+	_, err = entities.Requirements().Create(ctx, scopeID, f1.ID, store.RequirementKindFR, "Render the brief", strPtr2("A rendered brief must not drop a prohibition.\n\n- never hand-edit a generated file\n- refuted hypothesis: reconciling a hand edit is not possible here"))
+	require.NoError(t, err)
+	_, err = entities.Requirements().Create(ctx, scopeID, f1.ID, store.RequirementKindNFR, "Stay one-way", nil)
+	require.NoError(t, err)
+
 	lb1, err := entities.Decisions().Create(ctx, scopeID, featureSet.ID, "Keep it simple", nil)
 	require.NoError(t, err)
 	_, err = entities.Decisions().Create(ctx, scopeID, featureSet.ID, "Ship fast", strPtr2("velocity over polish"))
@@ -180,7 +189,16 @@ func TestRender_SeededProduct_ProducesFourFileLayout(t *testing.T) {
 		"a multi-line body must survive intact")
 
 	assert.Contains(t, files.CapabilityMapMD, "## Core")
-	assert.Contains(t, files.CapabilityMapMD, "- **C1** — F1")
+	// F1 carries Requirements and so renders as a heading with them
+	// beneath; F2 does not and keeps the compact one-line form.
+	assert.Contains(t, files.CapabilityMapMD, "### C1 — F1")
+	assert.Contains(t, files.CapabilityMapMD, "**FR1** — Render the brief")
+	assert.Contains(t, files.CapabilityMapMD, "never hand-edit a generated file",
+		"a Requirement body must reach the rendered map in full")
+	assert.Contains(t, files.CapabilityMapMD,
+		"refuted hypothesis: reconciling a hand edit is not possible here")
+	assert.Contains(t, files.CapabilityMapMD, "**NFR1** — Stay one-way")
+	assert.Contains(t, files.CapabilityMapMD, "_No body recorded._")
 	assert.Contains(t, files.CapabilityMapMD, "- **C2** — F2")
 
 	assert.Contains(t, files.RoadmapMD, "### M1")

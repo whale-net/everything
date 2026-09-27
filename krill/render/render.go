@@ -334,6 +334,50 @@ func renderCurrentStateMD(name, revision string) string {
 	return b.String()
 }
 
+// leadingFRLabelRe strips a leading "FR<n> — " / "NFR<n> — " token baked
+// into a stored Requirement.Name, mirroring leadingCLabelRe and
+// leadingLBLabelRe. A Requirement imported (or hand-created) with its own
+// citation in Name must not carry that stale prefix into a re-render, which
+// recomputes the citation from render-time sibling position instead.
+var leadingFRLabelRe = regexp.MustCompile(`^N?FR\d+\s*[—–-]\s*`)
+
+func cleanRequirementTitle(name string) string {
+	return leadingFRLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
+}
+
+// requirementCitations assigns each Requirement its `FRn`/`NFRn` number.
+// Unlike `Cn` and `LBn` there is no stored display number for a
+// Requirement -- migration 017 gave one to Features and LoadBearingDecisions
+// and not to these -- so per LB2 the number comes from render-time sibling
+// position instead, counted per kind.
+//
+// The sibling order is the one doc.Requirements already arrives in:
+// feature_set.position/name, feature.position/name, requirement.kind,
+// requirement.position, requirement.name (krill/store/slice.go's
+// ListRequirementsByProduct). That is exactly the order the capability map
+// walks below -- FeatureSets in order, Features in order, requirements
+// under their Feature -- so counting down the file reproduces these
+// numbers, and a reader counting `FR`s off this page lands on the same
+// requirement. A Requirement whose parent Feature is not in the slice is
+// left unnumbered, because it has no position in the document to count
+// from.
+func requirementCitations(doc slice.Document) map[uuid.UUID]string {
+	byFeature := make(map[uuid.UUID]int, len(doc.Features))
+	for _, f := range doc.Features {
+		byFeature[f.ID] = f.DisplayNumber
+	}
+	counters := map[string]int{}
+	out := make(map[uuid.UUID]string, len(doc.Requirements))
+	for _, rq := range doc.Requirements {
+		if _, ok := byFeature[rq.FeatureID]; !ok {
+			continue
+		}
+		counters[rq.Kind]++
+		out[rq.ID] = fmt.Sprintf("%s%d", rq.Kind, counters[rq.Kind])
+	}
+	return out
+}
+
 func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
@@ -349,6 +393,17 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 	for _, f := range doc.Features {
 		featuresBySet[f.FeatureSetID] = append(featuresBySet[f.FeatureSetID], f)
 	}
+	requirementsByFeature := map[uuid.UUID][]slice.RequirementEntity{}
+	for _, rq := range doc.Requirements {
+		requirementsByFeature[rq.FeatureID] = append(requirementsByFeature[rq.FeatureID], rq)
+	}
+	citations := requirementCitations(doc)
+
+	if len(doc.Requirements) > 0 {
+		b.WriteString("Each `Cn` is a capability. Beneath it, the Requirements that specify it: `FRn` (functional) and `NFRn` (non-functional), with their bodies in full — a body carries the prohibitions and the refuted-hypothesis records, so it is never truncated or summarized here.\n\n")
+		b.WriteString("krill stores no display number for a Requirement, so `FRn`/`NFRn` are assigned at render time, per kind, counting down this file in the order the requirements appear. The bracketed id after each name resolves a citation exactly.\n")
+	}
+
 	for _, fs := range doc.FeatureSets {
 		features := featuresBySet[fs.ID]
 		if len(features) == 0 {
@@ -358,12 +413,48 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 		b.WriteString(fs.Name)
 		b.WriteString("\n\n")
 		for _, f := range features {
-			b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
+			reqs := requirementsByFeature[f.ID]
+			if len(reqs) == 0 {
+				b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
+				continue
+			}
+			// A Feature with Requirements gets a heading, so each
+			// requirement's body can follow raw at the top level rather
+			// than indented into a list -- indenting would rewrite the
+			// body, and a body is a record, not formatting.
+			b.WriteString(fmt.Sprintf("### C%d — %s\n\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
+			for _, rq := range reqs {
+				writeRequirement(&b, rq, citations[rq.ID])
+			}
 		}
 		b.WriteString("\n")
 	}
 
 	return b.String()
+}
+
+// writeRequirement emits one Requirement under a bold label, not a
+// heading, so a body containing its own markdown renders as authored
+// instead of being folded into this document's outline. A nil or
+// whitespace-only body says so explicitly rather than leaving the reader
+// to wonder whether the renderer dropped it.
+func writeRequirement(b *strings.Builder, rq slice.RequirementEntity, citation string) {
+	if citation == "" {
+		citation = rq.Kind
+	}
+	b.WriteString("**")
+	b.WriteString(citation)
+	b.WriteString("** — ")
+	b.WriteString(cleanRequirementTitle(rq.Name))
+	b.WriteString(" (`")
+	b.WriteString(rq.ID.String())
+	b.WriteString("`)\n\n")
+	if rq.Body == nil || strings.TrimSpace(*rq.Body) == "" {
+		b.WriteString("_No body recorded._\n\n")
+		return
+	}
+	b.WriteString(strings.TrimSpace(*rq.Body))
+	b.WriteString("\n\n")
 }
 
 // milestoneEntry is one milestone's rendered content, reconstructed
