@@ -171,6 +171,61 @@ func (f *fakeDecisionStore) ListCurrentByFeatureSet(ctx context.Context, feature
 	return nil, nil
 }
 
+// fakePersonaStore backs persona_test.go.
+type fakePersonaStore struct {
+	createErr error
+
+	gotScopeID   uuid.UUID
+	gotProductID uuid.UUID
+	gotName      string
+	gotBody      *string
+}
+
+func (f *fakePersonaStore) Create(ctx context.Context, scopeID, productID uuid.UUID, name string, description *string) (store.Persona, error) {
+	f.gotScopeID, f.gotProductID, f.gotName, f.gotBody = scopeID, productID, name, description
+	if f.createErr != nil {
+		return store.Persona{}, f.createErr
+	}
+	return store.Persona{ID: uuid.New(), ScopeID: scopeID, ProductID: productID, Name: name, Description: description}, nil
+}
+
+func (f *fakePersonaStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (store.Persona, error) {
+	return store.Persona{}, store.ErrNotFound
+}
+
+func (f *fakePersonaStore) ListCurrentByProduct(ctx context.Context, productID uuid.UUID) ([]store.Persona, error) {
+	return nil, nil
+}
+
+// fakeNonGoalStore backs nongoal_test.go. gotKind is what nongoal_test.go's
+// discriminator cases assert on -- the handler's job is to turn the body's
+// `kind` string into exactly one of the two store kinds, or refuse.
+type fakeNonGoalStore struct {
+	createErr error
+
+	gotScopeID   uuid.UUID
+	gotProductID uuid.UUID
+	gotKind      store.NonGoalKind
+	gotName      string
+	gotBody      *string
+}
+
+func (f *fakeNonGoalStore) Create(ctx context.Context, scopeID, productID uuid.UUID, kind store.NonGoalKind, name string, body *string) (store.NonGoal, error) {
+	f.gotScopeID, f.gotProductID, f.gotKind, f.gotName, f.gotBody = scopeID, productID, kind, name, body
+	if f.createErr != nil {
+		return store.NonGoal{}, f.createErr
+	}
+	return store.NonGoal{ID: uuid.New(), ScopeID: scopeID, ProductID: productID, Kind: kind, Name: name, Body: body}, nil
+}
+
+func (f *fakeNonGoalStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (store.NonGoal, error) {
+	return store.NonGoal{}, store.ErrNotFound
+}
+
+func (f *fakeNonGoalStore) ListCurrentByProduct(ctx context.Context, productID uuid.UUID) ([]store.NonGoal, error) {
+	return nil, nil
+}
+
 // fakeAmendStore backs amend_test.go -- records the last call of each
 // AmendStore method's arguments so a test can assert the gate reached (or
 // never reached) the store, without needing a real Postgres (that is
