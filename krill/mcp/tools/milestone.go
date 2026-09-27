@@ -121,7 +121,7 @@ type addDeliversInput struct {
 func RegisterAddDelivers(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "add_delivers",
-		Description: "Record that a milestone delivers one or more features/FRs (LB6) -- pass entity_ids to deliver a slice spanning several FeatureSets in a single call. Refuses an entity another milestone of the same product already delivers; re-cut it with move_delivery_scope first.",
+		Description: "Record that a milestone delivers one or more features/FRs (LB6) -- pass entity_ids to deliver a slice spanning several FeatureSets in a single call. Refuses an entity another milestone of the same product already delivers; re-cut it with move_delivery_scope first, which is refused in turn if that entity has already shipped there.",
 	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDeliversInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 

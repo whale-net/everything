@@ -228,8 +228,11 @@ func (s milestoneStore) addAssociation(ctx context.Context, scopeID, entityID, m
 	// two milestone-level owners. Re-importing the SAME association is not a
 	// conflict -- excluding milestoneID from the lookup is what keeps a
 	// re-import of an unchanged brief idempotent. The importer has no
-	// re-cut verb, so a genuine hand-over is done through add_delivers and
-	// move_delivery_scope, both of which the refusal message names.
+	// re-cut verb, so a genuine hand-over is done through
+	// move_delivery_scope, the one remedy the refusal message names --
+	// add_delivers is not a way out of it, since the same guard refuses an
+	// add into the competing milestone, and move_delivery_scope itself is
+	// refused if the entity has already shipped there.
 	//
 	// Only the Delivers relation carries that rule: "must not foreclose"
 	// is a constraint, not a delivery claim, and a decision every milestone
