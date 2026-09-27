@@ -20,7 +20,10 @@ import (
 // (issue #2543), GET /design-sessions/{id}/open-questions (issue #2545,
 // FR6), and GET /milestones/{id} (issue #2683, FR1/FR2) are ungated; every
 // entity
-// create/attach endpoint (issue #2490, FR1/FR2/FR4), the amend
+// create/attach endpoint (issue #2490, FR1/FR2/FR4) -- and, since FR
+// 7a3906a3, the POST /personas and POST /non-goals collection creates,
+// which is what makes the create surface complete across every spec-axis
+// kind an actor can correct -- the amend
 // endpoints below (FR12, issue #2493; generalised to every spec-axis kind
 // by issue #2958/#2966), the seven void endpoints below (FR d38d726e,
 // FR 2a3a8eef), the Non-Goal resolve endpoint below (FR d0021a0f), the
@@ -70,6 +73,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /features", gate(handlers.CreateFeatureHandler(entities.Features())))
 	mux.Handle("POST /requirements", gate(handlers.CreateRequirementHandler(entities.Requirements())))
 	mux.Handle("POST /load-bearing-decisions", gate(handlers.AttachLoadBearingDecisionHandler(entities.Decisions())))
+	// Persona and Non-Goal (FR 7a3906a3): the last two product-level spec
+	// documents to gain a collection POST, so an ACTOR correcting one over
+	// HTTP no longer has to import it first. Mounted with the rest of the
+	// spec-axis collection POSTs above, gated identically.
+	mux.Handle("POST /personas", gate(handlers.CreatePersonaHandler(entities.Personas())))
+	mux.Handle("POST /non-goals", gate(handlers.CreateNonGoalHandler(entities.NonGoals())))
 	mux.Handle("POST /pointer-artifacts", gate(handlers.CreatePointerArtifactHandler(entities.Products(), entities.Scopes(), entities.PointerArtifacts(), forgeClient)))
 
 	mux.Handle("POST /milestones", gate(handlers.CreateMilestoneHandler(entities.MilestoneAuthoring())))
