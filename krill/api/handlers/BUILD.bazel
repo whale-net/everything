@@ -38,7 +38,10 @@ FR4/FR10) is the work-axis by-task-id fetch surface: GET /tasks/{id} is
 ungated, over //krill/work's Assembler. task_claim.go (issue #2722,
 FR3/FR5) is the work-axis claim surface: POST /tasks/{id}/claim is gated,
 returning the same //krill/work Assembler payload task_payload.go's GET
-/tasks/{id} does, enriched with the fresh lease."""
+/tasks/{id} does, enriched with the fresh lease. persona.go and
+nongoal.go (FR 7a3906a3) are the Persona and Non-Goal create endpoints,
+POST /personas and POST /non-goals -- the last two spec-axis kinds to gain
+a collection POST, both gated like every other write above."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
