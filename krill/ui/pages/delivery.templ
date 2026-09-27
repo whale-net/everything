@@ -169,7 +169,7 @@ templ Delivery(page DeliveryPage) {
 							<span class="badge badge-ghost badge-sm">FR budget { m.FRBudget }</span>
 						}
 						if m.Outcome != "" {
-							<div class="text-sm text-base-content/70">{ m.Outcome }</div>
+							<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(m.Outcome))</div>
 						}
 						if m.Breakdown != nil {
 							@breakdownBlock(m.Breakdown)
@@ -182,7 +182,7 @@ templ Delivery(page DeliveryPage) {
 										@entityID(mp.ID)
 										@statusBadge(mp.Status)
 										if mp.Outcome != "" {
-											<div class="text-sm text-base-content/70">{ mp.Outcome }</div>
+											<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(mp.Outcome))</div>
 										}
 										if mp.Breakdown != nil {
 											@breakdownBlock(mp.Breakdown)

@@ -92,6 +92,24 @@ func (f fakeRevisionEvents) ListOpenQuestions(_ context.Context, sessionID uuid.
 	return f.openQuestions[sessionID], nil
 }
 
+// ListLatestSignoffBySessionIDs folds each requested session's canned log
+// the same last-signoff-wins way the real store's SQL derives it, so tests
+// built against bySession need no separate signoff fixture.
+func (f fakeRevisionEvents) ListLatestSignoffBySessionIDs(_ context.Context, sessionIDs []uuid.UUID) (map[uuid.UUID]store.SignoffStatus, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make(map[uuid.UUID]store.SignoffStatus, len(sessionIDs))
+	for _, id := range sessionIDs {
+		for _, ev := range f.bySession[id] {
+			if ev.EventType == store.EventTypeSignoff && ev.SignoffStatus != nil {
+				out[id] = *ev.SignoffStatus
+			}
+		}
+	}
+	return out, nil
+}
+
 // newDesignReadApp builds an App whose only wired stores are the two the
 // read surface touches. The read routes are mounted directly (not behind
 // RequireAuthFunc) -- renderShell tolerates an absent user, and the FRs

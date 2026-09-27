@@ -161,6 +161,23 @@ func (f *fakeRevisionEventStore) ListBySession(ctx context.Context, sessionID uu
 	return f.events[sessionID], nil
 }
 
+// ListLatestSignoffBySessionIDs folds each requested session's in-memory
+// events the same last-signoff-wins way krill/store's SQL derives it.
+func (f *fakeRevisionEventStore) ListLatestSignoffBySessionIDs(ctx context.Context, sessionIDs []uuid.UUID) (map[uuid.UUID]store.SignoffStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make(map[uuid.UUID]store.SignoffStatus, len(sessionIDs))
+	for _, id := range sessionIDs {
+		for _, ev := range f.events[id] {
+			if ev.EventType == store.EventTypeSignoff && ev.SignoffStatus != nil {
+				out[id] = *ev.SignoffStatus
+			}
+		}
+	}
+	return out, nil
+}
+
 // ListOpenQuestions mirrors krill/store/open_questions.go's SQL
 // last-event-wins derivation (issue #2545, FR6), folded in Go over this
 // fake's in-memory events -- acceptable here (open_questions_test.go's

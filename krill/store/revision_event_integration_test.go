@@ -295,6 +295,53 @@ func TestRevisionEventStore_MethodSet_HasNoUpdateOrDeleteVerb(t *testing.T) {
 	assert.GreaterOrEqual(t, typ.NumMethod(), 1, "sanity: the interface must still expose at least Append/ListBySession")
 }
 
+// TestRevisionEventStore_ListLatestSignoffBySessionIDs_LastEventWins proves
+// the batched signoff derivation the design-session list view relies on
+// (krill/ui/design_page.go's listDesignSessions) matches what a per-session
+// fold over ListBySession would compute, across two sessions of the same
+// product in one call: a session with no signoff event is absent from the
+// returned map, and a session with more than one signoff event reports its
+// most recent one, not its first.
+func TestRevisionEventStore_ListLatestSignoffBySessionIDs_LastEventWins(t *testing.T) {
+	ctx := context.Background()
+	s, db := newDesignSessionTestStore(t)
+	scopeID := newDesignSessionTestScope(t, ctx, db, "whale-net/revision-event-latest-signoff-test")
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record substrate")
+	require.NoError(t, err)
+	self := dsTestSubject("agent-1")
+	krillSessionID := mintKrillSession(t, ctx, db, scopeID, self)
+
+	signedOff, err := s.DesignSessions().Open(ctx, scopeID, product.ID, "an opening idea", krillSessionID)
+	require.NoError(t, err)
+	neverSigned, err := s.DesignSessions().Open(ctx, scopeID, product.ID, "another opening idea", krillSessionID)
+	require.NoError(t, err)
+
+	// Approved-then-reopened session: two signoff events, the later one wins.
+	approved := store.SignoffStatusApproved
+	changesRequested := store.SignoffStatusChangesRequested
+	e := store.NewRevisionEvent{
+		ScopeID: scopeID, SessionID: signedOff.ID, Acting: self, OnBehalfOf: self,
+		EventType:          store.EventTypeSignoff,
+		OpenQuestionsDelta: store.OpenQuestionsDelta{Opened: []store.OpenQuestionOpened{}, Resolved: []string{}},
+		SignoffStatus:      &approved,
+	}
+	_, err = s.RevisionEvents().Append(ctx, e)
+	require.NoError(t, err)
+	e.SignoffStatus = &changesRequested
+	_, err = s.RevisionEvents().Append(ctx, e)
+	require.NoError(t, err)
+
+	got, err := s.RevisionEvents().ListLatestSignoffBySessionIDs(ctx, []uuid.UUID{signedOff.ID, neverSigned.ID})
+	require.NoError(t, err)
+
+	status, ok := got[signedOff.ID]
+	require.True(t, ok, "a session with signoff events must be present in the map")
+	assert.Equal(t, store.SignoffStatusChangesRequested, status, "the most recent signoff must win, not the first")
+
+	_, ok = got[neverSigned.ID]
+	assert.False(t, ok, "a session with no signoff event must be absent from the map, not present with a zero value")
+}
+
 // TestRevisionEventStore_Append_UnknownSession_ReturnsErrNotFound is a
 // bonus guard alongside case 2's design_session equivalent: Append against
 // a session_id with no design_session row must fail cleanly (via the

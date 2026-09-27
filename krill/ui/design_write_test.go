@@ -99,6 +99,18 @@ func (f writeSurfaceEvents) ListOpenQuestions(_ context.Context, id uuid.UUID) (
 	return f.openQuestions[id], nil
 }
 
+func (f writeSurfaceEvents) ListLatestSignoffBySessionIDs(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]store.SignoffStatus, error) {
+	out := make(map[uuid.UUID]store.SignoffStatus, len(ids))
+	for _, id := range ids {
+		for _, ev := range f.bySession[id] {
+			if ev.EventType == store.EventTypeSignoff && ev.SignoffStatus != nil {
+				out[id] = *ev.SignoffStatus
+			}
+		}
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------------------------
 // the environment one test drives
 // ---------------------------------------------------------------------------

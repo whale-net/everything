@@ -50,6 +50,16 @@ type RevisionEventStore interface {
 	// open_questions.go for the implementation and why it is one SQL
 	// window query, never a folded read of ListBySession's full log.
 	ListOpenQuestions(ctx context.Context, sessionID uuid.UUID) ([]OpenQuestion, error)
+
+	// ListLatestSignoffBySessionIDs returns each session's most recent
+	// signoff_status, for every id in sessionIDs that has ever received a
+	// signoff event. A session with no signoff event is absent from the
+	// returned map, not present with a zero value. Like ListOpenQuestions,
+	// this is one SQL statement over every requested session at once, never
+	// a per-session fold over ListBySession's full log -- the design
+	// session list view derives every row's signed-off state from one call
+	// here rather than one ListBySession call per session.
+	ListLatestSignoffBySessionIDs(ctx context.Context, sessionIDs []uuid.UUID) (map[uuid.UUID]SignoffStatus, error)
 }
 
 // revisionEventStore is the pgx-backed RevisionEventStore implementation.
@@ -283,4 +293,32 @@ func (s revisionEventStore) ListBySession(ctx context.Context, sessionID uuid.UU
 		events = append(events, ev)
 	}
 	return events, rows.Err()
+}
+
+func (s revisionEventStore) ListLatestSignoffBySessionIDs(ctx context.Context, sessionIDs []uuid.UUID) (map[uuid.UUID]SignoffStatus, error) {
+	out := make(map[uuid.UUID]SignoffStatus, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (session_id) session_id, signoff_status
+		FROM revision_event
+		WHERE session_id = ANY($1) AND event_type = $2
+		ORDER BY session_id, seq_no DESC
+	`, sessionIDs, string(EventTypeSignoff))
+	if err != nil {
+		return nil, fmt.Errorf("list latest signoff by session ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uuid.UUID
+		var status string
+		if err := rows.Scan(&id, &status); err != nil {
+			return nil, fmt.Errorf("scan latest signoff: %w", err)
+		}
+		out[id] = SignoffStatus(status)
+	}
+	return out, rows.Err()
 }

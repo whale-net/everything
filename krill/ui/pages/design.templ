@@ -213,7 +213,7 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 		<dt class="font-medium">Product</dt>
 		<dd class="sm:col-span-2"><code>{ page.ProductID }</code></dd>
 		<dt class="font-medium">Opening submission</dt>
-		<dd class="sm:col-span-2">{ page.OpeningSubmission }</dd>
+		<dd class="sm:col-span-2 krill-md">@templ.Raw(renderMarkdown(page.OpeningSubmission))</dd>
 		<dt class="font-medium">Opened by krill session</dt>
 		<dd class="sm:col-span-2"><code>{ page.OpenedByKrillSessionID }</code></dd>
 		<dt class="font-medium">Created</dt>

@@ -44,8 +44,33 @@ document.documentElement.setAttribute('data-theme',t);})();
 @import "tailwindcss";
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
-<style>%s</style>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS)
+<style>%s</style>
+<style>%s</style>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS)
 }
+
+// markdownCSS gives goldmark-rendered markdown (pages/markdown.go's
+// renderMarkdown, wrapped in a ".krill-md" element at every call site) sane
+// default spacing/typography -- the pinned Tailwind CDN build's preflight
+// reset otherwise zeroes a <p>'s margin and a <ul>'s list-style, so
+// goldmark's own <p>/<ul>/<pre>/<code>/<blockquote> output would render as
+// an unstyled, list-marker-less wall of text. Mirrors whagent_net/ui's
+// chatMarkdownCSS (same gap, same fix), scoped to ".krill-md" instead of
+// ".chat-markdown" since krill's markdown is full-width page prose, not a
+// chat bubble.
+const markdownCSS = `
+.krill-md :where(p) { margin: 0 0 0.5em; }
+.krill-md :where(p):last-child { margin-bottom: 0; }
+.krill-md :where(ul, ol) { margin: 0 0 0.5em 1.25em; }
+.krill-md :where(ul) { list-style-type: disc; }
+.krill-md :where(ol) { list-style-type: decimal; }
+.krill-md :where(pre) { background: rgba(0, 0, 0, 0.15); padding: 0.5em 0.75em; border-radius: 0.5em; overflow-x: auto; margin: 0.5em 0; }
+.krill-md :where(code) { font-family: ui-monospace, monospace; font-size: 0.875em; }
+.krill-md :where(pre code) { background: none; padding: 0; }
+.krill-md :where(code):not(pre code) { background: rgba(0, 0, 0, 0.15); padding: 0.1em 0.35em; border-radius: 0.3em; }
+.krill-md :where(blockquote) { border-left: 3px solid currentColor; opacity: 0.8; padding-left: 0.75em; margin: 0.5em 0; }
+.krill-md :where(a) { text-decoration: underline; }
+.krill-md :where(h1, h2, h3, h4, h5, h6) { font-weight: 700; margin: 0.5em 0 0.25em; }
+`
 
 // renderShell writes one signed-in page: the shared chrome plus body, at
 // HTTP 200.
