@@ -107,6 +107,13 @@ func (s *Store) Abandon() AbandonStore { return abandonStore{pool: s.pool} }
 // write path (FR12, issue #2493) for Requirement and LoadBearingDecision.
 func (s *Store) Amend() AmendStore { return amendStore{pool: s.pool} }
 
+// Reparent returns the ReparentStore implementation -- the spec axis's
+// move verb, which changes which FeatureSet a Feature sits under and
+// nothing else, through the same close-and-open supersession Amend uses.
+// It is a separate store precisely because AmendStore's contract is that
+// none of its methods ever reparent.
+func (s *Store) Reparent() ReparentStore { return reparentStore{pool: s.pool} }
+
 // Void returns the VoidStore implementation -- the SCD2
 // close-WITHOUT-successor tombstone write path (FR d38d726e, FR 2a3a8eef),
 // sitting alongside Amend: where an amend closes a row and opens a

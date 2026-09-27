@@ -53,6 +53,7 @@ go_library(
         "position.go",
         "product.go",
         "recut.go",
+        "reparent.go",
         "requirement.go",
         "resolve.go",
         "revision_event.go",
@@ -853,6 +854,53 @@ go_test(
         "abandon_integration_test.go",
         "milestone_authoring_integration_test.go",
         "recut_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for ReparentStore (reparent.go): a Feature
+# moved between FeatureSets keeps its immutable id, its `Cn`, its position
+# and its delivery axis, and the row it displaced is closed rather than
+# deleted; its Requirements follow while the FeatureSet-scoped decisions
+# stay put; and every way the move can be wrong -- an unknown or
+# cross-scope target, a target under another Product, the current parent,
+# a name a live sibling of the target already holds -- is a named refusal
+# that writes nothing. Shares
+# milestone_authoring_integration_test.go's test-store/test-scope/subject
+# helpers and recut_integration_test.go's deliversAssociation helper (same
+# package, same build tag) rather than duplicating them, mirroring
+# abandon_integration_test.go's own choice. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:reparent_integration_test --test_output=all
+go_test(
+    name = "reparent_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "milestone_authoring_integration_test.go",
+        "recut_integration_test.go",
+        "reparent_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [
