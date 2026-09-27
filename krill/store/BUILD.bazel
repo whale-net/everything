@@ -1709,6 +1709,7 @@ go_test(
         "integration",
         "manual",
         "no-cache",
+        "no-sandbox",
         "requires-network",
     ],
     deps = [
@@ -1737,6 +1738,7 @@ go_test(
         "integration",
         "manual",
         "no-cache",
+        "no-sandbox",
         "requires-network",
     ],
     deps = [
