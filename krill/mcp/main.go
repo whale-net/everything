@@ -200,7 +200,9 @@ func run() error {
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
 	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals(), entities.Features(), entities.Requirements())
 	// amend_requirement/amend_load_bearing_decision: SCD2 corrections, the MCP twin of POST /{requirements,load-bearing-decisions}/{id}/amend.
-	tools.RegisterAmendAll(designReg, sessions, entities.Amend())
+	// reparent_feature rides the same fan-out: it is the move verb an amend
+	// refusal names, so the two have to land on the same mount together.
+	tools.RegisterAmendAll(designReg, sessions, entities.Amend(), entities.Reparent())
 	// void_entity: the tombstone verb (the SCD2 close-WITHOUT-successor),
 	// and list_void_events, its audit read. The MCP twin of the seven
 	// POST /{kind}/{id}/void routes, with the kind as an argument rather

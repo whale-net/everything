@@ -276,9 +276,10 @@ go_test(
     ],
 )
 
-# No-database unit test: RegisterAmendAll registers exactly
-# {amend_requirement, amend_load_bearing_decision}, gates both on
-# krill_session_id, and passes id/name/body through to a fake AmendStore.
+# No-database unit test: RegisterAmendAll registers one tool per spec-axis
+# kind plus reparent_feature, gates every one of them on krill_session_id,
+# passes id/name/body through to a fake AmendStore, and pins the placement
+# refusal's per-(kind, field) advice.
 go_test(
     name = "amend_registration_test",
     srcs = ["amend_registration_test.go"],

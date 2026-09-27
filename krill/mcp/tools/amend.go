@@ -66,15 +66,27 @@ type amendMilestoneInput struct {
 	Outcome *string `json:"outcome,omitempty" jsonschema:"The milestone's replacement outcome sentence. Omit to clear it."`
 }
 
-// parseAmendInput resolves the session gate and the id/name checks exactly
-// as the HTTP amend handlers do, before any store mutation runs.
-func parseAmendInput(ctx context.Context, sessions store.SessionStore, krillSessionID, id, name string) (uuid.UUID, error) {
+// parseAmendID resolves the session gate and the entity id exactly as the
+// HTTP amend handlers do. It is parseAmendInput minus the name check, for
+// the sibling verb that changes WHERE an entity sits and so has no name to
+// require.
+func parseAmendID(ctx context.Context, sessions store.SessionStore, krillSessionID, id string) (uuid.UUID, error) {
 	if _, err := requireKrillSession(ctx, sessions, krillSessionID); err != nil {
 		return uuid.Nil, err
 	}
 	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("id: invalid or missing UUID")
+	}
+	return parsed, nil
+}
+
+// parseAmendInput resolves the session gate and the id/name checks exactly
+// as the HTTP amend handlers do, before any store mutation runs.
+func parseAmendInput(ctx context.Context, sessions store.SessionStore, krillSessionID, id, name string) (uuid.UUID, error) {
+	parsed, err := parseAmendID(ctx, sessions, krillSessionID, id)
+	if err != nil {
+		return uuid.Nil, err
 	}
 	if err := handlers.RequireNonEmpty("name", name); err != nil {
 		return uuid.Nil, err
@@ -296,8 +308,50 @@ func RegisterAmendMilestone(reg *server.Registry, sessions store.SessionStore, a
 	})
 }
 
-// RegisterAmendAll registers every amend_* tool against reg.
-func RegisterAmendAll(reg *server.Registry, sessions store.SessionStore, amend store.AmendStore) {
+// reparentFeatureInput is reparent_feature's argument schema: the Feature to
+// move and the feature set to move it under. There is no name or body -- a
+// reparent changes only WHERE the Feature sits -- so this is not
+// amendDescribedInput, and the id parse goes through parseAmendID rather
+// than parseAmendInput, whose name requirement a reparent has no answer for.
+type reparentFeatureInput struct {
+	krillSessionInput
+	FeatureID    string `json:"feature_id" jsonschema:"The surrogate id (LB2) of the feature to move, as a UUID string. Unchanged by the move."`
+	FeatureSetID string `json:"feature_set_id" jsonschema:"The surrogate id (LB2) of the feature set to move the feature under, as a UUID string."`
+}
+
+// RegisterReparentFeature registers reparent_feature: the move half of the
+// SCD2 write path, registered from this file because AmendPlacementChange
+// names it back to the caller (store/amend.go) and because the verb is
+// amend's own sibling -- same close-and-open, different column.
+func RegisterReparentFeature(reg *server.Registry, sessions store.SessionStore, reparent store.ReparentStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name: "reparent_feature",
+		Description: "Move a feature between feature sets: close the feature's current row and open a successor under the given feature_set_id, " +
+			"under the same id. It is SCD2 -- the prior revision is closed, not deleted, and nothing is created or deleted. The feature keeps its " +
+			"Cn display number, its requirements, and its delivery associations, and its name and description come along unchanged; to reword it, " +
+			"use amend_feature. The move stays inside one product -- a feature set of another product is refused, since Cn is numbered product-wide.",
+	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in reparentFeatureInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+		id, err := parseAmendID(ctx, sessions, in.KrillSessionID, in.FeatureID)
+		if err != nil {
+			return nil, zero, err
+		}
+		featureSetID, err := uuid.Parse(in.FeatureSetID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("feature_set_id: invalid or missing UUID")
+		}
+		moved, err := reparent.ReparentFeature(ctx, id, featureSetID)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: moved.ID.String()}, nil
+	})
+}
+
+// RegisterAmendAll registers every amend_* tool against reg, plus
+// reparent_feature -- the refusal store.AmendPlacementChange reports for a
+// Feature's feature_set_id has to name a verb this mount actually has.
+func RegisterAmendAll(reg *server.Registry, sessions store.SessionStore, amend store.AmendStore, reparent store.ReparentStore) {
 	RegisterAmendProduct(reg, sessions, amend)
 	RegisterAmendFeatureSet(reg, sessions, amend)
 	RegisterAmendFeature(reg, sessions, amend)
@@ -306,4 +360,5 @@ func RegisterAmendAll(reg *server.Registry, sessions store.SessionStore, amend s
 	RegisterAmendNonGoal(reg, sessions, amend)
 	RegisterAmendLoadBearingDecision(reg, sessions, amend)
 	RegisterAmendMilestone(reg, sessions, amend)
+	RegisterReparentFeature(reg, sessions, reparent)
 }
