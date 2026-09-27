@@ -91,11 +91,16 @@ from at all:
   replaces) — `renderCurrentStateMD` has never had anything to read here
   and none is planned yet.
 - **`product/03-roadmap.md` renders the structured facts, not the reasoning
-  prose behind them.** A milestone's outcome sentence, FR budget, and the
-  bare `Delivers`/`Must not foreclose`/`Deliberately deferred` id lists do
-  render (issue #2970). The paragraph of *why* each `Must not foreclose`
-  entry matters, "Notes for design," and pre-agreed over-budget-cut
-  rationale do not — krill has no schema slot for that prose.
+  prose behind them.** A milestone's outcome sentence, **current delivery
+  status**, FR budget, and the bare `Delivers`/`Must not foreclose`/
+  `Deliberately deferred` id lists do render (issue #2970). Status comes
+  from the append-only `milestone_status_event` history via
+  `Source.ListMilestoneStatuses` → `CurrentStatuses`; a milestone with no
+  recorded transition renders `not started`, which is krill's own derivation
+  from the absence of history (FR8), not a default the renderer invented.
+  The paragraph of *why* each `Must not foreclose` entry matters, "Notes for
+  design," and pre-agreed over-budget-cut rationale do not — krill has no
+  schema slot for that prose.
 
 Practical consequence: don't delete or stop maintaining that prose in the
 committed hand-authored files on the assumption a re-render will preserve
