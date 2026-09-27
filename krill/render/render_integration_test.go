@@ -104,7 +104,19 @@ func seedProduct(t *testing.T, ctx context.Context, entities *store.Store, scope
 	_, err = entities.Features().Create(ctx, scopeID, featureSet.ID, "F2", nil)
 	require.NoError(t, err)
 
-	lb1, err := entities.Decisions().Create(ctx, scopeID, featureSet.ID, "Keep it simple", nil)
+	// Real Requirements against F1, with the kind of body krill actually
+	// holds -- a prohibition and a refuted-hypothesis record. A summary of
+	// either would reproduce the problem rendering Requirements exists to
+	// fix, so the integration path asserts the full text survives.
+	_, err = entities.Requirements().Create(ctx, scopeID, f1.ID, store.RequirementKindFR, "Render the brief", strPtr2("A rendered brief must not drop a prohibition.\n\n- never hand-edit a generated file\n- refuted hypothesis: reconciling a hand edit is not possible here"))
+	require.NoError(t, err)
+	_, err = entities.Requirements().Create(ctx, scopeID, f1.ID, store.RequirementKindNFR, "Stay one-way", nil)
+	require.NoError(t, err)
+
+	// A decision whose body cross-references the note recorded below --
+	// the shape whagent_net's three LoadBearingDecisions have, and the
+	// dangling-reference defect this milepebble's guard test exists for.
+	lb1, err := entities.Decisions().Create(ctx, scopeID, featureSet.ID, "Keep it simple", strPtr2("Simplicity beats cleverness. See the mapping note on this Product."))
 	require.NoError(t, err)
 	_, err = entities.Decisions().Create(ctx, scopeID, featureSet.ID, "Ship fast", strPtr2("velocity over polish"))
 	require.NoError(t, err)
@@ -121,6 +133,32 @@ func seedProduct(t *testing.T, ctx context.Context, entities *store.Store, scope
 	require.NoError(t, err)
 	require.NoError(t, entities.Milestones().AddAssociation(ctx, scopeID, f1.ID, milestone.ID))
 	require.NoError(t, entities.Milestones().AddAssociation(ctx, scopeID, lb1.ID, milestone.ID))
+
+	// A second milestone with real status history, and M1 deliberately
+	// left untransitioned, so the rendered roadmap covers both the
+	// recorded-status and the derived-"not started" paths end to end
+	// through the real milestone_status_event table.
+	self := store.Subject{Iss: "https://issuer.example.com", Sub: "render-test", Kind: store.SubjectKindService}
+	productNoteKind := store.NoteEntityKindProduct
+	m2, err := entities.Milestones().GetOrCreateRef(ctx, scopeID, product.ID, "M2")
+	require.NoError(t, err)
+	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, m2.ID, store.MilestoneStatusPlanned, nil, self, self)
+	require.NoError(t, err)
+	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, m2.ID, store.MilestoneStatusShipped, nil, self, self)
+	require.NoError(t, err)
+
+	// A real note against the Product, of the kind entity bodies point at
+	// ("see the mapping note on this Product").
+	_, err = entities.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID:    scopeID,
+		EntityKind: &productNoteKind,
+		EntityID:   &product.ID,
+		Kind:       store.NoteKindComment,
+		Body:       "CAPABILITY RENUMBERING.\n\n  krill C1  = brief C1  (/wai)   Now\n  krill C5  = brief C12 (/wpoll) Now",
+		Acting:     self,
+		OnBehalfOf: self,
+	})
+	require.NoError(t, err)
 
 	return seededProduct{ScopeID: scopeID, ProductID: product.ID}
 }
@@ -147,18 +185,46 @@ func TestRender_SeededProduct_ProducesFourFileLayout(t *testing.T) {
 	assert.Contains(t, files.ProductMD, "- **Rendering other domains' docs.**")
 	assert.Contains(t, files.ProductMD, "- **Multi-tenant scopes.** later, not now")
 
+	assert.Contains(t, files.ProductMD, "## Notes")
+	assert.Contains(t, files.ProductMD, "CAPABILITY RENUMBERING.",
+		"a Product note's body must reach the rendered brief verbatim")
+	assert.Contains(t, files.ProductMD, "krill C5  = brief C12 (/wpoll) Now",
+		"a multi-line body must survive intact")
+
 	assert.Contains(t, files.CapabilityMapMD, "## Core")
-	assert.Contains(t, files.CapabilityMapMD, "- **C1** — F1")
+	// F1 carries Requirements and so renders as a heading with them
+	// beneath; F2 does not and keeps the compact one-line form.
+	assert.Contains(t, files.CapabilityMapMD, "### C1 — F1")
+	assert.Contains(t, files.CapabilityMapMD, "**FR1** — Render the brief")
+	assert.Contains(t, files.CapabilityMapMD, "never hand-edit a generated file",
+		"a Requirement body must reach the rendered map in full")
+	assert.Contains(t, files.CapabilityMapMD,
+		"refuted hypothesis: reconciling a hand edit is not possible here")
+	assert.Contains(t, files.CapabilityMapMD, "**NFR1** — Stay one-way")
+	assert.Contains(t, files.CapabilityMapMD, "_No body recorded._")
 	assert.Contains(t, files.CapabilityMapMD, "- **C2** — F2")
 
 	assert.Contains(t, files.RoadmapMD, "### M1")
 	assert.Contains(t, files.RoadmapMD, "Delivers: C1")
 	assert.Contains(t, files.RoadmapMD, "Must not foreclose: LB1")
 
+	// M1 has no milestone_status_event row at all; M2 shipped. Both must
+	// render an honest current status, the first from the absence of
+	// history rather than from a default the renderer invented.
+	assert.Contains(t, files.RoadmapMD, "### M1\n\nStatus: not started")
+	assert.Contains(t, files.RoadmapMD, "### M2\n\nStatus: shipped")
+
 	for name, content := range files.FileMap() {
 		assert.Contains(t, content, render.GeneratedMarker, "file %s must carry the non-hand-editable marker", name)
 		assert.Contains(t, content, `Product "Widgets"`, "file %s must name the product it was rendered from", name)
 	}
+
+	// The dangling-reference guard, against a realistic product slice
+	// built through the real store: LB1's body points at the note, and the
+	// note really is rendered, so the reference resolves. The unit half
+	// (dangling_reference_test.go) proves the guard fails when it does not.
+	assert.Contains(t, files.ProductMD, "See the mapping note on this Product")
+	assertNoDanglingReferences(t, files)
 }
 
 // TestRender_ReadOnlyDatabaseHandle_Succeeds is FR15's proof: Render

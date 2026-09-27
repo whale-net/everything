@@ -81,6 +81,27 @@ type Source interface {
 	// milestoneID (migration 010, issue #2683, FR1) -- the rows a
 	// `Deliberately deferred:` line is reconstructed from.
 	ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error)
+
+	// ListMilestoneStatuses returns each id's *current* delivery status --
+	// the latest `milestone_status_event` row per id, batched, because a
+	// whole-product roadmap renders every milestone in one pass and a
+	// per-milestone round trip is the wrong shape (migration 012, issue
+	// #2685, FR11). An id with no status history is expected to be
+	// present in the map as store.MilestoneStatusNotStarted: krill
+	// derives "not started" from the absence of history rather than
+	// seeding a row (FR8). A Source that omits an id entirely is still
+	// read honestly by the renderer -- see milestoneStatusLabel.
+	ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error)
+
+	// ListProductNotes returns every note recorded against the Product
+	// itself, oldest first, with its kind and lifecycle status intact.
+	// Notes are the one place krill holds prose that no entity field
+	// carries -- a capability renumbering, a scope-note recording a
+	// divergence between krill and a hand-authored file -- and a
+	// rendered brief that omits them sends readers to pointers whose
+	// targets are not in the document. Only the Product's own notes for
+	// now: notes on a Feature or Requirement are a separate read.
+	ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error)
 }
 
 // GeneratedMarker is the exact sentence NFR3's AGENTS.md carve-out and
@@ -141,12 +162,16 @@ func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID) (File
 	if err != nil {
 		return Files{}, fmt.Errorf("assemble milestones: %w", err)
 	}
+	notes, err := src.ListProductNotes(ctx, scopeID, productID)
+	if err != nil {
+		return Files{}, fmt.Errorf("list product notes: %w", err)
+	}
 
 	revision := doc.Product.RevisionID.String()
 	name := doc.Product.Name
 
 	return Files{
-		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals),
+		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals, notes),
 		CurrentStateMD:  renderCurrentStateMD(name, revision),
 		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc),
 		RoadmapMD:       renderRoadmapMD(name, revision, milestones),
@@ -169,14 +194,14 @@ func header(productName, revisionID string, now time.Time) string {
 // callers never need to touch it.
 var nowFunc = time.Now
 
-func renderProductMD(name, revision string, doc slice.Document, personas []store.Persona, nonGoals []store.NonGoal) string {
+func renderProductMD(name, revision string, doc slice.Document, personas []store.Persona, nonGoals []store.NonGoal, notes []store.Note) string {
 	var b strings.Builder
 
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# ")
 	b.WriteString(name)
 	b.WriteString(" — Product brief\n\n")
-	b.WriteString("This file is the index. Vision, Personas, Load-bearing decisions, and Non-goals are inline; the three sections with no natural ceiling are split out (`tools/project-manager/CONVENTIONS.md` § Layout):\n\n")
+	b.WriteString("This file is the index. Vision, Personas, Load-bearing decisions, Non-goals, and Notes are inline; the three sections with no natural ceiling are split out (`tools/project-manager/CONVENTIONS.md` § Layout):\n\n")
 	b.WriteString("| Section | File |\n|---|---|\n")
 	b.WriteString("| Current state | [`product/01-current-state.md`](product/01-current-state.md) |\n")
 	b.WriteString("| Capability map | [`product/02-capability-map.md`](product/02-capability-map.md) |\n")
@@ -226,7 +251,42 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		writeNonGoalBullet(&b, ng)
 	}
 
+	b.WriteString("\n")
+	renderNotesSection(&b, notes)
+
 	return b.String()
+}
+
+// renderNotesSection emits the Product's own notes. It exists because
+// several entity bodies point at them -- whagent_net's three
+// LoadBearingDecisions each end "See the mapping note on this Product",
+// and the renumbering mapping those pointers mean exists nowhere else --
+// so omitting the section leaves the document directing readers at
+// content it does not contain, which is worse than an omission.
+//
+// Each note is emitted under a bold label rather than a heading, so a body
+// containing its own markdown structure renders verbatim instead of
+// being reinterpreted as part of this document's outline. The lifecycle
+// status is always shown: a `closed` or `deferred` note is history, and
+// presenting its body as current fact would be a lie.
+func renderNotesSection(b *strings.Builder, notes []store.Note) {
+	b.WriteString("## Notes\n\n")
+	if len(notes) == 0 {
+		b.WriteString("_No notes are recorded against this Product in krill._\n")
+		return
+	}
+	b.WriteString("Notes recorded against this Product in krill, oldest first. The status after each id is the note's own lifecycle status (`store.NoteLifecycleStatus`); anything other than `noted` is rendered for the record, not as current fact.\n")
+	for _, n := range notes {
+		b.WriteString("\n**`")
+		b.WriteString(n.ID.String())
+		b.WriteString("`** — ")
+		b.WriteString(string(n.Kind))
+		b.WriteString(" — status: ")
+		b.WriteString(string(n.CurrentStatus))
+		b.WriteString("\n\n")
+		b.WriteString(strings.TrimSpace(n.Body))
+		b.WriteString("\n")
+	}
 }
 
 func writeNonGoalBullet(b *strings.Builder, ng store.NonGoal) {
@@ -266,12 +326,83 @@ func cleanFeatureTitle(name string) string {
 	return leadingCLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
 }
 
+// currentStatePlaceholderBody is the whole of what
+// product/01-current-state.md ever says. It is not a stub waiting to be
+// filled: krill's renderer is scoped to the product doc set (a vision,
+// personas, capabilities, requirements, load-bearing decisions, non-goals,
+// milestones, notes), and a current-state survey of a running system is
+// none of those. It is a static description of a deployment that changes
+// on its own schedule, not a spec of record an agent contributes to, so
+// it is hand-authored at `<domain>/ARCHITECTURE.md` -- which is where the
+// repository's own documentation conventions put system design,
+// component relationships, and data flow.
+//
+// The wording is deliberate about that. The earlier text said no entity
+// backed this section, which reads as "krill's model is missing
+// something" and invites a reader to propose a new entity type. Nothing
+// is missing and nothing is planned to arrive here.
+const currentStatePlaceholderBody = "This section is intentionally not rendered.\n\n" +
+	"`krill/render` is scoped to the product doc set — vision, personas, " +
+	"capabilities and their requirements, load-bearing decisions, non-goals, " +
+	"milestones, and notes — all of which are entities an agent authors " +
+	"through krill's own API. A current-state survey of a running system is " +
+	"none of those: it is a static description of a deployment that changes on " +
+	"its own schedule, not a spec of record anyone contributes to. So it is " +
+	"hand-authored, and it lives in this domain's `ARCHITECTURE.md`.\n\n" +
+	"Nothing was lost in migrating this domain's brief into krill — the survey " +
+	"was never in krill, and no future entity type is planned to bring it here. " +
+	"See `krill/render/README.md` for the same boundary stated in full.\n"
+
 func renderCurrentStateMD(name, revision string) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Current state\n\n")
-	b.WriteString("_No entity in krill's model backs this section (see `krill/ARCHITECTURE.md` \"Capability map entries, personas, and non-goals\"); krill/render always emits this file as an empty placeholder so the four-file layout stays complete._\n")
+	b.WriteString(currentStatePlaceholderBody)
 	return b.String()
+}
+
+// leadingFRLabelRe strips a leading "FR<n> — " / "NFR<n> — " token baked
+// into a stored Requirement.Name, mirroring leadingCLabelRe and
+// leadingLBLabelRe. A Requirement imported (or hand-created) with its own
+// citation in Name must not carry that stale prefix into a re-render, which
+// recomputes the citation from render-time sibling position instead.
+var leadingFRLabelRe = regexp.MustCompile(`^N?FR\d+\s*[—–-]\s*`)
+
+func cleanRequirementTitle(name string) string {
+	return leadingFRLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
+}
+
+// requirementCitations assigns each Requirement its `FRn`/`NFRn` number.
+// Unlike `Cn` and `LBn` there is no stored display number for a
+// Requirement -- migration 017 gave one to Features and LoadBearingDecisions
+// and not to these -- so per LB2 the number comes from render-time sibling
+// position instead, counted per kind.
+//
+// The sibling order is the one doc.Requirements already arrives in:
+// feature_set.position/name, feature.position/name, requirement.kind,
+// requirement.position, requirement.name (krill/store/slice.go's
+// ListRequirementsByProduct). That is exactly the order the capability map
+// walks below -- FeatureSets in order, Features in order, requirements
+// under their Feature -- so counting down the file reproduces these
+// numbers, and a reader counting `FR`s off this page lands on the same
+// requirement. A Requirement whose parent Feature is not in the slice is
+// left unnumbered, because it has no position in the document to count
+// from.
+func requirementCitations(doc slice.Document) map[uuid.UUID]string {
+	byFeature := make(map[uuid.UUID]int, len(doc.Features))
+	for _, f := range doc.Features {
+		byFeature[f.ID] = f.DisplayNumber
+	}
+	counters := map[string]int{}
+	out := make(map[uuid.UUID]string, len(doc.Requirements))
+	for _, rq := range doc.Requirements {
+		if _, ok := byFeature[rq.FeatureID]; !ok {
+			continue
+		}
+		counters[rq.Kind]++
+		out[rq.ID] = fmt.Sprintf("%s%d", rq.Kind, counters[rq.Kind])
+	}
+	return out
 }
 
 func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
@@ -289,6 +420,17 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 	for _, f := range doc.Features {
 		featuresBySet[f.FeatureSetID] = append(featuresBySet[f.FeatureSetID], f)
 	}
+	requirementsByFeature := map[uuid.UUID][]slice.RequirementEntity{}
+	for _, rq := range doc.Requirements {
+		requirementsByFeature[rq.FeatureID] = append(requirementsByFeature[rq.FeatureID], rq)
+	}
+	citations := requirementCitations(doc)
+
+	if len(doc.Requirements) > 0 {
+		b.WriteString("Each `Cn` is a capability. Beneath it, the Requirements that specify it: `FRn` (functional) and `NFRn` (non-functional), with their bodies in full — a body carries the prohibitions and the refuted-hypothesis records, so it is never truncated or summarized here.\n\n")
+		b.WriteString("krill stores no display number for a Requirement, so `FRn`/`NFRn` are assigned at render time, per kind, counting down this file in the order the requirements appear. The bracketed id after each name resolves a citation exactly.\n")
+	}
+
 	for _, fs := range doc.FeatureSets {
 		features := featuresBySet[fs.ID]
 		if len(features) == 0 {
@@ -298,12 +440,48 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 		b.WriteString(fs.Name)
 		b.WriteString("\n\n")
 		for _, f := range features {
-			b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
+			reqs := requirementsByFeature[f.ID]
+			if len(reqs) == 0 {
+				b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
+				continue
+			}
+			// A Feature with Requirements gets a heading, so each
+			// requirement's body can follow raw at the top level rather
+			// than indented into a list -- indenting would rewrite the
+			// body, and a body is a record, not formatting.
+			b.WriteString(fmt.Sprintf("### C%d — %s\n\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
+			for _, rq := range reqs {
+				writeRequirement(&b, rq, citations[rq.ID])
+			}
 		}
 		b.WriteString("\n")
 	}
 
 	return b.String()
+}
+
+// writeRequirement emits one Requirement under a bold label, not a
+// heading, so a body containing its own markdown renders as authored
+// instead of being folded into this document's outline. A nil or
+// whitespace-only body says so explicitly rather than leaving the reader
+// to wonder whether the renderer dropped it.
+func writeRequirement(b *strings.Builder, rq slice.RequirementEntity, citation string) {
+	if citation == "" {
+		citation = rq.Kind
+	}
+	b.WriteString("**")
+	b.WriteString(citation)
+	b.WriteString("** — ")
+	b.WriteString(cleanRequirementTitle(rq.Name))
+	b.WriteString(" (`")
+	b.WriteString(rq.ID.String())
+	b.WriteString("`)\n\n")
+	if rq.Body == nil || strings.TrimSpace(*rq.Body) == "" {
+		b.WriteString("_No body recorded._\n\n")
+		return
+	}
+	b.WriteString(strings.TrimSpace(*rq.Body))
+	b.WriteString("\n\n")
 }
 
 // milestoneEntry is one milestone's rendered content, reconstructed
@@ -317,6 +495,7 @@ type milestoneEntry struct {
 	Number           int
 	ID               string // "M1".."Mn"
 	Outcome          *string
+	Status           store.MilestoneStatus
 	FRBudget         *int
 	Delivers         []string
 	MustNotForeclose []string
@@ -345,6 +524,7 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 	}
 
 	entries := make([]milestoneEntry, 0, len(refs))
+	rendered := make([]store.MilestoneRef, 0, len(refs))
 	for _, ref := range refs {
 		// A later kind (milepebble, backlog bucket -- migration 010,
 		// issue #2683) must never silently render as a roadmap milestone
@@ -354,7 +534,22 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		if ref.Kind != store.MilestoneKindMilestone {
 			continue
 		}
+		rendered = append(rendered, ref)
+	}
 
+	// One batched status read for the whole roadmap, not one round trip
+	// per milestone -- a product's roadmap renders every milestone in one
+	// pass, so the set form is the right shape (FR11).
+	ids := make([]uuid.UUID, len(rendered))
+	for i, ref := range rendered {
+		ids[i] = ref.ID
+	}
+	statuses, err := src.ListMilestoneStatuses(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list milestone statuses: %w", err)
+	}
+
+	for _, ref := range rendered {
 		associations, err := src.ListMilestoneAssociations(ctx, ref.ID)
 		if err != nil {
 			return nil, fmt.Errorf("list associations for milestone %s: %w", ref.Name, err)
@@ -386,6 +581,7 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			Number:           num,
 			ID:               ref.Name,
 			Outcome:          ref.Outcome,
+			Status:           milestoneStatusLabel(statuses, ref.ID),
 			FRBudget:         ref.FRBudget,
 			Delivers:         prefixEach("C", delivers),
 			MustNotForeclose: prefixEach("LB", mustNot),
@@ -395,6 +591,19 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Number < entries[j].Number })
 	return entries, nil
+}
+
+// milestoneStatusLabel reads one milestone's current status honestly.
+// store.MilestoneStatusEventStore.CurrentStatuses already returns
+// MilestoneStatusNotStarted for an id with no status history (FR8: "not
+// started" is derived from absence, never seeded), so the missing-key and
+// empty-value cases collapse to the same honest answer rather than
+// rendering an empty `Status:` line or implying a status nobody recorded.
+func milestoneStatusLabel(statuses map[uuid.UUID]store.MilestoneStatus, id uuid.UUID) store.MilestoneStatus {
+	if s, ok := statuses[id]; ok && s != "" {
+		return s
+	}
+	return store.MilestoneStatusNotStarted
 }
 
 func prefixEach(prefix string, nums []int) []string {
@@ -412,6 +621,7 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Roadmap\n\n")
+	b.WriteString("_`Status` is each milestone's **current** delivery status, derived from krill's append-only `milestone_status_event` history (`store.MilestoneStatusEventStore.CurrentStatuses`). A milestone with no recorded transition is `not started` — that is krill's own derivation from the absence of history, not a rendered default._\n\n")
 
 	for _, m := range milestones {
 		b.WriteString("### ")
@@ -421,6 +631,9 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 			b.WriteString(*m.Outcome)
 		}
 		b.WriteString("\n\n")
+		b.WriteString("Status: ")
+		b.WriteString(string(m.Status))
+		b.WriteString("\n")
 		if len(m.Delivers) > 0 {
 			b.WriteString("Delivers: ")
 			b.WriteString(strings.Join(m.Delivers, ", "))

@@ -30,6 +30,15 @@ type fakeSource struct {
 	// Deferrals maps a MilestoneRef.ID to the milestone_deferral rows
 	// ListMilestoneDeferrals should return for it.
 	Deferrals map[uuid.UUID][]store.MilestoneDeferral
+	// Statuses is what ListMilestoneStatuses returns wholesale. Leave nil
+	// to model a Source that reports no status history at all.
+	Statuses map[uuid.UUID]store.MilestoneStatus
+	// StatusCalls records each id batch ListMilestoneStatuses was asked
+	// for, so a test can assert the roadmap reads statuses in one batch
+	// rather than one round trip per milestone.
+	StatusCalls [][]uuid.UUID
+	// Notes is what ListProductNotes returns.
+	Notes []store.Note
 }
 
 var _ render.Source = (*fakeSource)(nil)
@@ -56,4 +65,13 @@ func (f *fakeSource) ListMilestoneAssociations(ctx context.Context, milestoneID 
 
 func (f *fakeSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error) {
 	return f.Deferrals[milestoneID], nil
+}
+
+func (f *fakeSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error) {
+	f.StatusCalls = append(f.StatusCalls, milestoneIDs)
+	return f.Statuses, nil
+}
+
+func (f *fakeSource) ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error) {
+	return f.Notes, nil
 }

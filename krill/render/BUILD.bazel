@@ -36,6 +36,8 @@ go_test(
     name = "render_test",
     size = "small",
     srcs = [
+        "dangling_reference_helpers_test.go",
+        "dangling_reference_test.go",
         "fake_source_test.go",
         "render_test.go",
     ],
@@ -63,7 +65,10 @@ go_test(
     name = "render_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["render_integration_test.go"],
+    srcs = [
+        "dangling_reference_helpers_test.go",
+        "render_integration_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",

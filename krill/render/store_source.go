@@ -52,3 +52,16 @@ func (s *StoreSource) ListMilestoneAssociations(ctx context.Context, milestoneID
 func (s *StoreSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error) {
 	return s.store.MilestoneAuthoring().ListDeferrals(ctx, milestoneID)
 }
+
+// ListMilestoneStatuses is a read of `milestone_status_event` (migration
+// 012) and nothing else -- it adds no write path to what a Source holder
+// can reach. See this type's doc comment on why that matters.
+func (s *StoreSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error) {
+	return s.store.MilestoneStatus().CurrentStatuses(ctx, milestoneIDs)
+}
+
+// ListProductNotes is a read of `task_note` narrowed to this Product, and
+// nothing else.
+func (s *StoreSource) ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error) {
+	return s.store.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindProduct, productID)
+}

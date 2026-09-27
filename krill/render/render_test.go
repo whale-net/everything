@@ -108,6 +108,18 @@ func TestRender_ProducesFourFileLayout(t *testing.T) {
 	assert.NotContains(t, files.CapabilityMapMD, "## Vision")
 	assert.NotContains(t, files.RoadmapMD, "## Vision")
 
+	// The placeholder has to tell a reader where current-state content
+	// actually lives, and must not read as "krill dropped it" or promise
+	// that a future entity type will fill the file.
+	assert.Contains(t, files.CurrentStateMD, "This section is intentionally not rendered.")
+	assert.Contains(t, files.CurrentStateMD, "ARCHITECTURE.md",
+		"a reader must be told where the survey is, not merely that it is absent")
+	assert.Contains(t, files.CurrentStateMD, "Nothing was lost in migrating")
+	assert.NotContains(t, files.CurrentStateMD, "No entity in krill's model backs this section",
+		"that wording reads as a gap in krill's model and invites a new entity type")
+	assert.NotContains(t, files.CurrentStateMD, "will be filled",
+		"the placeholder must not promise a future entity type")
+
 	// Every generated file carries the provenance header (LB5) and NFR3's
 	// non-hand-editable marker, naming the Product and the exact revision
 	// it was rendered from.
@@ -422,4 +434,368 @@ func TestRender_NoProductRow_ReturnsError(t *testing.T) {
 	_, err := render.Render(ctx, src, uuid.New(), productID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), productID.String())
+}
+
+// TestRender_RoadmapCarriesCurrentStatus is the status signal the roadmap
+// used to be blind to: a rendered M1..M3 must each say where they are, so
+// a reader can tell shipped from in-progress from not-started without
+// opening krill.
+func TestRender_RoadmapCarriesCurrentStatus(t *testing.T) {
+	ctx := context.Background()
+	productID := uuid.New()
+	scopeID := uuid.New()
+
+	m1, m2, m3 := uuid.New(), uuid.New(), uuid.New()
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "Widgets", Vision: "v"},
+		},
+		MilestoneRefs: []store.MilestoneRef{
+			{ID: m1, Name: "M1", Kind: store.MilestoneKindMilestone},
+			{ID: m2, Name: "M2", Kind: store.MilestoneKindMilestone},
+			{ID: m3, Name: "M3", Kind: store.MilestoneKindMilestone},
+		},
+		Statuses: map[uuid.UUID]store.MilestoneStatus{
+			m1: store.MilestoneStatusShipped,
+			m2: store.MilestoneStatusInProgress,
+			m3: store.MilestoneStatusNotStarted,
+		},
+	}
+
+	files, err := render.Render(ctx, src, scopeID, productID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.RoadmapMD, "### M1\n\nStatus: shipped\n")
+	assert.Contains(t, files.RoadmapMD, "### M2\n\nStatus: in progress\n")
+	assert.Contains(t, files.RoadmapMD, "### M3\n\nStatus: not started\n")
+	assert.Contains(t, files.RoadmapMD, "**current** delivery status",
+		"the rendered status must be unambiguous that it is the current one, not history")
+}
+
+// A milestone with no recorded transition has no current status at all.
+// CurrentStatuses already answers "not started" for it (FR8 derives it
+// from the absence of history); a Source that omits the id entirely must
+// land on the same honest answer rather than an empty `Status:` line.
+func TestRender_MilestoneWithNoTransitionsRendersHonestStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		statuses func(milestoneID uuid.UUID) map[uuid.UUID]store.MilestoneStatus
+	}{
+		{"store reports not started explicitly", func(id uuid.UUID) map[uuid.UUID]store.MilestoneStatus {
+			return map[uuid.UUID]store.MilestoneStatus{id: store.MilestoneStatusNotStarted}
+		}},
+		{"source omits the id entirely", func(uuid.UUID) map[uuid.UUID]store.MilestoneStatus { return map[uuid.UUID]store.MilestoneStatus{} }},
+		{"source returns a nil map", func(uuid.UUID) map[uuid.UUID]store.MilestoneStatus { return nil }},
+		{"source returns an empty-string value", func(id uuid.UUID) map[uuid.UUID]store.MilestoneStatus {
+			return map[uuid.UUID]store.MilestoneStatus{id: ""}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			milestoneID := uuid.New()
+			src := &fakeSource{
+				Doc: slice.Document{
+					SchemaVersion: slice.SchemaVersion,
+					Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+				},
+				MilestoneRefs: []store.MilestoneRef{{ID: milestoneID, Name: "M1", Kind: store.MilestoneKindMilestone}},
+				Statuses:      tc.statuses(milestoneID),
+			}
+
+			files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+			require.NoError(t, err)
+
+			assert.Contains(t, files.RoadmapMD, "Status: not started")
+			assert.NotContains(t, files.RoadmapMD, "Status: \n", "an empty status line would tell a reader nothing")
+		})
+	}
+}
+
+// A whole-product roadmap is one pass over every milestone, so statuses
+// must be read in a single batched call -- a per-milestone round trip is
+// the wrong shape (FR11).
+func TestRender_RoadmapReadsStatusesInOneBatch(t *testing.T) {
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+		},
+		MilestoneRefs: []store.MilestoneRef{
+			{ID: ids[0], Name: "M1", Kind: store.MilestoneKindMilestone},
+			{ID: ids[1], Name: "M2", Kind: store.MilestoneKindMilestone},
+			{ID: ids[2], Name: "M3", Kind: store.MilestoneKindMilestone},
+		},
+	}
+
+	_, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	require.Len(t, src.StatusCalls, 1, "statuses must be read in one batch, not one call per milestone")
+	assert.ElementsMatch(t, ids, src.StatusCalls[0])
+}
+
+// A milepebble or backlog bucket never reaches the roadmap, so its id
+// must not be dragged into the status read either.
+func TestRender_RoadmapStatusBatchExcludesNonMilestoneRefs(t *testing.T) {
+	real, cut := uuid.New(), uuid.New()
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+		},
+		MilestoneRefs: []store.MilestoneRef{
+			{ID: real, Name: "M1", Kind: store.MilestoneKindMilestone},
+			{ID: cut, Name: "cut 1", Kind: store.MilestoneKindMilepebble},
+		},
+	}
+
+	_, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	require.Len(t, src.StatusCalls, 1)
+	assert.Equal(t, []uuid.UUID{real}, src.StatusCalls[0])
+}
+
+// mappingNoteFixture is the known-positive shape behind ce860827's guard
+// test: the exact sentence whagent_net's three LoadBearingDecisions carry
+// ("See the mapping note on this Product") plus the renumbering body that
+// only exists as a note. It is the real defect, not a hypothetical.
+const mappingNoteBody = "CAPABILITY RENUMBERING. krill C5 = brief C12 (/wpoll ad-hoc polls) Now."
+
+func mappingNoteSrc() *fakeSource {
+	productID := uuid.New()
+	return &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "whagent_net", Vision: "v"},
+			Decisions: []slice.DecisionEntity{{
+				EntityRef:     newRef(),
+				Name:          "Capability numbering is krill's, not the brief's",
+				DisplayNumber: 1,
+				Body:          strPtr("The C-numbers changed at onboarding. See the mapping note on this Product."),
+			}},
+		},
+		Notes: []store.Note{{
+			ID:            uuid.MustParse("bd9197eb-2b84-469a-b112-bfbd134fc67e"),
+			Kind:          store.NoteKindComment,
+			CurrentStatus: store.NoteLifecycleStatusNoted,
+			Body:          mappingNoteBody,
+		}},
+	}
+}
+
+func TestRender_ProductNotesRenderVerbatim(t *testing.T) {
+	src := mappingNoteSrc()
+	productID := src.Doc.Product.ID
+
+	files, err := render.Render(context.Background(), src, uuid.New(), productID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, "## Notes")
+	assert.Contains(t, files.ProductMD, "bd9197eb-2b84-469a-b112-bfbd134fc67e", "a note's own id must be citable")
+	assert.Contains(t, files.ProductMD, "comment", "the note's kind must be visible")
+	assert.Contains(t, files.ProductMD, "status: noted", "the note's lifecycle status must be visible")
+	assert.Contains(t, files.ProductMD, mappingNoteBody,
+		"a body must render verbatim -- a renumbering mapping is useless as a summary")
+}
+
+// A note whose body is a whole forensic record (paragraphs, a table, a
+// multi-line mapping) must survive intact, not be flattened to a line.
+func TestRender_ProductNoteMultilineBodyRendersIntact(t *testing.T) {
+	body := "Line one.\n\n  krill C1  = brief C1   (/wai)   Now\n  krill C5  = brief C12  (/wpoll) Now\n\nLine four."
+	src := mappingNoteSrc()
+	src.Notes[0].Body = body
+
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, body)
+}
+
+// A note in a terminal or transitional lifecycle state must not read as
+// current fact. `closed` in particular means the note is history.
+func TestRender_ProductNoteLifecycleStatusIsRendered(t *testing.T) {
+	for _, status := range []store.NoteLifecycleStatus{
+		store.NoteLifecycleStatusNoted,
+		store.NoteLifecycleStatusCarriedOver,
+		store.NoteLifecycleStatusDeferred,
+		store.NoteLifecycleStatusClosed,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			src := mappingNoteSrc()
+			src.Notes[0].CurrentStatus = status
+
+			files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+			require.NoError(t, err)
+
+			assert.Contains(t, files.ProductMD, "status: "+string(status))
+		})
+	}
+}
+
+func TestRender_ProductWithNoNotesRendersEmptySection(t *testing.T) {
+	src := mappingNoteSrc()
+	src.Notes = nil
+
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, "## Notes")
+	assert.Contains(t, files.ProductMD, "_No notes are recorded against this Product in krill._",
+		"an empty section must say so rather than render a bare heading")
+}
+
+// The whole point of the section: the "See the mapping note on this
+// Product" sentences in the rendered LB bodies must lead somewhere that
+// exists in the same document.
+func TestRender_MappingNotePointerResolves(t *testing.T) {
+	src := mappingNoteSrc()
+
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+
+	pointer := "See the mapping note on this Product"
+	require.Contains(t, files.ProductMD, pointer, "the fixture must carry the real pointer sentence")
+	notesAt := strings.Index(files.ProductMD, "## Notes")
+	pointerAt := strings.Index(files.ProductMD, pointer)
+	require.NotEqual(t, -1, notesAt)
+	assert.Greater(t, notesAt, pointerAt, "the pointer must not point forward past the end of the document")
+	assert.Contains(t, files.ProductMD[notesAt:], "CAPABILITY RENUMBERING",
+		"the section the pointer names must actually contain the mapping")
+}
+
+// reqDoc builds a whole-product slice with one FeatureSet, the given
+// Features, and the given Requirements -- the shape renderCapabilityMapMD
+// walks.
+func reqDoc(features []slice.FeatureEntity, reqs []slice.RequirementEntity) slice.Document {
+	fsID := uuid.New()
+	for i := range features {
+		features[i].FeatureSetID = fsID
+	}
+	return slice.Document{
+		SchemaVersion: slice.SchemaVersion,
+		Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+		FeatureSets:   []slice.FeatureSetEntity{{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core", Position: 1}},
+		Features:      features,
+		Requirements:  reqs,
+	}
+}
+
+func req(featureID uuid.UUID, kind, name string, body *string) slice.RequirementEntity {
+	return slice.RequirementEntity{EntityRef: newRef(), FeatureID: featureID, Kind: kind, Name: name, Body: body}
+}
+
+// The bodies are the deliverable. krill's richest forensic content --
+// prohibitions, refuted-hypothesis records, mandatory-ordering
+// constraints -- lives only in a Requirement body, so an elided body
+// reproduces the exact problem this rendering exists to fix.
+func TestRender_RequirementBodiesRenderInFull(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	body := "A requirement body with:\n\n- a prohibition: never do X\n- a refuted hypothesis: we tried Y, it does not work\n- a mandatory ordering: Z must precede W\n"
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1},
+		[]slice.RequirementEntity{req(f1.ID, "FR", "Handle the thing", &body)},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "**FR1** — Handle the thing")
+	assert.Contains(t, files.CapabilityMapMD, body, "the body must render in full, not summarized")
+	assert.Contains(t, files.CapabilityMapMD, "a refuted hypothesis: we tried Y, it does not work")
+}
+
+// FRs and NFRs are counted separately -- an NFR3 must not be FR3, and a
+// product's first NFR must be NFR1 however many FRs precede it.
+func TestRender_RequirementsNumberPerKind(t *testing.T) {
+	f1, f2 := newFeature("F1", 1), newFeature("F2", 2)
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1, f2},
+		[]slice.RequirementEntity{
+			req(f1.ID, "FR", "first", nil),
+			req(f1.ID, "NFR", "a non-functional one", nil),
+			req(f1.ID, "FR", "second", nil),
+			req(f2.ID, "FR", "third", nil),
+			req(f2.ID, "NFR", "another non-functional one", nil),
+		},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	cap := files.CapabilityMapMD
+	assert.Contains(t, cap, "**FR1** — first")
+	assert.Contains(t, cap, "**FR2** — second")
+	assert.Contains(t, cap, "**FR3** — third")
+	assert.Contains(t, cap, "**NFR1** — a non-functional one")
+	assert.Contains(t, cap, "**NFR2** — another non-functional one")
+	assert.NotContains(t, cap, "**FR4**")
+}
+
+// The rendered number has to be reconstructible by a reader. krill stores
+// no Requirement display number, so the document has to say where this one
+// comes from -- and carry the id that resolves it exactly.
+func TestRender_RequirementNumberingIsDocumentedAndResolvable(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	r := req(f1.ID, "FR", "Handle the thing", strPtr("body"))
+	src := &fakeSource{Doc: reqDoc([]slice.FeatureEntity{f1}, []slice.RequirementEntity{r})}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "krill stores no display number for a Requirement",
+		"the file must say where FRn comes from, or the citation does not resolve")
+	assert.Contains(t, files.CapabilityMapMD, "counting down this file")
+	assert.Contains(t, files.CapabilityMapMD, r.ID.String(), "a citation must resolve exactly, not just by position")
+}
+
+// A Requirement with no body still names itself. Dropping it would hide a
+// requirement krill holds; a broken heading would look like a render bug.
+func TestRender_RequirementWithNoBodyRendersCleanly(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1},
+		[]slice.RequirementEntity{
+			req(f1.ID, "FR", "nil body", nil),
+			req(f1.ID, "FR", "whitespace body", strPtr("   \n\t  ")),
+		},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "**FR1** — nil body")
+	assert.Contains(t, files.CapabilityMapMD, "**FR2** — whitespace body")
+	assert.Equal(t, 2, strings.Count(files.CapabilityMapMD, "_No body recorded._"),
+		"a bodiless requirement must say so rather than look truncated")
+}
+
+// A Requirement imported or hand-created with its own "FR7 — " prefix in
+// Name must not render that stale prefix next to the recomputed citation.
+func TestRender_RequirementNamePrefixStripped(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1},
+		[]slice.RequirementEntity{req(f1.ID, "FR", "FR7 — Handle the thing", strPtr("body"))},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "**FR1** — Handle the thing")
+	assert.NotContains(t, files.CapabilityMapMD, "FR7 — Handle the thing",
+		"the stored prefix is not the citation; the render-time number is")
+}
+
+// A product with no requirements keeps the compact one-line-per-capability
+// form and does not carry a numbering preamble it has nothing to number.
+func TestRender_ProductWithNoRequirementsKeepsBulletForm(t *testing.T) {
+	src := &fakeSource{Doc: reqDoc([]slice.FeatureEntity{newFeature("F1", 1)}, nil)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "- **C1** — F1")
+	assert.NotContains(t, files.CapabilityMapMD, "krill stores no display number for a Requirement")
 }
