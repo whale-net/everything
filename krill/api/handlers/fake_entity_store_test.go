@@ -182,6 +182,17 @@ func (f *fakeDecisionStore) ListCurrentByFeatureSet(ctx context.Context, feature
 type fakeAmendStore struct {
 	amendErr error
 
+	// current is what CurrentPlacement reports for any id: the placement
+	// columns of the row the entity being amended is standing on. The zero
+	// value reads as an entity whose kind has none of them, so every
+	// submitted value differs and is refused.
+	current store.AmendPlacementChange
+	// placementReads counts CurrentPlacement calls, so a test can assert
+	// that a body with no placement field needed no read at all.
+	placementReads int
+	// placementErr fails the read, standing in for an id with no current row.
+	placementErr error
+
 	calls []amendCall
 
 	gotRequirementID   uuid.UUID
@@ -266,4 +277,15 @@ func (f *fakeAmendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name 
 		return store.MilestoneRef{}, err
 	}
 	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
+}
+
+// CurrentPlacement answers the guard's read with the row the fake is
+// standing on. placementErr lets a test drive the unknown-id path the real
+// store takes for an id with no current row.
+func (f *fakeAmendStore) CurrentPlacement(ctx context.Context, entityKind string, id uuid.UUID) (store.AmendPlacementChange, error) {
+	f.placementReads++
+	if f.placementErr != nil {
+		return store.AmendPlacementChange{}, f.placementErr
+	}
+	return f.current, nil
 }

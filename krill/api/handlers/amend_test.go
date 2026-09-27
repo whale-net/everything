@@ -245,15 +245,32 @@ func TestAmendHandlers_NameConflictReturns409(t *testing.T) {
 }
 
 // TestAmendPlacementChange_Refuse pins the store-side rule the surfaces
-// share: no placement field set means no refusal, and the first one set is
-// the one named.
+// share: a submitted placement value that differs from the entity's own is
+// refused, the first such field is the one named, and a value equal to the
+// entity's current placement amends normally.
 func TestAmendPlacementChange_Refuse(t *testing.T) {
-	none := store.AmendPlacementChange{}
-	assert.NoError(t, none.Refuse("feature"), "an amend that changes nothing about placement is allowed")
-
 	productID := uuid.NewString()
-	changed := store.AmendPlacementChange{ProductID: &productID, Kind: strPtr("permanent")}
-	err := changed.Refuse("feature")
+	current := store.AmendPlacementChange{ProductID: &productID}
+
+	none := store.AmendPlacementChange{}
+	assert.NoError(t, none.Refuse("feature", current), "an amend that sends no placement field is allowed")
+
+	echoed := store.AmendPlacementChange{ProductID: &productID}
+	assert.NoError(t, echoed.Refuse("feature", current), "an amend echoing the entity's own placement is allowed")
+
+	empty := ""
+	blank := store.AmendPlacementChange{ProductID: &empty}
+	assert.ErrorIs(t, blank.Refuse("feature", current), store.ErrPlacementChange,
+		"a submitted empty string differs from a non-empty placement and is refused")
+
+	// The entity has no feature_id column, so its current value is absent
+	// and any submitted value differs.
+	orphan := store.AmendPlacementChange{FeatureID: &productID}
+	assert.ErrorIs(t, orphan.Refuse("feature", current), store.ErrPlacementChange,
+		"a field the kind has no column for is refused for any value")
+
+	changed := store.AmendPlacementChange{ProductID: strPtr(uuid.NewString()), Kind: strPtr("permanent")}
+	err := changed.Refuse("feature", current)
 	require.ErrorIs(t, err, store.ErrPlacementChange)
 	assert.Contains(t, err.Error(), "cannot change product_id on amend", "the first offending field is the one named")
 	assert.NotContains(t, err.Error(), "cannot change kind on amend")

@@ -24,8 +24,12 @@ import (
 // on the HTTP twin) and the krill session id (a header there).
 //
 // The placement fields are the same reparent/re-kind guard the HTTP bodies
-// carry: no amend tool ever applies them, and passing one is refused by
-// name rather than silently ignored (FR f0f6bc18).
+// carry: no amend tool ever applies them, and sending one that DIFFERS from
+// the entity's own current placement is refused by name rather than silently
+// ignored (FR f0f6bc18). Sending the placement the entity already has -- a
+// client echoing back what it read -- amends normally, which is why all five
+// are omitempty and why the guard reads the current row before it decides
+// (FR b62ed47a).
 type amendInput struct {
 	store.AmendPlacementChange
 	krillSessionInput
@@ -82,9 +86,20 @@ func parseAmendInput(ctx context.Context, sessions store.SessionStore, krillSess
 	return parsed, nil
 }
 
-// refusePlacement is the FR f0f6bc18 refusal every tool shares.
-func refusePlacement(placement store.AmendPlacementChange, entityKind string) error {
-	return placement.Refuse(entityKind)
+// refusePlacement is the FR f0f6bc18 refusal every tool shares, decided
+// against the entity's own current placement rather than against the
+// presence of a field in the arguments: an argument that echoes the
+// placement already there is not a change and amends fine (FR b62ed47a). A
+// tool that sends no placement field at all never reads it.
+func refusePlacement(ctx context.Context, amend store.AmendStore, placement store.AmendPlacementChange, entityKind string, id uuid.UUID) error {
+	if !placement.Sent() {
+		return nil
+	}
+	current, err := amend.CurrentPlacement(ctx, entityKind, id)
+	if err != nil {
+		return err
+	}
+	return placement.Refuse(entityKind, current)
 }
 
 // amendPersonas matches entity.go's create tools: amend is the correction
@@ -100,11 +115,11 @@ func RegisterAmendProduct(reg *server.Registry, sessions store.SessionStore, ame
 			"Never reparents; the Product's scope and position are unchanged.",
 	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendProductInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
-		if err := refusePlacement(in.AmendPlacementChange, "product"); err != nil {
-			return nil, zero, err
-		}
 		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
 		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "product", id); err != nil {
 			return nil, zero, err
 		}
 		if err := handlers.RequireNonEmpty("vision", in.Vision); err != nil {
@@ -128,11 +143,11 @@ func RegisterAmendFeatureSet(reg *server.Registry, sessions store.SessionStore, 
 			"Never reparents; the set's product and position are unchanged.",
 	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendDescribedInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
-		if err := refusePlacement(in.AmendPlacementChange, "feature set"); err != nil {
-			return nil, zero, err
-		}
 		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
 		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "feature set", id); err != nil {
 			return nil, zero, err
 		}
 		amended, err := amend.AmendFeatureSet(ctx, id, in.Name, in.Description)
@@ -153,11 +168,11 @@ func RegisterAmendFeature(reg *server.Registry, sessions store.SessionStore, ame
 			"Never reparents, and never renumbers -- the entry's Cn display number is carried forward unchanged.",
 	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendDescribedInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
-		if err := refusePlacement(in.AmendPlacementChange, "feature"); err != nil {
-			return nil, zero, err
-		}
 		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
 		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "feature", id); err != nil {
 			return nil, zero, err
 		}
 		amended, err := amend.AmendFeature(ctx, id, in.Name, in.Description)
@@ -178,11 +193,11 @@ func RegisterAmendRequirement(reg *server.Registry, sessions store.SessionStore,
 			"Never reparents; the Requirement's kind, feature, and position are unchanged.",
 	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
-		if err := refusePlacement(in.AmendPlacementChange, "requirement"); err != nil {
-			return nil, zero, err
-		}
 		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
 		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "requirement", id); err != nil {
 			return nil, zero, err
 		}
 		requirement, err := amend.AmendRequirement(ctx, id, in.Name, in.Body)
@@ -203,11 +218,11 @@ func RegisterAmendPersona(reg *server.Registry, sessions store.SessionStore, ame
 			"Never reparents; the persona's product and position are unchanged.",
 	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendDescribedInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
-		if err := refusePlacement(in.AmendPlacementChange, "persona"); err != nil {
-			return nil, zero, err
-		}
 		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
 		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "persona", id); err != nil {
 			return nil, zero, err
 		}
 		amended, err := amend.AmendPersona(ctx, id, in.Name, in.Description)
@@ -229,11 +244,11 @@ func RegisterAmendNonGoal(reg *server.Registry, sessions store.SessionStore, ame
 			"Never reparents or re-kinds; the non-goal's product, kind, and position are unchanged.",
 	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
-		if err := refusePlacement(in.AmendPlacementChange, "non-goal"); err != nil {
-			return nil, zero, err
-		}
 		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
 		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "non-goal", id); err != nil {
 			return nil, zero, err
 		}
 		amended, err := amend.AmendNonGoal(ctx, id, in.Name, in.Body)
@@ -254,11 +269,11 @@ func RegisterAmendLoadBearingDecision(reg *server.Registry, sessions store.Sessi
 			"Never reparents, and never renumbers -- the decision's LBn display number is carried forward unchanged.",
 	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
-		if err := refusePlacement(in.AmendPlacementChange, "load-bearing decision"); err != nil {
-			return nil, zero, err
-		}
 		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
 		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "load-bearing decision", id); err != nil {
 			return nil, zero, err
 		}
 		decision, err := amend.AmendLoadBearingDecision(ctx, id, in.Name, in.Body)
@@ -281,11 +296,11 @@ func RegisterAmendMilestone(reg *server.Registry, sessions store.SessionStore, a
 			"(status history, Delivers, must-not-foreclose, deferrals) is left untouched.",
 	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendMilestoneInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
-		if err := refusePlacement(in.AmendPlacementChange, "milestone"); err != nil {
-			return nil, zero, err
-		}
 		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
 		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "milestone", id); err != nil {
 			return nil, zero, err
 		}
 		amended, err := amend.AmendMilestone(ctx, id, in.Name, in.Outcome)

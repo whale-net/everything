@@ -82,16 +82,38 @@ func beginAmend(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // may proceed. placement and name are read after the decode -- the first a
 // pointer into the decoded body, the second a getter -- so neither can be
 // evaluated against a still-empty request.
-func decodeAmendBody(w http.ResponseWriter, r *http.Request, entityKind string, req any, placement *store.AmendPlacementChange, name func() string) bool {
+func decodeAmendBody(w http.ResponseWriter, r *http.Request, amend store.AmendStore, id uuid.UUID, entityKind string, req any, placement *store.AmendPlacementChange, name func() string) bool {
 	if err := decodeStrict(r, req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 		return false
 	}
-	if err := placement.Refuse(entityKind); err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
+	if !refusePlacement(w, r, amend, id, entityKind, placement) {
 		return false
 	}
 	if err := RequireNonEmpty("name", name()); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	return true
+}
+
+// refusePlacement is the FR f0f6bc18 guard, decided against the entity's
+// own current placement rather than against the presence of a field in the
+// body: a caller echoing back the parent and kind it read amends fine,
+// while a submitted value that differs is refused by name (FR b62ed47a).
+// A body that sends no placement field at all needs no read. It writes the
+// error itself -- the store's own error for an unknown id, the named
+// refusal for a real change -- and reports whether the handler may proceed.
+func refusePlacement(w http.ResponseWriter, r *http.Request, amend store.AmendStore, id uuid.UUID, entityKind string, placement *store.AmendPlacementChange) bool {
+	if !placement.Sent() {
+		return true
+	}
+	current, err := amend.CurrentPlacement(r.Context(), entityKind, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return false
+	}
+	if err := placement.Refuse(entityKind, current); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return false
 	}
@@ -117,7 +139,7 @@ func AmendProductHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 		var req amendProductRequest
-		if !decodeAmendBody(w, r, "product", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+		if !decodeAmendBody(w, r, amend, id, "product", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
 			return
 		}
 		if err := RequireNonEmpty("vision", req.Vision); err != nil {
@@ -138,7 +160,7 @@ func AmendFeatureSetHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 		var req amendRequest
-		if !decodeAmendBody(w, r, "feature set", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+		if !decodeAmendBody(w, r, amend, id, "feature set", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
 			return
 		}
 		amended, err := amend.AmendFeatureSet(r.Context(), id, req.Name, req.Description)
@@ -155,7 +177,7 @@ func AmendFeatureHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 		var req amendRequest
-		if !decodeAmendBody(w, r, "feature", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+		if !decodeAmendBody(w, r, amend, id, "feature", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
 			return
 		}
 		amended, err := amend.AmendFeature(r.Context(), id, req.Name, req.Description)
@@ -172,7 +194,7 @@ func AmendRequirementHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 		var req amendContentRequest
-		if !decodeAmendBody(w, r, "requirement", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+		if !decodeAmendBody(w, r, amend, id, "requirement", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
 			return
 		}
 		amended, err := amend.AmendRequirement(r.Context(), id, req.Name, req.Body)
@@ -189,7 +211,7 @@ func AmendPersonaHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 		var req amendRequest
-		if !decodeAmendBody(w, r, "persona", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+		if !decodeAmendBody(w, r, amend, id, "persona", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
 			return
 		}
 		amended, err := amend.AmendPersona(r.Context(), id, req.Name, req.Description)
@@ -206,7 +228,7 @@ func AmendNonGoalHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 		var req amendContentRequest
-		if !decodeAmendBody(w, r, "non-goal", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+		if !decodeAmendBody(w, r, amend, id, "non-goal", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
 			return
 		}
 		amended, err := amend.AmendNonGoal(r.Context(), id, req.Name, req.Body)
@@ -224,7 +246,7 @@ func AmendLoadBearingDecisionHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 		var req amendContentRequest
-		if !decodeAmendBody(w, r, "load-bearing decision", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+		if !decodeAmendBody(w, r, amend, id, "load-bearing decision", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
 			return
 		}
 		amended, err := amend.AmendLoadBearingDecision(r.Context(), id, req.Name, req.Body)
@@ -241,7 +263,7 @@ func AmendMilestoneHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 		var req amendMilestoneRequest
-		if !decodeAmendBody(w, r, "milestone", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+		if !decodeAmendBody(w, r, amend, id, "milestone", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
 			return
 		}
 		amended, err := amend.AmendMilestone(r.Context(), id, req.Name, req.Outcome)

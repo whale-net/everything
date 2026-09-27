@@ -87,6 +87,13 @@ func (f recordingAmendStore) AmendMilestone(_ context.Context, id uuid.UUID, nam
 	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
 }
 
+// CurrentPlacement answers the guard's read. The zero placement is the
+// honest answer for a store that has no row to report, and it is what lets
+// the test that sends no placement field through reach the write at all.
+func (f recordingAmendStore) CurrentPlacement(_ context.Context, entityKind string, id uuid.UUID) (store.AmendPlacementChange, error) {
+	return store.AmendPlacementChange{}, nil
+}
+
 // amendOperatorPersona resolves PersonaSwarmOperator for every tools/call
 // through the real server.PersonaMiddleware.
 func amendOperatorPersona(next mcp.MethodHandler) mcp.MethodHandler {
@@ -142,14 +149,14 @@ var amendToolNames = map[string]struct {
 	entity  string
 	content map[string]any
 }{
-	"amend_product":              {"product", map[string]any{"vision": "a new vision"}},
-	"amend_feature_set":          {"feature_set", nil},
-	"amend_feature":              {"feature", nil},
-	"amend_requirement":          {"requirement", map[string]any{"body": "amended body"}},
-	"amend_persona":              {"persona", nil},
-	"amend_non_goal":             {"non_goal", map[string]any{"body": "amended body"}},
+	"amend_product":               {"product", map[string]any{"vision": "a new vision"}},
+	"amend_feature_set":           {"feature_set", nil},
+	"amend_feature":               {"feature", nil},
+	"amend_requirement":           {"requirement", map[string]any{"body": "amended body"}},
+	"amend_persona":               {"persona", nil},
+	"amend_non_goal":              {"non_goal", map[string]any{"body": "amended body"}},
 	"amend_load_bearing_decision": {"load_bearing_decision", map[string]any{"body": "amended body"}},
-	"amend_milestone":            {"milestone", map[string]any{"outcome": "an amended outcome"}},
+	"amend_milestone":             {"milestone", map[string]any{"outcome": "an amended outcome"}},
 }
 
 func TestRegisterAmendAll_RegistersEverySpecAxisKind(t *testing.T) {
