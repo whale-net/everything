@@ -49,18 +49,19 @@ LB4 subject pair every other write tool on that mount already resolves
 
 Two schema-shape consequences worth calling out:
 
-- `milestone_ref` and `milestone_deferral` are **not** SCD2 (LB3: see this
-  section's earlier note and 010's own comment), so `position.go`'s
-  existing `nextSiblingPosition` -- built for the migration-002 spec axis,
-  which always filters on `valid_to IS NULL` -- cannot be reused as-is:
-  neither table has a `valid_to` column to filter on. `position.go` adds a
-  second helper, `nextSiblingPositionPlain`, with the same
-  `COALESCE(MAX(position), -1) + 1` shape but no `valid_to` filter, used
-  by `CreateMilestone` and `AddDeferral`. Likewise, `errors.go`'s
-  `currentRowExists` cannot check `milestone_ref` parentage (same missing-
-  column reason) -- `plainRowExists` is its non-SCD2 counterpart, used by
-  every `MilestoneAuthoringStore` method that takes a `milestoneID` and a
-  `scopeID` together.
+- `milestone_ref` and `milestone_deferral` were originally **not** SCD2 (LB3:
+  see this section's earlier note and 010's own comment), which is why
+  `position.go` needed a second helper, `nextSiblingPositionPlain`, with the
+  same `COALESCE(MAX(position), -1) + 1` shape as `nextSiblingPosition` but
+  no `valid_to` filter, used by `CreateMilestone` and `AddDeferral`. Migrations
+  020 and 024 made both tables SCD2, so the special case is gone:
+  `position.go`'s `nextSiblingPositionPlain` is deleted, and every
+  `MilestoneAuthoringStore` method that takes a `milestoneID` and a `scopeID`
+  together now uses `position.go`'s `nextSiblingPosition` and `errors.go`'s
+  `currentRowExists` like every other spec-axis table. `plainRowExists` is
+  still `currentRowExists`'s non-SCD2 counterpart, but its remaining callers
+  are the work-axis tables (`task`, `task_note`, `task_dependency`), which
+  genuinely have no `valid_to` column.
 - `entity_milestone_entity_milestone_idx` widening to `(entity_id,
   milestone_id, relation)` (migration 010) breaks the pre-existing
   `MilestoneStore.AddAssociation`'s `ON CONFLICT (entity_id,

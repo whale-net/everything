@@ -269,6 +269,7 @@ type amendCall struct {
 	body        *string
 	vision      string
 	outcome     *string
+	destination string
 }
 
 func (f *fakeAmendStore) record(call amendCall) error {
@@ -343,4 +344,11 @@ func (f *fakeAmendStore) CurrentPlacement(ctx context.Context, entityKind string
 		return store.AmendPlacementChange{}, f.placementErr
 	}
 	return f.current, nil
+}
+
+func (f *fakeAmendStore) AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string) (store.MilestoneDeferral, error) {
+	if err := f.record(amendCall{kind: "deferral", id: id, body: &body, destination: destination}); err != nil {
+		return store.MilestoneDeferral{}, err
+	}
+	return store.MilestoneDeferral{ID: id, Body: body, Destination: destination}, nil
 }

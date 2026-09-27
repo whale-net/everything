@@ -29,6 +29,7 @@ package render_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -263,4 +264,59 @@ func TestRender_ReadOnlyDatabaseHandle_Succeeds(t *testing.T) {
 	files, err := render.Render(ctx, render.NewStoreSource(roStore), seeded.ScopeID, seeded.ProductID)
 	require.NoError(t, err, "Render must succeed reading through a connection that cannot write")
 	assert.Contains(t, files.ProductMD, "# Widgets — Product brief")
+}
+
+// TestRender_AmendedDeferralRendersOnce is migration 024's renderer
+// regression: a deferral whose text has been amended by supersession must
+// still render as exactly one "Deliberately deferred:" line carrying the
+// CURRENT text.
+//
+// This is the only place the whole path is exercised end to end --
+// AmendDeferral closing the original row, StoreSource.ListMilestoneDeferrals
+// delegating to MilestoneAuthoringStore.ListDeferrals, the `valid_to IS
+// NULL` filter that store method carries, and renderMilestones emitting one
+// line per row it is handed. A filter missing anywhere in that chain shows
+// up here as a doubled line, which no fakeSource-driven test can catch: the
+// fake is handed whatever the test tells it to hand over, so it proves
+// nothing about what the store returns.
+func TestRender_AmendedDeferralRendersOnce(t *testing.T) {
+	ctx := context.Background()
+	entities, pool, _ := newTestStore(t)
+	scopeID := createScope(t, ctx, pool, "whale-net/render-deferral-amend-test")
+	seeded := seedProduct(t, ctx, entities, scopeID)
+
+	subject := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+	milestone, err := entities.Milestones().GetOrCreateRef(ctx, scopeID, seeded.ProductID, "M1")
+	require.NoError(t, err)
+
+	stale, err := entities.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 ships in a later milestone", "M2", subject, subject)
+	require.NoError(t, err)
+
+	// The stale text a renumbering leaves behind: it cites a capability
+	// number that no longer means what it meant, which is the case this
+	// whole verb exists to correct.
+	_, err = entities.Amend().AmendDeferral(ctx, stale.ID, "C5 ships in a later milestone", "M2")
+	require.NoError(t, err)
+
+	files, err := render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.RoadmapMD, "Deliberately deferred: C5 ships in a later milestone (→ M2)",
+		"the amended text must be what renders")
+	assert.NotContains(t, files.RoadmapMD, "C4 ships in a later milestone",
+		"the superseded revision must not render")
+	assert.Equal(t, 1, strings.Count(files.RoadmapMD, "Deliberately deferred:"),
+		"exactly one deferred line -- a second would mean the store handed the renderer both revisions")
+
+	// Two successive amends: the read path must still narrow to one row, so
+	// this pins "one line" as a property of the filter rather than of there
+	// happening to be only one closed row.
+	_, err = entities.Amend().AmendDeferral(ctx, stale.ID, "C5 ships in M2, which now also carries C6", "M2")
+	require.NoError(t, err)
+
+	files, err = render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(files.RoadmapMD, "Deliberately deferred:"),
+		"still exactly one deferred line after two amendments")
+	assert.Contains(t, files.RoadmapMD, "Deliberately deferred: C5 ships in M2, which now also carries C6 (→ M2)")
 }
