@@ -326,11 +326,38 @@ func cleanFeatureTitle(name string) string {
 	return leadingCLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
 }
 
+// currentStatePlaceholderBody is the whole of what
+// product/01-current-state.md ever says. It is not a stub waiting to be
+// filled: krill's renderer is scoped to the product doc set (a vision,
+// personas, capabilities, requirements, load-bearing decisions, non-goals,
+// milestones, notes), and a current-state survey of a running system is
+// none of those. It is a static description of a deployment that changes
+// on its own schedule, not a spec of record an agent contributes to, so
+// it is hand-authored at `<domain>/ARCHITECTURE.md` -- which is where the
+// repository's own documentation conventions put system design,
+// component relationships, and data flow.
+//
+// The wording is deliberate about that. The earlier text said no entity
+// backed this section, which reads as "krill's model is missing
+// something" and invites a reader to propose a new entity type. Nothing
+// is missing and nothing is planned to arrive here.
+const currentStatePlaceholderBody = "This section is intentionally not rendered.\n\n" +
+	"`krill/render` is scoped to the product doc set — vision, personas, " +
+	"capabilities and their requirements, load-bearing decisions, non-goals, " +
+	"milestones, and notes — all of which are entities an agent authors " +
+	"through krill's own API. A current-state survey of a running system is " +
+	"none of those: it is a static description of a deployment that changes on " +
+	"its own schedule, not a spec of record anyone contributes to. So it is " +
+	"hand-authored, and it lives in this domain's `ARCHITECTURE.md`.\n\n" +
+	"Nothing was lost in migrating this domain's brief into krill — the survey " +
+	"was never in krill, and no future entity type is planned to bring it here. " +
+	"See `krill/render/README.md` for the same boundary stated in full.\n"
+
 func renderCurrentStateMD(name, revision string) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Current state\n\n")
-	b.WriteString("_No entity in krill's model backs this section (see `krill/ARCHITECTURE.md` \"Capability map entries, personas, and non-goals\"); krill/render always emits this file as an empty placeholder so the four-file layout stays complete._\n")
+	b.WriteString(currentStatePlaceholderBody)
 	return b.String()
 }
 

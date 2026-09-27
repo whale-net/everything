@@ -38,6 +38,35 @@ Documentation Conventions describe, and `ARCHITECTURE.md`/`README.md`/
 krill's own non-goals scope its renderer to the product doc set only (see
 `krill/PRODUCT.md`'s Non-goals).
 
+### What "the product doc set" covers, and what it does not
+
+krill renders the things an agent authors through krill's own API as a
+spec of record: a vision, personas, capabilities and their requirements,
+load-bearing decisions, non-goals, milestones, and notes.
+
+A **current-state survey** — what a running system looks like today, its
+data inventory, its runtime shape, its coupling, its risks — is none of
+those. It is a static description of a deployment that changes on its own
+schedule, not a spec of record anyone contributes to. So it is
+**hand-authored at `<domain>/ARCHITECTURE.md`**, which is where
+`AGENTS.md`'s Documentation Conventions put system design, component
+relationships, and data flow anyway. `ARCHITECTURE.md`, `README.md`,
+`ENV.md`, and `TOC.md` stay hand-written for a krill-migrated domain.
+
+`product/01-current-state.md` therefore renders as a placeholder that
+points at `<domain>/ARCHITECTURE.md`. It is not a gap waiting to be
+filled, and no entity type is planned to fill it. Making krill hold this
+content was considered and sized: a new entity type means model design +
+migration + authoring API + MCP tool + render, which is a milestone, not
+a task. That decision is recorded in krill as a note against task
+`05dbcc72` (milepebble `6bfa88f8`, M8).
+
+That decision also raises an open question, recorded in the same note and
+not settled here: **a four-file layout that permanently contains one
+always-empty file is a smell.** Should `01-current-state.md` be dropped
+from the layout, or should the layout shrink to three files? Neither is
+decided.
+
 ## Source of truth: krill MCP, not this file
 
 Decided during issue #2971's readiness dogfood (2026-09-24): for a
@@ -86,10 +115,12 @@ projects from — some prose in the committed files has no entity to render
 from at all:
 
 - **`product/01-current-state.md` always renders as a fixed placeholder.**
-  There is no entity in krill's model for freeform current-state analysis
-  (an architect's narrative survey of what exists and what a milestone
-  replaces) — `renderCurrentStateMD` has never had anything to read here
-  and none is planned yet.
+  Deliberate, and now stated in the placeholder itself: the current-state
+  survey is hand-authored at `<domain>/ARCHITECTURE.md`, out of the
+  renderer's product-doc-set scope on purpose. The placeholder names that
+  file so a reader has somewhere to go — it does not read as "krill lost
+  this", and it does not promise a future entity type. See "What 'the
+  product doc set' covers" above.
 - **`product/03-roadmap.md` renders the structured facts, not the reasoning
   prose behind them.** A milestone's outcome sentence, **current delivery
   status**, FR budget, and the bare `Delivers`/`Must not foreclose`/
