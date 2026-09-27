@@ -103,8 +103,8 @@ func TestTaskStore_ListClaimedTasks_OnlyClaimedAppear(t *testing.T) {
 // TestTaskStore_ListClaimedTasks_RowContent is issue #2916's Testing
 // section item: each row carries title, delivery reference (both a
 // milepebble and an uncut milestone shape), the live claim's own claimant
-// session id and both LB4 subject pairs, current lane, a non-zero lease
-// expiry, and attempt count.
+// session id, both LB4 subject pairs, the claim's own claimed-since,
+// current lane, a non-zero lease expiry, and attempt count.
 func TestTaskStore_ListClaimedTasks_RowContent(t *testing.T) {
 	ctx := context.Background()
 	s, db := newTaskTestStore(t)
@@ -139,6 +139,8 @@ func TestTaskStore_ListClaimedTasks_RowContent(t *testing.T) {
 	assert.Equal(t, sessionID, mp.ClaimantSessionID)
 	assert.Equal(t, acting, mp.ClaimantActing)
 	assert.Equal(t, onBehalfOf, mp.ClaimantOnBehalfOf)
+	assert.False(t, mp.ClaimedAt.IsZero())
+	assert.Equal(t, mp.ClaimedAt.UTC(), milepebbleClaim.ClaimedAt.UTC(), "claimed-since is the claim's own instant, not the task's created_at")
 	assert.Equal(t, store.LaneScaffold, mp.CurrentLane)
 	assert.False(t, mp.LeaseExpiresAt.IsZero())
 	assert.Equal(t, mp.LeaseExpiresAt.UTC(), milepebbleClaim.InitialLeaseExpiresAt.UTC())

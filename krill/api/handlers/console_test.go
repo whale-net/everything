@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -73,10 +74,17 @@ func TestListClaimedTasksHandler_TokenError_Returns400(t *testing.T) {
 
 // TestListClaimedTasksHandler_RowContent proves the wire shape carries
 // title, delivery reference, claimant session id, both subject pairs,
-// current lane, lease expiry, and attempt count.
+// claimed-since, current lane, lease expiry, and attempt count.
+//
+// The claimed-since assertion is what makes list_claimed_tasks and
+// GET /console/claimed show it: both render rows through this same
+// ToClaimedTaskWire conversion, so one wire field is the whole
+// difference between the two surfaces carrying the value and neither
+// doing so.
 func TestListClaimedTasksHandler_RowContent(t *testing.T) {
 	taskID := uuid.New()
 	deliveryRefID := uuid.New()
+	claimedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	acting := store.Subject{Iss: "https://issuer.example.com", Sub: "operator-1", Kind: store.SubjectKindHuman}
 	onBehalfOf := store.Subject{Iss: "https://issuer.example.com", Sub: "swarm-1", Kind: store.SubjectKindService}
 
@@ -93,6 +101,7 @@ func TestListClaimedTasksHandler_RowContent(t *testing.T) {
 					},
 					ClaimantActing:     acting,
 					ClaimantOnBehalfOf: onBehalfOf,
+					ClaimedAt:          claimedAt,
 					CurrentLane:        store.LaneScaffold,
 					AttemptCount:       2,
 				},
@@ -113,6 +122,7 @@ func TestListClaimedTasksHandler_RowContent(t *testing.T) {
 	assert.Contains(t, body, "operator-1")
 	assert.Contains(t, body, "swarm-1")
 	assert.Contains(t, body, "Scaffold")
+	assert.Contains(t, body, claimedAt.Format(time.RFC3339), "the row carries when the claim was taken")
 }
 
 // TestListCancelledTasksHandler_MissingScopeID_Returns400 proves scope_id

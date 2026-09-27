@@ -43,6 +43,24 @@ func TestNewClaimedRowCarriesBothClaimSubjects(t *testing.T) {
 	assert.Equal(t, "bi b", row.OnBehalfOf, "the claim's on-behalf-of subject is presented too")
 }
 
+// TestNewClaimedRowCarriesClaimedSinceThroughOpsTime pins the claimed
+// view's claimed-since: it is the claim's own instant, formatted
+// absolute-RFC3339 by opsTime like every other time on these views. A
+// relative "5m ago" would shift on every poll and rewrite the
+// operator's page for a state that never changed.
+func TestNewClaimedRowCarriesClaimedSinceThroughOpsTime(t *testing.T) {
+	claimedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	row := newClaimedRow(store.ClaimedTaskRow{
+		TaskID:           uuid.New(),
+		ClaimedAt:        claimedAt,
+		LeaseExpiresAt:   claimedAt.Add(time.Hour),
+		ClaimantActing:     store.Subject{Iss: "ai", Sub: "a", Kind: store.SubjectKindHuman},
+		ClaimantOnBehalfOf: store.Subject{Iss: "bi", Sub: "b"},
+	})
+	assert.Equal(t, "2026-01-02T03:04:05Z", row.ClaimedSince)
+	assert.NotEqual(t, row.ClaimedSince, row.Lease, "claimed-since and lease expiry are different instants and must not collapse")
+}
+
 func TestNewEscalatedRowCarriesBothEscalatorSubjects(t *testing.T) {
 	row := newEscalatedRow(store.EscalatedTaskRow{
 		EscalatedByActing:     store.Subject{Iss: "ai", Sub: "a", Kind: store.SubjectKindHuman},

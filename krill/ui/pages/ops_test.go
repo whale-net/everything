@@ -145,14 +145,33 @@ func TestSettledResultsCarryNoPollAttributes(t *testing.T) {
 func TestResultsBlockIsByteStableAcrossRenders(t *testing.T) {
 	data := ClaimedData{
 		Rows: []ClaimedRow{{
-			TaskID:   "t1",
-			Title:    "a settled claim",
-			Lease:    "2026-01-02T03:04:05Z",
-			Claimant: "https://kc alice (human)",
+			TaskID:       "t1",
+			Title:        "a settled claim",
+			ClaimedSince: "2026-01-01T00:00:00Z",
+			Lease:        "2026-01-02T03:04:05Z",
+			Claimant:     "https://kc alice (human)",
 		}},
 		Href: "/ops/claimed",
 	}
 	assert.Equal(t, render(t, ClaimedResults(data)), render(t, ClaimedResults(data)))
+}
+
+// TestClaimedTableRendersClaimedSince requires the claimed view to show
+// when the claim was taken, not only when its lease runs out: an
+// operator watching a stalled claim needs to know how long it has been
+// held.
+func TestClaimedTableRendersClaimedSince(t *testing.T) {
+	got := render(t, ClaimedResults(ClaimedData{
+		Rows: []ClaimedRow{{
+			TaskID:       "t1",
+			ClaimedSince: "2026-01-01T00:00:00Z",
+			Lease:        "2026-01-02T03:04:05Z",
+		}},
+		Href: "/ops/claimed",
+	}))
+	assert.Contains(t, got, "Claimed since")
+	assert.Contains(t, got, "2026-01-01T00:00:00Z")
+	assert.Contains(t, got, "2026-01-02T03:04:05Z", "the lease expiry still renders alongside it")
 }
 
 // TestResultsBlockCarriesInlineRefusalAndNextLink covers the two things
