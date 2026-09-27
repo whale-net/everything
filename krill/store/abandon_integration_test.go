@@ -9,8 +9,10 @@
 // package doc comment documents (item 5), atomicity via a cascade failure
 // rolling back the parent's already-applied move and status writes (item
 // 6), the already-abandoned rejection writing nothing (item 7), the
-// backlog-bucket-itself rejection (item 8), and the post-abandon
-// MoveScope recovery path out of the backlog (item 9). Shares
+// backlog-bucket-itself rejection (item 8), the post-abandon
+// MoveScope recovery path out of the backlog (item 9), and the
+// attribution on a bucket this file's own Abandon creates (so the
+// backlog read's service subject can never reach this path). Shares
 // milestone_authoring_integration_test.go's test-store/test-scope/subject
 // helpers (same package, same build tag) rather than duplicating them,
 // mirroring recut_integration_test.go's own choice.
@@ -330,6 +332,32 @@ func TestAbandonStore_Abandon_BacklogBucket_Rejected(t *testing.T) {
 	var eventCount int
 	require.NoError(t, f.db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_status_event WHERE milestone_id = $1`, backlog.ID).Scan(&eventCount))
 	assert.Equal(t, 0, eventCount)
+}
+
+// TestAbandonStore_Abandon_BacklogBucketCarriesAbandonCallersSubject
+// guards the attribution on a bucket Abandon creates. The backlog read
+// (//krill/slice's GetBacklog) resolves the same bucket on first use and
+// attributes that row to a fixed krill service subject; if that subject
+// were baked into the store's shared resolve-or-create core instead of
+// being supplied by the read path, every Abandon-created bucket would
+// silently claim krill created it. No test would otherwise notice.
+func TestAbandonStore_Abandon_BacklogBucketCarriesAbandonCallersSubject(t *testing.T) {
+	ctx := context.Background()
+	f := newAbandonTestFixture(t)
+
+	result, err := f.s.Abandon().Abandon(ctx, f.scopeID, f.milestone.ID, nil, f.self, f.self)
+	require.NoError(t, err)
+
+	var actingIss, actingSub, actingKind string
+	var onBehalfIss, onBehalfSub, onBehalfKind string
+	require.NoError(t, f.db.Pool.QueryRow(ctx, `
+		SELECT created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+		       created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		FROM milestone_ref WHERE id = $1
+	`, result.BacklogID).Scan(&actingIss, &actingSub, &actingKind, &onBehalfIss, &onBehalfSub, &onBehalfKind))
+
+	assert.Equal(t, f.self, store.Subject{Iss: actingIss, Sub: actingSub, Kind: store.SubjectKind(actingKind)}, "an Abandon-created bucket names its real caller")
+	assert.Equal(t, f.self, store.Subject{Iss: onBehalfIss, Sub: onBehalfSub, Kind: store.SubjectKind(onBehalfKind)}, "LB4: both slots populated, with on_behalf_of = acting")
 }
 
 // TestAbandonStore_Abandon_PostAbandonScopeReCutsOutOfBacklog is issue
