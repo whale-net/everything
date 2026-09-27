@@ -293,15 +293,16 @@ func (app *App) claimedResults(ctx context.Context, page store.PageParams, selfP
 
 func newClaimedRow(r store.ClaimedTaskRow) pages.ClaimedRow {
 	return pages.ClaimedRow{
-		TaskID:     r.TaskID.String(),
-		Title:      r.Title,
-		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
-		Session:    r.ClaimantSessionID.String(),
-		Claimant:   opsActor(r.ClaimantActing),
-		OnBehalfOf: opsSubject(r.ClaimantOnBehalfOf),
-		Lane:       string(r.CurrentLane),
-		Lease:      opsTime(r.LeaseExpiresAt),
-		Attempts:   r.AttemptCount,
+		TaskID:       r.TaskID.String(),
+		Title:        r.Title,
+		Delivery:     string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
+		Session:      r.ClaimantSessionID.String(),
+		Claimant:     opsActor(r.ClaimantActing),
+		OnBehalfOf:   opsSubject(r.ClaimantOnBehalfOf),
+		Lane:         string(r.CurrentLane),
+		ClaimedSince: opsTime(r.ClaimedAt),
+		Lease:        opsTime(r.LeaseExpiresAt),
+		Attempts:     r.AttemptCount,
 		// A claimed task is the one view a Swarm Operator force-releases
 		// (release), flags for attention (escalate), or dead-letters
 		// (cancel) from directly.

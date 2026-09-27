@@ -47,8 +47,8 @@ type listClaimedTasksOutput struct {
 }
 
 // RegisterListClaimedTasks registers list_claimed_tasks (FR4): every
-// currently-claimed task in a scope -- claimant, current lane, lease
-// expiry, attempt count, title, and delivery reference -- via
+// currently-claimed task in a scope -- claimant, claimed-since, current
+// lane, lease expiry, attempt count, title, and delivery reference -- via
 // store.TaskStore.ListClaimedTasks, mirroring
 // krill/api/handlers/console.go's ListClaimedTasksHandler for the same
 // capability. Mounted via server.RegisterOpsRead -- PersonaSwarmOperator
@@ -56,7 +56,7 @@ type listClaimedTasksOutput struct {
 func RegisterListClaimedTasks(reg *server.Registry, tasks store.TaskStore) {
 	server.RegisterOpsRead(reg, &mcp.Tool{
 		Name:        "list_claimed_tasks",
-		Description: "Return every currently-claimed task in a scope: claimant, current lane, lease expiry, attempt count, title, and delivery reference (FR4). Bounded and continuable (NFR6).",
+		Description: "Return every currently-claimed task in a scope: claimant, claimed-since, current lane, lease expiry, attempt count, title, and delivery reference (FR4). Bounded and continuable (NFR6).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listClaimedTasksInput) (*mcp.CallToolResult, listClaimedTasksOutput, error) {
 		var zero listClaimedTasksOutput
 

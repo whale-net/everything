@@ -43,21 +43,22 @@ const cancelConfirmID = "cancel-confirm"
 // pre-formatted plain string built by newClaimedRow in package main, so
 // this file stays free of store reach-in and pointer logic.
 //
-// Lease is an absolute RFC3339 instant, never a relative "in 3m": the
-// results block is polled (see claimedPollAttrs), and a fragment whose
-// bytes shifted between two polls for no state change would defeat the
-// whole point of the poll.
+// Lease and ClaimedSince are absolute RFC3339 instants, never a relative
+// "in 3m": the results block is polled (see claimedPollAttrs), and a
+// fragment whose bytes shifted between two polls for no state change
+// would defeat the whole point of the poll.
 type ClaimedRow struct {
-	TaskID     string
-	Title      string
-	Delivery   string
-	Session    string
-	Claimant   string
-	OnBehalfOf string
-	Lane       string
-	Lease      string
-	Attempts   int
-	Actions    templ.Component
+	TaskID       string
+	Title        string
+	Delivery     string
+	Session      string
+	Claimant     string
+	OnBehalfOf   string
+	Lane         string
+	ClaimedSince string
+	Lease        string
+	Attempts     int
+	Actions      templ.Component
 }
 
 // EscalatedRow is one row of the escalated-task view (newEscalatedRow).
@@ -294,7 +295,7 @@ templ ClaimedResults(d ClaimedData) {
 templ ClaimedPage(d ClaimedData) {
 	@opsPageChrome(OpsPageData{
 		Heading:     "Claimed tasks",
-		Description: "Every task that currently holds a claim, with its claimant, lane, and lease expiry.",
+		Description: "Every task that currently holds a claim, with its claimant, lane, claimed-since, and lease expiry.",
 		RefreshHref: d.Href,
 		Results:     ClaimedResults(d),
 	})
@@ -313,6 +314,7 @@ templ claimedTable(rows []ClaimedRow) {
 						<th>Claimant</th>
 						<th>On behalf of</th>
 						<th>Lane</th>
+						<th>Claimed since</th>
 						<th>Lease expires</th>
 						<th>Attempts</th>
 						<th>Actions</th>
@@ -336,6 +338,7 @@ templ claimedTable(rows []ClaimedRow) {
 							<td class="text-sm">
 								@htmxui.Badge(row.Lane, laneVariant(row.Lane), htmxui.BadgeSizeSM, true, nil)
 							</td>
+							<td class="text-sm">{ row.ClaimedSince }</td>
 							<td class="text-sm">{ row.Lease }</td>
 							<td class="text-sm">{ strconv.Itoa(row.Attempts) }</td>
 							<td class="text-sm">
