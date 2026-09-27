@@ -92,6 +92,16 @@ type Source interface {
 	// seeding a row (FR8). A Source that omits an id entirely is still
 	// read honestly by the renderer -- see milestoneStatusLabel.
 	ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error)
+
+	// ListProductNotes returns every note recorded against the Product
+	// itself, oldest first, with its kind and lifecycle status intact.
+	// Notes are the one place krill holds prose that no entity field
+	// carries -- a capability renumbering, a scope-note recording a
+	// divergence between krill and a hand-authored file -- and a
+	// rendered brief that omits them sends readers to pointers whose
+	// targets are not in the document. Only the Product's own notes for
+	// now: notes on a Feature or Requirement are a separate read.
+	ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error)
 }
 
 // GeneratedMarker is the exact sentence NFR3's AGENTS.md carve-out and
@@ -152,12 +162,16 @@ func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID) (File
 	if err != nil {
 		return Files{}, fmt.Errorf("assemble milestones: %w", err)
 	}
+	notes, err := src.ListProductNotes(ctx, scopeID, productID)
+	if err != nil {
+		return Files{}, fmt.Errorf("list product notes: %w", err)
+	}
 
 	revision := doc.Product.RevisionID.String()
 	name := doc.Product.Name
 
 	return Files{
-		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals),
+		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals, notes),
 		CurrentStateMD:  renderCurrentStateMD(name, revision),
 		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc),
 		RoadmapMD:       renderRoadmapMD(name, revision, milestones),
@@ -180,14 +194,14 @@ func header(productName, revisionID string, now time.Time) string {
 // callers never need to touch it.
 var nowFunc = time.Now
 
-func renderProductMD(name, revision string, doc slice.Document, personas []store.Persona, nonGoals []store.NonGoal) string {
+func renderProductMD(name, revision string, doc slice.Document, personas []store.Persona, nonGoals []store.NonGoal, notes []store.Note) string {
 	var b strings.Builder
 
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# ")
 	b.WriteString(name)
 	b.WriteString(" — Product brief\n\n")
-	b.WriteString("This file is the index. Vision, Personas, Load-bearing decisions, and Non-goals are inline; the three sections with no natural ceiling are split out (`tools/project-manager/CONVENTIONS.md` § Layout):\n\n")
+	b.WriteString("This file is the index. Vision, Personas, Load-bearing decisions, Non-goals, and Notes are inline; the three sections with no natural ceiling are split out (`tools/project-manager/CONVENTIONS.md` § Layout):\n\n")
 	b.WriteString("| Section | File |\n|---|---|\n")
 	b.WriteString("| Current state | [`product/01-current-state.md`](product/01-current-state.md) |\n")
 	b.WriteString("| Capability map | [`product/02-capability-map.md`](product/02-capability-map.md) |\n")
@@ -237,7 +251,42 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		writeNonGoalBullet(&b, ng)
 	}
 
+	b.WriteString("\n")
+	renderNotesSection(&b, notes)
+
 	return b.String()
+}
+
+// renderNotesSection emits the Product's own notes. It exists because
+// several entity bodies point at them -- whagent_net's three
+// LoadBearingDecisions each end "See the mapping note on this Product",
+// and the renumbering mapping those pointers mean exists nowhere else --
+// so omitting the section leaves the document directing readers at
+// content it does not contain, which is worse than an omission.
+//
+// Each note is emitted under a bold label rather than a heading, so a body
+// containing its own markdown structure renders verbatim instead of
+// being reinterpreted as part of this document's outline. The lifecycle
+// status is always shown: a `closed` or `deferred` note is history, and
+// presenting its body as current fact would be a lie.
+func renderNotesSection(b *strings.Builder, notes []store.Note) {
+	b.WriteString("## Notes\n\n")
+	if len(notes) == 0 {
+		b.WriteString("_No notes are recorded against this Product in krill._\n")
+		return
+	}
+	b.WriteString("Notes recorded against this Product in krill, oldest first. The status after each id is the note's own lifecycle status (`store.NoteLifecycleStatus`); anything other than `noted` is rendered for the record, not as current fact.\n")
+	for _, n := range notes {
+		b.WriteString("\n**`")
+		b.WriteString(n.ID.String())
+		b.WriteString("`** — ")
+		b.WriteString(string(n.Kind))
+		b.WriteString(" — status: ")
+		b.WriteString(string(n.CurrentStatus))
+		b.WriteString("\n\n")
+		b.WriteString(strings.TrimSpace(n.Body))
+		b.WriteString("\n")
+	}
 }
 
 func writeNonGoalBullet(b *strings.Builder, ng store.NonGoal) {

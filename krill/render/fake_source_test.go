@@ -37,6 +37,8 @@ type fakeSource struct {
 	// for, so a test can assert the roadmap reads statuses in one batch
 	// rather than one round trip per milestone.
 	StatusCalls [][]uuid.UUID
+	// Notes is what ListProductNotes returns.
+	Notes []store.Note
 }
 
 var _ render.Source = (*fakeSource)(nil)
@@ -68,4 +70,8 @@ func (f *fakeSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uui
 func (f *fakeSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error) {
 	f.StatusCalls = append(f.StatusCalls, milestoneIDs)
 	return f.Statuses, nil
+}
+
+func (f *fakeSource) ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error) {
+	return f.Notes, nil
 }

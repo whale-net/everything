@@ -127,11 +127,25 @@ func seedProduct(t *testing.T, ctx context.Context, entities *store.Store, scope
 	// recorded-status and the derived-"not started" paths end to end
 	// through the real milestone_status_event table.
 	self := store.Subject{Iss: "https://issuer.example.com", Sub: "render-test", Kind: store.SubjectKindService}
+	productNoteKind := store.NoteEntityKindProduct
 	m2, err := entities.Milestones().GetOrCreateRef(ctx, scopeID, product.ID, "M2")
 	require.NoError(t, err)
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, m2.ID, store.MilestoneStatusPlanned, nil, self, self)
 	require.NoError(t, err)
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, m2.ID, store.MilestoneStatusShipped, nil, self, self)
+	require.NoError(t, err)
+
+	// A real note against the Product, of the kind entity bodies point at
+	// ("see the mapping note on this Product").
+	_, err = entities.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID:    scopeID,
+		EntityKind: &productNoteKind,
+		EntityID:   &product.ID,
+		Kind:       store.NoteKindComment,
+		Body:       "CAPABILITY RENUMBERING.\n\n  krill C1  = brief C1  (/wai)   Now\n  krill C5  = brief C12 (/wpoll) Now",
+		Acting:     self,
+		OnBehalfOf: self,
+	})
 	require.NoError(t, err)
 
 	return seededProduct{ScopeID: scopeID, ProductID: product.ID}
@@ -158,6 +172,12 @@ func TestRender_SeededProduct_ProducesFourFileLayout(t *testing.T) {
 	assert.Contains(t, files.ProductMD, "LB2 — Ship fast")
 	assert.Contains(t, files.ProductMD, "- **Rendering other domains' docs.**")
 	assert.Contains(t, files.ProductMD, "- **Multi-tenant scopes.** later, not now")
+
+	assert.Contains(t, files.ProductMD, "## Notes")
+	assert.Contains(t, files.ProductMD, "CAPABILITY RENUMBERING.",
+		"a Product note's body must reach the rendered brief verbatim")
+	assert.Contains(t, files.ProductMD, "krill C5  = brief C12 (/wpoll) Now",
+		"a multi-line body must survive intact")
 
 	assert.Contains(t, files.CapabilityMapMD, "## Core")
 	assert.Contains(t, files.CapabilityMapMD, "- **C1** — F1")
