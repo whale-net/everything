@@ -195,3 +195,155 @@ carry the prohibitions and the refuted-hypothesis records, which is the
 whole reason Requirements are rendered at all. A Requirement with a nil or
 whitespace-only body renders its name plus an explicit `_No body
 recorded._`, rather than being dropped or looking truncated.
+
+## The net-regression accounting
+
+**Read this before committing any rendered output.** Rendering is not yet a
+net win across the four files. Below is the line-by-line accounting of a
+real render of `friendly_computing_machine` against krill prod (2026-09-27,
+product revision `5940f0b6`), diffed against the committed hand-authored
+files at `main` `66d710b4`. Every committed line absent from the render is
+classified under one of four headings. This is the standing answer to
+"what does a rendered brief give up, and why is that acceptable" — and for
+several items, the honest answer today is *it isn't yet*.
+
+| File | Committed | Rendered | Verdict |
+|---|---:|---:|---|
+| `PRODUCT.md` | 64 | 170 | **Net win** — gains the notes section and two corrected load-bearing decisions |
+| `product/01-current-state.md` | 66 | 10 | **Accounted** — all 66 lines are (d), and they now live in `ARCHITECTURE.md` |
+| `product/02-capability-map.md` | 29 | 202 | **Net win** — gains 12 Requirement bodies in full |
+| `product/03-roadmap.md` | 67 | 39 | **Net loss in prose** — gains delivery status, loses ~28 lines of "why" |
+
+### (a) Now rendered elsewhere
+
+The substance survives; only its location or formatting changed.
+
+- `PRODUCT.md`: the vision, all three personas, both permanent non-goals, and
+  all three load-bearing-decision bodies.
+- `PRODUCT.md`: the jump table's two file links (the *guidance column* is
+  (b) — see below).
+- `02-capability-map.md`: the `Now`/`Next`/`Later` grouping (they are
+  FeatureSets and render as `##` headings) and all 12 capability lines.
+- `03-roadmap.md`: every milestone's outcome sentence, `Delivers`,
+  `Must not foreclose`, `Deliberately deferred`, and `FR budget`.
+- The `Cn` numbers themselves changed (`brief C12 → krill C5`, and so on).
+  That is the renumbering recorded in note `bd9197eb`, which now renders in
+  the same document, so the correction is legible instead of silent.
+
+### (b) Genuinely lost — open findings, not acceptable regressions
+
+Each of these is real content present in the committed files with **no
+entity in krill to hold it**. None has been rounded up to "acceptable".
+Closing them means new schema, which is a milestone — see the follow-up.
+
+1. **`PRODUCT.md` — the jump table's "When to read it" column.** All three
+   cells ("Before specifying any milestone: what exists, what is dead or
+   half-built…", "To find the `Cn` a requirement traces to…", "Before
+   designing a milestone: its outcome sentence, `Delivers`…"). Guidance
+   about *when to read a section* is a per-file editorial judgement; no
+   Product field carries it.
+2. **`02-capability-map.md` — the whole "Cheap later (no load-bearing
+   decision needed)" group.** Both bullets are substantive: moving the
+   music poll onto Temporal "is four tasks and two tables", and routing to
+   new channels "needs no schema work" because `slackspecialchannel` already
+   maps a type to channels. This is FeatureSet-level prose with no slot.
+3. **`03-roadmap.md` — the entire `Ships alongside` field.** The definition
+   paragraph ("names non-capability work (removals, defect fixes, schema
+   shapes) that a milestone must land for its outcome sentence to be true"),
+   plus M1's block — the V1 removal, the dead-code removal, the doc rewrite,
+   and the `slackspecialchannel` retention — and M4's block — the
+   `poll`/`polloption`/`pollvote` tables, `docs/poll.md`, and the `/wpoll`
+   Slack-app registration. `MilestoneRef` has no such column, and this is the
+   single largest loss in the whole accounting.
+4. **`03-roadmap.md` — M1's scope paragraph**, "This is an onboarding
+   milestone: existing behavior only, no new user-facing features." A
+   milestone's *shape* is not its outcome sentence, and no field holds it.
+5. **`03-roadmap.md` — M4's independence paragraph**, "Independent of
+   M1–M3: it needs no V1 removal, no service contract, and no whagent_net.
+   It can ship before M1 closes." Sequencing advice is not a
+   `Delivers`/`Deferral` row.
+6. **`03-roadmap.md` — the parenthetical rationales inside M4's
+   `Must not foreclose`.** The render emits the bare `LB1, LB3`; the
+   committed file explains *why* LB1 is safe ("C9 may later render an
+   agent's question as a poll — a poll is keyed by its own ID and Slack
+   message ts, not by a producer route") and why LB3 is ("votes are
+   recorded by the voter's Slack user ID, never FCM's"). This is the general
+   shape of the gap: `entity_milestone` records *which* entity, never *why*.
+7. **`03-roadmap.md` — the entire "Later coverage" section.** All four
+   bullets, each mapping a `Later` capability to the load-bearing decisions
+   that protect it. Nothing in krill's model expresses "capability X is
+   protected by decision Y" outside a milestone's own
+   `Must not foreclose` list.
+
+### (c) Correctly dropped — krill's model supersedes it
+
+- **`PRODUCT.md`: "Live milestone status is not in this file. It is tracked
+  as `Ledger: M<n> → <status>` comments on the tracking issue."** Status
+  now renders directly in `03-roadmap.md`, from
+  `milestone_status_event`. The Ledger convention is obsolete.
+- **`03-roadmap.md`: the same Ledger paragraph**, and the four file
+  preambles describing the layout (`"Part of the [FCM product brief]"`,
+  `"Milestone definitions only"`, the capability map's *"One line per
+  capability, phrased as a persona can do a thing"*). The renderer emits its
+  own.
+- **`PRODUCT.md`: the committed LB2 and LB3 bodies.** The committed file
+  carries the *pre-correction* text — LB2 says "FCM does not poll for
+  replies", LB3 says the Slack team/user IDs *are* the asserted subject.
+  Both were false and have been amended in krill; the render carries the
+  corrected bodies, including the supersession notes. This is the clearest
+  case of the render being right where the file was stale.
+- **`PRODUCT.md`: LB1's "such as turning manmanv2's `external` exchange
+  events into notifications"** — the worked example was dropped by LB1's
+  own amendment. The general statement remains.
+- Markdown cosmetics: `---` rules, `###` versus bold-label headings, and
+  bullet-versus-heading shape.
+
+### (d) Hand-authored content belonging in `ARCHITECTURE.md`
+
+- **All 66 lines of `01-current-state.md`**, in full: the 17-table data
+  inventory, runtime shape (5→6 `release_app`s, the `health_check_enabled`
+  correction, chart `bot-services`, ghcr image names), the external
+  dependency inventory, the shared-libraries list, the inbound-breakage
+  list, and the risks. This is not a loss: it has been re-homed to
+  `friendly_computing_machine/ARCHITECTURE.md` as a dated survey, with each
+  claim labelled *still true* / *drifted* / *added since* and the
+  corrections stated. See that file's "Current-state survey" section and
+  `krill` note `c653af15` for why the placeholder is permanent.
+- **`02-capability-map.md`'s "Cheap later"** is *not* in this bucket — it is
+  (b) item 2, because it is brief prose about scope and cost, not a survey
+  of the running system.
+
+### Closing the (b) list
+
+Fixing (b) means giving krill somewhere to put milestone and feature-set
+prose: a `Ships alongside` field on `MilestoneRef`, a prose field for a
+milestone's scope and sequencing, a rationale on `EntityMilestone`, and a
+FeatureSet-level "cheap later" list. That is model design + migration +
+authoring API + MCP tool + render — **a milestone, not a task**, the same
+sizing that retired the current-state entity question. It is filed as a
+follow-up rather than attempted here, and until it lands, **do not commit a
+rendered `03-roadmap.md`** expecting it to be a replacement for the
+hand-authored one.
+
+### The renderer is still one-way
+
+Re-verified 2026-09-27, after `Source` grew three methods
+(`ListMilestoneStatuses`, `ListProductNotes`, and — for Requirements — no
+method at all, since the product slice already carried them). Every store
+method reachable from `krill/render` is a read:
+
+```
+store.Personas().ListCurrentByProduct
+store.NonGoals().ListCurrentByProduct
+store.Milestones().ListRefsByProduct
+store.Milestones().ListAssociationsByMilestone
+store.MilestoneAuthoring().ListDeferrals
+store.MilestoneStatus().CurrentStatuses
+store.Tasks().ListNotesForEntity
+```
+
+`krill/render/cmd` holds one query (`SELECT id FROM scope LIMIT 1`) and two
+filesystem writes. Nothing in the package can reach a Create, Update, or
+Delete. The empirical proof is still `render_integration_test.go`'s
+read-only-role test, which renders against a pool with
+`default_transaction_read_only` forced on.
