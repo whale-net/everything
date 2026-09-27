@@ -310,6 +310,11 @@ func (q *Querier) GetBacklog(ctx context.Context, productID uuid.UUID) (Backlog,
 		return Backlog{}, fmt.Errorf("get product: %w", err)
 	}
 
+	ref, err := q.store.Recut().GetOrCreateBacklog(ctx, product.ScopeID, productID, BacklogBucketSubject, BacklogBucketSubject)
+	if err != nil {
+		return Backlog{}, fmt.Errorf("resolve backlog bucket: %w", err)
+	}
+
 	entityIDs, err := q.store.Recut().ListBacklog(ctx, product.ScopeID, productID)
 	if err != nil {
 		return Backlog{}, fmt.Errorf("list backlog: %w", err)
@@ -319,7 +324,7 @@ func (q *Querier) GetBacklog(ctx context.Context, productID uuid.UUID) (Backlog,
 	if err != nil {
 		return Backlog{}, fmt.Errorf("backlog entity set slice: %w", err)
 	}
-	return Backlog{Document: doc}, nil
+	return Backlog{Document: doc, MilestoneRefID: ref.ID}, nil
 }
 
 // -- as-of assembly (FR11 x FR5-FR8, issue #2493) ------------------------
