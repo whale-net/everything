@@ -23,7 +23,8 @@ ops-write tools (`release_task`, `requeue_task`, `escalate_task`,
 `cancel_task`), `transition_note_lifecycle`, and every milestone/product/
 delivery-authoring tool (`create_product`, `create_feature_set`,
 `create_load_bearing_decision`, `create_persona`, `create_non_goal`,
-`amend_requirement`, `amend_load_bearing_decision`, `propose_entities`,
+`amend_requirement`, `amend_load_bearing_decision`, `amend_deferral`,
+`propose_entities`,
 `create_milestone`, `set_fr_budget`, `add_delivers`,
 `add_must_not_foreclose`, `add_deferral`, `create_milepebble`,
 `add_milepebble_scope`, `add_discovered_scope`, `move_delivery_scope`,
@@ -219,8 +220,14 @@ as the read-only tools below (`get_milestone`/`list_milepebbles`/
 - `add_must_not_foreclose {krill_session_id, milestone_id, entity_id}` —
   same mechanism, for the `Must not foreclose` list architect's
   Load-bearing check reads.
-- `add_deferral {krill_session_id, milestone_id, body, destination}` —
-  records one deliberately-deferred item; `destination` is required.
+- `add_deferral {krill_session_id, milestone_id, body, destination}` →
+  `{id}`; records one deliberately-deferred item; `destination` is
+  required. Keep the returned id: `amend_deferral {krill_session_id, id,
+  body, destination}` is the only correction path, and it is keyed on that
+  deferral id, not the milestone's — a milestone carries several. It
+  supersedes the deferral in place (SCD2: the prior revision is closed,
+  never deleted) and touches nothing else on the milestone — not its
+  status history, `Delivers`, or must-not-foreclose rows.
 - `get_milestone {id}` → authoring fields plus `Delivers`/`Must not
   foreclose`/deferrals, read-only, no session gate.
 - `create_milepebble {krill_session_id, milestone_id, name, outcome,

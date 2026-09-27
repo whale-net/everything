@@ -89,6 +89,19 @@ and returns the unchanged surrogate id as `handlers.IDResponse`.
 `amend_load_bearing_decision`, and `amend_milestone`, each taking a
 `krill_session_id` plus the same replacement content.
 
+`amend_deferral` is the ninth, and the one that breaks the family's shape
+twice. It is the only one keyed on a child row rather than a spec-axis
+entity, so it takes the deferral's own `id` -- the one `add_deferral`
+returns -- rather than a `milestone_id`, which cannot say which of a
+milestone's several deferrals is being corrected. It is also the only one
+with no `name` to replace, so its body is `body` plus `destination`
+(FR1, refused with `add_deferral`'s own `"destination: required"`). It
+has no HTTP twin yet, so the LB7 one-to-one claim above holds for the
+other eight only. And because the deferral *is* a delivery-axis row, the
+guarantee `amend_milestone` makes is what it has to make for the rest of
+the axis: the milestone's status history, `Delivers`, and
+must-not-foreclose rows are not read or written by it.
+
 **History reads are unchanged.** `HistoryStore` still covers Requirement
 and LoadBearingDecision only (FR 11/12) -- see
 [`22-amend-as-of-history-reads.md`](22-amend-as-of-history-reads.md) for

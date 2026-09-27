@@ -66,15 +66,41 @@ type amendMilestoneInput struct {
 	Outcome *string `json:"outcome,omitempty" jsonschema:"The milestone's replacement outcome sentence. Omit to clear it."`
 }
 
-// parseAmendInput resolves the session gate and the id/name checks exactly
-// as the HTTP amend handlers do, before any store mutation runs.
-func parseAmendInput(ctx context.Context, sessions store.SessionStore, krillSessionID, id, name string) (uuid.UUID, error) {
+// amendDeferralInput is amendInput's shape for a milestone deferral, the one
+// amend with no name to replace: a deferral's whole amendable content is the
+// body plus the destination FR1 requires. It keys on the deferral's own id
+// rather than its milestone's, because one milestone carries many deferrals
+// and only the deferral's own id says which one is being corrected -- the
+// same id add_deferral hands back.
+type amendDeferralInput struct {
+	store.AmendPlacementChange
+	krillSessionInput
+	ID          string `json:"id" jsonschema:"The surrogate id (LB2) of the deferral to amend, as a UUID string -- the id add_deferral returned. Unchanged by the amend."`
+	Body        string `json:"body" jsonschema:"The deferral's replacement body. Required."`
+	Destination string `json:"destination" jsonschema:"Where the deferred item went, e.g. a future milestone or issue. Required for every deferral (FR1)."`
+}
+
+// parseAmendID resolves the session gate and the entity id, the two checks
+// every amend shares, exactly as the HTTP amend handlers do, before any store
+// mutation runs.
+func parseAmendID(ctx context.Context, sessions store.SessionStore, krillSessionID, id string) (uuid.UUID, error) {
 	if _, err := requireKrillSession(ctx, sessions, krillSessionID); err != nil {
 		return uuid.Nil, err
 	}
 	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("id: invalid or missing UUID")
+	}
+	return parsed, nil
+}
+
+// parseAmendInput is parseAmendID plus the replacement name, which every
+// named amend carries. amend_deferral has no name to replace and stops at
+// parseAmendID.
+func parseAmendInput(ctx context.Context, sessions store.SessionStore, krillSessionID, id, name string) (uuid.UUID, error) {
+	parsed, err := parseAmendID(ctx, sessions, krillSessionID, id)
+	if err != nil {
+		return uuid.Nil, err
 	}
 	if err := handlers.RequireNonEmpty("name", name); err != nil {
 		return uuid.Nil, err
@@ -296,6 +322,43 @@ func RegisterAmendMilestone(reg *server.Registry, sessions store.SessionStore, a
 	})
 }
 
+// RegisterAmendDeferral registers amend_deferral: closes the deferral's
+// current row and opens a new revision with the given body and destination,
+// under the same deferral id. Destination stays mandatory (FR1) and the
+// refusal is add_deferral's own, so an amend can never write the row shape
+// add_deferral would have rejected.
+//
+// The deferral's own milestone -- its status history, its Delivers set, and
+// its must-not-foreclose rows -- is not read or written here; the rest of the
+// delivery axis is a different table per axis, keyed on the milestone.
+func RegisterAmendDeferral(reg *server.Registry, sessions store.SessionStore, amend store.AmendStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name: "amend_deferral",
+		Description: "Amend a milestone deferral's text: replace its body and destination as a new SCD2 revision under the same deferral id. " +
+			"Key it on the deferral's own id -- the id add_deferral returned -- since one milestone carries many. The prior revision is " +
+			"closed, never deleted, and the deferral never moves to another milestone. Nothing else on the milestone changes: its status " +
+			"history, its Delivers set, and its must-not-foreclose rows are all left exactly as they were.",
+	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendDeferralInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+		if err := refusePlacement(in.AmendPlacementChange, "deferral"); err != nil {
+			return nil, zero, err
+		}
+		id, err := parseAmendID(ctx, sessions, in.KrillSessionID, in.ID)
+		if err != nil {
+			return nil, zero, err
+		}
+		// add_deferral's own FR1 refusal, verbatim, rather than a new message.
+		if in.Destination == "" {
+			return nil, zero, fmt.Errorf("destination: required")
+		}
+		amended, err := amend.AmendDeferral(ctx, id, in.Body, in.Destination)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: amended.ID.String()}, nil
+	})
+}
+
 // RegisterAmendAll registers every amend_* tool against reg.
 func RegisterAmendAll(reg *server.Registry, sessions store.SessionStore, amend store.AmendStore) {
 	RegisterAmendProduct(reg, sessions, amend)
@@ -306,4 +369,5 @@ func RegisterAmendAll(reg *server.Registry, sessions store.SessionStore, amend s
 	RegisterAmendNonGoal(reg, sessions, amend)
 	RegisterAmendLoadBearingDecision(reg, sessions, amend)
 	RegisterAmendMilestone(reg, sessions, amend)
+	RegisterAmendDeferral(reg, sessions, amend)
 }

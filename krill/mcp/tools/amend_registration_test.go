@@ -8,6 +8,7 @@ package tools_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -34,12 +35,15 @@ func (f amendSessionStore) GetSession(_ context.Context, id store.SessionID) (st
 	return store.Session{ID: id, ScopeID: uuid.New()}, nil
 }
 
-// amendCall records one AmendStore invocation.
+// amendCall records one AmendStore invocation. name is the replacement name
+// for the named kinds; amend_deferral has none and records its body/destination
+// instead.
 type amendCall struct {
-	entity string
-	id     uuid.UUID
-	name   string
-	body   *string
+	entity      string
+	id          uuid.UUID
+	name        string
+	body        *string
+	destination string
 }
 
 // recordingAmendStore records every call and echoes the id back.
@@ -48,47 +52,47 @@ type recordingAmendStore struct {
 }
 
 func (f recordingAmendStore) AmendRequirement(_ context.Context, id uuid.UUID, name string, body *string) (store.Requirement, error) {
-	*f.calls = append(*f.calls, amendCall{"requirement", id, name, body})
+	*f.calls = append(*f.calls, amendCall{entity: "requirement", id: id, name: name, body: body})
 	return store.Requirement{ID: id, Name: name, Body: body}, nil
 }
 
 func (f recordingAmendStore) AmendLoadBearingDecision(_ context.Context, id uuid.UUID, name string, body *string) (store.LoadBearingDecision, error) {
-	*f.calls = append(*f.calls, amendCall{"load_bearing_decision", id, name, body})
+	*f.calls = append(*f.calls, amendCall{entity: "load_bearing_decision", id: id, name: name, body: body})
 	return store.LoadBearingDecision{ID: id, Name: name, Body: body}, nil
 }
 
 func (f recordingAmendStore) AmendProduct(_ context.Context, id uuid.UUID, name, vision string) (store.Product, error) {
-	*f.calls = append(*f.calls, amendCall{"product", id, name, nil})
+	*f.calls = append(*f.calls, amendCall{entity: "product", id: id, name: name, body: nil})
 	return store.Product{ID: id, Name: name, Vision: vision}, nil
 }
 
 func (f recordingAmendStore) AmendFeatureSet(_ context.Context, id uuid.UUID, name string, description *string) (store.FeatureSet, error) {
-	*f.calls = append(*f.calls, amendCall{"feature_set", id, name, nil})
+	*f.calls = append(*f.calls, amendCall{entity: "feature_set", id: id, name: name, body: nil})
 	return store.FeatureSet{ID: id, Name: name, Description: description}, nil
 }
 
 func (f recordingAmendStore) AmendFeature(_ context.Context, id uuid.UUID, name string, description *string) (store.Feature, error) {
-	*f.calls = append(*f.calls, amendCall{"feature", id, name, nil})
+	*f.calls = append(*f.calls, amendCall{entity: "feature", id: id, name: name, body: nil})
 	return store.Feature{ID: id, Name: name, Description: description}, nil
 }
 
 func (f recordingAmendStore) AmendPersona(_ context.Context, id uuid.UUID, name string, description *string) (store.Persona, error) {
-	*f.calls = append(*f.calls, amendCall{"persona", id, name, nil})
+	*f.calls = append(*f.calls, amendCall{entity: "persona", id: id, name: name, body: nil})
 	return store.Persona{ID: id, Name: name, Description: description}, nil
 }
 
 func (f recordingAmendStore) AmendNonGoal(_ context.Context, id uuid.UUID, name string, body *string) (store.NonGoal, error) {
-	*f.calls = append(*f.calls, amendCall{"non_goal", id, name, body})
+	*f.calls = append(*f.calls, amendCall{entity: "non_goal", id: id, name: name, body: body})
 	return store.NonGoal{ID: id, Name: name, Body: body}, nil
 }
 
 func (f recordingAmendStore) AmendMilestone(_ context.Context, id uuid.UUID, name string, outcome *string) (store.MilestoneRef, error) {
-	*f.calls = append(*f.calls, amendCall{"milestone", id, name, nil})
+	*f.calls = append(*f.calls, amendCall{entity: "milestone", id: id, name: name, body: nil})
 	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
 }
 
 func (f recordingAmendStore) AmendDeferral(_ context.Context, id uuid.UUID, body, destination string) (store.MilestoneDeferral, error) {
-	*f.calls = append(*f.calls, amendCall{"deferral", id, body, nil})
+	*f.calls = append(*f.calls, amendCall{entity: "deferral", id: id, body: &body, destination: destination})
 	return store.MilestoneDeferral{ID: id, Body: body, Destination: destination}, nil
 }
 
@@ -143,18 +147,22 @@ func amendTextOf(res *mcp.CallToolResult) string {
 // reach. content names the extra required argument that kind's schema
 // carries beyond id/name -- an amend that omits it is rejected before the
 // store, so the "valid session reaches store" case has to supply it.
+// noName marks the one amend whose schema has no name field at all, so the
+// shared name assertions do not apply to it.
 var amendToolNames = map[string]struct {
 	entity  string
 	content map[string]any
+	noName  bool
 }{
-	"amend_product":              {"product", map[string]any{"vision": "a new vision"}},
-	"amend_feature_set":          {"feature_set", nil},
-	"amend_feature":              {"feature", nil},
-	"amend_requirement":          {"requirement", map[string]any{"body": "amended body"}},
-	"amend_persona":              {"persona", nil},
-	"amend_non_goal":             {"non_goal", map[string]any{"body": "amended body"}},
-	"amend_load_bearing_decision": {"load_bearing_decision", map[string]any{"body": "amended body"}},
-	"amend_milestone":            {"milestone", map[string]any{"outcome": "an amended outcome"}},
+	"amend_product":               {entity: "product", content: map[string]any{"vision": "a new vision"}},
+	"amend_feature_set":           {entity: "feature_set"},
+	"amend_feature":               {entity: "feature"},
+	"amend_requirement":           {entity: "requirement", content: map[string]any{"body": "amended body"}},
+	"amend_persona":               {entity: "persona"},
+	"amend_non_goal":              {entity: "non_goal", content: map[string]any{"body": "amended body"}},
+	"amend_load_bearing_decision": {entity: "load_bearing_decision", content: map[string]any{"body": "amended body"}},
+	"amend_milestone":             {entity: "milestone", content: map[string]any{"outcome": "an amended outcome"}},
+	"amend_deferral":              {entity: "deferral", content: map[string]any{"body": "amended body", "destination": "M2"}, noName: true},
 }
 
 func TestRegisterAmendAll_RegistersEverySpecAxisKind(t *testing.T) {
@@ -187,7 +195,10 @@ func TestAmendTools_RejectMissingOrUnknownSession(t *testing.T) {
 				var calls []amendCall
 				cs := connectAmendTools(t, store.SessionID(uuid.New()), &calls)
 
-				args := map[string]any{"id": uuid.NewString(), "name": "renamed"}
+				args := map[string]any{"id": uuid.NewString()}
+				if !tool.noName {
+					args["name"] = "renamed"
+				}
 				for k, v := range tool.content {
 					args[k] = v
 				}
@@ -207,21 +218,49 @@ func TestAmendTools_RejectMissingOrUnknownSession(t *testing.T) {
 func TestAmendTools_RejectInvalidFieldsBeforeStore(t *testing.T) {
 	sessionID := store.SessionID(uuid.New())
 	for name, tool := range amendToolNames {
-		for label, tc := range map[string]struct {
+		cases := map[string]struct {
 			args map[string]any
 			want string
-		}{
-			"bad id":     {map[string]any{"id": "nope", "name": "x"}, "id: invalid"},
-			"empty name": {map[string]any{"id": uuid.NewString(), "name": ""}, "name"},
-		} {
+		}{}
+
+		if tool.noName {
+			// amend_deferral has no name to refuse on; FR1's destination
+			// rule is the field check it carries instead.
+			cases["bad id"] = struct {
+				args map[string]any
+				want string
+			}{args: map[string]any{"id": "nope", "body": "b", "destination": "M2"}, want: "id: invalid"}
+			cases["empty destination"] = struct {
+				args map[string]any
+				want string
+			}{args: map[string]any{"id": uuid.NewString(), "body": "b", "destination": ""}, want: "destination: required"}
+		} else {
+			cases["bad id"] = struct {
+				args map[string]any
+				want string
+			}{args: map[string]any{"id": "nope", "name": "x"}, want: "id: invalid"}
+			cases["empty name"] = struct {
+				args map[string]any
+				want string
+			}{args: map[string]any{"id": uuid.NewString(), "name": ""}, want: "name"}
+		}
+
+		for label, tc := range cases {
 			t.Run(name+"/"+label, func(t *testing.T) {
 				var calls []amendCall
 				cs := connectAmendTools(t, sessionID, &calls)
 
+				// content fills in the tool's other required fields; the
+				// case's own args then override, so a case can blank one.
+				args := map[string]any{}
 				for k, v := range tool.content {
-					tc.args[k] = v
+					args[k] = v
 				}
-				tc.args["krill_session_id"] = uuid.UUID(sessionID).String()
+				for k, v := range tc.args {
+					args[k] = v
+				}
+				args["krill_session_id"] = uuid.UUID(sessionID).String()
+				tc.args = args
 				res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: tc.args})
 				require.NoError(t, err)
 				assert.True(t, res.IsError, "expected a tool error")
@@ -243,7 +282,9 @@ func TestAmendTools_ValidSessionReachesStore(t *testing.T) {
 			args := map[string]any{
 				"krill_session_id": uuid.UUID(sessionID).String(),
 				"id":               entityID.String(),
-				"name":             "amended name",
+			}
+			if !tc.noName {
+				args["name"] = "amended name"
 			}
 			for k, v := range tc.content {
 				args[k] = v
@@ -257,7 +298,61 @@ func TestAmendTools_ValidSessionReachesStore(t *testing.T) {
 			require.Len(t, calls, 1)
 			assert.Equal(t, tc.entity, calls[0].entity)
 			assert.Equal(t, entityID, calls[0].id)
-			assert.Equal(t, "amended name", calls[0].name)
+			if tc.noName {
+				require.NotNil(t, calls[0].body)
+				assert.Equal(t, "amended body", *calls[0].body)
+				assert.Equal(t, "M2", calls[0].destination)
+			} else {
+				assert.Equal(t, "amended name", calls[0].name)
+			}
 		})
+	}
+}
+
+// TestAmendDeferral_SchemaKeysOnTheDeferralIDAndTakesNoSubject is
+// amend_deferral's two schema contracts: it is keyed on the deferral's own
+// id (a milestone carries many, so milestone_id cannot identify one), and
+// the subject pair is never a caller-supplied field (LB4) -- it comes from
+// the resolved krill session alone.
+func TestAmendDeferral_SchemaKeysOnTheDeferralIDAndTakesNoSubject(t *testing.T) {
+	var calls []amendCall
+	cs := connectAmendTools(t, store.SessionID(uuid.New()), &calls)
+
+	var inputSchema any
+	found := false
+	for tool, err := range cs.Tools(context.Background(), nil) {
+		require.NoError(t, err)
+		if tool.Name == "amend_deferral" {
+			inputSchema = tool.InputSchema
+			found = true
+		}
+	}
+	require.True(t, found, "amend_deferral must be registered")
+
+	raw, err := json.Marshal(inputSchema)
+	require.NoError(t, err)
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(raw, &schema))
+
+	props, ok := schema["properties"].(map[string]any)
+	require.True(t, ok, "schema has no properties object: %s", raw)
+
+	for _, field := range []string{"acting", "on_behalf_of", "created_by_acting", "created_by_on_behalf_of", "created_by"} {
+		assert.NotContains(t, props, field,
+			"amend_deferral must not accept a caller-supplied %s: the subject pair comes from the resolved krill session (LB4)", field)
+	}
+
+	// Keyed on the deferral, not the milestone: a milestone carries several.
+	_, hasDeferralID := props["id"]
+	assert.True(t, hasDeferralID, "amend_deferral must be keyed on the deferral's own id: %s", raw)
+	assert.NotContains(t, props, "milestone_id",
+		"milestone_id cannot say which of a milestone's several deferrals is being amended: %s", raw)
+	_, hasName := props["name"]
+	assert.False(t, hasName, "a deferral has no name to replace: %s", raw)
+
+	required, ok := schema["required"].([]any)
+	require.True(t, ok, "schema has no required list: %s", raw)
+	for _, field := range []string{"krill_session_id", "id", "body", "destination"} {
+		assert.Contains(t, required, field, "amend_deferral must require %q", field)
 	}
 }

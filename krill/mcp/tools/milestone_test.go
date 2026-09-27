@@ -3,7 +3,8 @@
 // Real-Postgres + real-HTTP-transport MCP client coverage for krill's
 // milestone-authoring surface (issue #2683, FR1/FR2, C13): add_delivers,
 // add_must_not_foreclose, and add_deferral (milestone.go) exercised
-// through the MCP tool registration/dispatch layer -- the store-level
+// through the MCP tool registration/dispatch layer, plus amend_deferral
+// (amend.go) correcting one of them -- the store-level
 // coverage for these already lives in
 // //krill/store:milestone_authoring_integration_test; this file is
 // specifically about the RegisterMilestoneAll wrapper layer, never the
@@ -213,6 +214,9 @@ func TestMCPMilestoneSurface_EndToEnd(t *testing.T) {
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
+	// The amend family rides the same design mount (../main.go), and
+	// amend_deferral is how the deferral written above gets corrected.
+	tools.RegisterAmendAll(designReg, sessions, entities.Amend())
 
 	// Mirrors ../main.go's own construction order exactly (see
 	// design_test.go's identical comment): every milestone write tool is
@@ -416,6 +420,128 @@ func TestMCPMilestoneSurface_EndToEnd(t *testing.T) {
 		assert.Equal(t, decision.ID, mustNotForeclose[0].EntityID)
 		require.Len(t, deferrals, 1)
 		assert.Equal(t, "M4", deferrals[0].Destination)
+	})
+
+	// ── amend_deferral: the correction path add_deferral never had ────────
+	// Appended after the read-back above, so it observes the row
+	// add_deferral wrote rather than perturbing what that test asserts.
+
+	// deferralID is the id add_deferral handed back, read from the store:
+	// the amend is keyed on it directly, never on the milestone's id.
+	deferralID := func(t *testing.T) string {
+		t.Helper()
+		id, err := uuid.Parse(milestoneID)
+		require.NoError(t, err)
+		_, _, _, deferrals, err := entities.MilestoneAuthoring().GetMilestone(ctx, id)
+		require.NoError(t, err)
+		require.Len(t, deferrals, 1)
+		return deferrals[0].ID.String()
+	}
+
+	t.Run("amend_deferral rejects an empty destination with add_deferral's own FR1 refusal", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "amend_deferral",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"id":               deferralID(t),
+				"body":             "cut for M1",
+				"destination":      "",
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.IsError, "FR1 requires every deferred entry to cite where it went")
+		assert.Contains(t, milestoneTextOf(res), "destination: required",
+			"the amend must refuse exactly as add_deferral does, not with a message of its own")
+		assert.NotContains(t, milestoneTextOf(res), "every deferred entry must cite where it went",
+			"the tool's own add_deferral-shaped check must fire before the store's longer-form one")
+	})
+
+	t.Run("amend_deferral on an unknown id is a named not-found, not a generic error", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "amend_deferral",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"id":               uuid.New().String(),
+				"body":             "cut for M1",
+				"destination":      "M4",
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.IsError)
+		assert.Contains(t, milestoneTextOf(res), "not found",
+			"every amend resolves a bad id to the same named ErrNotFound")
+	})
+
+	t.Run("amend_deferral twice leaves one current deferral carrying the second text (SCD2)", func(t *testing.T) {
+		id := deferralID(t)
+
+		for _, body := range []string{"cut for M1, and M2 now carries it too", "cut for M1 and M2"} {
+			cs, err := connectMilestoneMCP(t, designURL, agentToken)
+			require.NoError(t, err)
+
+			res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+				Name: "amend_deferral",
+				Arguments: map[string]any{
+					"krill_session_id": selfSessionID.String(),
+					"id":               id,
+					"body":             body,
+					"destination":      "M2",
+				},
+			})
+			require.NoError(t, err)
+			require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+			structured, ok := res.StructuredContent.(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, id, structured["id"],
+				"the amend is keyed on the deferral's own id and returns it unchanged")
+		}
+
+		// Exactly one row is current after two amends: the superseded
+		// revisions are closed, never deleted, and never re-surface.
+		cs, err := connectMilestoneMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "get_milestone",
+			Arguments: map[string]any{"id": milestoneID},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		deferrals, ok := structured["deferrals"].([]any)
+		require.True(t, ok)
+		require.Len(t, deferrals, 1, "two amends must leave exactly one current row, not three")
+		deferral, ok := deferrals[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "cut for M1 and M2", deferral["body"])
+		assert.Equal(t, "M2", deferral["destination"])
+
+		// The rest of the delivery axis is untouched by the amend: both
+		// associations survive, and the milestone itself never moves.
+		assert.Len(t, structured["delivers"], 1)
+		assert.Len(t, structured["must_not_foreclose"], 1)
+		assert.Equal(t, milestoneID, structured["id"])
+	})
+
+	t.Run("the amended deferral is what the store layer reports directly", func(t *testing.T) {
+		id, err := uuid.Parse(milestoneID)
+		require.NoError(t, err)
+		ref, delivers, mustNotForeclose, deferrals, err := entities.MilestoneAuthoring().GetMilestone(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, "M1", ref.Name)
+		require.Len(t, delivers, 1)
+		require.Len(t, mustNotForeclose, 1)
+		require.Len(t, deferrals, 1)
+		assert.Equal(t, "cut for M1 and M2", deferrals[0].Body)
+		assert.Equal(t, "M2", deferrals[0].Destination)
 	})
 }
 
