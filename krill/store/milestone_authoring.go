@@ -164,18 +164,19 @@ type milestoneAuthoringStore struct{ pool *pgxpool.Pool }
 
 var _ MilestoneAuthoringStore = milestoneAuthoringStore{}
 
-const milestoneDeferralColumns = `id, scope_id, milestone_id, body, destination, position, ` +
+const milestoneDeferralColumns = `revision_id, id, scope_id, milestone_id, body, destination, position, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
-	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
+	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at, ` +
+	`valid_from, valid_to`
 
 func scanMilestoneDeferral(row pgx.Row) (MilestoneDeferral, error) {
 	var d MilestoneDeferral
 	var actingKind, onBehalfOfKind string
 	err := row.Scan(
-		&d.ID, &d.ScopeID, &d.MilestoneID, &d.Body, &d.Destination, &d.Position,
+		&d.RevisionID, &d.ID, &d.ScopeID, &d.MilestoneID, &d.Body, &d.Destination, &d.Position,
 		&d.CreatedByActing.Iss, &d.CreatedByActing.Sub, &actingKind,
 		&d.CreatedByOnBehalfOf.Iss, &d.CreatedByOnBehalfOf.Sub, &onBehalfOfKind,
-		&d.CreatedAt,
+		&d.CreatedAt, &d.ValidFrom, &d.ValidTo,
 	)
 	if err != nil {
 		return MilestoneDeferral{}, err
@@ -430,7 +431,7 @@ func (s milestoneAuthoringStore) AddDeferral(ctx context.Context, scopeID, miles
 		return MilestoneDeferral{}, errParentNotFound("milestone_ref", milestoneID)
 	}
 
-	position, err := nextSiblingPositionPlain(ctx, tx, "milestone_deferral", "milestone_id", milestoneID, scopeID)
+	position, err := nextSiblingPosition(ctx, tx, "milestone_deferral", "milestone_id", milestoneID, scopeID)
 	if err != nil {
 		return MilestoneDeferral{}, err
 	}
@@ -459,7 +460,7 @@ func (s milestoneAuthoringStore) ListDeferrals(ctx context.Context, milestoneID 
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+milestoneDeferralColumns+`
 		FROM milestone_deferral
-		WHERE milestone_id = $1
+		WHERE milestone_id = $1 AND valid_to IS NULL
 		ORDER BY position
 	`, milestoneID)
 	if err != nil {

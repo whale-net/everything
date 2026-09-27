@@ -84,7 +84,7 @@ type RecutStore interface {
 	// NFR2/NFR3 comment) and never changes any entity's own `id`, nor its
 	// real spec-tree parent (FeatureSetID/FeatureID) (NFR1) -- only the
 	// delivery-axis association moves. Because of that, this method never
-	// calls #2682's nextSiblingPosition/nextSiblingPositionPlain: that
+	// calls #2682's nextSiblingPosition: that
 	// helper assigns `position` among a *spec entity's* real siblings
 	// (Feature under a FeatureSet, Requirement under a Feature, ...) or a
 	// milestone_ref row's own siblings when ONE OF THOSE ROWS IS CREATED --

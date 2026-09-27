@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -612,4 +613,207 @@ func TestAmend_KeepingItsOwnNameSucceeds(t *testing.T) {
 	require.NotNil(t, amended.Body)
 	assert.Equal(t, "only the body changed", *amended.Body)
 	assertSuperseded(t, ctx, db, "requirement", fr.ID)
+}
+
+// ── AmendDeferral (migration 023, which made milestone_deferral SCD2) ──
+
+// newAmendTestMilestone provisions a bare milestone to hang deferrals off,
+// so each deferral test below states only what it is about.
+func newAmendTestMilestone(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, scopeID uuid.UUID) store.MilestoneRef {
+	t.Helper()
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "")
+	require.NoError(t, err)
+	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "the original outcome", nil, acting, acting)
+	require.NoError(t, err)
+	return milestone
+}
+
+// TestAmendDeferral_SupersedesUnderTheSameID is the core contract on the
+// kind migration 023 created this method for: a deferral's body is
+// correctable in place, under its own unchanged id, with the pre-correction
+// text retained beside the current one rather than deleted.
+func TestAmendDeferral_SupersedesUnderTheSameID(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
+
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 stays unbuilt until M2", "M2", acting, acting)
+	require.NoError(t, err)
+	assert.Nil(t, created.ValidTo, "a freshly added deferral is its own first, current revision")
+
+	amended, err := s.Amend().AmendDeferral(ctx, created.ID, "C4 is unbuilt until M2, which now also carries C5", "M2")
+	require.NoError(t, err)
+
+	assert.Equal(t, created.ID, amended.ID, "amend must never mint a new surrogate id (LB2) -- a corrected deferral is the same deferral")
+	assert.NotEqual(t, created.RevisionID, amended.RevisionID, "amend must insert a distinct physical row")
+	assert.Equal(t, "C4 is unbuilt until M2, which now also carries C5", amended.Body)
+	assert.Equal(t, "M2", amended.Destination)
+	assert.Nil(t, amended.ValidTo, "the successor must be the current revision")
+
+	// Everything else about the deferral is carried forward, not re-chosen.
+	assert.Equal(t, created.Position, amended.Position, "an amend must not reorder the item against its siblings")
+	assert.Equal(t, created.MilestoneID, amended.MilestoneID, "an amend never reparents (LB2)")
+	assert.WithinDuration(t, created.CreatedAt, amended.CreatedAt, time.Second,
+		"created_at names when the item was DEFERRED, which a wording correction does not change")
+	assert.Equal(t, acting.Iss, amended.CreatedByActing.Iss,
+		"the successor carries the original's subject pair forward -- overwriting it would make 'when and by whom was this deferred' unreadable, which is the provenance delete-and-recreate already destroyed")
+	assert.Equal(t, acting.Sub, amended.CreatedByOnBehalfOf.Sub)
+	assert.Equal(t, acting.Kind, amended.CreatedByOnBehalfOf.Kind)
+
+	// The closed original keeps the pre-correction text in full: amend
+	// supersedes, it never overwrites or deletes.
+	var originalBody string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT body FROM milestone_deferral WHERE id = $1 AND valid_to IS NOT NULL
+	`, created.ID).Scan(&originalBody))
+	assert.Equal(t, "C4 stays unbuilt until M2", originalBody,
+		"the superseded revision must still be readable -- that is the whole reason for closing it instead of updating in place")
+
+	assertSuperseded(t, ctx, db, "milestone_deferral", created.ID)
+}
+
+// TestAmendDeferral_SuccessiveAmends_ReadsReturnExactlyOneRow is the
+// read-path sweep's whole point: after two successive amends, every reader
+// -- ListDeferrals, and GetMilestone, and through the latter the
+// get_milestone MCP tool response and the renderer -- must return the
+// latest amendment exactly once, never the superseded text alongside it.
+func TestAmendDeferral_SuccessiveAmends_ReadsReturnExactlyOneRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
+
+	// A sibling deferral, so "exactly one row" is not satisfied trivially by
+	// an over-aggressive filter that drops everything.
+	other, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, acting)
+	require.NoError(t, err)
+
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 stale", "M2", acting, acting)
+	require.NoError(t, err)
+
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "C4 corrected once", "M2")
+	require.NoError(t, err)
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "C4 corrected twice", "M3")
+	require.NoError(t, err)
+
+	list, err := s.MilestoneAuthoring().ListDeferrals(ctx, milestone.ID)
+	require.NoError(t, err)
+	require.Len(t, list, 2, "two current deferrals, not four: every superseded revision must be filtered out")
+	// Index by id rather than by slot: the assertion is about which rows
+	// survive the filter, not about sibling ordering.
+	byID := map[uuid.UUID]store.MilestoneDeferral{}
+	for _, d := range list {
+		byID[d.ID] = d
+	}
+	require.Contains(t, byID, created.ID, "the amended deferral must still be in the list, under its own id")
+	assert.Equal(t, "C4 corrected twice", byID[created.ID].Body, "the reader must see the second amendment's text")
+	assert.Equal(t, "M3", byID[created.ID].Destination)
+	assert.Nil(t, byID[created.ID].ValidTo)
+	require.Contains(t, byID, other.ID, "the un-amended sibling must be untouched and still present -- a filter that dropped everything would satisfy Len(2) too")
+	assert.Equal(t, "the UI rewrite", byID[other.ID].Body)
+
+	// GetMilestone hands its []MilestoneDeferral straight to the
+	// get_milestone tool output, so it is the second place a superseded
+	// revision would have surfaced.
+	_, _, _, deferrals, err := s.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	require.Len(t, deferrals, 2, "GetMilestone must return one deferral per current row, never one per revision")
+	var amendedViaGet store.MilestoneDeferral
+	for _, d := range deferrals {
+		if d.ID == created.ID {
+			amendedViaGet = d
+		}
+	}
+	assert.Equal(t, "C4 corrected twice", amendedViaGet.Body, "get_milestone's tool output must carry the amended text")
+
+	// Three physical rows now: the original plus two successors, of which
+	// exactly one is current.
+	var total, current int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_deferral WHERE id = $1`, created.ID).Scan(&total))
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_deferral WHERE id = $1 AND valid_to IS NULL`, created.ID).Scan(&current))
+	assert.Equal(t, 3, total, "an amend must supersede, never delete: all three revisions stay on record")
+	assert.Equal(t, 1, current)
+}
+
+// TestAmendDeferral_AmendMilestoneLeavesItAlone is the separation AmendStore
+// has to keep: FR 39373553's promise was that amending a milestone never
+// reaches its delivery axis, and migration 023 did not reopen that -- a
+// deferral got its own amend, it did not become something AmendMilestone
+// touches.
+func TestAmendDeferral_AmendMilestoneLeavesItAlone(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
+
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, acting)
+	require.NoError(t, err)
+
+	_, err = s.Amend().AmendMilestone(ctx, milestone.ID, "M1 (renamed)", nil)
+	require.NoError(t, err)
+
+	var total, current int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_deferral WHERE id = $1`, created.ID).Scan(&total))
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_deferral WHERE id = $1 AND valid_to IS NULL`, created.ID).Scan(&current))
+	assert.Equal(t, 1, total, "amending a milestone must not supersede any of its deferrals (FR 39373553)")
+	assert.Equal(t, 1, current)
+}
+
+// TestAmendDeferral_EmptyDestinationRefused is FR1's amendment-side half:
+// the row shape AddDeferral would have refused must not be reachable by
+// amending either, or "the destination is mandatory" would be a property of
+// the create verb alone.
+func TestAmendDeferral_EmptyDestinationRefused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
+
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, acting)
+	require.NoError(t, err)
+
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "the UI rewrite, restated", "")
+	assert.Error(t, err, "FR1: every deferred entry must cite where it went -- an amend may not write the row AddDeferral refuses")
+	assert.Contains(t, err.Error(), "FR1", "the refusal must name the rule it enforces, as AddDeferral's does")
+
+	var current int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM milestone_deferral WHERE id = $1 AND valid_to IS NULL
+	`, created.ID).Scan(&current))
+	assert.Equal(t, 1, current, "a refused amend must be atomic: the original stays current and no successor is written")
+}
+
+// TestAmendDeferral_UnknownIDIsNotFound matches every other Amend* method's
+// error contract, and pins the second half of the row-lock: each amend
+// supersedes the CURRENT revision only, so an id that has already been
+// amended once still amends cleanly, against its successor.
+func TestAmendDeferral_UnknownIDIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
+
+	_, err := s.Amend().AmendDeferral(ctx, uuid.New(), "never existed", "M2")
+	assert.ErrorIs(t, err, store.ErrNotFound, "amending an id that names no deferral row is ErrNotFound, as every other Amend* method reports")
+
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, acting)
+	require.NoError(t, err)
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "amended once", "Later")
+	require.NoError(t, err)
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "amended twice", "Later")
+	require.NoError(t, err, "an already-amended id still names a current row, so it is still amendable")
+
+	var total, current int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_deferral WHERE id = $1`, created.ID).Scan(&total))
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_deferral WHERE id = $1 AND valid_to IS NULL`, created.ID).Scan(&current))
+	assert.Equal(t, 3, total, "one original plus one successor per amend, none deleted")
+	assert.Equal(t, 1, current, "the FOR UPDATE + valid_to IS NULL row-lock is what makes each amend close the current row rather than re-closing an already-closed one")
 }
