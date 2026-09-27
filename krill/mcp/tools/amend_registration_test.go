@@ -42,9 +42,14 @@ type amendCall struct {
 	body   *string
 }
 
-// recordingAmendStore records every call and echoes the id back.
+// recordingAmendStore records every call and echoes the id back. current is
+// what CurrentPlacement reports, so a test can send an entity's own
+// placement back and expect the amend to reach the write; reads counts
+// those guard reads, so a test can assert the session gate runs first.
 type recordingAmendStore struct {
-	calls *[]amendCall
+	calls   *[]amendCall
+	current store.AmendPlacementChange
+	reads   *int
 }
 
 func (f recordingAmendStore) AmendRequirement(_ context.Context, id uuid.UUID, name string, body *string) (store.Requirement, error) {
@@ -87,6 +92,16 @@ func (f recordingAmendStore) AmendMilestone(_ context.Context, id uuid.UUID, nam
 	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
 }
 
+// CurrentPlacement answers the guard's read. The zero placement is the
+// honest answer for a store that has no row to report, and it is what lets
+// the test that sends no placement field through reach the write at all.
+func (f recordingAmendStore) CurrentPlacement(_ context.Context, entityKind string, id uuid.UUID) (store.AmendPlacementChange, error) {
+	if f.reads != nil {
+		*f.reads++
+	}
+	return f.current, nil
+}
+
 // amendOperatorPersona resolves PersonaSwarmOperator for every tools/call
 // through the real server.PersonaMiddleware.
 func amendOperatorPersona(next mcp.MethodHandler) mcp.MethodHandler {
@@ -106,12 +121,20 @@ func amendOperatorPersona(next mcp.MethodHandler) mcp.MethodHandler {
 
 func connectAmendTools(t *testing.T, sessionID store.SessionID, calls *[]amendCall) *mcp.ClientSession {
 	t.Helper()
+	return connectAmendToolsOver(t, sessionID, calls, store.AmendPlacementChange{}, nil)
+}
+
+// connectAmendToolsOver is connectAmendTools with the placement the fake
+// store reports for the guard to compare against, and a counter to record
+// how many times it was asked.
+func connectAmendToolsOver(t *testing.T, sessionID store.SessionID, calls *[]amendCall, current store.AmendPlacementChange, reads *int) *mcp.ClientSession {
+	t.Helper()
 	ctx := context.Background()
 
 	srv := mcp.NewServer(server.Implementation, nil)
 	srv.AddReceivingMiddleware(amendOperatorPersona)
 	reg := server.NewRegistry(srv)
-	tools.RegisterAmendAll(reg, amendSessionStore{known: sessionID}, recordingAmendStore{calls: calls})
+	tools.RegisterAmendAll(reg, amendSessionStore{known: sessionID}, recordingAmendStore{calls: calls, current: current, reads: reads})
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	_, err := srv.Connect(ctx, serverTransport, nil)
@@ -142,14 +165,14 @@ var amendToolNames = map[string]struct {
 	entity  string
 	content map[string]any
 }{
-	"amend_product":              {"product", map[string]any{"vision": "a new vision"}},
-	"amend_feature_set":          {"feature_set", nil},
-	"amend_feature":              {"feature", nil},
-	"amend_requirement":          {"requirement", map[string]any{"body": "amended body"}},
-	"amend_persona":              {"persona", nil},
-	"amend_non_goal":             {"non_goal", map[string]any{"body": "amended body"}},
+	"amend_product":               {"product", map[string]any{"vision": "a new vision"}},
+	"amend_feature_set":           {"feature_set", nil},
+	"amend_feature":               {"feature", nil},
+	"amend_requirement":           {"requirement", map[string]any{"body": "amended body"}},
+	"amend_persona":               {"persona", nil},
+	"amend_non_goal":              {"non_goal", map[string]any{"body": "amended body"}},
 	"amend_load_bearing_decision": {"load_bearing_decision", map[string]any{"body": "amended body"}},
-	"amend_milestone":            {"milestone", map[string]any{"outcome": "an amended outcome"}},
+	"amend_milestone":             {"milestone", map[string]any{"outcome": "an amended outcome"}},
 }
 
 func TestRegisterAmendAll_RegistersEverySpecAxisKind(t *testing.T) {
@@ -256,3 +279,112 @@ func TestAmendTools_ValidSessionReachesStore(t *testing.T) {
 		})
 	}
 }
+
+// ── the placement guard, over MCP ──
+
+// TestAmendTools_EchoedPlacementReachesStore is the MCP half of the inverse
+// case: every registered amend tool accepts the entity's OWN placement
+// echoed back, so the guard is a comparison against the current row the
+// tool read rather than a presence check (FR b62ed47a).
+func TestAmendTools_EchoedPlacementReachesStore(t *testing.T) {
+	sessionID := store.SessionID(uuid.New())
+	held := uuid.NewString()
+	current := store.AmendPlacementChange{
+		ProductID:         &held,
+		FeatureSetID:      &held,
+		FeatureID:         &held,
+		ParentMilestoneID: &held,
+		Kind:              strPtrAmendTools("NFR"),
+	}
+	echo := map[string]any{
+		"product_id":          held,
+		"feature_set_id":      held,
+		"feature_id":          held,
+		"parent_milestone_id": held,
+		"kind":                "NFR",
+	}
+
+	for name, tool := range amendToolNames {
+		t.Run(name, func(t *testing.T) {
+			var calls []amendCall
+			cs := connectAmendToolsOver(t, sessionID, &calls, current, nil)
+
+			args := map[string]any{
+				"krill_session_id": uuid.UUID(sessionID).String(),
+				"id":               uuid.NewString(),
+				"name":             "amended name",
+			}
+			for k, v := range tool.content {
+				args[k] = v
+			}
+			for k, v := range echo {
+				args[k] = v
+			}
+
+			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+			require.NoError(t, err)
+			require.False(t, res.IsError, "an echoed placement must not be refused: %s", amendTextOf(res))
+			assert.Len(t, calls, 1)
+		})
+	}
+}
+
+// TestAmendTools_ChangedPlacementIsRefusedByName is the other half: the same
+// arguments with one field moved are refused, naming that field, and never
+// reach the write.
+func TestAmendTools_ChangedPlacementIsRefusedByName(t *testing.T) {
+	sessionID := store.SessionID(uuid.New())
+	held, moved := uuid.NewString(), uuid.NewString()
+	current := store.AmendPlacementChange{FeatureSetID: &held, Kind: strPtrAmendTools("NFR")}
+
+	var calls []amendCall
+	cs := connectAmendToolsOver(t, sessionID, &calls, current, nil)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "amend_feature_set",
+		Arguments: map[string]any{
+			"krill_session_id": uuid.UUID(sessionID).String(),
+			"id":               uuid.NewString(),
+			"name":             "amended name",
+			"feature_set_id":   moved,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, res.IsError, "a moved parent must be refused")
+	assert.Contains(t, amendTextOf(res), "amend cannot reparent or re-kind")
+	assert.Contains(t, amendTextOf(res), "feature_set_id")
+	assert.Empty(t, calls, "a refused reparent must never reach the write")
+}
+
+// TestAmendTools_SessionGateRunsBeforeThePlacementRead proves the guard's
+// read is behind the session gate like the write it guards: an unknown
+// session with a placement field in its arguments never gets the store to
+// read the current placement.
+func TestAmendTools_SessionGateRunsBeforeThePlacementRead(t *testing.T) {
+	for name, tool := range amendToolNames {
+		t.Run(name, func(t *testing.T) {
+			var calls []amendCall
+			reads := 0
+			cs := connectAmendToolsOver(t, store.SessionID(uuid.New()), &calls, store.AmendPlacementChange{}, &reads)
+
+			args := map[string]any{
+				"krill_session_id": uuid.NewString(),
+				"id":               uuid.NewString(),
+				"name":             "amended name",
+				"feature_id":       uuid.NewString(),
+			}
+			for k, v := range tool.content {
+				args[k] = v
+			}
+
+			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+			require.NoError(t, err)
+			assert.True(t, res.IsError)
+			assert.Contains(t, amendTextOf(res), "unknown krill session")
+			assert.Empty(t, calls)
+			assert.Zero(t, reads, "an unauthenticated call must not read the current placement")
+		})
+	}
+}
+
+func strPtrAmendTools(s string) *string { return &s }

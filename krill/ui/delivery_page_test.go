@@ -176,11 +176,15 @@ func outcomePtr(s string) *string {
 func budgetPtr(n int) *int { return &n }
 
 // breakdownOf flattens a shipped/unshipped pair into the page's breakdown
-// map entry, exactly as deliveryBreakdowns does for a successful read.
+// map entry, exactly as deliveryBreakdowns does for a successful read --
+// including the StatusDisagrees an empty unshipped list carries under a
+// partially-complete badge.
 func breakdownOf(shipped, unshipped slice.Document) pages.DeliveryBreakdown {
+	unshippedEntities := deliveryEntitiesOf(unshipped)
 	return pages.DeliveryBreakdown{
-		Shipped:   deliveryEntitiesOf(shipped),
-		Unshipped: deliveryEntitiesOf(unshipped),
+		Shipped:         deliveryEntitiesOf(shipped),
+		Unshipped:       unshippedEntities,
+		StatusDisagrees: len(unshippedEntities) == 0,
 	}
 }
 
@@ -848,5 +852,216 @@ func TestDeliveryUnknownProductIsNotFound(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("unknown-id page missing %q", want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 11. partially complete with nothing outstanding (FR 33d8b20e)
+// ---------------------------------------------------------------------------
+
+// deliveryDisagreementHook is the stable data-krill attribute the
+// status/breakdown disambiguation carries, so these tests find it without
+// depending on the alert's class or copy wording.
+const deliveryDisagreementHook = `data-krill="delivery-status-disagreement"`
+
+// TestDeliveryPartiallyCompleteWithNothingOutstandingIsDisambiguated (FR
+// 33d8b20e) is the acceptance case: a container whose status reads
+// "partially complete" while every entity it delivers has a shipment
+// record -- a badge and an empty outstanding list disagreeing in the same
+// view -- renders a disambiguation, and renders it ADJACENT to that
+// container's own badge, inside that container's own breakdown block.
+// Both the milestone and the milepebble form are pinned: deliveryBreakdowns
+// populates both, so a milepebble-only fix would pass a milestone-only test.
+//
+// Driven through the real handleSpecDelivery so deliveryBreakdowns decides
+// StatusDisagrees from the read, not from a hand-set view-model field.
+func TestDeliveryPartiallyCompleteWithNothingOutstandingIsDisambiguated(t *testing.T) {
+	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
+	partialM, _, partialMID, partialMPID := milestoneEntry(t,
+		"Nothing outstanding", "outcome", budgetPtr(2), store.MilestoneStatusPartiallyComplete,
+		"Nothing outstanding either", "child outcome", store.MilestoneStatusPartiallyComplete)
+	// A partially-complete container that DOES have work outstanding, the
+	// contrast that keeps the disambiguation from becoming decoration on
+	// every partial container.
+	busyM, _, busyMID, _ := milestoneEntry(t,
+		"Still has scope", "outcome", budgetPtr(2), store.MilestoneStatusPartiallyComplete,
+		"child", "child outcome", store.MilestoneStatusShipped)
+
+	shippedFeat := slice.FeatureEntity{
+		EntityRef:     slice.EntityRef{ID: mustID(t, "33333333-3333-3333-3333-333333333333")},
+		Name:          "recorded feature",
+		DisplayNumber: 4,
+	}
+	outstandingFeat := slice.FeatureEntity{
+		EntityRef:     slice.EntityRef{ID: mustID(t, "44444444-4444-4444-4444-444444444444")},
+		Name:          "outstanding feature",
+		DisplayNumber: 5,
+	}
+	reader := &fakeSpecReader{
+		product: store.Product{ID: productID, Name: "krill", Vision: "the substrate"},
+		listing: slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{partialM, busyM}},
+		breakdown: map[uuid.UUID]deliveryPair{
+			partialMID:  {shipped: featureDoc(shippedFeat)},
+			partialMPID: {shipped: featureDoc(shippedFeat)},
+			busyMID:     {shipped: featureDoc(shippedFeat), unshipped: featureDoc(outstandingFeat)},
+		},
+	}
+	mux := deliveryReadMux(reader)
+
+	rec := fetch(t, mux, "/spec/products/"+productID.String()+"/delivery")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET delivery = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+	}{
+		{"milestone", partialMID},
+		{"milepebble", partialMPID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			block := containerBlock(body, tc.id)
+			if block == "" {
+				t.Fatalf("container %s did not render at all", tc.id)
+			}
+			// The badge is still there, unchanged -- the disambiguation
+			// joins it, it does not replace it.
+			badge := strings.Index(block, string(store.MilestoneStatusPartiallyComplete))
+			if badge < 0 {
+				t.Fatalf("container %s lost its partially-complete badge", tc.id)
+			}
+			if !strings.Contains(block, deliveryBreakdownHook) {
+				t.Fatalf("container %s rendered no breakdown block to disambiguate inside", tc.id)
+			}
+			disagree := strings.Index(block, deliveryDisagreementHook)
+			if disagree < 0 {
+				t.Fatalf("partially-complete container %s with nothing outstanding rendered no disambiguation", tc.id)
+			}
+			// Adjacency: after the badge, inside the block that block's own
+			// badge sits above, and above the lists it disagrees with.
+			if disagree < badge {
+				t.Errorf("disambiguation rendered before container %s's own badge, so it is not adjacent to it", tc.id)
+			}
+			if list := strings.Index(block, "recorded feature"); disagree > list {
+				t.Errorf("disambiguation rendered after container %s's breakdown lists, so it is not adjacent to its badge", tc.id)
+			}
+			// The copy names the inconsistency rather than asserting a
+			// cause: both the status and the delivery scope are named.
+			for _, want := range []string{"Status and breakdown disagree", "partially complete", "nothing in its breakdown is outstanding"} {
+				if !strings.Contains(block, want) {
+					t.Errorf("disambiguation copy for %s missing %q", tc.id, want)
+				}
+			}
+			// The lists it disambiguates are still rendered, not replaced.
+			if !strings.Contains(block, "Nothing unshipped.") {
+				t.Errorf("container %s lost its %q line", tc.id, "Nothing unshipped.")
+			}
+		})
+	}
+
+	// The contrast: a partially-complete container WITH outstanding scope
+	// lists the scope and says nothing about a disagreement, because the
+	// badge and the list agree.
+	busyBlock := containerBlock(body, busyMID)
+	if strings.Contains(busyBlock, deliveryDisagreementHook) {
+		t.Errorf("partially-complete container %s with %q outstanding rendered the disagreement; the two are consistent", busyMID, "outstanding feature")
+	}
+	if !strings.Contains(busyBlock, "outstanding feature") {
+		t.Errorf("partially-complete container %s dropped its outstanding list", busyMID)
+	}
+}
+
+// TestDeliveryUnshippedBucketIsLabelledCauseFree (FR 33d8b20e) pins the
+// label for a delivered entity with no shipment record: it states what
+// every member of the bucket is, and asserts no cause for it. A skipped
+// recording step is not observable anywhere in krill, and the same
+// sentence is true of a planned milestone's entire scope -- so a label
+// that reads true of the whole roadmap teaches an operator to skip it.
+func TestDeliveryUnshippedBucketIsLabelledCauseFree(t *testing.T) {
+	m, _, mID, _ := milestoneEntry(t,
+		"Partial", "outcome", budgetPtr(1), store.MilestoneStatusPartiallyComplete,
+		"child", "child outcome", store.MilestoneStatusShipped)
+	shippedFeat := slice.FeatureEntity{
+		EntityRef:     slice.EntityRef{ID: mustID(t, "33333333-3333-3333-3333-333333333333")},
+		Name:          "recorded feature",
+		DisplayNumber: 4,
+	}
+	outstandingFeat := slice.FeatureEntity{
+		EntityRef:     slice.EntityRef{ID: mustID(t, "44444444-4444-4444-4444-444444444444")},
+		Name:          "outstanding feature",
+		DisplayNumber: 5,
+	}
+	html := renderDelivery(t,
+		slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{m}},
+		map[uuid.UUID]pages.DeliveryBreakdown{
+			mID: breakdownOf(featureDoc(shippedFeat), featureDoc(outstandingFeat)),
+		},
+	)
+	block := containerBlock(html, mID)
+
+	if !strings.Contains(block, "Delivered to this container, no shipment record.") {
+		t.Errorf("the Unshipped bucket did not render its cause-free label %q", "Delivered to this container, no shipment record.")
+	}
+	// The label sits with the Unshipped list it describes.
+	if label, list := strings.Index(block, "Delivered to this container, no shipment record."), strings.Index(block, "outstanding feature"); label > list {
+		t.Errorf("the unshipped label rendered after the list it describes")
+	}
+	// No cause is asserted anywhere in the block: nothing in krill can
+	// observe that a recording step was skipped, and no surface should
+	// claim to.
+	for _, cause := range []string{"skipped", "not yet merged", "unrecorded", "forgot", "overdue"} {
+		if strings.Contains(strings.ToLower(block), cause) {
+			t.Errorf("the breakdown block asserts a cause nothing can observe: found %q", cause)
+		}
+	}
+}
+
+// TestDeliveryBreakdownErrorPathIsNotADisagreement (FR 33d8b20e): the error
+// branch of breakdownBlock is not an instance of this defect and is left
+// unchanged. An alert with no list is not a confident badge over an empty
+// list -- nothing on the page claims completion -- so a failed read renders
+// the error alone, with no disambiguation and no fabricated empty-list copy.
+func TestDeliveryBreakdownErrorPathIsNotADisagreement(t *testing.T) {
+	m, _, mID, _ := milestoneEntry(t,
+		"Partial", "outcome", budgetPtr(1), store.MilestoneStatusPartiallyComplete,
+		"child", "child outcome", store.MilestoneStatusShipped)
+	html := renderDelivery(t,
+		slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{m}},
+		map[uuid.UUID]pages.DeliveryBreakdown{
+			mID: {Error: "This container's shipped/unshipped breakdown could not be read. See the logs."},
+		},
+	)
+	block := containerBlock(html, mID)
+
+	if strings.Contains(block, deliveryDisagreementHook) {
+		t.Errorf("an unreadable breakdown rendered the status disagreement; the error path is not an instance of it")
+	}
+	if !hasClassToken(block, "alert-error") {
+		t.Errorf("an unreadable breakdown did not render its error alert")
+	}
+	// The empty-list copy was not moved into the error branch.
+	if strings.Contains(block, "Nothing unshipped.") || strings.Contains(block, "Nothing shipped yet.") {
+		t.Errorf("an unreadable breakdown fabricated an empty-list line")
+	}
+}
+
+// TestDeliveryStatusDisagreementGatedOnNothingOutstanding pins the gate at
+// the view-model level: StatusDisagrees is a property of the two lists, so
+// a container with outstanding scope never carries it no matter how the
+// map entry was built.
+func TestDeliveryStatusDisagreementGatedOnNothingOutstanding(t *testing.T) {
+	outstanding := breakdownOf(slice.Document{}, featureDoc(slice.FeatureEntity{
+		EntityRef:     slice.EntityRef{ID: mustID(t, "44444444-4444-4444-4444-444444444444")},
+		Name:          "outstanding feature",
+		DisplayNumber: 5,
+	}))
+	if outstanding.StatusDisagrees {
+		t.Errorf("a breakdown with an outstanding list was marked as a status disagreement")
+	}
+	nothing := breakdownOf(slice.Document{}, slice.Document{})
+	if !nothing.StatusDisagrees {
+		t.Errorf("a breakdown with nothing outstanding was not marked as a status disagreement")
 	}
 }

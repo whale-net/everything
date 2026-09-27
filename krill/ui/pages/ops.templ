@@ -43,21 +43,22 @@ const cancelConfirmID = "cancel-confirm"
 // pre-formatted plain string built by newClaimedRow in package main, so
 // this file stays free of store reach-in and pointer logic.
 //
-// Lease is an absolute RFC3339 instant, never a relative "in 3m": the
-// results block is polled (see claimedPollAttrs), and a fragment whose
-// bytes shifted between two polls for no state change would defeat the
-// whole point of the poll.
+// Lease and ClaimedSince are absolute RFC3339 instants, never a relative
+// "in 3m": the results block is polled (see claimedPollAttrs), and a
+// fragment whose bytes shifted between two polls for no state change
+// would defeat the whole point of the poll.
 type ClaimedRow struct {
-	TaskID     string
-	Title      string
-	Delivery   string
-	Session    string
-	Claimant   string
-	OnBehalfOf string
-	Lane       string
-	Lease      string
-	Attempts   int
-	Actions    templ.Component
+	TaskID       string
+	Title        string
+	Delivery     string
+	Session      string
+	Claimant     string
+	OnBehalfOf   string
+	Lane         string
+	ClaimedSince string
+	Lease        string
+	Attempts     int
+	Actions      templ.Component
 }
 
 // EscalatedRow is one row of the escalated-task view (newEscalatedRow).
@@ -294,7 +295,7 @@ templ ClaimedResults(d ClaimedData) {
 templ ClaimedPage(d ClaimedData) {
 	@opsPageChrome(OpsPageData{
 		Heading:     "Claimed tasks",
-		Description: "Every task that currently holds a claim, with its claimant, lane, and lease expiry.",
+		Description: "Every task that currently holds a claim, with its claimant, lane, claimed-since, and lease expiry.",
 		RefreshHref: d.Href,
 		Results:     ClaimedResults(d),
 	})
@@ -313,6 +314,7 @@ templ claimedTable(rows []ClaimedRow) {
 						<th>Claimant</th>
 						<th>On behalf of</th>
 						<th>Lane</th>
+						<th>Claimed since</th>
 						<th>Lease expires</th>
 						<th>Attempts</th>
 						<th>Actions</th>
@@ -336,6 +338,7 @@ templ claimedTable(rows []ClaimedRow) {
 							<td class="text-sm">
 								@htmxui.Badge(row.Lane, laneVariant(row.Lane), htmxui.BadgeSizeSM, true, nil)
 							</td>
+							<td class="text-sm">{ row.ClaimedSince }</td>
 							<td class="text-sm">{ row.Lease }</td>
 							<td class="text-sm">{ strconv.Itoa(row.Attempts) }</td>
 							<td class="text-sm">
@@ -599,6 +602,25 @@ templ OpsInlineError(message string) {
 	<div id={ opsResultsID } data-krill="ops-inline-error">
 		@htmxui.Alert(htmxui.AlertError, message, nil)
 	</div>
+}
+
+// OpsQueryError is the in-shell page a console query failure renders for a
+// no-JS browser: the same operator-facing message OpsInlineError carries,
+// plus a way back to a working page. It is the reason the failure is not a
+// bare text/plain body -- an operator who lands on a view that cannot load
+// has to be able to navigate away from it, and a bare http.Error takes the
+// nav with it.
+//
+// backHref is the view's own URI with the rejected continuation token
+// dropped, so following it is itself the recovery.
+templ OpsQueryError(message, backHref string) {
+	<section data-krill="ops-query-error">
+		<h2 class="text-xl font-semibold" data-krill="page-title">Could not load this view</h2>
+		@htmxui.Alert(htmxui.AlertError, message, nil)
+		<p class="mt-4">
+			<a href={ templ.URL(backHref) } class="btn btn-secondary btn-sm">Reload the view</a>
+		</p>
+	</section>
 }
 
 // InterventionError is the in-shell page a refused intervention renders

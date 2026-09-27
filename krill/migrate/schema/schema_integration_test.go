@@ -18,6 +18,7 @@ package schema_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sort"
 	"testing"
 
@@ -198,18 +199,20 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(22), latest, "expected the latest migration source version to be 22 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event, 022_non_goal_promotion) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(23), latest, "expected the latest migration source version to be 23 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event, 022_non_goal_promotion, 023_single_delivery_parent) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
-	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-022")
+	// must exist, version must land clean at the latest. 023 adds no table
+	// -- it is a data fix over rows 004/010 already created, covered on its
+	// own by TestMigration023_*.
+	require.NoError(t, runner.Up(), "apply migrations 001-023")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(22), version)
+	assert.Equal(t, uint(23), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -268,7 +271,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(22), version)
+	assert.Equal(t, uint(23), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -3029,4 +3032,231 @@ func TestMigration022_SchemaContract(t *testing.T) {
 		RETURNING outcome
 	`, scopeID, uuid.New(), productID).Scan(&defaultedOutcome))
 	assert.Equal(t, "void", defaultedOutcome, "an omitted outcome must default to void")
+}
+
+// TestMigration023_SingleDeliveryParent drives the one-off data fix that
+// repairs C6's duplicate Delivers association (NFR c0629588, issue #3094).
+// It migrates to exactly 022, builds the pre-fix state -- C6 delivered by M1
+// and M7 alike, M7 also delivering four Requirements, shipment rows recorded
+// on both sides -- then applies 023 and asserts the repair is narrow,
+// complete, and a no-op the second time.
+//
+// The fixture addresses C6 by `display_number` and M1/M7 by `name` for the
+// same reason the migration does: those are the citations the roadmap
+// renders, so the test exercises the real resolution path rather than a
+// hand-fed pair of UUIDs.
+func TestMigration023_SingleDeliveryParent(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(22), "apply every migration through exactly 022 -- the state that predates the fix")
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('single-delivery-023/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+
+	newProduct := func(name string) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			INSERT INTO product (scope_id, name, vision) VALUES ($1, $2, 'v') RETURNING id
+		`, scopeID, name).Scan(&id))
+		return id
+	}
+	newMilestone := func(productID uuid.UUID, name string) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, $3) RETURNING id
+		`, scopeID, productID, name).Scan(&id))
+		return id
+	}
+	// display_number is NOT NULL since 017 and is unique per product, so the
+	// six Features here give C6 exactly the address the migration looks up.
+	newFeature := func(productID, featureSetID uuid.UUID, displayNumber int, name string) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			INSERT INTO feature (scope_id, feature_set_id, name, position, display_number)
+			VALUES ($1, $2, $3, $4, $5) RETURNING id
+		`, scopeID, featureSetID, name, displayNumber, displayNumber).Scan(&id))
+		return id
+	}
+	// Returns the association row's own id, so a later assertion can prove the
+	// surviving row is the SAME row rather than a replacement.
+	associate := func(entityID, milestoneID uuid.UUID, relation string) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
+			VALUES ($1, $2, $3, $4) RETURNING id
+		`, scopeID, entityID, milestoneID, relation).Scan(&id))
+		return id
+	}
+	ship := func(entityID, milestoneID uuid.UUID) {
+		t.Helper()
+		_, err := db.Pool.Exec(ctx, `
+			INSERT INTO delivery_shipment (
+				scope_id, entity_id, milestone_id,
+				created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+				created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+			) VALUES ($1, $2, $3, 'krill', 'seed', 'service', 'krill', 'seed', 'service')
+		`, scopeID, entityID, milestoneID)
+		require.NoError(t, err)
+	}
+	deliversTo := func(entityID uuid.UUID) []uuid.UUID {
+		t.Helper()
+		rows, err := db.Pool.Query(ctx, `
+			SELECT milestone_id FROM entity_milestone
+			WHERE entity_id = $1 AND relation = 'delivers'
+			ORDER BY milestone_id
+		`, entityID)
+		require.NoError(t, err)
+		defer rows.Close()
+		var out []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			require.NoError(t, rows.Scan(&id))
+			out = append(out, id)
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+	associationExists := func(id uuid.UUID) bool {
+		t.Helper()
+		var exists bool
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM entity_milestone WHERE id = $1)
+		`, id).Scan(&exists))
+		return exists
+	}
+	shipmentCount := func() int {
+		t.Helper()
+		var n int
+		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM delivery_shipment`).Scan(&n))
+		return n
+	}
+	shipmentExists := func(entityID, milestoneID uuid.UUID) bool {
+		t.Helper()
+		var exists bool
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM delivery_shipment WHERE entity_id = $1 AND milestone_id = $2
+			)
+		`, entityID, milestoneID).Scan(&exists))
+		return exists
+	}
+	countDeliveredBy := func(milestoneID uuid.UUID) int {
+		t.Helper()
+		var n int
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			SELECT count(*) FROM entity_milestone WHERE milestone_id = $1 AND relation = 'delivers'
+		`, milestoneID).Scan(&n))
+		return n
+	}
+
+	// -- The pre-fix state: one product whose M1 and M7 both deliver C6 -------
+	productID := newProduct("krill")
+	var featureSetID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature_set (scope_id, product_id, name, position) VALUES ($1, $2, 'Now', 0) RETURNING id
+	`, scopeID, productID).Scan(&featureSetID))
+
+	features := make([]uuid.UUID, 6)
+	for i := range features {
+		features[i] = newFeature(productID, featureSetID, i+1, fmt.Sprintf("C%d", i+1))
+	}
+	c6 := features[5]
+
+	// M7's own scope: four Requirements, which must survive untouched.
+	m7Requirements := make([]uuid.UUID, 4)
+	for i := range m7Requirements {
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			INSERT INTO requirement (scope_id, feature_id, kind, name, position)
+			VALUES ($1, $2, 'NFR', $3, $4) RETURNING id
+		`, scopeID, features[0], fmt.Sprintf("R%d", i+1), i).Scan(&m7Requirements[i]))
+	}
+
+	m1 := newMilestone(productID, "M1")
+	m7 := newMilestone(productID, "M7")
+
+	keepRow := associate(c6, m1, "delivers")    // M1's association STANDS
+	dropRow := associate(c6, m7, "delivers")    // M7's is the wrong one
+	mustNotRow := associate(c6, m7, "must_not_foreclose")
+	for _, reqID := range m7Requirements {
+		associate(reqID, m7, "delivers")
+	}
+	ship(c6, m1)
+	ship(c6, m7)
+	shipmentsBefore := shipmentCount()
+
+	require.ElementsMatch(t, []uuid.UUID{m1, m7}, deliversTo(c6),
+		"fixture precondition: C6 is a Delivers association of M1 and M7 alike -- the duplicate this migration repairs")
+
+	// -- A second product shaped so the EXISTS guard is the ONLY thing
+	// stopping the fix. It has an M1 and an M7, so every join in the DELETE
+	// resolves -- but its M1 delivers a DIFFERENT capability, so this C6 is
+	// not a duplicate and there is nothing here to repair. Without the
+	// guard the migration would delete this row on the strength of the M1
+	// milestone existing, which is not the same fact at all.
+	soloProductID := newProduct("solo")
+	var soloFeatureSetID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature_set (scope_id, product_id, name, position) VALUES ($1, $2, 'Now', 0) RETURNING id
+	`, scopeID, soloProductID).Scan(&soloFeatureSetID))
+	soloC1 := newFeature(soloProductID, soloFeatureSetID, 1, "C1")
+	soloC6 := newFeature(soloProductID, soloFeatureSetID, 6, "C6")
+	soloM1 := newMilestone(soloProductID, "M1")
+	soloM7 := newMilestone(soloProductID, "M7")
+	associate(soloC1, soloM1, "delivers")
+	soloRow := associate(soloC6, soloM7, "delivers")
+
+	// -- The fix -------------------------------------------------------------
+	require.NoError(t, runner.Migrate(23), "apply 023_single_delivery_parent")
+
+	assert.Equal(t, []uuid.UUID{m1}, deliversTo(c6),
+		"after the fix C6 must be a Delivers association of M1 ALONE -- the whole point of the migration")
+	assert.True(t, associationExists(keepRow),
+		"M1's own (C6, M1) row must survive, and survive as the same row: the fix deletes an association, it does not rewrite one")
+	assert.False(t, associationExists(dropRow),
+		"the (C6, M7) Delivers row is the one row this migration removes")
+	assert.True(t, associationExists(mustNotRow),
+		"a must_not_foreclose association is a different statement about M7, not a duplicate delivery parent -- it must not be touched")
+	assert.Equal(t, 4, countDeliveredBy(m7),
+		"M7 still delivers its four amend Requirements; the fix drops one association and nothing else")
+
+	assert.Equal(t, shipmentsBefore, shipmentCount(),
+		"every delivery_shipment row on both sides is left intact -- the table has no DELETE path in krill/store, and neither does this migration")
+	assert.True(t, shipmentExists(c6, m7),
+		"the retained (C6, M7) shipment row is the more accurate history: M7's design session did mark C6 shipped")
+
+	assert.Equal(t, []uuid.UUID{soloM7}, deliversTo(soloC6),
+		"a product whose M1 delivers some other capability has no duplicate to repair, so the fix must not reach into it -- M1 existing is not the same fact as M1 delivering C6")
+
+	// -- Idempotence: re-run 023's own SQL against the already-fixed data ----
+	require.NoError(t, runner.Force(22), "rewind the recorded version so 023's Up runs a second time")
+	require.NoError(t, runner.Migrate(23), "023 must be re-runnable on a database where the row is already absent")
+
+	assert.Equal(t, []uuid.UUID{m1}, deliversTo(c6), "a second run must write nothing")
+	assert.True(t, associationExists(keepRow), "a second run must leave M1's row exactly as it found it")
+	assert.True(t, associationExists(soloRow), "a second run must not reach the untouched product")
+	assert.Equal(t, 4, countDeliveredBy(m7), "a second run must leave M7's four Requirements delivered")
+	assert.Equal(t, shipmentsBefore, shipmentCount(), "a second run must write no shipment row")
+
+	// -- The down migration must not put the product back --------------------
+	require.NoError(t, runner.Steps(-1), "roll 023 back")
+	assert.Equal(t, []uuid.UUID{m1}, deliversTo(c6),
+		"rolling back must not recreate the duplicate: the down re-inserts (C6, M7) only when M1 does NOT already deliver C6")
+	assert.True(t, associationExists(keepRow), "M1's row is untouched by the down as well")
+
+	require.NoError(t, runner.Steps(1), "re-apply 023 after the down")
+	assert.Equal(t, []uuid.UUID{m1}, deliversTo(c6), "the up/down round trip is stable at the fixed state")
+	assert.Equal(t, 4, countDeliveredBy(m7), "M7's four Requirements survive the round trip")
+	assert.Equal(t, shipmentsBefore, shipmentCount(), "the round trip writes no shipment row")
 }

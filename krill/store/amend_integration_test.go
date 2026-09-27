@@ -613,3 +613,164 @@ func TestAmend_KeepingItsOwnNameSucceeds(t *testing.T) {
 	assert.Equal(t, "only the body changed", *amended.Body)
 	assertSuperseded(t, ctx, db, "requirement", fr.ID)
 }
+
+// ── CurrentPlacement: the read the placement guard compares against ──
+
+// TestCurrentPlacement_ReadsEachKindsOwnColumns is the per-kind column map
+// against the real schema: each kind reports the parent and kind its own
+// current row holds, and reports nothing at all for the placement fields it
+// has no column for. Those absences are what make a submitted value for one
+// of them differ, so getting one wrong here would either over-refuse a
+// correct client or under-refuse a real move.
+func TestCurrentPlacement_ReadsEachKindsOwnColumns(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "the vision")
+	require.NoError(t, err)
+	otherSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "Other Set", nil)
+	require.NoError(t, err)
+	set, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "Spec Entities", nil)
+	require.NoError(t, err)
+	feature, err := s.Features().Create(ctx, scopeID, set.ID, "SCD2 Store", nil)
+	require.NoError(t, err)
+	otherFeature, err := s.Features().Create(ctx, scopeID, otherSet.ID, "Somewhere Else", nil)
+	require.NoError(t, err)
+	fr, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindNFR, "Placement guard", nil)
+	require.NoError(t, err)
+	persona, err := s.Personas().Create(ctx, scopeID, product.ID, "A Requirement Contributor", nil)
+	require.NoError(t, err)
+	deferred, err := s.NonGoals().Create(ctx, scopeID, product.ID, store.NonGoalKindDeferred, "Multi-tenancy", nil)
+	require.NoError(t, err)
+	decision, err := s.Decisions().Create(ctx, scopeID, set.ID, "LB2 identity", nil)
+	require.NoError(t, err)
+	budget := 12
+	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M9", "", &budget, acting, acting)
+	require.NoError(t, err)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "M9.1", "", nil, acting, acting)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		kind string
+		id   uuid.UUID
+		want store.AmendPlacementChange
+	}{
+		// A Product is scoped by scope_id alone and has no parent and no
+		// kind column, so it reports nothing -- every field it could be
+		// sent is absent.
+		{"product", product.ID, store.AmendPlacementChange{}},
+		{"feature set", set.ID, store.AmendPlacementChange{ProductID: strPtrAmend(product.ID.String())}},
+		{"feature", feature.ID, store.AmendPlacementChange{FeatureSetID: strPtrAmend(set.ID.String())}},
+		{
+			"requirement", fr.ID,
+			store.AmendPlacementChange{FeatureID: strPtrAmend(feature.ID.String()), Kind: strPtrAmend("NFR")},
+		},
+		{"persona", persona.ID, store.AmendPlacementChange{ProductID: strPtrAmend(product.ID.String())}},
+		{
+			"non-goal", deferred.ID,
+			store.AmendPlacementChange{ProductID: strPtrAmend(product.ID.String()), Kind: strPtrAmend("deferred")},
+		},
+		{"load-bearing decision", decision.ID, store.AmendPlacementChange{FeatureSetID: strPtrAmend(set.ID.String())}},
+		{
+			"milestone", milestone.ID,
+			store.AmendPlacementChange{ProductID: strPtrAmend(product.ID.String()), Kind: strPtrAmend("milestone")},
+		},
+		{
+			"milestone", milepebble.ID,
+			store.AmendPlacementChange{
+				ProductID:         strPtrAmend(product.ID.String()),
+				ParentMilestoneID: strPtrAmend(milestone.ID.String()),
+				Kind:              strPtrAmend("milepebble"),
+			},
+		},
+	} {
+		t.Run(tc.kind+"/"+tc.id.String()[:8], func(t *testing.T) {
+			got, err := s.Amend().CurrentPlacement(ctx, tc.kind, tc.id)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+
+	// The read follows the id it was given, not some other row of the kind:
+	// a second Feature under a different FeatureSet reports that set.
+	other, err := s.Amend().CurrentPlacement(ctx, "feature", otherFeature.ID)
+	require.NoError(t, err)
+	require.NotNil(t, other.FeatureSetID)
+	assert.Equal(t, otherSet.ID.String(), *other.FeatureSetID,
+		"the read must return the row it was asked about, not a constant or a sibling's")
+}
+
+// TestCurrentPlacement_ReadsTheCurrentRevisionAfterASupersession proves the
+// read filters on valid_to IS NULL like every other current-row read: after
+// an amend the placement comes from the new current revision, which carries
+// the parent forward unchanged.
+func TestCurrentPlacement_ReadsTheCurrentRevisionAfterASupersession(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	feature := newAmendTestFeature(t, ctx, s, scopeID)
+
+	fr, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "Placement guard", nil)
+	require.NoError(t, err)
+	_, err = s.Amend().AmendRequirement(ctx, fr.ID, "Placement guard (amended)", nil)
+	require.NoError(t, err)
+
+	got, err := s.Amend().CurrentPlacement(ctx, "requirement", fr.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.FeatureID)
+	assert.Equal(t, feature.ID.String(), *got.FeatureID)
+	require.NotNil(t, got.Kind)
+	assert.Equal(t, "FR", *got.Kind)
+}
+
+// TestCurrentPlacement_RealPlacementDrivesTheGuard closes the loop: the
+// placement a client would have read is accepted, moving the entity to any
+// other parent is refused by name, and a field the kind has no column for is
+// refused whatever it holds.
+func TestCurrentPlacement_RealPlacementDrivesTheGuard(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	feature := newAmendTestFeature(t, ctx, s, scopeID)
+
+	fr, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "Placement guard", nil)
+	require.NoError(t, err)
+
+	current, err := s.Amend().CurrentPlacement(ctx, "requirement", fr.ID)
+	require.NoError(t, err)
+
+	echoed := store.AmendPlacementChange{FeatureID: current.FeatureID, Kind: current.Kind}
+	assert.NoError(t, echoed.Refuse("requirement", current), "a client echoing what it read must not be refused")
+
+	moved := store.AmendPlacementChange{FeatureID: strPtrAmend(uuid.NewString())}
+	err = moved.Refuse("requirement", current)
+	require.ErrorIs(t, err, store.ErrPlacementChange)
+	assert.Contains(t, err.Error(), "cannot change feature_id on amend")
+
+	// A Requirement has no parent_milestone_id column, so its current value
+	// is absent and anything sent for it differs -- an empty string
+	// included, which is a submitted value.
+	orphan := store.AmendPlacementChange{ParentMilestoneID: strPtrAmend("")}
+	assert.ErrorIs(t, orphan.Refuse("requirement", current), store.ErrPlacementChange)
+}
+
+// TestCurrentPlacement_UnknownIDAndUnknownKind proves the read's two failure
+// modes: an id with no current row is ErrNotFound, exactly as the write
+// would report it, and a kind the placement map does not name is an error
+// rather than a silent zero value.
+func TestCurrentPlacement_UnknownIDAndUnknownKind(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	feature := newAmendTestFeature(t, ctx, s, scopeID)
+
+	_, err := s.Amend().CurrentPlacement(ctx, "requirement", uuid.New())
+	assert.ErrorIs(t, err, store.ErrNotFound)
+
+	fr, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "Placement guard", nil)
+	require.NoError(t, err)
+	_, err = s.Amend().CurrentPlacement(ctx, "task", fr.ID)
+	assert.Error(t, err, "a kind the placement map does not name must be an error, not a silent zero value")
+}

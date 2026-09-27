@@ -58,7 +58,10 @@ func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
 // every partially-complete milestone and milepebble in the listing, via the
 // same Querier.GetDeliveryBreakdown the MCP tool get_delivery_breakdown
 // wraps. A container in any other status gets no entry -- its shipped/unshipped
-// breakdown is not applicable, not "zero shipped, zero unshipped".
+// breakdown is not applicable, not "zero shipped, zero unshipped". The
+// partially-complete-only gate is also what makes StatusDisagrees meaningful:
+// a container that is fully shipped and lists nothing unshipped is the normal
+// end state, not a disagreement, so it renders no breakdown at all.
 //
 // A breakdown read that fails for one container is non-fatal: it is logged
 // at ERROR (a genuine failed read, not expected control flow) and that
@@ -86,9 +89,16 @@ func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryLi
 			breakdowns[id] = pages.DeliveryBreakdown{Error: "This container's shipped/unshipped breakdown could not be read. See the logs."}
 			continue
 		}
+		// Every id above is partially complete, so an empty unshipped list
+		// under such a badge is the status and the delivery scope telling
+		// different stories. The page names that rather than letting a
+		// confident badge sit over an empty outstanding list. No cause is
+		// asserted: which of the two is wrong is not observable from here.
+		unshippedEntities := deliveryEntitiesOf(unshipped)
 		breakdowns[id] = pages.DeliveryBreakdown{
-			Shipped:   deliveryEntitiesOf(shipped),
-			Unshipped: deliveryEntitiesOf(unshipped),
+			Shipped:         deliveryEntitiesOf(shipped),
+			Unshipped:       unshippedEntities,
+			StatusDisagrees: len(unshippedEntities) == 0,
 		}
 	}
 	return breakdowns

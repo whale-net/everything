@@ -77,9 +77,10 @@ etc.) take as input (`POST /sessions/init` returns the same shape).
 
 `acting`/`on_behalf_of` are each a `{iss, sub, kind}` triple:
 
-- `kind` is exactly `"human"` or `"service"` — no third value, no `"agent"`
-  spelling. Use `"human"` for an ordinary interactive session; unattended
-  personas (e.g. `loop-design-panel`'s `reviewer`) use `"service"`.
+- `kind` is exactly `"human"`, `"service"` or `"agent"`. Use `"human"` for
+  an ordinary interactive session; unattended personas (e.g.
+  `loop-design-panel`'s `reviewer`) use `"service"`; an AI agent calling in on
+  its own behalf uses `"agent"`.
 - `iss`/`sub` only need to be non-empty free text (e.g. `iss:
   "whalenet-cli"`, `sub: "<caller's email>"`). For the common case, `acting
   == on_behalf_of` — set them to the same value. Set them differently only
@@ -268,7 +269,9 @@ as the read-only tools below (`get_milestone`/`list_milepebbles`/
 - `move_delivery_scope {krill_session_id, entity_ids[], from, to}` and
   `get_backlog {product_id}` — re-cuts not-yet-shipped scope between
   milestones/milepebbles/the backlog bucket; refuses (writes nothing) if
-  any entity is already shipped in its `from` container.
+  any entity is already shipped in its `from` container. `get_backlog`
+  returns the bucket's own `milestone_ref` id alongside its contents, so
+  `to` can be that id on a product whose bucket has never been used.
 - `abandon_milestone {krill_session_id, milestone_id, note?}` — marks a
   milestone or milepebble abandoned and sweeps its not-yet-shipped scope
   into the backlog in one transaction. **Not reversible.**

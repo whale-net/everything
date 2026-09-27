@@ -104,30 +104,70 @@ func (app *App) soleScopeID(ctx context.Context) (uuid.UUID, error) {
 // response: a cross-scope or malformed continuation token is the
 // caller's error (400), never a genuine store failure (500).
 //
+// Neither branch hands the operator the store's own text. A sentinel
+// error's message is a Go package-qualified string
+// ("krill/store: continuation token was issued for a different scope"),
+// which names an internal package and tells the operator nothing they can
+// act on; a genuine failure can carry a connection string or an internal
+// address. The operator gets krill's own wording either way, and on-call
+// humans still get the real error from the logger.
+//
 // An htmx caller gets 200 with the message inline instead. htmx does not
 // swap on a non-2xx, so a bare http.Error here would leave the operator
 // looking at an unchanged table with no explanation -- and on the claimed
 // view this path is reached by the always-on poll, so a database blip
 // would silently freeze the console while the poll kept firing.
+//
+// A browser gets the same message inside the shell, at the status the
+// error earns. A bare http.Error would answer text/plain with no nav, on
+// exactly the page the operator most needs to navigate away from.
 func writeOpsQueryError(w http.ResponseWriter, r *http.Request, err error) {
-	message := err.Error()
+	status := http.StatusInternalServerError
+	message := "Failed to load console data. Try again."
 	switch {
 	case errors.Is(err, store.ErrTokenScopeMismatch), errors.Is(err, store.ErrInvalidContinuationToken):
-		// The caller's own bad token; saying so is useful, not sensitive.
+		// The caller's own bad token; saying which input is wrong is
+		// useful, and saying the store's package path is not.
+		status = http.StatusBadRequest
+		message = "This page's page_token is not valid for this view. Reload the view to start from the first page."
 	default:
 		logger.Error("failed to load an ops console view", "error", err)
-		message = "Failed to load console data. Try again."
 	}
 
 	if isHtmxRequest(r) {
 		renderFragment(w, r, pages.OpsInlineError(message))
 		return
 	}
-	status := http.StatusInternalServerError
-	if errors.Is(err, store.ErrTokenScopeMismatch) || errors.Is(err, store.ErrInvalidContinuationToken) {
-		status = http.StatusBadRequest
+	renderShellStatus(w, r, "Ops console", opsActivePath(r), pages.OpsQueryError(message, opsRecoveryPath(r)), status)
+}
+
+// opsActivePath is the path the nav marks active for a console page. The
+// request's own path is what keeps the "Ops console" link lit across all
+// four views, and opsPath is the fallback when a caller passed no request.
+func opsActivePath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return opsPath
 	}
-	http.Error(w, message, status)
+	return r.URL.Path
+}
+
+// opsRecoveryPath is the way back to a working page from a rejected query:
+// the view's own URI with the continuation token dropped. A rejected token
+// is the one paging input that gets the operator back, and a store failure
+// is no worse off without it.
+func opsRecoveryPath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return opsPath
+	}
+	q := r.URL.Query()
+	if q.Get(opsPageTokenParam) == "" {
+		return r.URL.RequestURI()
+	}
+	q.Del(opsPageTokenParam)
+	if len(q) == 0 {
+		return r.URL.Path
+	}
+	return r.URL.Path + "?" + q.Encode()
 }
 
 // opsNextHref builds a view's "next page" link, carrying the page size
@@ -253,15 +293,16 @@ func (app *App) claimedResults(ctx context.Context, page store.PageParams, selfP
 
 func newClaimedRow(r store.ClaimedTaskRow) pages.ClaimedRow {
 	return pages.ClaimedRow{
-		TaskID:     r.TaskID.String(),
-		Title:      r.Title,
-		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
-		Session:    r.ClaimantSessionID.String(),
-		Claimant:   opsActor(r.ClaimantActing),
-		OnBehalfOf: opsSubject(r.ClaimantOnBehalfOf),
-		Lane:       string(r.CurrentLane),
-		Lease:      opsTime(r.LeaseExpiresAt),
-		Attempts:   r.AttemptCount,
+		TaskID:       r.TaskID.String(),
+		Title:        r.Title,
+		Delivery:     string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
+		Session:      r.ClaimantSessionID.String(),
+		Claimant:     opsActor(r.ClaimantActing),
+		OnBehalfOf:   opsSubject(r.ClaimantOnBehalfOf),
+		Lane:         string(r.CurrentLane),
+		ClaimedSince: opsTime(r.ClaimedAt),
+		Lease:        opsTime(r.LeaseExpiresAt),
+		Attempts:     r.AttemptCount,
 		// A claimed task is the one view a Swarm Operator force-releases
 		// (release), flags for attention (escalate), or dead-letters
 		// (cancel) from directly.

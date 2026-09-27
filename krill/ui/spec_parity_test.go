@@ -12,7 +12,7 @@ package main
 //
 // Two layers:
 //
-//   - TestSpecViewsRenderEveryCarriedWireField: the field-by-field presence
+//   - the per-view *CarriesEveryWireField tests: the field-by-field presence
 //     check, scoped to the fields each view claims to carry.
 //   - TestSpecWireFieldClassesAreComplete: a reflection guard that fails if a
 //     wire struct exposes a leaf field the view has not explicitly classified

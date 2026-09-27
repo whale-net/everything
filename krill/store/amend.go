@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -76,6 +77,16 @@ type AmendStore interface {
 	// pair unchanged, with name and outcome as given. Everything on the
 	// delivery axis is left exactly as it was.
 	AmendMilestone(ctx context.Context, id uuid.UUID, name string, outcome *string) (MilestoneRef, error)
+
+	// CurrentPlacement reads the placement columns of the entity's current
+	// row -- the parent id that kind has, and its kind -- so an amend
+	// surface can tell a caller echoing its own placement from one trying
+	// to move or re-kind the entity (FR b62ed47a). A field the kind has no
+	// column for reads as absent. Returns ErrNotFound if id has no
+	// current row. It is the only read in this file, and no Amend* method
+	// consults it: the guard stays a refusal the surface decides before any
+	// supersede runs.
+	CurrentPlacement(ctx context.Context, entityKind string, id uuid.UUID) (AmendPlacementChange, error)
 }
 
 type amendStore struct{ pool *pgxpool.Pool }
@@ -263,7 +274,10 @@ func subjectArgs(s *Subject) []any {
 // unchanged id, parent, and kind; none of these fields is ever applied.
 // They exist so that a caller attempting a move or a re-kind gets the named
 // refusal Refuse reports, naming the operation to use instead, rather than
-// a generic unknown-field decode error.
+// a generic unknown-field decode error -- and so that a caller echoing back
+// the placement it read is not refused for it (FR b62ed47a). The same
+// struct is what CurrentPlacement returns, which is how Refuse compares a
+// submitted value against the entity's own.
 type AmendPlacementChange struct {
 	ProductID         *string `json:"product_id,omitempty"`
 	FeatureSetID      *string `json:"feature_set_id,omitempty"`
@@ -272,28 +286,121 @@ type AmendPlacementChange struct {
 	Kind              *string `json:"kind,omitempty"`
 }
 
+// Sent reports whether the caller submitted any placement field at all. A
+// body that submits none has nothing to compare, so a surface can skip the
+// current-placement read entirely rather than pay for it on every amend.
+func (p AmendPlacementChange) Sent() bool {
+	return p.ProductID != nil || p.FeatureSetID != nil || p.FeatureID != nil ||
+		p.ParentMilestoneID != nil || p.Kind != nil
+}
+
 // ErrPlacementChange is the named refusal an amend returns when a caller
 // asks to reparent or re-kind. Moving an entity is a create/move
 // operation and re-kinding is a resolution operation; amend never is one.
 var ErrPlacementChange = errors.New("krill/store: amend cannot reparent or re-kind an entity")
 
-// Refuse reports ErrPlacementChange naming entityKind and whichever field
-// the caller tried to change, or nil when the caller changed none of them.
-func (p AmendPlacementChange) Refuse(entityKind string) error {
+// Refuse reports ErrPlacementChange naming entityKind and the first field
+// whose SUBMITTED value differs from current, the entity's own placement as
+// CurrentPlacement read it -- or nil when every submitted value is the one
+// the entity already has. An omitted field was never sent and is never a
+// difference; a field the kind has no column for has an absent current
+// value, so any submitted value differs, an empty string included (FR
+// b62ed47a).
+func (p AmendPlacementChange) Refuse(entityKind string, current AmendPlacementChange) error {
 	for _, field := range []struct {
-		name  string
-		value *string
+		name      string
+		submitted *string
+		current   *string
 	}{
-		{"product_id", p.ProductID},
-		{"feature_set_id", p.FeatureSetID},
-		{"feature_id", p.FeatureID},
-		{"parent_milestone_id", p.ParentMilestoneID},
-		{"kind", p.Kind},
+		{"product_id", p.ProductID, current.ProductID},
+		{"feature_set_id", p.FeatureSetID, current.FeatureSetID},
+		{"feature_id", p.FeatureID, current.FeatureID},
+		{"parent_milestone_id", p.ParentMilestoneID, current.ParentMilestoneID},
+		{"kind", p.Kind, current.Kind},
 	} {
-		if field.value != nil {
+		if placementDiffers(field.submitted, field.current) {
 			return fmt.Errorf("%w: %s cannot change %s on amend -- reparent through the create/move path and re-kind through the resolution path",
 				ErrPlacementChange, entityKind, field.name)
 		}
 	}
 	return nil
+}
+
+// placementDiffers is the whole narrowing: a field the caller did not send
+// is never a difference, and a sent field is one only when the current value
+// is absent or holds something else.
+func placementDiffers(submitted, current *string) bool {
+	if submitted == nil {
+		return false
+	}
+	return current == nil || *submitted != *current
+}
+
+// placementSources maps each amendable kind, under the same spelling the
+// surfaces pass Refuse, to the table its current row lives in and to which
+// of the five placement fields that table has a column for. A field absent
+// from the map entry has no column, so it reads back as an absent current
+// value.
+var placementSources = map[string]struct {
+	table                                                       string
+	productID, featureSetID, featureID, parentMilestoneID, kind string
+}{
+	"product":               {table: "product"},
+	"feature set":           {table: "feature_set", productID: "product_id"},
+	"feature":               {table: "feature", featureSetID: "feature_set_id"},
+	"requirement":           {table: "requirement", featureID: "feature_id", kind: "kind"},
+	"persona":               {table: "persona", productID: "product_id"},
+	"non-goal":              {table: "non_goal", productID: "product_id", kind: "kind"},
+	"load-bearing decision": {table: "load_bearing_decision", featureSetID: "feature_set_id"},
+	"milestone":             {table: "milestone_ref", productID: "product_id", parentMilestoneID: "parent_milestone_id", kind: "kind"},
+}
+
+func (s amendStore) CurrentPlacement(ctx context.Context, entityKind string, id uuid.UUID) (AmendPlacementChange, error) {
+	src, ok := placementSources[entityKind]
+	if !ok {
+		return AmendPlacementChange{}, fmt.Errorf("krill/store: %q is not an amendable entity kind", entityKind)
+	}
+
+	// A constant NULL stands in for every field the kind has no column for,
+	// so the scan below reads AmendPlacementChange's field order either way.
+	selected := make([]string, 0, 5)
+	for _, column := range []string{src.productID, src.featureSetID, src.featureID, src.parentMilestoneID, src.kind} {
+		if column == "" {
+			selected = append(selected, "NULL")
+			continue
+		}
+		selected = append(selected, column)
+	}
+
+	var productID, featureSetID, featureID, parentMilestoneID *uuid.UUID
+	var kind *string
+	row := s.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT %s FROM %s WHERE id = $1 AND valid_to IS NULL`,
+		strings.Join(selected, ", "), src.table), id)
+	if err := row.Scan(&productID, &featureSetID, &featureID, &parentMilestoneID, &kind); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AmendPlacementChange{}, fmt.Errorf("%w: %s id %s", ErrNotFound, src.table, id)
+		}
+		return AmendPlacementChange{}, fmt.Errorf("get current %s placement: %w", src.table, err)
+	}
+
+	return AmendPlacementChange{
+		ProductID:         uuidString(productID),
+		FeatureSetID:      uuidString(featureSetID),
+		FeatureID:         uuidString(featureID),
+		ParentMilestoneID: uuidString(parentMilestoneID),
+		Kind:              kind,
+	}, nil
+}
+
+// uuidString renders a nullable placement column as the *string the
+// AmendPlacementChange the caller compares against carries; a NULL column --
+// a kind with no parent, a top-level milestone's own parent_milestone_id --
+// stays nil so any submitted value reads as a difference.
+func uuidString(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	s := id.String()
+	return &s
 }

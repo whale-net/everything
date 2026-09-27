@@ -259,6 +259,44 @@ func TestMCPRecutSurface_EndToEnd(t *testing.T) {
 		structured, ok := res.StructuredContent.(map[string]any)
 		require.True(t, ok)
 		assert.Empty(t, structured["features"])
+		assert.Equal(t, backlog.ID.String(), structured["milestone_ref_id"], "the read names the bucket, so it can be named as a move destination without a session")
+	})
+
+	t.Run("get_backlog names a bucket the product has never had, once", func(t *testing.T) {
+		fresh, err := entities.Products().Create(ctx, scopeID, "krill-fresh", "product whose bucket has never been created")
+		require.NoError(t, err)
+
+		cs, err := connectRecutMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		// No krill_session_id argument at all: the read is ungated, so a
+		// producer learns a destination id without holding a session.
+		read := func() map[string]any {
+			res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+				Name:      "get_backlog",
+				Arguments: map[string]any{"product_id": fresh.ID.String()},
+			})
+			require.NoError(t, err)
+			require.False(t, res.IsError, "unexpected error: %s", recutTextOf(res))
+			structured, ok := res.StructuredContent.(map[string]any)
+			require.True(t, ok)
+			return structured
+		}
+
+		first := read()
+		assert.Empty(t, first["features"])
+		bucketID, ok := first["milestone_ref_id"].(string)
+		require.True(t, ok, "a never-created bucket still comes back nameable: %v", first)
+		assert.NotEqual(t, uuid.Nil.String(), bucketID)
+
+		assert.Equal(t, bucketID, read()["milestone_ref_id"], "the read is idempotent")
+
+		var rows int
+		require.NoError(t, pool.QueryRow(ctx, `
+			SELECT count(*) FROM milestone_ref
+			WHERE scope_id = $1 AND product_id = $2 AND kind = $3 AND valid_to IS NULL
+		`, scopeID, fresh.ID, string(store.MilestoneKindBacklog)).Scan(&rows))
+		assert.Equal(t, 1, rows, "two reads of a never-created bucket create exactly one row")
 	})
 
 	t.Run("move_delivery_scope rejects an entity the from container does not deliver", func(t *testing.T) {
@@ -323,6 +361,7 @@ func TestMCPRecutSurface_EndToEnd(t *testing.T) {
 		feature, ok := features[0].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, delivered.ID.String(), feature["id"])
+		assert.Equal(t, backlog.ID.String(), structured["milestone_ref_id"], "a populated bucket reports the same id the empty read did")
 	})
 
 	// ── cross-check against the store layer directly, so this test proves ──

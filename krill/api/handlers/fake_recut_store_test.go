@@ -55,10 +55,10 @@ var _ store.RecutStore = (*fakeRecutStore)(nil)
 // (backlogQuerier, recut.go's unexported narrowing of *slice.Querier), so
 // TestGetBacklogHandler_* never needs a real store/querier pair.
 type fakeBacklogQuerier struct {
-	doc slice.Document
-	err error
+	backlog slice.Backlog
+	err     error
 }
 
-func (f *fakeBacklogQuerier) GetBacklog(ctx context.Context, productID uuid.UUID) (slice.Document, error) {
-	return f.doc, f.err
+func (f *fakeBacklogQuerier) GetBacklog(ctx context.Context, productID uuid.UUID) (slice.Backlog, error) {
+	return f.backlog, f.err
 }

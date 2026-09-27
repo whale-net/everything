@@ -56,6 +56,7 @@ type ClaimedTaskWire struct {
 	Title          string                     `json:"title"`
 	DeliveryRef    ClaimedTaskDeliveryRefWire `json:"delivery_ref"`
 	Claimant       ClaimedTaskClaimantWire    `json:"claimant"`
+	ClaimedAt      time.Time                  `json:"claimed_at"`
 	CurrentLane    string                     `json:"current_lane"`
 	LeaseExpiresAt time.Time                  `json:"lease_expires_at"`
 	AttemptCount   int                        `json:"attempt_count"`
@@ -76,6 +77,7 @@ func ToClaimedTaskWire(row store.ClaimedTaskRow) ClaimedTaskWire {
 			Acting:     ToSubjectWire(row.ClaimantActing),
 			OnBehalfOf: ToSubjectWire(row.ClaimantOnBehalfOf),
 		},
+		ClaimedAt:      row.ClaimedAt,
 		CurrentLane:    string(row.CurrentLane),
 		LeaseExpiresAt: row.LeaseExpiresAt,
 		AttemptCount:   row.AttemptCount,

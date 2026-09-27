@@ -38,7 +38,10 @@ FR4/FR10) is the work-axis by-task-id fetch surface: GET /tasks/{id} is
 ungated, over //krill/work's Assembler. task_claim.go (issue #2722,
 FR3/FR5) is the work-axis claim surface: POST /tasks/{id}/claim is gated,
 returning the same //krill/work Assembler payload task_payload.go's GET
-/tasks/{id} does, enriched with the fresh lease."""
+/tasks/{id} does, enriched with the fresh lease. persona.go and
+nongoal.go (FR 7a3906a3) are the Persona and Non-Goal create endpoints,
+POST /personas and POST /non-goals -- the last two spec-axis kinds to gain
+a collection POST, both gated like every other write above."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -71,7 +74,9 @@ go_library(
         "mediated.go",
         "milestone.go",
         "milestone_status.go",
+        "nongoal.go",
         "open_questions.go",
+        "persona.go",
         "pointer.go",
         "product.go",
         "recut.go",
@@ -169,7 +174,9 @@ go_test(
         "mediated_test.go",
         "milestone_delivery_test.go",
         "milestone_status_test.go",
+        "nongoal_test.go",
         "open_questions_test.go",
+        "persona_test.go",
         "pointer_test.go",
         "product_test.go",
         "recut_test.go",
@@ -328,6 +335,45 @@ go_test(
         "//krill/slice",
         "//krill/store",
         "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for the two spec-axis collection creates FR
+# 7a3906a3 adds (persona_nongoal_integration_test.go): a real gated
+# session POSTing POST /personas and POST /non-goals persists rows whose
+# surrogate ids are the ones the responses carried, a real duplicate name is
+# the same 409, an invalid `kind` writes nothing, and an ungated POST is a
+# 401 that writes nothing. Deliberately NOT part of `bazel test //...` --
+# see //libs/go/dbtest's README, mirrored by task_claim_integration_test
+# above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/api/handlers:persona_nongoal_integration_test --test_output=all
+go_test(
+    name = "persona_nongoal_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["persona_nongoal_integration_test.go"],
+    embed = [":handlers"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//krill/migrate/schema",
+        "//krill/store",
         "//libs/go/dbtest",
         "//libs/go/migrate",
         "@com_github_google_uuid//:uuid",

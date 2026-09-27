@@ -1,6 +1,6 @@
 // TestProposeEntities_SchemaHasNoCallerSettablePosition is the regression
 // check for the position-schema drift (issue #3027's finding; M8's
-// c7699a57).
+// c3b09ef2).
 //
 // The three layers disagreed. agents/producer.md said "no position field --
 // don't set one", because FR7 assigns each proposed entity's position

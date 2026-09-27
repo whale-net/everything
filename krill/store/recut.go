@@ -132,7 +132,9 @@ type RecutStore interface {
 	// This is the re-cut MilestoneAuthoringStore.AddDeliversMany names as
 	// the way out of ErrEntityDeliveredByCompetingMilestone, so it is not
 	// itself held to that rule: a move is what establishes the single
-	// delivery parent, not a second claim on it.
+	// delivery parent, not a second claim on it. It cannot serve that role
+	// for an entity already shipped in `from`, however -- ErrEntityShipped
+	// refuses it above, so that entity has no re-cut path at all.
 	MoveScope(ctx context.Context, scopeID uuid.UUID, entityIDs []uuid.UUID, fromContainerID, toContainerID uuid.UUID, acting, onBehalfOf Subject) error
 }
 

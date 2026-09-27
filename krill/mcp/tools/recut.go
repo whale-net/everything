@@ -3,7 +3,7 @@
 // GetBacklog -- move_delivery_scope (write, Requirement Contributor and
 // Agent personas) and get_backlog (read) -- mirroring
 // krill/api/handlers/recut.go's HTTP surface for the same capability
-// (LB7), via the same handlers.MoveScopeResponse/slice.Document shapes
+// (LB7), via the same handlers.MoveScopeResponse/slice.Backlog shapes
 // this package's other write/read tools reuse. Registered from
 // RegisterRecutAll (below) onto the design mount (../main.go's
 // designReg), same as delivery_shipment.go's tools:
@@ -95,36 +95,42 @@ type backlogInput struct {
 // krill/api/handlers/recut.go's own backlogQuerier, so this file's tests
 // can supply a fake without a real *store.Store.
 type backlogQuerier interface {
-	GetBacklog(ctx context.Context, productID uuid.UUID) (slice.Document, error)
+	GetBacklog(ctx context.Context, productID uuid.UUID) (slice.Backlog, error)
 }
 
 var _ backlogQuerier = (*slice.Querier)(nil)
 
+// backlogOutputSchema is get_backlog's own advertised output schema,
+// built the same way as sliceDocumentOutputSchema (slice.go) but over
+// slice.Backlog: the response adds the bucket's milestone_ref id to the
+// document, so it is no longer the document type that shared schema
+// describes.
+var backlogOutputSchema = mustSliceOutputSchema[slice.Backlog]("slice.Backlog")
+
 // RegisterGetBacklog registers get_backlog (FR5/FR6): productID's backlog
-// bucket contents via querier.GetBacklog, returned as the same
-// slice.Document shape every other read tool in this package returns
-// (LB7). Reuses sliceDocumentOutputSchema (slice.go) -- get_backlog
-// returns the same slice.Document type FR5-FR8's tools do, so it needs
-// the same uuid.UUID output-schema override those tools already declared,
-// not a second copy of it.
+// bucket via querier.GetBacklog -- the bucket's own milestone_ref id
+// alongside its entities, so a caller holding no session can name the
+// bucket as move_delivery_scope's `to`. The read creates that bucket on a
+// product's first call, so the id is nameable whether or not anything has
+// ever been moved into it.
 func RegisterGetBacklog(reg *server.Registry, querier backlogQuerier) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name:         "get_backlog",
-		Description:  "Return a product's backlog bucket contents (FR5/FR6) -- not-yet-shipped scope that was moved out of a milestone or milepebble without landing in another one.",
-		OutputSchema: sliceDocumentOutputSchema,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in backlogInput) (*mcp.CallToolResult, slice.Document, error) {
-		var zero slice.Document
+		Description:  "Return a product's backlog bucket (FR5/FR6): its milestone_ref id -- pass it to move_delivery_scope as `to` to retract planned scope -- plus the not-yet-shipped scope currently parked there.",
+		OutputSchema: backlogOutputSchema,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in backlogInput) (*mcp.CallToolResult, slice.Backlog, error) {
+		var zero slice.Backlog
 
 		productID, err := uuid.Parse(in.ProductID)
 		if err != nil {
 			return nil, zero, fmt.Errorf("product_id: invalid or missing UUID")
 		}
 
-		doc, err := querier.GetBacklog(ctx, productID)
+		backlog, err := querier.GetBacklog(ctx, productID)
 		if err != nil {
 			return nil, zero, err
 		}
-		return nil, doc, nil
+		return nil, backlog, nil
 	})
 }
 

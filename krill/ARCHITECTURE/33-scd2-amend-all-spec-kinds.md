@@ -27,9 +27,16 @@ could be forgotten. The refusal is still a *named* one at the surface, not
 a generic unknown-field decode: every amend request body embeds
 `store.AmendPlacementChange` (amend.go), a struct of the parent/kind
 fields a caller might reach for, which no handler or tool ever applies.
-`Refuse` turns any of them into `store.ErrPlacementChange` naming the
-field and pointing at the operation that does move or re-kind an entity --
-the create/move path, or the resolution path for a kind change.
+`Refuse` turns a submitted value that *differs* from the entity's own
+current placement into `store.ErrPlacementChange` naming the field and
+pointing at the operation that does move or re-kind an entity -- the
+create/move path, or the resolution path for a kind change. A value equal
+to the placement already there is not a change, so a client that echoes
+back the parent and kind it read amends normally (FR b62ed47a); a field
+the kind has no column for has no current value, so anything sent for it
+differs. That is why the guard is not decidable from the request body
+alone: each surface reads the entity's current row with
+`CurrentPlacement` in the same request, before any supersede runs.
 
 **Name uniqueness is create's, unchanged** (FR b2767a89). Every spec-axis
 table's scope-qualified name index is partial on `valid_to IS NULL`, so

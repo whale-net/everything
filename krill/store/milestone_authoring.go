@@ -61,7 +61,8 @@ type MilestoneAuthoringStore interface {
 	// if any entityID is already delivered by a different `kind='milestone'`
 	// row of the same product. Re-cutting first
 	// (RecutStore.MoveScope -- the `move_delivery_scope` verb) is the only
-	// way to hand an already-delivered entity to a competing milestone.
+	// way to hand an already-delivered entity to a competing milestone, and
+	// only while it has not shipped there; a shipped one has no re-cut path.
 	// Re-adding an entity milestoneID already delivers is not a
 	// conflict: that stays an idempotent no-op.
 	AddDeliversMany(ctx context.Context, scopeID, milestoneID uuid.UUID, entityIDs []uuid.UUID, acting, onBehalfOf Subject) error
@@ -355,8 +356,10 @@ func addDeliversTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUI
 // delivers it -- the single-delivery-parent rule (LB6) every Delivers write
 // path owes, whether it was authored through add_delivers or imported from
 // a brief. Re-asserting the same milestone's own association is not a
-// conflict, so a repeat call stays idempotent; the only way to hand the
-// entity to another milestone is an explicit move_delivery_scope re-cut.
+// conflict, so a repeat call stays idempotent; the way to hand the entity
+// to another milestone is an explicit move_delivery_scope re-cut -- which
+// ErrEntityShipped refuses for an entity already shipped by the competing
+// milestone, the one case with no re-cut path at all.
 func refuseCompetingMilestoneDelivers(ctx context.Context, tx pgx.Tx, scopeID, productID, milestoneID, entityID uuid.UUID) error {
 	var competing uuid.UUID
 	err := tx.QueryRow(ctx, `
@@ -370,7 +373,8 @@ func refuseCompetingMilestoneDelivers(ctx context.Context, tx pgx.Tx, scopeID, p
 	`, entityID, string(MilestoneRelationDelivers), string(MilestoneKindMilestone),
 		milestoneID, scopeID, productID).Scan(&competing)
 	if err == nil {
-		return fmt.Errorf("%w: entity %s is already delivered by milestone %s; move_delivery_scope it there first",
+		return fmt.Errorf("%w: entity %s is already delivered by milestone %s; move_delivery_scope it there first"+
+			", which is refused if it has already shipped there",
 			ErrEntityDeliveredByCompetingMilestone, entityID, competing)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -385,7 +389,9 @@ func refuseCompetingMilestoneDelivers(ctx context.Context, tx pgx.Tx, scopeID, p
 // single association (LB6) -- a FeatureSet named for a lane does not
 // create a second parent that can rival the milestone for the same
 // entity. Re-cutting with RecutStore.MoveScope is the only way to hand
-// the entity to a competing milestone.
+// the entity to a competing milestone, and only while the entity has not
+// already shipped in the competing milestone: MoveScope refuses that with
+// ErrEntityShipped, so a shipped entity has no re-cut path at all.
 var ErrEntityDeliveredByCompetingMilestone = errors.New("krill/store: entity is already delivered by another milestone of this product")
 
 // deliversTarget resolves the association target's own Kind and Product

@@ -49,6 +49,11 @@ type ClaimedTaskRow struct {
 	ClaimantActing     Subject
 	ClaimantOnBehalfOf Subject
 
+	// ClaimedAt is when the live claim was taken (task_claim.claimed_at),
+	// never task.created_at: a task claimed much later than it was created
+	// would otherwise read as having been held all that time.
+	ClaimedAt time.Time
+
 	CurrentLane    Lane
 	LeaseExpiresAt time.Time
 	AttemptCount   int
@@ -68,10 +73,11 @@ type ListClaimedTasksParams struct {
 //
 // Joins task (WHERE current_claim_id IS NOT NULL) to milestone_ref (the
 // identifying delivery reference this file's own doc comment describes)
-// and to task_claim (task.current_claim_id) for the claimant session and
-// both LB4 subject pairs -- task_claim's created_by_acting/
-// created_by_on_behalf_of columns name whoever created the claim (the
-// claimant), per ClaimedTaskRow's own doc comment. task.current_claim_id
+// and to task_claim (task.current_claim_id) for the claimant session,
+// the claimed-since instant, and both LB4 subject pairs -- task_claim's
+// created_by_acting/created_by_on_behalf_of columns name whoever created
+// the claim (the claimant), per ClaimedTaskRow's own doc comment.
+// task.current_claim_id
 // carries no DB-level FK onto task_claim(id) (migration 015's own note:
 // task_claim is created later in the same migration), so this join is
 // enforced here in Go/SQL, not by the schema.
@@ -90,7 +96,7 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 	args := []any{params.ScopeID}
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
-			tc.session_id,
+			tc.session_id, tc.claimed_at,
 			tc.created_by_acting_iss, tc.created_by_acting_sub, tc.created_by_acting_kind,
 			tc.created_by_on_behalf_of_iss, tc.created_by_on_behalf_of_sub, tc.created_by_on_behalf_of_kind,
 			task.current_lane, task.lease_expires_at, task.attempt_count
@@ -127,7 +133,7 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 		var currentLane string
 		if err := rows.Scan(
 			&row.TaskID, &row.Title, &row.DeliveryRef.ID, &deliveryKind, &row.DeliveryRef.Title,
-			&sessionID,
+			&sessionID, &row.ClaimedAt,
 			&row.ClaimantActing.Iss, &row.ClaimantActing.Sub, &actingKind,
 			&row.ClaimantOnBehalfOf.Iss, &row.ClaimantOnBehalfOf.Sub, &onBehalfOfKind,
 			&currentLane, &row.LeaseExpiresAt, &row.AttemptCount,

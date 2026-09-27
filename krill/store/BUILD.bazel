@@ -911,6 +911,23 @@ go_test(
     ],
 )
 
+# Pure unit tests for the amend placement guard (amend.go, FR b62ed47a):
+# Refuse comparing each submitted field against the entity's own current
+# placement -- omitted, echoed, changed, empty-string, and no-column-for-it
+# -- plus the Sent predicate that skips the read when a body sends no
+# placement field at all. No database needed; the read those comparisons
+# take is covered against real Postgres by amend_integration_test below.
+go_test(
+    name = "amend_test",
+    srcs = ["amend_test.go"],
+    deps = [
+        ":store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real Postgres integration test for TaskStore.CreateTask (task.go,
 # migration 015, issue #2719's Testing section, FR1): the milepebble and
 # uncut-milestone creation shapes, the cut-milestone rejection
@@ -1709,6 +1726,7 @@ go_test(
         "integration",
         "manual",
         "no-cache",
+        "no-sandbox",
         "requires-network",
     ],
     deps = [
@@ -1737,6 +1755,7 @@ go_test(
         "integration",
         "manual",
         "no-cache",
+        "no-sandbox",
         "requires-network",
     ],
     deps = [

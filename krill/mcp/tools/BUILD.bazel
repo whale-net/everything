@@ -736,7 +736,7 @@ go_test(
     ],
 )
 
-# Regression check for the position-schema drift (M8's c7699a57): the
+# Regression check for the position-schema drift (M8's c3b09ef2): the
 # propose_entities MCP schema must not advertise a caller-settable
 # position, because FR7 assigns it server-side. The field was a non-pointer
 # int with no omitempty, so the generated jsonschema marked it REQUIRED and a

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -229,6 +230,160 @@ func TestAmendHandlers_RefuseReparentAndReKind(t *testing.T) {
 	}
 }
 
+// ── the value comparison, and the cases that only it can tell apart ──
+
+// ownPlacement is one kind's current row placement with the body fragments
+// that echo it back and that echo it back with one field changed: what a
+// client sends when it read the entity, kept its parent and kind, and
+// replaced only the content. A Product has no placement column of its own,
+// so it has no echo to send and is covered by the no-column-for-it cases.
+type ownPlacement struct {
+	current store.AmendPlacementChange
+	// echo carries every field of current; broken carries the same fields
+	// with changed holding a different value and everything else intact.
+	echo    string
+	broken  string
+	changed string
+}
+
+func ownPlacementOf(kind string) ownPlacement {
+	product, set, feature, parent := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	other := uuid.NewString()
+	echo := func(fields ...string) string { return ", " + strings.Join(fields, ", ") }
+	quoted := func(field, value string) string { return `"` + field + `": "` + value + `"` }
+
+	switch kind {
+	case "feature set", "persona":
+		return ownPlacement{
+			current: store.AmendPlacementChange{ProductID: &product},
+			echo:    echo(quoted("product_id", product)),
+			broken:  echo(quoted("product_id", other)),
+			changed: "product_id",
+		}
+	case "feature", "load-bearing decision":
+		return ownPlacement{
+			current: store.AmendPlacementChange{FeatureSetID: &set},
+			echo:    echo(quoted("feature_set_id", set)),
+			broken:  echo(quoted("feature_set_id", other)),
+			changed: "feature_set_id",
+		}
+	case "requirement":
+		return ownPlacement{
+			current: store.AmendPlacementChange{FeatureID: &feature, Kind: strPtr("NFR")},
+			echo:    echo(quoted("feature_id", feature), quoted("kind", "NFR")),
+			broken:  echo(quoted("feature_id", feature), quoted("kind", "FR")),
+			changed: "kind",
+		}
+	case "non-goal":
+		return ownPlacement{
+			current: store.AmendPlacementChange{ProductID: &product, Kind: strPtr("deferred")},
+			echo:    echo(quoted("product_id", product), quoted("kind", "deferred")),
+			broken:  echo(quoted("product_id", product), quoted("kind", "permanent")),
+			changed: "kind",
+		}
+	case "milestone":
+		return ownPlacement{
+			current: store.AmendPlacementChange{ProductID: &product, ParentMilestoneID: &parent, Kind: strPtr("milepebble")},
+			echo:    echo(quoted("product_id", product), quoted("parent_milestone_id", parent), quoted("kind", "milepebble")),
+			broken:  echo(quoted("product_id", product), quoted("parent_milestone_id", parent), quoted("kind", "milestone")),
+			changed: "kind",
+		}
+	}
+	return ownPlacement{}
+}
+
+// withPlacement splices a placement fragment into the endpoint's own valid
+// body, so the placement cases are decided by the guard and not by a field
+// that kind requires and another kind does not.
+func withPlacement(body, placement string) string {
+	return strings.TrimSuffix(body, "}") + placement + "}"
+}
+
+// TestAmendHandlers_EchoesOwnPlacement_IsAccepted is the inverse of every
+// case TestAmendHandlers_RefuseReparentAndReKind has: a body that echoes
+// the entity's OWN placement amends normally, so the guard is a comparison
+// against the row the handler read and not a presence check. This is the
+// case that fails if the comparison is made against a constant, or against
+// some other row than the one being amended.
+func TestAmendHandlers_EchoesOwnPlacement_IsAccepted(t *testing.T) {
+	for kind, endpoint := range amendEndpoints {
+		t.Run(kind, func(t *testing.T) {
+			sessions, _, sessionIDStr := newTestSession(t)
+			own := ownPlacementOf(kind)
+			amend := &fakeAmendStore{current: own.current}
+			id := uuid.New()
+
+			rec := doAmendRequest(t, endpoint.handler(amend), sessions, sessionIDStr, id.String(),
+				withPlacement(endpoint.body, own.echo))
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Len(t, amend.calls, 1, "an echo of the entity's own placement must amend, not refuse")
+			assert.Equal(t, id, amend.calls[0].id)
+		})
+	}
+}
+
+// TestAmendHandlers_OnePlacementFieldChanged_RefusedAndNamed proves the
+// comparison is per field against the row that was read: echoing the whole
+// current placement and changing ONE of its values is refused naming exactly
+// that field, so the fields beside it were genuinely accepted rather than
+// never looked at.
+func TestAmendHandlers_OnePlacementFieldChanged_RefusedAndNamed(t *testing.T) {
+	for kind, endpoint := range amendEndpoints {
+		t.Run(kind, func(t *testing.T) {
+			own := ownPlacementOf(kind)
+			if own.echo == "" {
+				t.Skip("a Product has no placement column of its own; see TestAmendHandlers_RefuseReparentAndReKind")
+			}
+			sessions, _, sessionIDStr := newTestSession(t)
+			amend := &fakeAmendStore{current: own.current}
+
+			rec := doAmendRequest(t, endpoint.handler(amend), sessions, sessionIDStr, uuid.New().String(),
+				withPlacement(endpoint.body, own.broken))
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Contains(t, rec.Body.String(), "cannot change "+own.changed+" on amend",
+				"the changed field is the one named; the echoed fields beside it were accepted")
+			assert.Empty(t, amend.calls, "a refused change must never reach AmendStore")
+		})
+	}
+}
+
+// TestAmendHandlers_NoPlacementField_NeedsNoCurrentPlacementRead proves an
+// omitted field is never a difference and costs nothing: a body that sends
+// none of the five amends without the guard reading the row at all, which is
+// also the state NFR f9fbce50's schema leaves every well-behaved caller in.
+func TestAmendHandlers_NoPlacementField_NeedsNoCurrentPlacementRead(t *testing.T) {
+	for kind, endpoint := range amendEndpoints {
+		t.Run(kind, func(t *testing.T) {
+			sessions, _, sessionIDStr := newTestSession(t)
+			amend := &fakeAmendStore{}
+
+			rec := doAmendRequest(t, endpoint.handler(amend), sessions, sessionIDStr, uuid.New().String(), endpoint.body)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			assert.Zero(t, amend.placementReads, "an amend sending no placement field must not read the current placement")
+			assert.Len(t, amend.calls, 1)
+		})
+	}
+}
+
+// TestAmendHandlers_PlacementOnUnknownID_Returns400 proves the guard's read
+// is a real read: an id with no current row has no placement to echo, so
+// the surface reports it the same way the write would rather than treating
+// the failed read as an echo and amending.
+func TestAmendHandlers_PlacementOnUnknownID_Returns400(t *testing.T) {
+	sessions, _, sessionIDStr := newTestSession(t)
+	amend := &fakeAmendStore{placementErr: store.ErrNotFound}
+
+	rec := doAmendRequest(t, handlers.AmendRequirementHandler(amend), sessions, sessionIDStr, uuid.New().String(),
+		`{"name": "Amended", "feature_id": "`+uuid.NewString()+`"}`)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Equal(t, 1, amend.placementReads)
+	assert.Empty(t, amend.calls, "a guard that could not read must not fall through to the write")
+}
+
 // TestAmendHandlers_NameConflictReturns409 proves store.ErrNameConflict --
 // an amend whose replacement name collides with a live sibling (FR
 // b2767a89) -- maps to 409, the same conflict status a create's collision
@@ -245,15 +400,32 @@ func TestAmendHandlers_NameConflictReturns409(t *testing.T) {
 }
 
 // TestAmendPlacementChange_Refuse pins the store-side rule the surfaces
-// share: no placement field set means no refusal, and the first one set is
-// the one named.
+// share: a submitted placement value that differs from the entity's own is
+// refused, the first such field is the one named, and a value equal to the
+// entity's current placement amends normally.
 func TestAmendPlacementChange_Refuse(t *testing.T) {
-	none := store.AmendPlacementChange{}
-	assert.NoError(t, none.Refuse("feature"), "an amend that changes nothing about placement is allowed")
-
 	productID := uuid.NewString()
-	changed := store.AmendPlacementChange{ProductID: &productID, Kind: strPtr("permanent")}
-	err := changed.Refuse("feature")
+	current := store.AmendPlacementChange{ProductID: &productID}
+
+	none := store.AmendPlacementChange{}
+	assert.NoError(t, none.Refuse("feature", current), "an amend that sends no placement field is allowed")
+
+	echoed := store.AmendPlacementChange{ProductID: &productID}
+	assert.NoError(t, echoed.Refuse("feature", current), "an amend echoing the entity's own placement is allowed")
+
+	empty := ""
+	blank := store.AmendPlacementChange{ProductID: &empty}
+	assert.ErrorIs(t, blank.Refuse("feature", current), store.ErrPlacementChange,
+		"a submitted empty string differs from a non-empty placement and is refused")
+
+	// The entity has no feature_id column, so its current value is absent
+	// and any submitted value differs.
+	orphan := store.AmendPlacementChange{FeatureID: &productID}
+	assert.ErrorIs(t, orphan.Refuse("feature", current), store.ErrPlacementChange,
+		"a field the kind has no column for is refused for any value")
+
+	changed := store.AmendPlacementChange{ProductID: strPtr(uuid.NewString()), Kind: strPtr("permanent")}
+	err := changed.Refuse("feature", current)
 	require.ErrorIs(t, err, store.ErrPlacementChange)
 	assert.Contains(t, err.Error(), "cannot change product_id on amend", "the first offending field is the one named")
 	assert.NotContains(t, err.Error(), "cannot change kind on amend")
