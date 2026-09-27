@@ -601,6 +601,25 @@ templ OpsInlineError(message string) {
 	</div>
 }
 
+// OpsQueryError is the in-shell page a console query failure renders for a
+// no-JS browser: the same operator-facing message OpsInlineError carries,
+// plus a way back to a working page. It is the reason the failure is not a
+// bare text/plain body -- an operator who lands on a view that cannot load
+// has to be able to navigate away from it, and a bare http.Error takes the
+// nav with it.
+//
+// backHref is the view's own URI with the rejected continuation token
+// dropped, so following it is itself the recovery.
+templ OpsQueryError(message, backHref string) {
+	<section data-krill="ops-query-error">
+		<h2 class="text-xl font-semibold" data-krill="page-title">Could not load this view</h2>
+		@htmxui.Alert(htmxui.AlertError, message, nil)
+		<p class="mt-4">
+			<a href={ templ.URL(backHref) } class="btn btn-secondary btn-sm">Reload the view</a>
+		</p>
+	</section>
+}
+
 // InterventionError is the in-shell page a refused intervention renders
 // for a no-JS browser. The htmx path never reaches it: a refusal rides
 // inside the re-derived results block as an inline Alert instead, because
