@@ -8,11 +8,8 @@
 // open-question derivation -- never a parallel query.
 //
 // Unlike a write, a read carries no attribution, so it needs no krill
-// session: api's own GET /design-sessions/{id} and
-// GET /design-sessions/{id}/open-questions are ungated for the same reason
-// (krill/ARCHITECTURE/12-design-session-revision-event-http.md). These
-// pages are behind the sign-in gate only, exactly like the rest of the
-// nav shell.
+// session. These pages are behind readerRoute (sign-in plus a reader or
+// operator role), like the rest of the read pages.
 //
 // The view models themselves (pages.DesignSessionListPage and friends) are
 // declared in krill/ui/pages/design.templ beside the components that

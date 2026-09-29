@@ -309,6 +309,15 @@ in sync. `krill/ui/components/status.go` is a `.go` rather than a
 `libs/go/htmxui`'s own `templ_library` carries a `# keep` marker so
 gazelle does not collapse it. The app-level ones do not.
 
+## Read gate
+
+Reads stay in-process (no api hop), so every read page is mounted through
+`readerRoute` (main.go): sign-in, then the same `RoleConfig.ResolvePersona`
+(`KRILL_ROLE_OPERATOR` / `KRILL_ROLE_READER`) api uses. A signed-in user with
+neither role gets 403. Under `AUTH_MODE=none` the synthetic dev user is
+admitted as an operator, matching api's dev token. New read pages must use
+`readerRoute`, never bare `RequireAuthFunc`.
+
 ## Write identity (LB4) — the constraint that is easy to break
 
 **Identity is resolved server-side.** Every write resolves the operator's
