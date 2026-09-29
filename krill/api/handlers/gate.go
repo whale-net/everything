@@ -22,6 +22,13 @@ import (
 // field so RequireSession can reject before a handler even parses its own
 // body, and so the same header works uniformly across every write
 // endpoint's differently-shaped request body.
+// SessionExpiredCode is the error code an idle-expired session is rejected
+// with, on the api (401 body "code") and on MCP tool errors.
+const SessionExpiredCode = "session_expired"
+
+// SessionExpiredMessage tells the client to mint a fresh session.
+const SessionExpiredMessage = SessionExpiredCode + ": krill session expired from inactivity; call init_session to start a new one"
+
 const sessionHeader = "X-Krill-Session-Id"
 
 // GatedSession is what RequireSession resolves a caller-presented session
@@ -77,9 +84,13 @@ func RequireSession(sessions store.SessionStore) func(http.Handler) http.Handler
 				return
 			}
 
-			sess, err := sessions.GetSession(r.Context(), store.SessionID(id))
+			sess, err := sessions.UseSession(r.Context(), store.SessionID(id))
 			if errors.Is(err, store.ErrSessionNotFound) {
 				writeJSONError(w, http.StatusUnauthorized, "unknown krill session")
+				return
+			}
+			if errors.Is(err, store.ErrSessionExpired) {
+				writeJSON(w, http.StatusUnauthorized, jsonError{Error: SessionExpiredMessage, Code: SessionExpiredCode})
 				return
 			}
 			if err != nil {

@@ -374,3 +374,7 @@ func resolveTextOf(res *mcp.CallToolResult) string {
 	}
 	return out
 }
+
+func (f resolveSessionStore) UseSession(ctx context.Context, id store.SessionID) (store.Session, error) {
+	return f.GetSession(ctx, id)
+}
