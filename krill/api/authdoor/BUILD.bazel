@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "authdoor",
+    srcs = ["authdoor.go"],
+    importpath = "github.com/whale-net/everything/krill/api/authdoor",
+    visibility = ["//krill:__subpackages__"],
+    deps = [
+        "//krill/caller",
+        "//krill/mcp/server",
+        "//libs/go/auth",
+        "//libs/go/grpcauth",
+        "//libs/go/logging",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+    ],
+)
+
+go_test(
+    name = "authdoor_test",
+    srcs = ["authdoor_test.go"],
+    embed = [":authdoor"],
+    deps = [
+        "//krill/mcp/server",
+        "//libs/go/auth",
+        "//libs/go/grpcauth",
+        "@com_github_stretchr_testify//require",
+    ],
+)

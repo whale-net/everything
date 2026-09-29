@@ -71,6 +71,9 @@ layer and the auth credential store read from it).
 | `KRILL_MCP_WHAGENT_ISSUER` | — | whagent-net's own issuer identifier, verified against every whagent Claim `mcp` accepts. |
 | `KRILL_ROLE_OPERATOR` | api, mcp | `""` | Keycloak realm role (from `realm_access.roles`) that resolves to the `swarm_operator` persona. Unset means no identity is an operator. |
 | `KRILL_ROLE_READER` | api, mcp | `""` | Keycloak realm role that resolves to the `reader` persona (operator implies read). Unset means no identity is a reader. |
+| `KRILL_OIDC_ISSUER` | api | `""` | Keycloak issuer for the api's OIDC door; a JWT is verified only if its unverified `iss` equals this exactly. Needs `KRILL_OIDC_CLIENT_ID` too. |
+| `KRILL_OIDC_CLIENT_ID` | api | `""` | Audience the api expects in verified Keycloak tokens (see `libs/go/grpcauth/KEYCLOAK.md`). |
+| `KRILL_API_REQUIRE_AUTH` | api | `false` | `true` rejects requests with no token (401). Off, tokens are verified when present but absence is allowed. |
 
 The auth (human OAuth2) front door additionally requires its
 `mcp_credential`-shaped table to exist against the same `PG_DATABASE_URL`
