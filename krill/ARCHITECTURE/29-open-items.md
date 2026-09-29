@@ -73,8 +73,8 @@
 
 - `krill/Tiltfile` local dev is not configured for the authenticated `api`
   (no Keycloak, roles, or credential wiring); scope note c5ef6e96.
-- The machine `client_credentials` token source (`krill/apiclient`) has no
-  in-repo caller yet.
+- The machine `client_credentials` token source (`krill/apiclient`) is used
+  by the importer CLI (`--api-url`) to mint its session.
 - The Keycloak `act.agent_id` claim is dropped; only `sub`/`iss` are kept.
 - There is no credential-to-scope mapping: with more than one scope,
   `init` refuses (`ScopeStore.GetSole` fails) rather than choosing one.
