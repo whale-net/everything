@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "callerid",
+    srcs = ["callerid.go"],
+    importpath = "github.com/whale-net/everything/krill/callerid",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/identity",
+        "//libs/go/grpcauth",
+        "//libs/go/whagent",
+    ],
+)
+
+go_test(
+    name = "callerid_test",
+    srcs = ["callerid_test.go"],
+    embed = [":callerid"],
+    deps = [
+        "//krill/identity",
+        "//libs/go/grpcauth",
+        "//libs/go/whagent",
+        "@com_github_stretchr_testify//require",
+    ],
+)
