@@ -16,6 +16,7 @@ var expectedWorkSurfaceToolNames = []string{
 	// its plugin manifest no longer mounts /mcp/design, so without these it
 	// cannot resolve the product or read the milestone it is working on.
 	"init_session",
+	"get_scope",
 	"list_products",
 	"get_milestone",
 	"list_milepebbles",
@@ -61,6 +62,7 @@ func RegisterWorkAll(reg *server.Registry, entities *store.Store, sessions store
 	// Ungated discovery. A persona holding a task or milestone id cannot use
 	// it without resolving the product it belongs to (issue #3028).
 	RegisterInitSession(reg, sessions, entities.Scopes())
+	RegisterGetScope(reg, entities.Scopes())
 	RegisterListProducts(reg, entities.Products())
 	RegisterGetMilestone(reg, entities.MilestoneAuthoring())
 	RegisterListMilepebbles(reg, entities.MilestoneAuthoring())

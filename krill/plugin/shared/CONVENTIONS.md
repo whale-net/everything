@@ -69,24 +69,18 @@ registers it.
 ## Session bootstrapping
 
 Every write tool on `/mcp/design` requires a `krill_session_id` (every read
-tool is ungated). Mint one first: `init_session {acting, on_behalf_of,
-whagent_session_id?}` → `{session_id, scope_id}` — no persona restriction.
-`scope_id` is the scope the session was minted under — the value
-`list_products`, `list_tasks`, and the ops console tools (`list_claimed_tasks`
-etc.) take as input (`POST /sessions/init` returns the same shape).
+tool is ungated). Mint one first: `init_session {}` (no arguments) →
+`{session_id, scope_id}` — no persona restriction. Your identity
+(`acting`/`on_behalf_of`, and `whagent_session_id` for a whagent-net agent) is
+derived server-side from your verified credential; the tool accepts no
+identity or scope fields, and supplying any is rejected. `scope_id` is the
+deployment's sole scope — the value `list_products`, `list_tasks`, and the ops
+console tools (`list_claimed_tasks` etc.) take as input. To learn it without
+minting a session, call the read-only `get_scope {}`.
 
-`acting`/`on_behalf_of` are each a `{iss, sub, kind}` triple:
-
-- `kind` is exactly `"human"`, `"service"` or `"agent"`. Use `"human"` for
-  an ordinary interactive session; unattended personas (e.g.
-  `loop-design-panel`'s `reviewer`) use `"service"`; an AI agent calling in on
-  its own behalf uses `"agent"`.
-- `iss`/`sub` only need to be non-empty free text (e.g. `iss:
-  "whalenet-cli"`, `sub: "<caller's email>"`). For the common case, `acting
-  == on_behalf_of` — set them to the same value. Set them differently only
-  for a genuinely mediated call (a Requirement Contributor's ask relayed by
-  an Agent via `propose_entities`) — never the same value there, or the
-  write is rejected (`ErrMediatedIdentitySame`).
+A mediated call (a Requirement Contributor's ask relayed by an Agent via
+`propose_entities`) gets distinct acting/on-behalf-of from the credential
+itself (a whagent claim), never from client input.
 
 `krill_session_id` values don't survive a plugin-connection reset
 (`/reload-plugins`, a dropped MCP auth session) — mint a fresh one rather

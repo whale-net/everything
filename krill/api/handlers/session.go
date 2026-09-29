@@ -148,3 +148,21 @@ type jsonError struct {
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, jsonError{Error: msg})
 }
+
+// ScopeResponse is GET /scope's body.
+type ScopeResponse struct {
+	ScopeID string `json:"scope_id"`
+}
+
+// GetScopeHandler returns GET /scope: the deployment's sole scope_id,
+// resolved by the same store.ScopeStore.GetSole the MCP get_scope tool uses.
+func GetScopeHandler(scopes store.ScopeStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, err := scopes.GetSole(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusConflict, fmt.Sprintf("resolve scope: %v", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, ScopeResponse{ScopeID: scope.ID.String()})
+	}
+}
