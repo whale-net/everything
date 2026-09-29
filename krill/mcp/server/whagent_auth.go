@@ -38,6 +38,7 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/whale-net/everything/krill/caller"
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -55,7 +56,7 @@ type WhagentAuthConfig struct {
 // DualAuthHTTPHandler's whagent-shaped-token branch stashes a verified
 // *whagent.Claim under, and WhagentPersonaMiddleware reads it back from
 // mcp.Request.GetExtra().TokenInfo.Extra.
-const whagentClaimExtraKey = "krill/mcp/server.whagent_claim"
+const whagentClaimExtraKey = caller.WhagentClaimExtraKey
 
 // errWhagentTokenInvalid is the single fixed error this file's
 // sdkauth.TokenVerifier returns for every whagent.Verifier.Verify
