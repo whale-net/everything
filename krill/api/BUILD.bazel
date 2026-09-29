@@ -35,7 +35,10 @@ go_library(
 
 go_test(
     name = "api_test",
-    srcs = ["routes_auth_test.go"],
+    srcs = [
+        "config_test.go",
+        "routes_auth_test.go",
+    ],
     data = ["routes.go"],
     embed = [":api_lib"],
     deps = [
