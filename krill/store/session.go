@@ -69,6 +69,7 @@ type Session struct {
 	OnBehalfOf       Subject
 	WhagentSessionID *string
 	CreatedAt        time.Time
+	LastUsedAt       *time.Time
 }
 
 // ErrSessionNotFound is returned by SessionStore.GetSession when id does not
@@ -76,6 +77,15 @@ type Session struct {
 // this into a rejection rather than a 500, since an unknown session id is a
 // caller error (an expired or fabricated id), not a store failure.
 var ErrSessionNotFound = errors.New("krill session not found")
+
+// ErrSessionExpired is returned by SessionStore.UseSession when the session
+// was last used more than SessionIdleTTL ago, or has never been used (NULL
+// last_used_at, i.e. minted before idle expiry existed).
+var ErrSessionExpired = errors.New("krill session expired")
+
+// SessionIdleTTL is how long a session may sit unused before a gated write
+// is rejected with ErrSessionExpired.
+const SessionIdleTTL = 12 * time.Hour
 
 // SessionStore is the store surface FR3's `init` primitive and the write
 // gate (api/handlers/gate.go) depend on.
@@ -102,6 +112,12 @@ type SessionStore interface {
 	// success -- so the gate can tell "invalid session id" apart from a
 	// genuine store error.
 	GetSession(ctx context.Context, id SessionID) (Session, error)
+
+	// UseSession is the session check every gated write performs: it
+	// atomically refreshes last_used_at and returns the session, or returns
+	// ErrSessionExpired (idle over SessionIdleTTL, or NULL last_used_at) or
+	// ErrSessionNotFound. Reads must use GetSession, which never refreshes.
+	UseSession(ctx context.Context, id SessionID) (Session, error)
 }
 
 // sessionStore is the pgx-backed SessionStore implementation.
@@ -123,8 +139,8 @@ func (s sessionStore) InitSession(ctx context.Context, scopeID uuid.UUID, acting
 			scope_id,
 			acting_iss, acting_sub, acting_kind,
 			on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
-			whagent_session_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			whagent_session_id, last_used_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 		RETURNING id
 	`,
 		scopeID,
@@ -149,7 +165,8 @@ func (s sessionStore) GetSession(ctx context.Context, id SessionID) (Session, er
 			acting_iss, acting_sub, acting_kind,
 			on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
 			whagent_session_id,
-			created_at
+			created_at,
+			last_used_at
 		FROM krill_session
 		WHERE id = $1
 	`, uuid.UUID(id)).Scan(
@@ -159,12 +176,55 @@ func (s sessionStore) GetSession(ctx context.Context, id SessionID) (Session, er
 		&sess.OnBehalfOf.Iss, &sess.OnBehalfOf.Sub, &onBehalfOfKind,
 		&sess.WhagentSessionID,
 		&sess.CreatedAt,
+		&sess.LastUsedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrSessionNotFound
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("select krill_session: %w", err)
+	}
+	sess.Acting.Kind = SubjectKind(actingKind)
+	sess.OnBehalfOf.Kind = SubjectKind(onBehalfOfKind)
+	return sess, nil
+}
+
+// UseSession implements SessionStore.
+func (s sessionStore) UseSession(ctx context.Context, id SessionID) (Session, error) {
+	var sess Session
+	var actingKind, onBehalfOfKind string
+	err := s.pool.QueryRow(ctx, `
+		UPDATE krill_session
+		SET last_used_at = NOW()
+		WHERE id = $1
+		  AND last_used_at IS NOT NULL
+		  AND last_used_at > NOW() - make_interval(secs => $2)
+		RETURNING
+			id,
+			scope_id,
+			acting_iss, acting_sub, acting_kind,
+			on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
+			whagent_session_id,
+			created_at,
+			last_used_at
+	`, uuid.UUID(id), SessionIdleTTL.Seconds()).Scan(
+		(*uuid.UUID)(&sess.ID),
+		&sess.ScopeID,
+		&sess.Acting.Iss, &sess.Acting.Sub, &actingKind,
+		&sess.OnBehalfOf.Iss, &sess.OnBehalfOf.Sub, &onBehalfOfKind,
+		&sess.WhagentSessionID,
+		&sess.CreatedAt,
+		&sess.LastUsedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Distinguish an expired session from an unknown one.
+		if _, gerr := s.GetSession(ctx, id); gerr != nil {
+			return Session{}, gerr
+		}
+		return Session{}, ErrSessionExpired
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("touch krill_session: %w", err)
 	}
 	sess.Acting.Kind = SubjectKind(actingKind)
 	sess.OnBehalfOf.Kind = SubjectKind(onBehalfOfKind)

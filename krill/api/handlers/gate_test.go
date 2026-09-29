@@ -10,6 +10,7 @@
 package handlers_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -130,4 +131,27 @@ func TestReadHandler_NotWrappedByRequireSession_NeverGated(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code, "a read handler must never require a krill session id -- FR3 gates writes only")
+}
+
+// TestRequireSession_ExpiredSession_Rejects401WithSessionExpiredCode proves an
+// idle-expired session is a 401 carrying the distinct session_expired code,
+// and never reaches the write handler.
+func TestRequireSession_ExpiredSession_Rejects401WithSessionExpiredCode(t *testing.T) {
+	sessions := newFakeSessionStore()
+	id, err := sessions.InitSession(t.Context(), uuid.New(), store.Subject{}, store.Subject{}, nil)
+	require.NoError(t, err)
+	sessions.expired = map[store.SessionID]bool{id: true}
+
+	reached := false
+	wrapped := handlers.RequireSession(sessions)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	req := httptest.NewRequest(http.MethodPost, "/some/write/endpoint", nil)
+	req.Header.Set("X-Krill-Session-Id", id.String())
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	assert.False(t, reached)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, handlers.SessionExpiredCode, body["code"])
 }
