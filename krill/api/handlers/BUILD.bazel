@@ -107,6 +107,7 @@ go_library(
     importpath = "github.com/whale-net/everything/krill/api/handlers",
     visibility = ["//visibility:public"],
     deps = [
+        "//krill/caller",
         "//krill/forge",
         "//krill/slice",
         "//krill/store",
@@ -204,6 +205,7 @@ go_test(
     ],
     embed = [":handlers"],
     deps = [
+        "//krill/caller",
         "//krill/slice",
         "//krill/store",
         "//krill/work",

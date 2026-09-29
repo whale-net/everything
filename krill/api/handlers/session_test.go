@@ -1,14 +1,12 @@
-// Unit tests for InitSessionHandler (session.go, issue #2489's Testing
-// section): success mints a session id and records both subjects, and
-// per-field validation failures reject with 400 before ever reaching the
-// store. No Postgres dependency -- fakeSessionStore (fake_session_store_test.go)
-// stands in for store.SessionStore.
+// Unit tests for InitSessionHandler: identity and scope come from the
+// verified caller and the deployment, never the request body.
 package handlers_test
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,131 +16,85 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/krill/api/handlers"
+	"github.com/whale-net/everything/krill/caller"
 	"github.com/whale-net/everything/krill/store"
 )
 
-func doInit(t *testing.T, sessions *fakeSessionStore, body string) *httptest.ResponseRecorder {
-	t.Helper()
+type soleScope struct {
+	id  uuid.UUID
+	err error
+}
+
+func (s soleScope) GetByID(context.Context, uuid.UUID) (store.Scope, error) {
+	return store.Scope{ID: s.id}, s.err
+}
+func (s soleScope) GetSole(context.Context) (store.Scope, error) {
+	return store.Scope{ID: s.id}, s.err
+}
+
+func verified(ok bool) handlers.IdentityFunc {
+	return func(*http.Request) (caller.Identity, bool) {
+		return caller.Identity{
+			Acting:           caller.Subject{Iss: "https://kc", Sub: "agent-1", Kind: "service"},
+			OnBehalfOf:       caller.Subject{Iss: "https://kc", Sub: "human-1", Kind: "human"},
+			WhagentSessionID: "ws-1",
+		}, ok
+	}
+}
+
+func doInit(sessions *fakeSessionStore, scopes soleScope, id handlers.IdentityFunc, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/sessions/init", bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
-	handlers.InitSessionHandler(sessions).ServeHTTP(rec, req)
+	handlers.InitSessionHandler(sessions, scopes, id).ServeHTTP(rec, req)
 	return rec
 }
 
-// TestInitSessionHandler_Success proves a well-formed request mints a
-// session id distinct from the request's own whagent_session_id and
-// records both subjects on the store exactly as sent (LB4).
-func TestInitSessionHandler_Success(t *testing.T) {
+func TestInitSessionHandler_DerivesIdentityAndScope(t *testing.T) {
 	sessions := newFakeSessionStore()
-	scopeID := uuid.New()
-	whagentSessionID := uuid.NewString()
-
-	body := `{
-		"scope_id": "` + scopeID.String() + `",
-		"acting": {"iss": "https://issuer.example.com", "sub": "agent-1", "kind": "service"},
-		"on_behalf_of": {"iss": "https://issuer.example.com", "sub": "human-1", "kind": "human"},
-		"whagent_session_id": "` + whagentSessionID + `"
-	}`
-
-	rec := doInit(t, sessions, body)
+	scope := uuid.New()
+	// A body asserting a different identity and scope must have no effect.
+	body := `{"scope_id":"` + uuid.NewString() + `","acting":{"iss":"evil","sub":"root","kind":"human"}}`
+	rec := doInit(sessions, soleScope{id: scope}, verified(true), body)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	var resp struct {
-		SessionID string `json:"session_id"`
-		ScopeID   string `json:"scope_id"`
-	}
+	var resp handlers.InitSessionResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotEmpty(t, resp.SessionID)
-	assert.Equal(t, scopeID.String(), resp.ScopeID, "response must hand back the scope the session was minted under")
-	assert.NotEqual(t, whagentSessionID, resp.SessionID, "the minted krill session id must never equal the whagent session id")
-
-	id, err := uuid.Parse(resp.SessionID)
+	assert.Equal(t, scope.String(), resp.ScopeID)
+	sid, err := uuid.Parse(resp.SessionID)
 	require.NoError(t, err)
-
-	sess, err := sessions.GetSession(context.Background(), store.SessionID(id))
+	sess, err := sessions.GetSession(context.Background(), store.SessionID(sid))
 	require.NoError(t, err)
+	assert.Equal(t, scope, sess.ScopeID)
 	assert.Equal(t, "agent-1", sess.Acting.Sub)
 	assert.Equal(t, "human-1", sess.OnBehalfOf.Sub)
 	require.NotNil(t, sess.WhagentSessionID)
-	assert.Equal(t, whagentSessionID, *sess.WhagentSessionID)
+	assert.Equal(t, "ws-1", *sess.WhagentSessionID)
 }
 
-// TestInitSessionHandler_SuccessWithoutWhagentClaim proves the human/OAuth2
-// shape: omitting whagent_session_id entirely still succeeds.
-func TestInitSessionHandler_SuccessWithoutWhagentClaim(t *testing.T) {
+func TestInitSessionHandler_NoVerifiedCaller(t *testing.T) {
 	sessions := newFakeSessionStore()
-	scopeID := uuid.New()
-
-	body := `{
-		"scope_id": "` + scopeID.String() + `",
-		"acting": {"iss": "https://issuer.example.com", "sub": "human-1", "kind": "human"},
-		"on_behalf_of": {"iss": "https://issuer.example.com", "sub": "human-1", "kind": "human"}
-	}`
-
-	rec := doInit(t, sessions, body)
-	require.Equal(t, http.StatusCreated, rec.Code)
+	rec := doInit(sessions, soleScope{id: uuid.New()}, verified(false), `{}`)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Empty(t, sessions.sessions)
 }
 
-// TestInitSessionHandler_ValidationFailures proves each documented rejection
-// (parseSubject/session.go) returns 400 without ever calling InitSession.
-func TestInitSessionHandler_ValidationFailures(t *testing.T) {
-	scopeID := uuid.New().String()
-	validActing := `{"iss": "https://issuer.example.com", "sub": "agent-1", "kind": "service"}`
-
-	cases := map[string]string{
-		"malformed json": `{not json`,
-		"missing scope_id": `{
-			"acting": ` + validActing + `,
-			"on_behalf_of": ` + validActing + `
-		}`,
-		"invalid scope_id uuid": `{
-			"scope_id": "not-a-uuid",
-			"acting": ` + validActing + `,
-			"on_behalf_of": ` + validActing + `
-		}`,
-		"missing acting.iss": `{
-			"scope_id": "` + scopeID + `",
-			"acting": {"sub": "agent-1", "kind": "service"},
-			"on_behalf_of": ` + validActing + `
-		}`,
-		"missing acting.sub": `{
-			"scope_id": "` + scopeID + `",
-			"acting": {"iss": "https://issuer.example.com", "kind": "service"},
-			"on_behalf_of": ` + validActing + `
-		}`,
-		"invalid acting.kind": `{
-			"scope_id": "` + scopeID + `",
-			"acting": {"iss": "https://issuer.example.com", "sub": "agent-1", "kind": "robot"},
-			"on_behalf_of": ` + validActing + `
-		}`,
-		"missing on_behalf_of": `{
-			"scope_id": "` + scopeID + `",
-			"acting": ` + validActing + `,
-			"on_behalf_of": {"iss": "https://issuer.example.com", "sub": "", "kind": "human"}
-		}`,
-		"unknown field": `{
-			"scope_id": "` + scopeID + `",
-			"acting": ` + validActing + `,
-			"on_behalf_of": ` + validActing + `,
-			"unexpected_field": true
-		}`,
-	}
-
-	for name, body := range cases {
-		t.Run(name, func(t *testing.T) {
-			sessions := newFakeSessionStore()
-			rec := doInit(t, sessions, body)
-			assert.Equal(t, http.StatusBadRequest, rec.Code, "expected 400 for case %q, got body %q", name, rec.Body.String())
-			assert.Empty(t, sessions.sessions, "a validation failure must never reach InitSession")
-		})
-	}
+func TestInitSessionHandler_ScopeUnresolvable(t *testing.T) {
+	sessions := newFakeSessionStore()
+	rec := doInit(sessions, soleScope{err: errors.New("many")}, verified(true), `{}`)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Empty(t, sessions.sessions)
 }
 
-// TestInitSessionHandler_MethodNotAllowed proves GET is rejected.
+func TestInitSessionHandler_StoreError(t *testing.T) {
+	sessions := newFakeSessionStore()
+	sessions.initErr = errors.New("db")
+	rec := doInit(sessions, soleScope{id: uuid.New()}, verified(true), `{}`)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
 func TestInitSessionHandler_MethodNotAllowed(t *testing.T) {
-	sessions := newFakeSessionStore()
 	req := httptest.NewRequest(http.MethodGet, "/sessions/init", nil)
 	rec := httptest.NewRecorder()
-	handlers.InitSessionHandler(sessions).ServeHTTP(rec, req)
+	handlers.InitSessionHandler(newFakeSessionStore(), soleScope{}, verified(true)).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }

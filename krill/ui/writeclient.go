@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -102,6 +103,21 @@ func (c *writeClient) InitSession(ctx context.Context) (store.SessionID, error) 
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusCreated {
+		// A 403 (reader role) or 401 is api's own answer; carry it so the
+		// browser sees the rejection rather than a generic 502.
+		var parsed struct {
+			Error string `json:"error"`
+		}
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+		if json.Unmarshal(msg, &parsed) != nil || parsed.Error == "" {
+			parsed.Error = strings.TrimSpace(string(msg))
+		}
+		if parsed.Error == "" {
+			parsed.Error = http.StatusText(resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+			return zero, &writeRejection{status: resp.StatusCode, message: parsed.Error}
+		}
 		return zero, fmt.Errorf("init session: api returned %s", resp.Status)
 	}
 

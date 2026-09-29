@@ -1,7 +1,8 @@
 // Package authdoor is the api binary's auth front door: it verifies a
 // presented bearer token (opaque mcpauth credential or Keycloak JWT),
 // resolves the caller's identity and persona, and attaches both to the
-// request context. Missing tokens are rejected only when Require is set.
+// request context. Every route except /healthz requires a token (401);
+// reads need reader or operator, writes need operator (403).
 package authdoor
 
 import (
@@ -33,8 +34,6 @@ type Config struct {
 	OIDC       grpcauth.TokenVerifier
 	OIDCIssuer string
 	Roles      server.RoleConfig
-	// Require rejects requests that carry no token. Off during rollout.
-	Require bool
 }
 
 // Caller is the verified caller attached to the request context.
@@ -53,22 +52,26 @@ func FromContext(ctx context.Context) (Caller, bool) {
 
 var errForbidden = errors.New("no persona")
 
-// Middleware verifies tokens when present. A present-but-invalid token is
-// always rejected; an absent one only when cfg.Require is set.
+// isProbe reports whether path is an unauthenticated health/readiness probe.
+func isProbe(path string) bool { return path == "/healthz" || path == "/readyz" }
+
+// isRead reports whether the request only reads; every other method is a write.
+func isRead(r *http.Request) bool {
+	return r.Method == http.MethodGet || r.Method == http.MethodHead
+}
+
+// Middleware rejects a missing or invalid token (401) and a persona that may
+// not perform the request (403), on every route but the probes.
 func Middleware(cfg Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/healthz" {
+			if isProbe(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
 			token := grpcauth.BearerToken(r)
 			if token == "" {
-				if cfg.Require {
-					http.Error(w, "unauthenticated", http.StatusUnauthorized)
-					return
-				}
-				next.ServeHTTP(w, r)
+				http.Error(w, "unauthenticated", http.StatusUnauthorized)
 				return
 			}
 			c, err := cfg.resolve(r.Context(), token)
@@ -78,6 +81,8 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 			case err != nil:
 				logger.WarnContext(r.Context(), "api credential rejected", "error", err)
 				http.Error(w, "unauthenticated", http.StatusUnauthorized)
+			case !isRead(r) && c.Persona != server.PersonaSwarmOperator:
+				http.Error(w, "forbidden: operator role required", http.StatusForbidden)
 			default:
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, c)))
 			}

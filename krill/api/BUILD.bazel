@@ -17,6 +17,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//krill/api/authdoor",
+        "//krill/caller",
         "//krill/api/handlers",
         "//krill/forge",
         "//krill/mcp/server",

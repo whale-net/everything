@@ -107,12 +107,56 @@ func TestOpaque_ResolvesViaStoreWithPersona(t *testing.T) {
 	require.Equal(t, 401, code)
 }
 
-func TestMissingToken_PassesUnlessRequired(t *testing.T) {
-	code, _, ok := do(baseCfg(), "")
-	require.Equal(t, 200, code)
-	require.False(t, ok)
+func doReq(cfg Config, method, path, token string) int {
+	h := Middleware(cfg)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	req := httptest.NewRequest(method, path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func readerCfg() Config {
 	cfg := baseCfg()
-	cfg.Require = true
-	code, _, _ = do(cfg, "")
-	require.Equal(t, 401, code)
+	cfg.OIDC = fakeOIDC{claims: &grpcauth.Claims{Issuer: issuer, Subject: "r1", Roles: []string{"krill-ro"}}}
+	cfg.Roles.ReaderRole = "krill-ro"
+	return cfg
+}
+
+var routeTable = []struct{ method, path string }{
+	{"GET", "/products"}, {"GET", "/scope"}, {"GET", "/tasks/x"}, {"GET", "/milestones/x/tasks"},
+	{"GET", "/console/claimed"}, {"GET", "/design-sessions/x"}, {"GET", "/nope"},
+	{"POST", "/sessions/init"}, {"POST", "/products"}, {"POST", "/tasks/x/claim"},
+	{"POST", "/features/x/amend"}, {"POST", "/nope"}, {"PUT", "/products"}, {"DELETE", "/products"},
+}
+
+func TestUnauthenticated401OnEveryRoute(t *testing.T) {
+	for _, rt := range routeTable {
+		require.Equal(t, 401, doReq(baseCfg(), rt.method, rt.path, ""), rt.method+" "+rt.path)
+		require.Equal(t, 401, doReq(baseCfg(), rt.method, rt.path, "nope"), rt.method+" "+rt.path)
+	}
+}
+
+func TestReaderReadsOKWritesForbidden(t *testing.T) {
+	for _, rt := range routeTable {
+		want := 403
+		if rt.method == "GET" {
+			want = 200
+		}
+		require.Equal(t, want, doReq(readerCfg(), rt.method, rt.path, jwt(issuer)), rt.method+" "+rt.path)
+	}
+}
+
+func TestOperatorAllowedEverywhere(t *testing.T) {
+	for _, rt := range routeTable {
+		require.Equal(t, 200, doReq(baseCfg(), rt.method, rt.path, "opaque-op"), rt.method+" "+rt.path)
+	}
+}
+
+func TestProbesNeedNoToken(t *testing.T) {
+	for _, p := range []string{"/healthz", "/readyz"} {
+		require.Equal(t, 200, doReq(baseCfg(), "GET", p, ""), p)
+	}
 }

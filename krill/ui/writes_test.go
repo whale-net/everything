@@ -201,3 +201,24 @@ func TestNewWriteClient_RequiresBaseURL(t *testing.T) {
 	_, err = newWriteClient(writeClientConfig{BaseURL: "not-a-url"})
 	assert.Error(t, err)
 }
+
+// A reader-role user's write is refused at api's /sessions/init (403); the
+// UI relays that 403 and its message rather than a generic 502.
+func TestUIWrite_ReaderForbiddenSurfaced(t *testing.T) {
+	idp := newFakeIDP(t, testOperatorSub)
+	authenticator, sessionCookie := newSignedInOperator(t, idp)
+	api := newFakeAPI(t)
+	api.onRequest(func(r recordedRequest) (int, string) {
+		if r.Path == "/sessions/init" {
+			return http.StatusForbidden, "forbidden: operator role required"
+		}
+		return 0, ""
+	})
+	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
+	rec := serveWithCookie(mux, http.MethodPost, "/tasks/"+uuid.NewString()+"/escalate", `{}`, sessionCookie)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "operator role required")
+}

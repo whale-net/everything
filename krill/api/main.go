@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/krill/api/authdoor"
+	"github.com/whale-net/everything/krill/caller"
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
@@ -49,9 +50,6 @@ type config struct {
 	// configure the Keycloak door; both must be set to enable it.
 	OIDCIssuer   string
 	OIDCClientID string
-	// RequireAuth (KRILL_API_REQUIRE_AUTH) rejects requests without a
-	// token. Default off so rollout is a config change.
-	RequireAuth bool
 }
 
 func loadConfig() config {
@@ -63,7 +61,6 @@ func loadConfig() config {
 		RoleReader:   os.Getenv("KRILL_ROLE_READER"),
 		OIDCIssuer:   os.Getenv("KRILL_OIDC_ISSUER"),
 		OIDCClientID: os.Getenv("KRILL_OIDC_CLIENT_ID"),
-		RequireAuth:  os.Getenv("KRILL_API_REQUIRE_AUTH") == "true",
 	}
 }
 
@@ -103,11 +100,13 @@ func run() error {
 	defer pool.Close()
 
 	mux := http.NewServeMux()
-	setupRoutes(mux, pool, cfg.GitHubToken)
+	setupRoutes(mux, pool, cfg.GitHubToken, func(r *http.Request) (caller.Identity, bool) {
+		c, ok := authdoor.FromContext(r.Context())
+		return c.Identity, ok
+	})
 
 	doorCfg := authdoor.Config{
-		Roles:   server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
-		Require: cfg.RequireAuth,
+		Roles: server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
 	}
 	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
 	if err != nil {

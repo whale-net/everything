@@ -149,6 +149,11 @@ func writeWriteError(w http.ResponseWriter, err error) {
 		http.Error(w, "unresolved operator identity", http.StatusUnauthorized)
 		return
 	}
+	var rejection *writeRejection
+	if errors.As(err, &rejection) {
+		http.Error(w, rejection.message, rejection.status)
+		return
+	}
 	logger.Error("failed to issue an operator write", "error", err)
 	http.Error(w, "failed to issue write as the signed-in operator", http.StatusBadGateway)
 }
