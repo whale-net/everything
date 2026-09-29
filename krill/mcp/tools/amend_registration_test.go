@@ -695,3 +695,7 @@ func TestAmendPlacementRefuse_AdvicePerKindAndField(t *testing.T) {
 	// A change of none of them is not a refusal at all.
 	assert.NoError(t, (store.AmendPlacementChange{}).Refuse("feature", store.AmendPlacementChange{}))
 }
+
+func (f amendSessionStore) UseSession(ctx context.Context, id store.SessionID) (store.Session, error) {
+	return f.GetSession(ctx, id)
+}

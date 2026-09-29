@@ -20,6 +20,8 @@ type fakeSessionStore struct {
 	mu       sync.Mutex
 	sessions map[store.SessionID]store.Session
 	initErr  error
+	// expired ids make UseSession report idle expiry.
+	expired map[store.SessionID]bool
 }
 
 func newFakeSessionStore() *fakeSessionStore {
@@ -54,4 +56,14 @@ func (f *fakeSessionStore) GetSession(ctx context.Context, id store.SessionID) (
 		return store.Session{}, store.ErrSessionNotFound
 	}
 	return sess, nil
+}
+
+func (f *fakeSessionStore) UseSession(ctx context.Context, id store.SessionID) (store.Session, error) {
+	f.mu.Lock()
+	exp := f.expired[id]
+	f.mu.Unlock()
+	if exp {
+		return store.Session{}, store.ErrSessionExpired
+	}
+	return f.GetSession(ctx, id)
 }

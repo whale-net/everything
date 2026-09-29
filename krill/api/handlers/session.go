@@ -143,6 +143,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // returns -- a single "error" field, never a shape that varies by endpoint.
 type jsonError struct {
 	Error string `json:"error"`
+	Code  string `json:"code,omitempty"`
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
