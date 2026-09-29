@@ -27,7 +27,7 @@ func newTestApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
-	return &App{auth: auth}
+	return &App{auth: auth, devAuth: true}
 }
 
 // newTestMux registers only the shell's own routes, mirroring
@@ -425,4 +425,24 @@ func fetch(t *testing.T, mux *http.ServeMux, target string) *httptest.ResponseRe
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
 	return rec
+}
+
+// Under AUTH_MODE=none the synthetic dev user is admitted to read routes,
+// as api admits its dev token; with devAuth off the same user is refused.
+func TestReadRoutes_AuthModeNoneAdmitsDevUser(t *testing.T) {
+	get := func(app *App) int {
+		mux := http.NewServeMux()
+		app.mountShellRoutes(mux)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		return rec.Code
+	}
+	if got := get(newTestApp(t)); got != http.StatusOK {
+		t.Fatalf("dev user: status %d, want 200", got)
+	}
+	strict := newTestApp(t)
+	strict.devAuth = false
+	if got := get(strict); got != http.StatusForbidden {
+		t.Fatalf("devAuth off, no role: status %d, want 403", got)
+	}
 }

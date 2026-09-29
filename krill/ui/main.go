@@ -145,6 +145,16 @@ type App struct {
 	// devAPIToken is set only under AUTH_MODE=none; see requireOperator.
 	devAPIToken string
 
+	// devAuth is true under AUTH_MODE=none, where the synthetic dev user
+	// holds the operator persona (as api's dev token does) so readerRoute
+	// admits it; see readerRoute.
+	devAuth bool
+
+	// sessionRoles overrides how a request's realm roles are read; nil
+	// means the signed-in user's session roles. Tests set it because the
+	// cookie-backed test session does not persist roles (DB sessions do).
+	sessionRoles func(r *http.Request) ([]string, error)
+
 	// roles maps realm roles to personas at credential-mint time.
 	roles server.RoleConfig
 
@@ -171,7 +181,7 @@ type App struct {
 	scopes store.ScopeStore
 
 	// tasks is the console query surface the ops read views (ops.go) call
-	// directly. Reads are ungated (NFR6's gate is write-only) and the
+	// directly. Reads are role-gated (readerRoute) and the
 	// views resolve the sole scope themselves, so -- unlike writes -- they
 	// reach the same List* store methods the MCP ops mount and
 	// GET /console/* serve, over the same store/paging.go pagination
@@ -184,14 +194,14 @@ type App struct {
 	// browser and an MCP client see one session, one ordering, and one
 	// open-question derivation. A read carries no attribution, so -- unlike
 	// app.writes -- it needs no krill session and reads the store in
-	// process, exactly as api's own ungated read handlers do.
+	// process; the route's readerRoute gate mirrors api's reader check.
 	designSessions store.DesignSessionStore
 	revisionEvents store.RevisionEventStore
 
 	// spec reads the spec axis (products, the capability map, decisions,
 	// personas, non-goals, and the delivery/roadmap view) for the /spec
 	// pages. Unlike writes it is not a session-attributed HTTP client:
-	// reads are ungated, and the reader calls the same //krill/slice.Querier
+	// reads are gated by readerRoute, and the reader calls the same //krill/slice.Querier
 	// and //krill/store methods the MCP spec tools wrap, so a page and the
 	// matching tool agree (see readclient.go). Held as the specReadClient
 	// interface so the view assembly is testable against a fake.
@@ -261,6 +271,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		auth:           auth,
 		oidcIssuer:     cfg.OIDCIssuer,
 		devAPIToken:    devTokenFor(cfg),
+		devAuth:        authMode == htmxauth.AuthModeNone,
 		roles:          server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
 		scopes:         entities.Scopes(),
 		tasks:          entities.Tasks(),
@@ -460,27 +471,27 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 // the same registrations production does, rather than a copy that could
 // drift from it.
 func (app *App) mountShellRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/{$}", app.auth.RequireAuthFunc(app.handleShellHome))
-	mux.HandleFunc(opsPath, app.auth.RequireAuthFunc(app.handleOps))
-	mux.HandleFunc(designPath, app.auth.RequireAuthFunc(app.handleDesign))
-	mux.HandleFunc(credentialsPath, app.auth.RequireAuthFunc(app.handleCredentials))
+	mux.HandleFunc("/{$}", app.readerRoute(app.handleShellHome))
+	mux.HandleFunc(opsPath, app.readerRoute(app.handleOps))
+	mux.HandleFunc(designPath, app.readerRoute(app.handleDesign))
+	mux.HandleFunc(credentialsPath, app.readerRoute(app.handleCredentials))
 
 	// The ops console's read views (ops.go), each behind the same sign-in
-	// gate as the area roots. Reads are ungated and attribute nothing, so
+	// gate as the area roots. Reads are behind readerRoute and attribute nothing, so
 	// they need no operator identity and no krill session -- just a
 	// signed-in browser and the deployment's sole scope.
-	mux.HandleFunc(opsClaimedPath, app.auth.RequireAuthFunc(app.handleClaimedTasks))
-	mux.HandleFunc(opsEscalatedPath, app.auth.RequireAuthFunc(app.handleEscalatedTasks))
-	mux.HandleFunc(opsCancelledPath, app.auth.RequireAuthFunc(app.handleCancelledTasks))
-	mux.HandleFunc(opsNotesPath, app.auth.RequireAuthFunc(app.handleOpenNotes))
+	mux.HandleFunc(opsClaimedPath, app.readerRoute(app.handleClaimedTasks))
+	mux.HandleFunc(opsEscalatedPath, app.readerRoute(app.handleEscalatedTasks))
+	mux.HandleFunc(opsCancelledPath, app.readerRoute(app.handleCancelledTasks))
+	mux.HandleFunc(opsNotesPath, app.readerRoute(app.handleOpenNotes))
 
 	// The design-session read surface (design_page.go): a product's session
 	// list and one session's revision-event log + open questions. Behind
-	// the sign-in gate like every other shell page, but NOT operatorRoute --
+	// readerRoute like every other read page, but NOT operatorRoute --
 	// a read attributes no mutation, so it resolves no operator Subject and
-	// carries no krill session, exactly like api's ungated read handlers.
-	mux.HandleFunc("GET /design/products/{productID}/design-sessions", app.auth.RequireAuthFunc(app.handleDesignSessionList))
-	mux.HandleFunc("GET /design/design-sessions/{id}", app.auth.RequireAuthFunc(app.handleDesignSessionDetail))
+	// carries no krill session.
+	mux.HandleFunc("GET /design/products/{productID}/design-sessions", app.readerRoute(app.handleDesignSessionList))
+	mux.HandleFunc("GET /design/design-sessions/{id}", app.readerRoute(app.handleDesignSessionDetail))
 
 	// The design root's JS-free product browse: the operator types a
 	// product id into a plain GET form and this 302s them to that
@@ -488,24 +499,24 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// read, so RequireAuthFunc and no operator identity. The id is
 	// uuid.Parse'd before it reaches the path, so it is not a
 	// user-controlled redirect target.
-	mux.HandleFunc("GET "+designGoPath, app.auth.RequireAuthFunc(app.handleDesignGo))
+	mux.HandleFunc("GET "+designGoPath, app.readerRoute(app.handleDesignGo))
 
 	// The spec browser (FRs 638a7e5f, 6aa70e3a, b4c1c77f): a static area
 	// landing, then the store-backed product index at /spec/products, and
 	// per product the capability map, load-bearing decisions, personas, and
 	// non-goals. All the data pages read through app.spec (readclient.go).
-	mux.HandleFunc(specPath, app.auth.RequireAuthFunc(app.handleSpec))
-	mux.HandleFunc(specProductsPath, app.auth.RequireAuthFunc(app.handleSpecProducts))
-	mux.HandleFunc(specProductPath, app.auth.RequireAuthFunc(app.handleCapabilityMap))
-	mux.HandleFunc(specProductPath+"/decisions", app.auth.RequireAuthFunc(app.handleSpecDecisions))
-	mux.HandleFunc(specProductPath+"/personas", app.auth.RequireAuthFunc(app.handleSpecPersonas))
-	mux.HandleFunc(specProductPath+"/non-goals", app.auth.RequireAuthFunc(app.handleSpecNonGoals))
+	mux.HandleFunc(specPath, app.readerRoute(app.handleSpec))
+	mux.HandleFunc(specProductsPath, app.readerRoute(app.handleSpecProducts))
+	mux.HandleFunc(specProductPath, app.readerRoute(app.handleCapabilityMap))
+	mux.HandleFunc(specProductPath+"/decisions", app.readerRoute(app.handleSpecDecisions))
+	mux.HandleFunc(specProductPath+"/personas", app.readerRoute(app.handleSpecPersonas))
+	mux.HandleFunc(specProductPath+"/non-goals", app.readerRoute(app.handleSpecNonGoals))
 	// The delivery/roadmap view: every milestone and milepebble with its
 	// current status, plus the shipped/unshipped breakdown for each
 	// partially-complete container (FR 4398c532). It hangs off the same
 	// /spec/products/{id} prefix as the spec pages above, so it cannot
 	// collide with the sibling spec routes or the /spec landing.
-	mux.HandleFunc(specProductPath+"/delivery", app.auth.RequireAuthFunc(app.handleSpecDelivery))
+	mux.HandleFunc(specProductPath+"/delivery", app.readerRoute(app.handleSpecDelivery))
 
 	// The design-session write surface (design_write.go), hung off the read
 	// views above: the list page's "open a session" form and a session detail
@@ -527,6 +538,39 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 // always read a Subject, and can never be reached without one.
 func (app *App) operatorRoute(next http.HandlerFunc) http.HandlerFunc {
 	return app.auth.RequireAuthFunc(app.requireOperator(next))
+}
+
+// readerRoute is the wrapper every read page wears: RequireAuth, then a
+// reader-or-operator persona check via the same RoleConfig.ResolvePersona
+// api uses. A signed-in user holding neither role gets 403, matching api's
+// reader gate. Under AUTH_MODE=none the synthetic dev user is admitted as
+// an operator, the same identity api resolves for its dev token.
+func (app *App) readerRoute(next http.HandlerFunc) http.HandlerFunc {
+	return app.auth.RequireAuthFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !app.devAuth {
+			roles, err := app.requestRoles(r)
+			if err != nil {
+				http.Error(w, "unauthenticated", http.StatusUnauthorized)
+				return
+			}
+			if _, ok := app.roles.ResolvePersona(roles); !ok {
+				http.Error(w, "forbidden: reader or operator role required", http.StatusForbidden)
+				return
+			}
+		}
+		next(w, r)
+	})
+}
+
+func (app *App) requestRoles(r *http.Request) ([]string, error) {
+	if app.sessionRoles != nil {
+		return app.sessionRoles(r)
+	}
+	user, err := app.auth.CurrentUser(r)
+	if err != nil {
+		return nil, err
+	}
+	return user.Roles, nil
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

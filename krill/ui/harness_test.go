@@ -133,7 +133,7 @@ func (idp *fakeIDP) signIDToken(issuer, sub string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal header: %w", err)
 	}
-	claims, err := json.Marshal(map[string]any{
+	claimMap := map[string]any{
 		"iss":                issuer,
 		"sub":                sub,
 		"aud":                testClientID,
@@ -142,7 +142,8 @@ func (idp *fakeIDP) signIDToken(issuer, sub string) (string, error) {
 		"preferred_username": "operator",
 		"name":               "Test Operator",
 		"email":              "operator@example.com",
-	})
+	}
+	claims, err := json.Marshal(claimMap)
 	if err != nil {
 		return "", fmt.Errorf("marshal claims: %w", err)
 	}

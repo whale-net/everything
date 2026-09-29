@@ -69,6 +69,7 @@ go_test(
     name = "ui_test",
     srcs = [
         "harness_test.go",
+        "read_gate_test.go",
         "writes_test.go",
     ],
     embed = [":ui_lib"],

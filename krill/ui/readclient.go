@@ -6,9 +6,8 @@
 // MCP surface wraps rather than a parallel query, so a page and the
 // matching tool can never disagree about what "the current spec" is.
 //
-// Like every krill read path, these are ungated: no krill session, no
-// operator Subject -- the spec axis is readable by anyone who can reach
-// the deployment (PRODUCT.md's write-only gate). Every method below reads
+// These reads carry no krill session and no operator Subject; the routes
+// calling them are gated to reader-or-operator by readerRoute (main.go). Every method below reads
 // *current* rows (GetCurrentByID / ListCurrentByProduct), never history,
 // which is what "current revisions only" means for the views: a superseded
 // revision is never surfaced.
@@ -95,7 +94,7 @@ func (r *specReader) NonGoals(ctx context.Context, productID uuid.UUID) ([]store
 // partially-complete container -- its shipped/unshipped counts, resolved
 // through the exact //krill/slice.Querier.ListProductDelivery the MCP tool
 // wraps. The product's own scope_id is resolved from its current row first,
-// exactly as the tool's handler does, because an ungated read carries no
+// exactly as the tool's handler does, because a read here carries no
 // krill session to read scope_id from. An empty statuses slice means "all",
 // mirroring the querier's own contract.
 func (r *specReader) Delivery(ctx context.Context, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error) {

@@ -14,9 +14,9 @@
 //
 // The scope is the deployment's sole scope (ScopeStore.GetSole), never a
 // value the browser supplies: a browser has no way to learn a scope id.
-// Reads are ungated (NFR6's gate is write-only), so -- unlike the write
-// path in writes.go -- no krill session is minted and no operator identity
-// is required beyond sign-in.
+// Reads are role-gated (readerRoute: reader or operator), but -- unlike the
+// write path in writes.go -- mint no krill session and need no operator
+// identity.
 //
 // Each view is one route in two modes. This file holds the data half --
 // the loaders that turn a store page into a view-model -- and the
