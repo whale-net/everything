@@ -356,3 +356,19 @@ func TestRevisionEventStore_Append_UnknownSession_ReturnsErrNotFound(t *testing.
 	_, err := f.store.RevisionEvents().Append(ctx, e)
 	assert.True(t, errors.Is(err, store.ErrNotFound), "append against an unknown session must fail as ErrNotFound, not a raw FK violation")
 }
+
+// Migration 025 widens revision_event's kind CHECKs to admit 'agent'.
+func TestRevisionEventStore_Append_AgentKind_ActingAndOnBehalfOf(t *testing.T) {
+	ctx := context.Background()
+	f := newRevisionEventFixture(t, "whale-net/revision-event-agent-kind-test")
+	agent := store.Subject{Iss: "https://issuer.example.com", Sub: "agent-2", Kind: store.SubjectKindAgent}
+	human := store.Subject{Iss: "https://issuer.example.com", Sub: "human-1", Kind: store.SubjectKindHuman}
+
+	ev, err := f.store.RevisionEvents().Append(ctx, baseRevisionEvent(f, agent, human))
+	require.NoError(t, err, "acting kind=agent must be accepted")
+	assert.Equal(t, store.SubjectKindAgent, ev.Acting.Kind)
+
+	ev, err = f.store.RevisionEvents().Append(ctx, baseRevisionEvent(f, human, agent))
+	require.NoError(t, err, "on_behalf_of kind=agent must be accepted")
+	assert.Equal(t, store.SubjectKindAgent, ev.OnBehalfOf.Kind)
+}
