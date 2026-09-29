@@ -70,6 +70,15 @@ type amendMilestoneInput struct {
 	Outcome *string `json:"outcome,omitempty" jsonschema:"The milestone's replacement outcome sentence. Omit to clear it."`
 }
 
+// amendDeferralInput is amend_deferral's schema. A deferral has no name:
+// its amendable content is the body plus the destination FR1 requires.
+type amendDeferralInput struct {
+	krillSessionInput
+	ID          string `json:"id" jsonschema:"The surrogate id (LB2) of the deferral to amend, as a UUID string. Unchanged by the amend."`
+	Body        string `json:"body" jsonschema:"The deferral's replacement text. Required."`
+	Destination string `json:"destination" jsonschema:"Where the deferred item went (FR1). Required."`
+}
+
 // parseAmendID resolves the session gate and the entity id exactly as the
 // HTTP amend handlers do. It is parseAmendInput minus the name check, for
 // the sibling verb that changes WHERE an entity sits and so has no name to
@@ -323,6 +332,31 @@ func RegisterAmendMilestone(reg *server.Registry, sessions store.SessionStore, a
 	})
 }
 
+// RegisterAmendDeferral registers amend_deferral: supersedes one milestone
+// deferral's text under its unchanged id, keeping its milestone, position
+// and original authorship.
+func RegisterAmendDeferral(reg *server.Registry, sessions store.SessionStore, amend store.AmendStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name: "amend_deferral",
+		Description: "Amend a milestone deferral: replace its body and destination as a new SCD2 revision under the same id. " +
+			"The deferral stays on its milestone at its position, and keeps its original authorship.",
+	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendDeferralInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+		id, err := parseAmendID(ctx, sessions, in.KrillSessionID, in.ID)
+		if err != nil {
+			return nil, zero, err
+		}
+		if err := handlers.RequireNonEmpty("body", in.Body); err != nil {
+			return nil, zero, err
+		}
+		amended, err := amend.AmendDeferral(ctx, id, in.Body, in.Destination)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: amended.ID.String()}, nil
+	})
+}
+
 // reparentFeatureInput is reparent_feature's argument schema: the Feature to
 // move and the feature set to move it under. There is no name or body -- a
 // reparent changes only WHERE the Feature sits -- so this is not
@@ -375,5 +409,6 @@ func RegisterAmendAll(reg *server.Registry, sessions store.SessionStore, amend s
 	RegisterAmendNonGoal(reg, sessions, amend)
 	RegisterAmendLoadBearingDecision(reg, sessions, amend)
 	RegisterAmendMilestone(reg, sessions, amend)
+	RegisterAmendDeferral(reg, sessions, amend)
 	RegisterReparentFeature(reg, sessions, reparent)
 }
