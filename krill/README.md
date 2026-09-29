@@ -249,7 +249,7 @@ as complete for the resolved session's scope refuses before parsing
 anything; see `ARCHITECTURE.md` "The markdown importer and the
 delivery-axis association" for the one-time, one-way guarantee.
 
-`$KRILL_TOKEN` is a Keycloak access token (or mcpauth credential) with the operator role. Or bring up the whole domain (Postgres + migrate + api) via Tilt (note: the Tiltfile is not yet configured for the authenticated api, so requests need a token it cannot mint locally):
+`$KRILL_TOKEN` is a Keycloak access token (or mcpauth credential) with the operator role. Or bring up the whole domain (Postgres + migrate + api) via Tilt (the Tiltfile runs api with `KRILL_ENV=dev` and a static `KRILL_DEV_AUTH_TOKEN`, and `ui` forwards it, so UI writes work locally; for curl use `KRILL_TOKEN=krill-dev-token`):
 
 ```sh
 cd krill && tilt up

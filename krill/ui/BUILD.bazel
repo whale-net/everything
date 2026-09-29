@@ -73,6 +73,7 @@ go_test(
     ],
     embed = [":ui_lib"],
     deps = [
+        "//krill/apiclient",
         "//krill/store",
         "//libs/go/htmxauth",
         "@com_github_google_uuid//:uuid",
@@ -119,6 +120,7 @@ go_test(
     ],
     embed = [":ui_lib"],
     deps = [
+        "//krill/apiclient",
         "//krill/store",
         "//libs/go/htmxauth",
         "@com_github_google_uuid//:uuid",

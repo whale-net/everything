@@ -64,6 +64,12 @@ func (app *App) operatorEncodedIdentity(r *http.Request) (string, bool) {
 	return encoded, true
 }
 
+// Identity api's dev token resolves to (authdoor.DevIssuer/DevSubject).
+const (
+	devIssuer  = "krill-dev"
+	devSubject = "dev-operator"
+)
+
 // operatorSubjectContextKey is the unexported context key
 // withOperatorSubject/OperatorSubjectFromContext share.
 type operatorSubjectContextKey struct{}
@@ -90,6 +96,13 @@ func OperatorSubjectFromContext(ctx context.Context) (store.Subject, bool) {
 // resolve.
 func (app *App) requireOperator(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if app.devAPIToken != "" {
+			// AUTH_MODE=none dev stack: forward the static dev token api accepts.
+			subject := store.Subject{Iss: devIssuer, Sub: devSubject, Kind: store.SubjectKindHuman}
+			ctx := apiclient.WithUserToken(withOperatorSubject(r.Context(), subject), app.devAPIToken)
+			next(w, r.WithContext(ctx))
+			return
+		}
 		subject, ok := app.operatorSubject(r)
 		if !ok {
 			http.Error(w, "unresolved operator identity", http.StatusUnauthorized)

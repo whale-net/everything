@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http/httptest"
 	"net/http"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/whale-net/everything/krill/apiclient"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
@@ -221,4 +223,33 @@ func TestUIWrite_ReaderForbiddenSurfaced(t *testing.T) {
 	rec := serveWithCookie(mux, http.MethodPost, "/tasks/"+uuid.NewString()+"/escalate", `{}`, sessionCookie)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "operator role required")
+}
+
+// Under the dev stack requireOperator forwards the static dev token and
+// dev identity without any session; with no dev token it still 401s.
+func TestRequireOperator_DevToken(t *testing.T) {
+	idp := newFakeIDP(t, testOperatorSub)
+	authenticator, _ := newSignedInOperator(t, idp)
+	app := newTestApp(t, authenticator, idp.server.URL, "http://api.invalid")
+	app.devAPIToken = "dev-secret"
+
+	var gotToken string
+	var gotSubject store.Subject
+	h := app.requireOperator(func(w http.ResponseWriter, r *http.Request) {
+		gotToken, _ = apiclient.UserTokenFromContext(r.Context())
+		gotSubject, _ = OperatorSubjectFromContext(r.Context())
+	})
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodPost, "/x", nil))
+	assert.Equal(t, "dev-secret", gotToken)
+	assert.Equal(t, devIssuer, gotSubject.Iss)
+	assert.Equal(t, devSubject, gotSubject.Sub)
+
+	app.devAPIToken = ""
+	called := false
+	h = app.requireOperator(func(http.ResponseWriter, *http.Request) { called = true })
+	rec = httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodPost, "/x", nil))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.False(t, called)
 }

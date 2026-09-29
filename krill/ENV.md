@@ -119,6 +119,8 @@ layer and the auth credential store read from it).
 | `KRILL_ROLE_READER` | api, mcp | `""` | Keycloak realm role that resolves to the `reader` persona (operator implies read). Unset means no identity is a reader. |
 | `KRILL_OIDC_ISSUER` | api | `""` | Keycloak issuer for the api's OIDC door; a JWT is verified only if its unverified `iss` equals this exactly. Needs `KRILL_OIDC_CLIENT_ID` too. |
 | `KRILL_OIDC_CLIENT_ID` | api | `""` | Audience the api expects in verified Keycloak tokens (see `libs/go/grpcauth/KEYCLOAK.md`). |
+| `KRILL_ENV` | api | `""` | Deployment environment; only `dev` permits `KRILL_DEV_AUTH_TOKEN`. |
+| `KRILL_DEV_AUTH_TOKEN` | api | `""` | Dev only. A static bearer that authenticates as a fixed operator (`krill-dev\|dev-operator`). The api refuses to boot if set while `KRILL_ENV` is not `dev`. Never set in prod. |
 
 The auth (human OAuth2) front door additionally requires its
 `mcp_credential`-shaped table to exist against the same `PG_DATABASE_URL`
@@ -148,6 +150,7 @@ migration `006_mcpauth_credential`).
 | `AUTH_MODE` | `none` | `none` (dev-only synthetic user, no Keycloak) or `oidc` (real Keycloak sign-in). |
 | `KRILL_OIDC_ISSUER` | `""` | Keycloak realm issuer URL. Required when `AUTH_MODE=oidc`. |
 | `KRILL_OIDC_CLIENT_ID` / `KRILL_OIDC_CLIENT_SECRET` | `""` | Keycloak client credentials. Required when `AUTH_MODE=oidc`. |
+| `KRILL_DEV_API_TOKEN` | `""` | Dev only; honored only under `AUTH_MODE=none`. Forwarded to api as the bearer for writes; must equal api's `KRILL_DEV_AUTH_TOKEN`. |
 | `KRILL_OIDC_REDIRECT_URI` | `http://localhost:8080/auth/callback` | OIDC redirect URI registered on the Keycloak client. |
 | `SECRET_KEY` | `dev-secret-key-change-in-production` | Encrypts the DB-backed session store's access/refresh tokens (`//libs/go/htmxauth`). |
 | `PG_DATABASE_URL` | *(required)* | Backs both the `ui_sessions` table and the auth Postgres-backed credential/client/auth-code stores. |

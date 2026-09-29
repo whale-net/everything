@@ -170,6 +170,10 @@ spec:
         env:
         - name: KRILL_API_ADDR
           value: ":8080"
+        - name: KRILL_ENV
+          value: "dev"
+        - name: KRILL_DEV_AUTH_TOKEN
+          value: "krill-dev-token"
         - name: PG_DATABASE_URL
           value: "{pg_database_url}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -313,6 +317,8 @@ spec:
           value: ":8080"
         - name: AUTH_MODE
           value: "none"
+        - name: KRILL_DEV_API_TOKEN
+          value: "krill-dev-token"
         - name: SECRET_KEY
           value: "dev-secret-key"
         - name: PG_DATABASE_URL

@@ -160,3 +160,20 @@ func TestProbesNeedNoToken(t *testing.T) {
 		require.Equal(t, 200, doReq(baseCfg(), "GET", p, ""), p)
 	}
 }
+
+func TestDevToken(t *testing.T) {
+	cfg := baseCfg()
+	cfg.DevToken = "dev-secret"
+	code, c, ok := do(cfg, "dev-secret")
+	require.Equal(t, 200, code)
+	require.True(t, ok)
+	require.Equal(t, server.PersonaSwarmOperator, c.Persona)
+	require.Equal(t, DevSubject, c.Identity.Acting.Sub)
+
+	code, _, _ = do(cfg, "wrong")
+	require.Equal(t, 401, code)
+
+	// Unset DevToken: the same bearer is not special.
+	code, _, _ = do(baseCfg(), "dev-secret")
+	require.Equal(t, 401, code)
+}
