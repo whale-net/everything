@@ -50,6 +50,18 @@ type config struct {
 	// configure the Keycloak door; both must be set to enable it.
 	OIDCIssuer   string
 	OIDCClientID string
+	// DevAuthToken (KRILL_DEV_AUTH_TOKEN) is a static operator bearer for
+	// local dev; refused unless Env (KRILL_ENV) is "dev".
+	DevAuthToken string
+	Env          string
+}
+
+// validate rejects configs that must never boot.
+func (c config) validate() error {
+	if c.DevAuthToken != "" && c.Env != "dev" {
+		return fmt.Errorf("KRILL_DEV_AUTH_TOKEN is only allowed with KRILL_ENV=dev")
+	}
+	return nil
 }
 
 func loadConfig() config {
@@ -61,6 +73,8 @@ func loadConfig() config {
 		RoleReader:   os.Getenv("KRILL_ROLE_READER"),
 		OIDCIssuer:   os.Getenv("KRILL_OIDC_ISSUER"),
 		OIDCClientID: os.Getenv("KRILL_OIDC_CLIENT_ID"),
+		DevAuthToken: os.Getenv("KRILL_DEV_AUTH_TOKEN"),
+		Env:          os.Getenv("KRILL_ENV"),
 	}
 }
 
@@ -80,6 +94,9 @@ func main() {
 
 func run() error {
 	cfg := loadConfig()
+	if err := cfg.validate(); err != nil {
+		return err
+	}
 
 	logging.Configure(logging.Config{
 		ServiceName:   "krill-api",
@@ -106,7 +123,11 @@ func run() error {
 	})
 
 	doorCfg := authdoor.Config{
-		Roles: server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
+		Roles:    server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
+		DevToken: cfg.DevAuthToken,
+	}
+	if cfg.DevAuthToken != "" {
+		logger.Warn("KRILL_DEV_AUTH_TOKEN set: static dev operator token accepted (KRILL_ENV=dev)")
 	}
 	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
 	if err != nil {

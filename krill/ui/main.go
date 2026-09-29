@@ -101,6 +101,10 @@ type config struct {
 	// configured `api` cannot attribute a write to a real operator
 	// identity, so it refuses to boot rather than run write-less.
 	APIBaseURL string
+
+	// DevAPIToken (KRILL_DEV_API_TOKEN) is the static bearer forwarded to
+	// api under AUTH_MODE=none; must equal api's KRILL_DEV_AUTH_TOKEN.
+	DevAPIToken string
 }
 
 func loadConfig() config {
@@ -118,6 +122,7 @@ func loadConfig() config {
 		UIPublicURL:      getEnv("KRILL_UI_PUBLIC_URL", ""),
 		MCPPublicURL:     getEnv("KRILL_MCP_PUBLIC_URL", ""),
 		APIBaseURL:       getEnv("KRILL_API_URL", ""),
+		DevAPIToken:      os.Getenv("KRILL_DEV_API_TOKEN"),
 	}
 }
 
@@ -136,6 +141,9 @@ type App struct {
 	// signed-in operator's encoded identity carries (auth.go's
 	// mcpCallerResolver).
 	oidcIssuer string
+
+	// devAPIToken is set only under AUTH_MODE=none; see requireOperator.
+	devAPIToken string
 
 	// roles maps realm roles to personas at credential-mint time.
 	roles server.RoleConfig
@@ -252,6 +260,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	app := &App{
 		auth:           auth,
 		oidcIssuer:     cfg.OIDCIssuer,
+		devAPIToken:    devTokenFor(cfg),
 		roles:          server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
 		scopes:         entities.Scopes(),
 		tasks:          entities.Tasks(),
@@ -524,4 +533,12 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `{"status":"ok"}`)
+}
+
+// devTokenFor returns the dev api token only in AUTH_MODE=none.
+func devTokenFor(cfg config) string {
+	if cfg.AuthMode == "none" || cfg.AuthMode == "" {
+		return cfg.DevAPIToken
+	}
+	return ""
 }

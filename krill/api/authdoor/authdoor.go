@@ -7,6 +7,7 @@ package authdoor
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -34,7 +35,17 @@ type Config struct {
 	OIDC       grpcauth.TokenVerifier
 	OIDCIssuer string
 	Roles      server.RoleConfig
+	// DevToken, when non-empty, is a static bearer that resolves to a fixed
+	// operator identity. Dev stacks only; the api binary refuses to set it
+	// outside KRILL_ENV=dev.
+	DevToken string
 }
+
+// Fixed identity a DevToken resolves to.
+const (
+	DevIssuer  = "krill-dev"
+	DevSubject = "dev-operator"
+)
 
 // Caller is the verified caller attached to the request context.
 type Caller struct {
@@ -91,6 +102,13 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 }
 
 func (cfg Config) resolve(ctx context.Context, token string) (Caller, error) {
+	if cfg.DevToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(cfg.DevToken)) == 1 {
+		id, err := caller.FromTokenInfo(&sdkauth.TokenInfo{UserID: DevIssuer + "|" + DevSubject})
+		if err != nil {
+			return Caller{}, err
+		}
+		return Caller{Identity: id, Persona: server.PersonaSwarmOperator}, nil
+	}
 	if !isJWTShaped(token) {
 		return cfg.resolveOpaque(ctx, token)
 	}
