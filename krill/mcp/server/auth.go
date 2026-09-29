@@ -41,6 +41,10 @@ const (
 	// persona; see this file's doc comment for why.
 	PersonaSwarmOperator Persona = "swarm_operator"
 
+	// PersonaReader may call read tools only. Resolved from
+	// KRILL_ROLE_READER; see RoleConfig.ResolvePersona.
+	PersonaReader Persona = "reader"
+
 	// PersonaRequirementContributor is reserved for when C12 (M2) gives
 	// this persona its own unmediated path into krill (see this file's
 	// doc comment) -- no code path produces it yet.

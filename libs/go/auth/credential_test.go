@@ -131,3 +131,25 @@ func TestValidateIdentifier_AcceptsSafeNames(t *testing.T) {
 		})
 	}
 }
+
+// ── opt-in persona column ────────────────────────────────────────────────
+
+func TestPersonaColumn_UnsetLeavesSQLUnchanged(t *testing.T) {
+	s := &pgxCredentialStore{cfg: StoreConfig{TableName: "mcp_credential", IdentityColumn: "identity"}}
+	assert.Equal(t, "id, identity, token_hash, created_at, last_used_at, revoked_at", s.columns())
+	assert.Equal(t, `
+		INSERT INTO mcp_credential (identity, token_hash)
+		VALUES ($1, $2)
+		RETURNING id, identity, token_hash, created_at, last_used_at, revoked_at
+	`, s.mintQuery())
+}
+
+func TestPersonaColumn_SetAddsColumnAndParam(t *testing.T) {
+	s := &pgxCredentialStore{cfg: StoreConfig{TableName: "mcp_credential", IdentityColumn: "identity", PersonaColumn: "persona"}}
+	assert.Equal(t, "id, identity, token_hash, created_at, last_used_at, revoked_at, persona", s.columns())
+	assert.Equal(t, `
+		INSERT INTO mcp_credential (identity, token_hash, persona)
+		VALUES ($1, $2, $3)
+		RETURNING id, identity, token_hash, created_at, last_used_at, revoked_at, persona
+	`, s.mintQuery())
+}
