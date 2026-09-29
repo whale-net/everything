@@ -24,7 +24,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | Endpoint | Description |
 |----------|-------------|
 | `GET /healthz` | Live DB connectivity check. Never gated. |
-| `POST /sessions/init` | Mints a krill-native session id (FR3). Body: `{"scope_id": "<uuid>", "acting": {"iss", "sub", "kind"}, "on_behalf_of": {"iss", "sub", "kind"}, "whagent_session_id": "<optional string>"}`; `kind` is `human`, `service` or `agent`. Returns `{"session_id": "<uuid>"}`. Every write endpoint below (and every write endpoint added by a later M1 task -- #2493/#2496) requires the resulting id on an `X-Krill-Session-Id` header (`api/handlers/gate.go`'s `RequireSession`) — see `ARCHITECTURE.md` "`init` and the write gate" for why `init` itself takes the caller's identity fields as-is rather than verifying a bearer credential. The importer (`//krill/importer/cmd`, issue #2492) is gated the same way but takes the resulting id as a `--session-id` flag, since it is a CLI, not an HTTP write endpoint. |
+| `POST /sessions/init` | Mints a krill-native session id (FR3). Requires a bearer token; the body is ignored -- identity is derived from the verified credential and scope from the deployment's sole scope. Returns `{"session_id": "<uuid>", "scope_id": "<uuid>"}`. Every route but `/healthz` needs `Authorization: Bearer` (reads: reader or operator role; writes: operator role), and every write endpoint below also requires the session id on an `X-Krill-Session-Id` header (`api/handlers/gate.go`'s `RequireSession`); sessions expire after 12 idle hours (`session_expired`). See `ARCHITECTURE/16-init-and-write-gate.md` and `ENV.md`. The importer (`//krill/importer/cmd`, issue #2492) takes the resulting id as a `--session-id` flag. |
 | `POST /products` | Creates a Product (FR1). Body: `{"name", "vision"}`. No parent -- top of the spec chain. Gated. Returns `{"id": "<uuid>"}` (the surrogate id, LB2 -- never a display number). |
 | `GET /products?scope_id=<uuid>` | Lists every current Product in a scope as `{"products": [{"id", "name", "vision"}]}`, ordered by position then name — the discovery entry point for the Product id every slice read needs (issue #2941). `scope_id` is a required query parameter. Never gated. Also exposed as the `list_products` MCP tool on `/mcp/design`. |
 | `POST /feature-sets` | Creates a FeatureSet under a Product (FR2). Body: `{"product_id", "name", "description"?}`. Gated. Returns `{"id": "<uuid>"}`. |
@@ -230,11 +230,11 @@ curl http://localhost:8080/healthz
 
 # Read a scoped spec slice (FR5-FR9) -- same call shape for all four
 # granularities, only the path segment and id change:
-curl http://localhost:8080/slices/products/<product-id>
+curl -H "Authorization: Bearer $KRILL_TOKEN" http://localhost:8080/slices/products/<product-id>
 
 # Mint a session, then import a product's doc set (issue #2492)
 SESSION_ID=$(curl -s -X POST http://localhost:8080/sessions/init \
-  -d '{"scope_id":"<scope-uuid>","acting":{"iss":"local","sub":"me","kind":"human"},"on_behalf_of":{"iss":"local","sub":"me","kind":"human"}}' \
+  -H "Authorization: Bearer $KRILL_TOKEN" \
   | jq -r .session_id)
 PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \
   bazel run //krill/importer/cmd:import -- --path krill --session-id "$SESSION_ID" \
@@ -249,7 +249,7 @@ as complete for the resolved session's scope refuses before parsing
 anything; see `ARCHITECTURE.md` "The markdown importer and the
 delivery-axis association" for the one-time, one-way guarantee.
 
-Or bring up the whole domain (Postgres + migrate + api) via Tilt:
+`$KRILL_TOKEN` is a Keycloak access token (or mcpauth credential) with the operator role. Or bring up the whole domain (Postgres + migrate + api) via Tilt (note: the Tiltfile is not yet configured for the authenticated api, so requests need a token it cannot mint locally):
 
 ```sh
 cd krill && tilt up
@@ -268,7 +268,7 @@ the same `import` CLI described above, pointed at `whagent_net` instead of
 
 ```sh
 SESSION_ID=$(curl -s -X POST http://localhost:8080/sessions/init \
-  -d '{"scope_id":"<scope-uuid>","acting":{"iss":"local","sub":"me","kind":"human"},"on_behalf_of":{"iss":"local","sub":"me","kind":"human"}}' \
+  -H "Authorization: Bearer $KRILL_TOKEN" \
   | jq -r .session_id)
 PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \
   bazel run //krill/importer/cmd:import -- --path whagent_net --session-id "$SESSION_ID" \

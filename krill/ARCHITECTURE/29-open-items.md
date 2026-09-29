@@ -62,13 +62,19 @@
   `PersonaSwarmOperator` (widened from `PersonaAgent`-only by issue #2926,
   which had made the tool unreachable from any mcpauth-authenticated
   caller, including every krill-design/krill-work subagent).
-- No auth wired up on `api` — `POST /sessions/init`, every future write
-  endpoint, and the FR5-FR9 slice routes all trust caller-asserted
-  identity or are unauthenticated (see "`init` and the write gate"
-  above); only `krill/mcp` (issue #2494, extended by #2547) gets NFR1's
-  two-front-door pattern, for both the read-only spec surface and the
-  design-session surface — `api` itself gets none of it.
+- `api` now has an auth front door (see `16-init-and-write-gate.md`);
+  `init` derives identity and scope from the verified credential.
 - The renderer (`krill/render`, issue #2495) covers FR13-FR15/NFR3 as of
   this task; see "The doc renderer" above. No hook or schedule triggers it
   automatically yet — `bazel run //krill/render/cmd:render` is a manual,
   Swarm-Operator-run step, same shape as the importer.
+
+## Known gaps: authenticated api
+
+- `krill/Tiltfile` local dev is not configured for the authenticated `api`
+  (no Keycloak, roles, or credential wiring); scope note c5ef6e96.
+- The machine `client_credentials` token source (`krill/apiclient`) has no
+  in-repo caller yet.
+- The Keycloak `act.agent_id` claim is dropped; only `sub`/`iss` are kept.
+- There is no credential-to-scope mapping: with more than one scope,
+  `init` refuses (`ScopeStore.GetSole` fails) rather than choosing one.
