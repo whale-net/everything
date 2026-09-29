@@ -18,6 +18,8 @@ const (
 
 // Claims holds authenticated user/service account claims
 type Claims struct {
+	// Issuer is the verified token's `iss` claim.
+	Issuer   string
 	Subject  string
 	Roles    []string
 	Audience []string
@@ -165,6 +167,7 @@ func (v *oidcVerifier) Verify(ctx context.Context, token string) (*Claims, error
 	clientID, isServiceAccount := classifyKeycloakClaims(rawClaims)
 
 	return &Claims{
+		Issuer:           idToken.Issuer,
 		Subject:          idToken.Subject,
 		Roles:            rawClaims.RealmAccess.Roles,
 		Audience:         idToken.Audience,
