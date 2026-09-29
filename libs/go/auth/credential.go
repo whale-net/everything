@@ -314,7 +314,9 @@ func (s *pgxCredentialStore) Mint(ctx context.Context, identity string) (string,
 	args := []any{identity, hashToken(rawToken)}
 	if s.cfg.PersonaColumn != "" {
 		var persona *string
-		if s.cfg.PersonaResolver != nil {
+		if p := personaFromContext(ctx); p != "" {
+			persona = &p
+		} else if s.cfg.PersonaResolver != nil {
 			p, err := s.cfg.PersonaResolver.ResolvePersona(ctx, identity)
 			if err != nil {
 				return "", Credential{}, fmt.Errorf("auth: resolve persona: %w", err)

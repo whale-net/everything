@@ -96,6 +96,17 @@ func (p *Provider) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A resolver that carries a persona refuses a caller holding none: no
+	// authorization code, so no credential, is ever issued to it.
+	var persona string
+	if pc, ok := p.cfg.Resolver.(PersonaCaller); ok {
+		persona, ok = pc.ResolveCallerPersona(r)
+		if !ok {
+			writeAuthorizeRedirectError(w, r, redirectURI, state, "access_denied")
+			return
+		}
+	}
+
 	// Step 3 (#1642): mint a single-use authorization code. The raw code
 	// is generated here and handed to the client in the redirect below;
 	// only its SHA-256 hash (NFR1) is ever persisted via AuthCodeStore.Save
@@ -111,6 +122,7 @@ func (p *Provider) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		ClientID:            clientID,
 		RedirectURI:         redirectURI,
 		Identity:            identity,
+		Persona:             persona,
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: "S256",
 		ExpiresAt:           time.Now().Add(p.cfg.AuthCodeTTL),

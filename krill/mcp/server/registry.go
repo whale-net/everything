@@ -30,23 +30,26 @@ func NewRegistry(srv *mcp.Server) *Registry {
 	return &Registry{server: srv}
 }
 
+// readPersonas are the personas that may call any read tool.
+var readPersonas = []Persona{PersonaReader, PersonaSwarmOperator, PersonaAgent}
+
 // RegisterRead adds a read-only tool. Every call requires a Persona to have
 // been resolved by PersonaMiddleware or WhagentPersonaMiddleware before h
-// runs (NFR1: authorization is by persona, never individual identity) -- a
-// call with no resolved Persona is rejected before h is ever entered.
-// Every read tool this package backs (../../tools, both the FR5-FR8 spec
-// surface and this task's design-session surface) is open to any resolved
-// persona: there is no per-tool persona allow-list on the read side in M1
-// or M2, only on the write side (RegisterWrite below) -- a later
-// milestone's work-axis surface (M4) is where a persona-restricted READ
-// tool first becomes necessary. Every call -- authorized or rejected -- is
+// runs (NFR1: authorization is by persona, never individual identity), and
+// admits exactly reader, operator, and agent -- there is no per-tool
+// allow-list on the read side. A call with no resolved persona is rejected
+// before h is ever entered. Every call -- authorized or rejected -- is
 // traced and logged by instrumentToolCall (observability.go).
 func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
 			var zero Out
-			if PersonaFromContext(ctx) == "" {
+			persona := PersonaFromContext(ctx)
+			if persona == "" {
 				return nil, zero, fmt.Errorf("unauthenticated: no caller persona resolved")
+			}
+			if !personaAllowed(persona, readPersonas) {
+				return nil, zero, fmt.Errorf("forbidden: persona %q may not call %s", persona, tool.Name)
 			}
 			return h(ctx, req, in)
 		})
@@ -61,12 +64,10 @@ func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerF
 // like RegisterRead, every call requires a Persona to have been resolved
 // before h runs.
 //
-// allowedPersonas is the minimal per-tool allow-list this task's Scope
-// section calls for: pass nil (or an empty slice) for a tool any resolved
-// persona may call -- open_design_session, append_revision_event, and
-// init_session, the write tools with no persona-sensitivity of their own --
-// or a non-empty list to reject every persona not named in it. Every
-// non-empty allow-list in this package includes PersonaSwarmOperator
+// allowedPersonas is the explicit per-tool allow-list: every persona not
+// named in it is rejected, and an empty list rejects every persona (fail
+// closed -- a write tool never defaults to "anyone"). Reader is never
+// listed. Every allow-list in this package includes PersonaSwarmOperator
 // (issue #2926): an allow-list naming only PersonaAgent and/or
 // PersonaRequirementContributor made the tool unreachable end-to-end from
 // any mcpauth-authenticated caller, including every krill-design/krill-work
@@ -111,7 +112,7 @@ func RegisterWrite[In, Out any](reg *Registry, tool *mcp.Tool, allowedPersonas [
 			if persona == "" {
 				return nil, zero, fmt.Errorf("unauthenticated: no caller persona resolved")
 			}
-			if len(allowedPersonas) > 0 && !personaAllowed(persona, allowedPersonas) {
+			if !personaAllowed(persona, allowedPersonas) {
 				return nil, zero, fmt.Errorf("forbidden: persona %q may not call %s", persona, tool.Name)
 			}
 			return h(ctx, req, in)

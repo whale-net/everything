@@ -6,12 +6,13 @@
 // full rationale this file shares:
 //
 //  1. Routes each request's bearer token to exactly one of the two doors
-//     at the HTTP layer (DualAuthHTTPHandler), keyed on token SHAPE: a
-//     whagent Claim is always a three-segment, two-dot JWT compact
-//     serialization; an auth credential is always a 64-character hex
-//     string with no dots (libs/go/auth/credential.go's
-//     generateToken) -- the two encodings never overlap, so this split
-//     is exact, not probabilistic.
+//     at the HTTP layer (DualAuthHTTPHandler): an auth credential is an
+//     opaque 64-character hex string with no dots
+//     (libs/go/auth/credential.go's generateToken) and goes to the
+//     credential door; a JWT whose unverified `iss` is whagent-net's goes
+//     to the whagent door; any other JWT (e.g. a Keycloak token) is
+//     rejected outright -- the OIDC door is deliberately not mounted here.
+//     The peek only selects a verifier; it never grants anything.
 //  2. For the whagent-shaped case, calls whagent.Verifier.Verify
 //     directly (never whagent.HTTPMiddleware -- see
 //     audience_score_system's file for the exact contract gap this
@@ -31,6 +32,8 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -49,6 +52,11 @@ import (
 type WhagentAuthConfig struct {
 	Verifier *whagent.Verifier
 	Audience string
+
+	// Issuer is whagent-net's issuer identifier: a JWT bearing any other
+	// unverified `iss` is rejected without reaching Verifier. Empty routes
+	// every JWT to Verifier, which pins its own issuer regardless.
+	Issuer string
 }
 
 // whagentClaimExtraKey is the sdkauth.TokenInfo.Extra key
@@ -66,12 +74,10 @@ var errWhagentTokenInvalid = fmt.Errorf("mcp: invalid, expired, or unverifiable 
 
 // isWhagentShapedToken reports whether token is shaped like a whagent
 // Claim JWT (RFC 7519 compact serialization: exactly three non-empty,
-// dot-separated segments) rather than an auth credential (a
-// 64-character hex string with no dots). DualAuthHTTPHandler uses this to
-// decide which of the two verification paths a given request's bearer
-// token belongs to, without ever trying a credential against the wrong
-// path's verifier (NFR1): the two encodings never overlap, so this split
-// is exact, not probabilistic.
+// dot-separated segments). An opaque auth credential never has dots, so
+// this cleanly separates JWTs from credentials; whether a JWT is actually
+// whagent's is decided by peekIssuer plus the verifier, never by shape
+// alone.
 func isWhagentShapedToken(token string) bool {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -83,6 +89,27 @@ func isWhagentShapedToken(token string) bool {
 		}
 	}
 	return true
+}
+
+// peekIssuer returns the unverified `iss` claim of a JWT-shaped token, or
+// "" when the payload does not decode. It is used only to pick which
+// verifier sees the token -- never to grant access.
+func peekIssuer(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return claims.Iss
 }
 
 // bearerToken extracts the raw bearer token from r's Authorization header
@@ -115,23 +142,57 @@ func whagentTokenVerifier(cfg WhagentAuthConfig) sdkauth.TokenVerifier {
 	}
 }
 
+// forbiddenNoPersona is the 403 body for a credential with no recognized
+// persona (e.g. minted before personas existed): authenticated, but not
+// authorized for anything.
+const forbiddenNoPersona = `{"error":"forbidden","error_description":"credential carries no persona; sign in again"}`
+
+// personaGated wraps h so a verified credential with no recognized persona
+// is refused 403 before any MCP handling.
+func personaGated(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := sdkauth.TokenInfoFromContext(r.Context())
+		if info == nil {
+			http.Error(w, "unauthenticated", http.StatusUnauthorized)
+			return
+		}
+		if _, ok := credentialPersona(info); !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(forbiddenNoPersona))
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// credentialGuarded is the auth (opaque credential) door around h.
+func credentialGuarded(h http.Handler, credentials auth.CredentialStore, opts *sdkauth.RequireBearerTokenOptions) http.Handler {
+	return auth.RequireBearerToken(credentials, opts)(personaGated(h))
+}
+
 // DualAuthHTTPHandler wraps mcpHandler with BOTH caller-authentication
-// front doors (NFR1): the auth (human OAuth2) door (via credentials)
-// and the whagent-net (agent) door (via cfg), routed per-request by
-// isWhagentShapedToken so neither door is built on the other and neither
-// can be satisfied by the other's credential. Each branch is its own
-// independent sdkauth.RequireBearerToken instance around mcpHandler, so a
-// rejection in either branch never invokes mcpHandler.
+// front doors (NFR1): the auth (opaque credential) door and the
+// whagent-net (agent) door, routed per-request -- opaque tokens to the
+// credential door, whagent-issued JWTs to the whagent door, every other
+// JWT rejected 401 without reaching either verifier. Each branch is its
+// own independent sdkauth.RequireBearerToken instance around mcpHandler,
+// so a rejection in either branch never invokes mcpHandler.
 func DualAuthHTTPHandler(mcpHandler http.Handler, credentials auth.CredentialStore, cfg WhagentAuthConfig, authOpts *sdkauth.RequireBearerTokenOptions) http.Handler {
-	credentialGuarded := auth.RequireBearerToken(credentials, authOpts)(mcpHandler)
+	credentialDoor := credentialGuarded(mcpHandler, credentials, authOpts)
 	whagentGuarded := sdkauth.RequireBearerToken(whagentTokenVerifier(cfg), authOpts)(mcpHandler)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isWhagentShapedToken(bearerToken(r)) {
-			whagentGuarded.ServeHTTP(w, r)
+		token := bearerToken(r)
+		if !isWhagentShapedToken(token) {
+			credentialDoor.ServeHTTP(w, r)
 			return
 		}
-		credentialGuarded.ServeHTTP(w, r)
+		if cfg.Issuer != "" && peekIssuer(token) != cfg.Issuer {
+			http.Error(w, errWhagentTokenInvalid.Error(), http.StatusUnauthorized)
+			return
+		}
+		whagentGuarded.ServeHTTP(w, r)
 	})
 }
 
