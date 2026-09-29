@@ -135,7 +135,7 @@ func refuseIfAlreadyImported(ctx context.Context, st *store.Store, scopeID uuid.
 // can attribute its writes to the session's scope, exactly as
 // handlers.GatedSession does for an HTTP write handler.
 func requireSession(ctx context.Context, sessions store.SessionStore, sessionID uuid.UUID) (store.Session, error) {
-	sess, err := sessions.GetSession(ctx, store.SessionID(sessionID))
+	sess, err := sessions.UseSession(ctx, store.SessionID(sessionID))
 	if errors.Is(err, store.ErrSessionNotFound) {
 		return store.Session{}, fmt.Errorf("import: unknown krill session %s: %w", sessionID, err)
 	}

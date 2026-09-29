@@ -56,6 +56,9 @@ type krillSessionInput struct {
 // recognize, is returned as a clean tool error -- every caller below
 // checks this error before running any store mutation, so a bad or
 // unknown session id never reaches a write.
+// SessionExpiredCode prefixes the MCP tool error for an idle-expired session.
+const SessionExpiredCode = "session_expired"
+
 func requireKrillSession(ctx context.Context, sessions store.SessionStore, raw string) (store.Session, error) {
 	if raw == "" {
 		return store.Session{}, fmt.Errorf("krill_session_id: required")
@@ -64,7 +67,10 @@ func requireKrillSession(ctx context.Context, sessions store.SessionStore, raw s
 	if err != nil {
 		return store.Session{}, fmt.Errorf("krill_session_id: invalid or missing UUID")
 	}
-	sess, err := sessions.GetSession(ctx, store.SessionID(id))
+	sess, err := sessions.UseSession(ctx, store.SessionID(id))
+	if errors.Is(err, store.ErrSessionExpired) {
+		return store.Session{}, fmt.Errorf("%s: krill session expired from inactivity; call init_session to start a new one", SessionExpiredCode)
+	}
 	if errors.Is(err, store.ErrSessionNotFound) {
 		return store.Session{}, fmt.Errorf("unknown krill session %s", id)
 	}
