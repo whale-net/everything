@@ -101,7 +101,17 @@ func (p *Provider) handleMintCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rawToken, cred, err := p.cfg.Credentials.Mint(r.Context(), identity)
+	ctx := r.Context()
+	if pc, ok := p.cfg.Resolver.(PersonaCaller); ok {
+		persona, ok := pc.ResolveCallerPersona(r)
+		if !ok {
+			writeSelfServeError(w, http.StatusForbidden, "access_denied")
+			return
+		}
+		ctx = WithPersona(ctx, persona)
+	}
+
+	rawToken, cred, err := p.cfg.Credentials.Mint(ctx, identity)
 	if err != nil {
 		writeSelfServeError(w, http.StatusInternalServerError, "mint_failed")
 		return

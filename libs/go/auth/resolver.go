@@ -1,6 +1,9 @@
 package auth
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
 // CallerResolver resolves the already-authenticated caller behind an HTTP
 // request to a stable identity key.
@@ -55,4 +58,28 @@ type CallerResolverFunc func(r *http.Request) (identity string, ok bool)
 // ResolveCaller calls f.
 func (f CallerResolverFunc) ResolveCaller(r *http.Request) (identity string, ok bool) {
 	return f(r)
+}
+
+// PersonaCaller is an optional extension a CallerResolver implements when
+// the identity it vouches for also carries an authorization persona (e.g.
+// resolved from verified IdP role claims). When ProviderConfig.Resolver
+// implements it, /authorize and POST /credentials refuse a caller for which
+// ok is false -- no credential is minted -- and otherwise persist persona on
+// the minted credential (StoreConfig.PersonaColumn).
+type PersonaCaller interface {
+	ResolveCallerPersona(r *http.Request) (persona string, ok bool)
+}
+
+type personaCtxKey struct{}
+
+// WithPersona returns ctx carrying persona for Mint to persist. Only the
+// Provider's own handlers set it, from a persona already vetted at
+// /authorize or /credentials.
+func WithPersona(ctx context.Context, persona string) context.Context {
+	return context.WithValue(ctx, personaCtxKey{}, persona)
+}
+
+func personaFromContext(ctx context.Context) string {
+	p, _ := ctx.Value(personaCtxKey{}).(string)
+	return p
 }

@@ -131,9 +131,11 @@ func NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials
 	if resourceMeta.enabled() {
 		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
 	}
-	requireBearer := auth.RequireBearerToken(credentials, opts)
+	guard := func(srv *mcp.Server) http.Handler {
+		return credentialGuarded(mcpHandlerFor(srv), credentials, opts)
+	}
 
-	return newMux(requireBearer(mcpHandlerFor(specSrv)), requireBearer(mcpHandlerFor(designSrv)), requireBearer(mcpHandlerFor(workSrv)), requireBearer(mcpHandlerFor(opsSrv)), resourceMeta)
+	return newMux(guard(specSrv), guard(designSrv), guard(workSrv), guard(opsSrv), resourceMeta)
 }
 
 // NewDualAuthHTTPHandler is NewHTTPHandler's two-front-door counterpart

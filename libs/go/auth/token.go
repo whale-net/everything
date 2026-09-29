@@ -124,7 +124,7 @@ func (p *Provider) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawToken, _, err := p.cfg.Credentials.Mint(r.Context(), authCode.Identity)
+	rawToken, _, err := p.cfg.Credentials.Mint(WithPersona(r.Context(), authCode.Persona), authCode.Identity)
 	if err != nil {
 		writeTokenError(w, http.StatusInternalServerError, "server_error")
 		return

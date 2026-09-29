@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	libauth "github.com/whale-net/everything/libs/go/auth"
 
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/mcp/tools"
@@ -138,7 +139,7 @@ func amendOperatorPersona(next mcp.MethodHandler) mcp.MethodHandler {
 		if call.Extra == nil {
 			call.Extra = &mcp.RequestExtra{}
 		}
-		call.Extra.TokenInfo = &auth.TokenInfo{UserID: "operator-1"}
+		call.Extra.TokenInfo = &auth.TokenInfo{UserID: "operator-1", Extra: map[string]any{libauth.TokenInfoPersonaKey: "swarm_operator"}}
 		return gated(ctx, method, req)
 	}
 }
@@ -228,11 +229,36 @@ func TestRegisterAmendAll_RegistersEverySpecAxisKind(t *testing.T) {
 		require.NoError(t, err)
 		registered[tool.Name] = true
 	}
-	require.Len(t, registered, len(amendToolNames)+1)
+	require.Len(t, registered, len(amendToolNames)+2)
 	for name := range amendToolNames {
 		assert.True(t, registered[name], "%s must be registered", name)
 	}
 	assert.True(t, registered[reparentFeatureToolName], "%s must be registered", reparentFeatureToolName)
+	assert.True(t, registered["amend_deferral"], "amend_deferral must be registered")
+}
+
+func TestAmendDeferral_ReachesStoreAfterSessionGate(t *testing.T) {
+	sessionID := store.SessionID(uuid.New())
+	var calls []amendCall
+	cs := connectAmendTools(t, sessionID, &calls)
+	id := uuid.New()
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "amend_deferral", Arguments: map[string]any{
+		"krill_session_id": uuid.UUID(sessionID).String(), "id": id.String(), "body": "standalone text", "destination": "M2",
+	}})
+	require.NoError(t, err)
+	require.False(t, res.IsError, amendTextOf(res))
+	require.Len(t, calls, 1)
+	assert.Equal(t, "deferral", calls[0].entity)
+	assert.Equal(t, id, calls[0].id)
+	assert.Equal(t, "standalone text", calls[0].name)
+
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "amend_deferral", Arguments: map[string]any{
+		"krill_session_id": uuid.NewString(), "id": id.String(), "body": "x", "destination": "M2",
+	}})
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+	assert.Len(t, calls, 1)
 }
 
 func TestAmendTools_RejectMissingOrUnknownSession(t *testing.T) {
@@ -669,4 +695,8 @@ func TestAmendPlacementRefuse_AdvicePerKindAndField(t *testing.T) {
 
 	// A change of none of them is not a refusal at all.
 	assert.NoError(t, (store.AmendPlacementChange{}).Refuse("feature", store.AmendPlacementChange{}))
+}
+
+func (f amendSessionStore) UseSession(ctx context.Context, id store.SessionID) (store.Session, error) {
+	return f.GetSession(ctx, id)
 }

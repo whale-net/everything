@@ -7,6 +7,10 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
+// TokenInfoPersonaKey is the TokenInfo.Extra key TokenVerifier stores the
+// credential's persona under, when the store records one.
+const TokenInfoPersonaKey = "libs/go/auth.persona"
+
 // errInvalidToken is the single, fixed error TokenVerifier returns for
 // every verification failure (FR6, NFR1): its Error() string never varies
 // between an unrecognized, malformed, revoked, or store-error case, and
@@ -50,11 +54,15 @@ var _ error = errInvalidTokenWrap{}
 // otherwise set AllowMissingExpiration: true) — see that function's doc.
 func TokenVerifier(store CredentialStore) sdkauth.TokenVerifier {
 	return func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
-		identity, _, err := store.Verify(ctx, token)
+		identity, cred, err := store.Verify(ctx, token)
 		if err != nil {
 			return nil, errInvalidToken
 		}
-		return &sdkauth.TokenInfo{UserID: identity}, nil
+		info := &sdkauth.TokenInfo{UserID: identity}
+		if cred.Persona != "" {
+			info.Extra = map[string]any{TokenInfoPersonaKey: cred.Persona}
+		}
+		return info, nil
 	}
 }
 

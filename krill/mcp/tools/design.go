@@ -56,6 +56,9 @@ type krillSessionInput struct {
 // recognize, is returned as a clean tool error -- every caller below
 // checks this error before running any store mutation, so a bad or
 // unknown session id never reaches a write.
+// SessionExpiredCode prefixes the MCP tool error for an idle-expired session.
+const SessionExpiredCode = "session_expired"
+
 func requireKrillSession(ctx context.Context, sessions store.SessionStore, raw string) (store.Session, error) {
 	if raw == "" {
 		return store.Session{}, fmt.Errorf("krill_session_id: required")
@@ -64,7 +67,10 @@ func requireKrillSession(ctx context.Context, sessions store.SessionStore, raw s
 	if err != nil {
 		return store.Session{}, fmt.Errorf("krill_session_id: invalid or missing UUID")
 	}
-	sess, err := sessions.GetSession(ctx, store.SessionID(id))
+	sess, err := sessions.UseSession(ctx, store.SessionID(id))
+	if errors.Is(err, store.ErrSessionExpired) {
+		return store.Session{}, fmt.Errorf("%s: krill session expired from inactivity; call init_session to start a new one", SessionExpiredCode)
+	}
 	if errors.Is(err, store.ErrSessionNotFound) {
 		return store.Session{}, fmt.Errorf("unknown krill session %s", id)
 	}
@@ -94,7 +100,7 @@ func RegisterOpenDesignSession(reg *server.Registry, sessions store.SessionStore
 		Name: "open_design_session",
 		Description: "Open a new design session against a Product (FR1). Accepts a plain-language opening_submission with " +
 			"no entity reference (FR8) -- a Requirement Contributor contributes without knowing krill's entity model.",
-	}, nil, func(ctx context.Context, _ *mcp.CallToolRequest, in openDesignSessionInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaSwarmOperator, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in openDesignSessionInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -169,7 +175,7 @@ func RegisterAppendRevisionEvent(reg *server.Registry, sessions store.SessionSto
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "append_revision_event",
 		Description: "Append one round (FR2) to an existing design session: draft, reconciliation, answer, signoff, or ruling.",
-	}, nil, func(ctx context.Context, _ *mcp.CallToolRequest, in appendRevisionEventInput) (*mcp.CallToolResult, handlers.RevisionEventCreatedResponse, error) {
+	}, []server.Persona{server.PersonaSwarmOperator, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in appendRevisionEventInput) (*mcp.CallToolResult, handlers.RevisionEventCreatedResponse, error) {
 		var zero handlers.RevisionEventCreatedResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
