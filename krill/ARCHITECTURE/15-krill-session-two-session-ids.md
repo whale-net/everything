@@ -13,11 +13,9 @@ identifiers matter here and must never be confused:
   `krill_session.whagent_session_id` purely as a correlation field. It is
   nullable (a human/OAuth2 caller has none), it is never used as or in
   place of `krill_session.id`, and a whagent-authenticated call still
-  gets its own, distinct krill session id. **In M1, `init` takes this
-  value as-is from the request body** — `api` mounts no whagent-verifier
-  middleware to extract it from a verified `Claim` (see "`init` and the
-  write gate" below for why) — so it is only as trustworthy as every
-  other field `init` accepts in this milestone.
+  gets its own, distinct krill session id. `init` derives it from the verified credential (the MCP door's
+  whagent claim); no request field supplies it. See
+  `16-init-and-write-gate.md`.
 
 `krill_session` also carries `acting_*`/`on_behalf_of_*` — two
 `(iss, sub, kind)` triples (LB4, mirroring `whagent_net`'s LB2 and
