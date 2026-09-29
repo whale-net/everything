@@ -27,6 +27,8 @@ import (
 type voidSessionStore struct {
 	store.SessionStore
 	known store.SessionID
+	// expired makes UseSession (the write gate) report idle expiry.
+	expired bool
 }
 
 func (f voidSessionStore) GetSession(_ context.Context, id store.SessionID) (store.Session, error) {
@@ -99,12 +101,17 @@ func (f recordingVoidStore) ListVoidEvents(_ context.Context, scopeID uuid.UUID,
 
 func connectVoidTools(t *testing.T, sessionID store.SessionID, calls *[]voidCall, refusers map[string]error, events []store.VoidEvent) *mcp.ClientSession {
 	t.Helper()
+	return connectVoidToolsWith(t, voidSessionStore{known: sessionID}, calls, refusers, events)
+}
+
+func connectVoidToolsWith(t *testing.T, sessions voidSessionStore, calls *[]voidCall, refusers map[string]error, events []store.VoidEvent) *mcp.ClientSession {
+	t.Helper()
 	ctx := context.Background()
 
 	srv := mcp.NewServer(server.Implementation, nil)
 	srv.AddReceivingMiddleware(voidOperatorPersona)
 	reg := server.NewRegistry(srv)
-	tools.RegisterVoidAll(reg, voidSessionStore{known: sessionID}, recordingVoidStore{calls: calls, refusers: refusers, events: events})
+	tools.RegisterVoidAll(reg, sessions, recordingVoidStore{calls: calls, refusers: refusers, events: events})
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	_, err := srv.Connect(ctx, serverTransport, nil)
@@ -305,3 +312,28 @@ func voidTextOf(res *mcp.CallToolResult) string {
 }
 
 func intPtr(n int) *int { return &n }
+
+func (f voidSessionStore) UseSession(ctx context.Context, id store.SessionID) (store.Session, error) {
+	if f.expired {
+		return store.Session{}, store.ErrSessionExpired
+	}
+	return f.GetSession(ctx, id)
+}
+
+// TestVoidEntity_ExpiredSession_RejectsWithSessionExpiredCode proves an
+// idle-expired session is rejected before the store with the distinct
+// session_expired code and a re-init instruction.
+func TestVoidEntity_ExpiredSession_RejectsWithSessionExpiredCode(t *testing.T) {
+	sessionID := store.SessionID(uuid.New())
+	var calls []voidCall
+	cs := connectVoidToolsWith(t, voidSessionStore{known: sessionID, expired: true}, &calls, nil, nil)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "void_entity", Arguments: map[string]any{
+		"krill_session_id": uuid.UUID(sessionID).String(), "entity_kind": "feature", "entity_id": uuid.NewString(),
+	}})
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+	assert.Contains(t, voidTextOf(res), tools.SessionExpiredCode)
+	assert.Contains(t, voidTextOf(res), "init_session")
+	assert.Empty(t, calls)
+}
