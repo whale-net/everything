@@ -17,7 +17,11 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/krill/api/authdoor"
+	"github.com/whale-net/everything/krill/mcp/server"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 )
 
@@ -41,6 +45,13 @@ type config struct {
 	// personas. Unset means no identity holds that persona.
 	RoleOperator string
 	RoleReader   string
+	// OIDCIssuer/OIDCClientID (KRILL_OIDC_ISSUER / KRILL_OIDC_CLIENT_ID)
+	// configure the Keycloak door; both must be set to enable it.
+	OIDCIssuer   string
+	OIDCClientID string
+	// RequireAuth (KRILL_API_REQUIRE_AUTH) rejects requests without a
+	// token. Default off so rollout is a config change.
+	RequireAuth bool
 }
 
 func loadConfig() config {
@@ -50,6 +61,9 @@ func loadConfig() config {
 		GitHubToken:  os.Getenv("KRILL_GITHUB_TOKEN"),
 		RoleOperator: os.Getenv("KRILL_ROLE_OPERATOR"),
 		RoleReader:   os.Getenv("KRILL_ROLE_READER"),
+		OIDCIssuer:   os.Getenv("KRILL_OIDC_ISSUER"),
+		OIDCClientID: os.Getenv("KRILL_OIDC_CLIENT_ID"),
+		RequireAuth:  os.Getenv("KRILL_API_REQUIRE_AUTH") == "true",
 	}
 }
 
@@ -91,9 +105,27 @@ func run() error {
 	mux := http.NewServeMux()
 	setupRoutes(mux, pool, cfg.GitHubToken)
 
+	doorCfg := authdoor.Config{
+		Roles:   server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
+		Require: cfg.RequireAuth,
+	}
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
+	if err != nil {
+		logger.Warn("mcpauth credential store unavailable; opaque tokens will be rejected", "error", err)
+	} else {
+		doorCfg.Credentials = credentials
+	}
+	if cfg.OIDCIssuer != "" && cfg.OIDCClientID != "" {
+		verifier, err := grpcauth.NewOIDCVerifier(ctx, cfg.OIDCIssuer, cfg.OIDCClientID)
+		if err != nil {
+			return fmt.Errorf("oidc verifier: %w", err)
+		}
+		doorCfg.OIDC, doorCfg.OIDCIssuer = verifier, cfg.OIDCIssuer
+	}
+
 	httpServer := &http.Server{
 		Addr:         cfg.Addr,
-		Handler:      otelhttp.NewHandler(mux, "krill-api"),
+		Handler:      otelhttp.NewHandler(authdoor.Middleware(doorCfg)(mux), "krill-api"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
