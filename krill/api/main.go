@@ -36,13 +36,20 @@ type config struct {
 	// pointer issue. Only POST /pointer-artifacts needs it; every other
 	// endpoint in this binary ignores it. See ../ENV.md.
 	GitHubToken string
+	// RoleOperator and RoleReader (KRILL_ROLE_OPERATOR / KRILL_ROLE_READER)
+	// are the realm roles that resolve to the operator and reader
+	// personas. Unset means no identity holds that persona.
+	RoleOperator string
+	RoleReader   string
 }
 
 func loadConfig() config {
 	return config{
-		Addr:        getEnv("KRILL_API_ADDR", ":8080"),
-		DatabaseURL: os.Getenv("PG_DATABASE_URL"),
-		GitHubToken: os.Getenv("KRILL_GITHUB_TOKEN"),
+		Addr:         getEnv("KRILL_API_ADDR", ":8080"),
+		DatabaseURL:  os.Getenv("PG_DATABASE_URL"),
+		GitHubToken:  os.Getenv("KRILL_GITHUB_TOKEN"),
+		RoleOperator: os.Getenv("KRILL_ROLE_OPERATOR"),
+		RoleReader:   os.Getenv("KRILL_ROLE_READER"),
 	}
 }
 
