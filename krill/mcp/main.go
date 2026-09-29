@@ -327,7 +327,7 @@ func run() error {
 	// initializeAuthDeps degrade-and-log convention for every other
 	// optional dependency: the agent front door below never depends on
 	// this succeeding.
-	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
 	if err != nil {
 		logger.Warn("auth credential store unavailable; the auth (human) front door will reject every call until its migration is applied", "error", err)
 		credentials = rejectingCredentialStore{}
@@ -358,6 +358,7 @@ func run() error {
 		handler = server.NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, server.WhagentAuthConfig{
 			Verifier: whagentVerifier,
 			Audience: cfg.MCPPublicURL,
+			Issuer:   cfg.WhagentIssuer,
 		}, resourceMeta)
 	} else {
 		handler = server.NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, resourceMeta)

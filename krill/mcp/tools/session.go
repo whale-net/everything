@@ -55,7 +55,7 @@ func RegisterInitSession(reg *server.Registry, sessions store.SessionStore, scop
 		Description: "Mint a krill_session_id (FR3): the session id every other write tool on this mount requires as " +
 			"input. Call this first -- every other write tool rejects a missing or unknown krill_session_id. " +
 			"The response also carries scope_id, the value list_products, list_tasks, and the ops console tools take as input.",
-	}, nil, func(ctx context.Context, _ *mcp.CallToolRequest, in initSessionInput) (*mcp.CallToolResult, handlers.InitSessionResponse, error) {
+	}, []server.Persona{server.PersonaSwarmOperator, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in initSessionInput) (*mcp.CallToolResult, handlers.InitSessionResponse, error) {
 		var zero handlers.InitSessionResponse
 
 		scope, err := scopes.GetSole(ctx)

@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	libauth "github.com/whale-net/everything/libs/go/auth"
 
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/mcp/tools"
@@ -138,7 +139,7 @@ func amendOperatorPersona(next mcp.MethodHandler) mcp.MethodHandler {
 		if call.Extra == nil {
 			call.Extra = &mcp.RequestExtra{}
 		}
-		call.Extra.TokenInfo = &auth.TokenInfo{UserID: "operator-1"}
+		call.Extra.TokenInfo = &auth.TokenInfo{UserID: "operator-1", Extra: map[string]any{libauth.TokenInfoPersonaKey: "swarm_operator"}}
 		return gated(ctx, method, req)
 	}
 }

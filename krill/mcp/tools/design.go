@@ -100,7 +100,7 @@ func RegisterOpenDesignSession(reg *server.Registry, sessions store.SessionStore
 		Name: "open_design_session",
 		Description: "Open a new design session against a Product (FR1). Accepts a plain-language opening_submission with " +
 			"no entity reference (FR8) -- a Requirement Contributor contributes without knowing krill's entity model.",
-	}, nil, func(ctx context.Context, _ *mcp.CallToolRequest, in openDesignSessionInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaSwarmOperator, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in openDesignSessionInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -175,7 +175,7 @@ func RegisterAppendRevisionEvent(reg *server.Registry, sessions store.SessionSto
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "append_revision_event",
 		Description: "Append one round (FR2) to an existing design session: draft, reconciliation, answer, signoff, or ruling.",
-	}, nil, func(ctx context.Context, _ *mcp.CallToolRequest, in appendRevisionEventInput) (*mcp.CallToolResult, handlers.RevisionEventCreatedResponse, error) {
+	}, []server.Persona{server.PersonaSwarmOperator, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in appendRevisionEventInput) (*mcp.CallToolResult, handlers.RevisionEventCreatedResponse, error) {
 		var zero handlers.RevisionEventCreatedResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

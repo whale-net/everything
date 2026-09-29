@@ -34,6 +34,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//krill/identity",
+        "//krill/mcp/server",
         "//krill/slice",
         "//krill/store",
         "//krill/ui/components",

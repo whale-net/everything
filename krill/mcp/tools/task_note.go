@@ -114,7 +114,7 @@ func RegisterTransitionNoteLifecycle(reg *server.Registry, sessions store.Sessio
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "transition_note_lifecycle",
 		Description: "Transition a note's lifecycle status (FR11): noted -> carried-over/deferred/closed, or any other value in that fixed enumeration. Any persona may call this -- the only gate is an active krill session. The note's body and kind are never touched.",
-	}, nil, func(ctx context.Context, _ *mcp.CallToolRequest, in transitionNoteLifecycleInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaSwarmOperator, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in transitionNoteLifecycleInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

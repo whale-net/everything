@@ -26,6 +26,10 @@ type AuthCode struct {
 	CodeChallenge       string
 	CodeChallengeMethod string // always "S256"
 	ExpiresAt           time.Time
+
+	// Persona is the persona vetted at /authorize, carried to /token so the
+	// minted credential records it. Empty when the resolver has none.
+	Persona string
 }
 
 // AuthCodeStore is the save/consume lifecycle for pending OAuth2
@@ -145,6 +149,11 @@ type AuthCodeStoreConfig struct {
 	// Defaults to "mcp_auth_code". Unqualified for the same search_path
 	// reason StoreConfig.TableName is (credential.go).
 	TableName string
+
+	// PersonaColumn, when set, names a nullable TEXT column the store
+	// persists AuthCode.Persona through. Unset leaves generated SQL
+	// unchanged.
+	PersonaColumn string
 }
 
 // pgxAuthCodeStore is the pgx-backed, multi-replica-safe AuthCodeStore
@@ -175,6 +184,11 @@ func NewPostgresAuthCodeStore(ctx context.Context, cfg AuthCodeStoreConfig) (Aut
 	}
 	if err := validateIdentifier(cfg.TableName, "TableName"); err != nil {
 		return nil, err
+	}
+	if cfg.PersonaColumn != "" {
+		if err := validateIdentifier(cfg.PersonaColumn, "PersonaColumn"); err != nil {
+			return nil, err
+		}
 	}
 
 	s := &pgxAuthCodeStore{cfg: cfg}
@@ -220,15 +234,24 @@ func (s *pgxAuthCodeStore) pruneExpired(ctx context.Context) {
 func (s *pgxAuthCodeStore) Save(ctx context.Context, code AuthCode) error {
 	s.pruneExpired(ctx)
 
-	query := fmt.Sprintf(`
-		INSERT INTO %s (code_hash, client_id, redirect_uri, identity, code_challenge, code_challenge_method, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, s.cfg.TableName)
-
-	_, err := s.cfg.Pool.Exec(ctx, query,
+	cols := "code_hash, client_id, redirect_uri, identity, code_challenge, code_challenge_method, expires_at"
+	holders := "$1, $2, $3, $4, $5, $6, $7"
+	args := []any{
 		code.Code, code.ClientID, code.RedirectURI, code.Identity,
 		code.CodeChallenge, code.CodeChallengeMethod, code.ExpiresAt,
-	)
+	}
+	if s.cfg.PersonaColumn != "" {
+		var persona *string
+		if code.Persona != "" {
+			persona = &code.Persona
+		}
+		cols += ", " + s.cfg.PersonaColumn
+		holders += ", $8"
+		args = append(args, persona)
+	}
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", s.cfg.TableName, cols, holders)
+
+	_, err := s.cfg.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("auth: insert auth code: %w", err)
 	}
@@ -245,23 +268,31 @@ func (s *pgxAuthCodeStore) Save(ctx context.Context, code AuthCode) error {
 func (s *pgxAuthCodeStore) Consume(ctx context.Context, rawCode string) (AuthCode, error) {
 	s.pruneExpired(ctx)
 
-	query := fmt.Sprintf(`
-		DELETE FROM %s
-		WHERE code_hash = $1
-		RETURNING client_id, redirect_uri, identity, code_challenge, code_challenge_method, expires_at
-	`, s.cfg.TableName)
+	returning := "client_id, redirect_uri, identity, code_challenge, code_challenge_method, expires_at"
+	if s.cfg.PersonaColumn != "" {
+		returning += ", " + s.cfg.PersonaColumn
+	}
+	query := fmt.Sprintf("DELETE FROM %s WHERE code_hash = $1 RETURNING %s", s.cfg.TableName, returning)
 
 	hash := hashToken(rawCode)
 	var code AuthCode
-	err := s.cfg.Pool.QueryRow(ctx, query, hash).Scan(
+	dest := []any{
 		&code.ClientID, &code.RedirectURI, &code.Identity,
 		&code.CodeChallenge, &code.CodeChallengeMethod, &code.ExpiresAt,
-	)
+	}
+	var persona *string
+	if s.cfg.PersonaColumn != "" {
+		dest = append(dest, &persona)
+	}
+	err := s.cfg.Pool.QueryRow(ctx, query, hash).Scan(dest...)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return AuthCode{}, ErrAuthCodeNotFound
 		}
 		return AuthCode{}, fmt.Errorf("auth: consume auth code: %w", err)
+	}
+	if persona != nil {
+		code.Persona = *persona
 	}
 	code.Code = hash
 	return code, nil

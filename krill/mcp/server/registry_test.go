@@ -47,7 +47,7 @@ func TestRegisterRead_NoPersonaResolved_HandlerNotInvoked(t *testing.T) {
 }
 
 func TestRegisterRead_PersonaResolved_HandlerInvokedExactlyOnce(t *testing.T) {
-	for _, persona := range []Persona{PersonaSwarmOperator, PersonaAgent} {
+	for _, persona := range []Persona{PersonaSwarmOperator, PersonaAgent, PersonaReader} {
 		t.Run(string(persona), func(t *testing.T) {
 			var calls int32
 			srv, reg := newTestServer(persona)
@@ -94,8 +94,8 @@ func TestRegisterWrite_NoPersonaResolved_HandlerNotInvoked(t *testing.T) {
 	assert.Equal(t, int32(0), atomic.LoadInt32(&calls), "the handler must never run when no persona has been resolved")
 }
 
-func TestRegisterWrite_PersonaResolved_NoAllowList_EveryPersonaLetThrough(t *testing.T) {
-	for _, persona := range []Persona{PersonaSwarmOperator, PersonaAgent} {
+func TestRegisterWrite_NoAllowList_FailsClosedForEveryPersona(t *testing.T) {
+	for _, persona := range []Persona{PersonaSwarmOperator, PersonaAgent, PersonaReader} {
 		t.Run(string(persona), func(t *testing.T) {
 			var calls int32
 			srv, reg := newTestServer(persona)
@@ -104,10 +104,36 @@ func TestRegisterWrite_PersonaResolved_NoAllowList_EveryPersonaLetThrough(t *tes
 
 			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "design_write", Arguments: countInput{}})
 			require.NoError(t, err)
-			assert.False(t, res.IsError, "unexpected error: %s", textOf(res))
-			assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "a nil/empty allow-list must let any resolved persona through, exactly like open_design_session and append_revision_event")
+			assert.True(t, res.IsError)
+			assert.Contains(t, textOf(res), "forbidden")
+			assert.Equal(t, int32(0), atomic.LoadInt32(&calls))
 		})
 	}
+}
+
+func TestRegisterWrite_ReaderRefusedEvenWhenOthersAllowed(t *testing.T) {
+	var calls int32
+	srv, reg := newTestServer(PersonaReader)
+	RegisterWrite(reg, &mcp.Tool{Name: "init_session"}, []Persona{PersonaSwarmOperator, PersonaAgent}, countingWriteHandler(&calls))
+	cs := connectClient(t, srv)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "init_session", Arguments: countInput{}})
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+	assert.Contains(t, textOf(res), "forbidden")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&calls))
+}
+
+func TestRegisterOpsRead_ReaderRejected(t *testing.T) {
+	var calls int32
+	srv, reg := newTestServer(PersonaReader)
+	RegisterOpsRead(reg, &mcp.Tool{Name: "ops_read"}, countingReadHandler(&calls))
+	cs := connectClient(t, srv)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "ops_read", Arguments: countInput{}})
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&calls))
 }
 
 func TestRegisterWrite_AllowList_RejectsDisallowedPersona_AllowsListedPersona(t *testing.T) {

@@ -29,6 +29,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
@@ -61,7 +62,11 @@ type config struct {
 	AuthMode string
 
 	// OIDC configuration (required when AuthMode == "oidc").
-	OIDCIssuer       string
+	OIDCIssuer string
+	// RoleOperator/RoleReader (KRILL_ROLE_OPERATOR / KRILL_ROLE_READER) are
+	// the realm roles that resolve to the operator and reader personas.
+	RoleOperator     string
+	RoleReader       string
 	OIDCClientID     string
 	OIDCClientSecret string
 	OIDCRedirectURL  string
@@ -103,6 +108,8 @@ func loadConfig() config {
 		Addr:             getEnv("KRILL_UI_ADDR", ":8080"),
 		AuthMode:         strings.ToLower(getEnv("AUTH_MODE", "none")),
 		OIDCIssuer:       getEnv("KRILL_OIDC_ISSUER", ""),
+		RoleOperator:     os.Getenv("KRILL_ROLE_OPERATOR"),
+		RoleReader:       os.Getenv("KRILL_ROLE_READER"),
 		OIDCClientID:     getEnv("KRILL_OIDC_CLIENT_ID", ""),
 		OIDCClientSecret: getEnv("KRILL_OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  getEnv("KRILL_OIDC_REDIRECT_URI", "http://localhost:8080/auth/callback"),
@@ -129,6 +136,9 @@ type App struct {
 	// signed-in operator's encoded identity carries (auth.go's
 	// mcpCallerResolver).
 	oidcIssuer string
+
+	// roles maps realm roles to personas at credential-mint time.
+	roles server.RoleConfig
 
 	// mcpProvider is auth's OAuth2 authorization-server front end,
 	// constructed in NewApp and mounted on this binary's mux in
@@ -242,6 +252,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	app := &App{
 		auth:           auth,
 		oidcIssuer:     cfg.OIDCIssuer,
+		roles:          server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
 		scopes:         entities.Scopes(),
 		tasks:          entities.Tasks(),
 		designSessions: entities.DesignSessions(),
