@@ -212,8 +212,8 @@ func TestRender_SeededProduct_ProducesFourFileLayout(t *testing.T) {
 	// M1 has no milestone_status_event row at all; M2 shipped. Both must
 	// render an honest current status, the first from the absence of
 	// history rather than from a default the renderer invented.
-	assert.Contains(t, files.RoadmapMD, "### M1\n\nStatus: not started")
-	assert.Contains(t, files.RoadmapMD, "### M2\n\nStatus: shipped")
+	assert.Contains(t, files.RoadmapMD, "### M1\n\n- Status: not started")
+	assert.Contains(t, files.RoadmapMD, "### M2\n\n- Status: shipped")
 
 	for name, content := range files.FileMap() {
 		assert.Contains(t, content, render.GeneratedMarker, "file %s must carry the non-hand-editable marker", name)
