@@ -17,6 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/whale-net/everything/libs/go/auth"
 )
 
 func TestPersonaMiddleware_RejectsWhenUnauthenticated(t *testing.T) {
@@ -54,7 +55,7 @@ func TestPersonaMiddleware_ResolvesSwarmOperatorAndCallsNext(t *testing.T) {
 		return nil, nil
 	})
 
-	req := requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{UserID: "any-resolved-caller"}})
+	req := requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{UserID: "any-resolved-caller", Extra: map[string]any{auth.TokenInfoPersonaKey: "swarm_operator"}}})
 	_, err := PersonaMiddleware()(next)(context.Background(), "tools/call", req)
 	require.NoError(t, err)
 	assert.True(t, nextCalled, "next must run once caller identity resolves")
@@ -84,4 +85,44 @@ func TestPersonaMiddleware_DoesNotReResolveWhenPersonaAlreadySet(t *testing.T) {
 
 func TestPersonaFromContext_EmptyWhenNothingResolved(t *testing.T) {
 	assert.Equal(t, Persona(""), PersonaFromContext(context.Background()))
+}
+
+func personaReq(extra map[string]any) mcp.Request {
+	return requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{UserID: "u", Extra: extra}})
+}
+
+func TestPersonaMiddleware_ResolvesPersonaFromCredential(t *testing.T) {
+	for raw, want := range map[string]Persona{"swarm_operator": PersonaSwarmOperator, "reader": PersonaReader} {
+		var got Persona
+		next := mcp.MethodHandler(func(ctx context.Context, _ string, _ mcp.Request) (mcp.Result, error) {
+			got = PersonaFromContext(ctx)
+			return nil, nil
+		})
+		_, err := PersonaMiddleware()(next)(context.Background(), "tools/call", personaReq(map[string]any{auth.TokenInfoPersonaKey: raw}))
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	}
+}
+
+func TestPersonaMiddleware_PersonaLessOrUnknownCredential_Forbidden(t *testing.T) {
+	cases := map[string]map[string]any{
+		"nil extra":     nil,
+		"empty persona": {auth.TokenInfoPersonaKey: ""},
+		"agent forged":  {auth.TokenInfoPersonaKey: "agent"},
+		"unknown":       {auth.TokenInfoPersonaKey: "root"},
+		"wrong type":    {auth.TokenInfoPersonaKey: 7},
+	}
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			var nextCalled bool
+			next := mcp.MethodHandler(func(context.Context, string, mcp.Request) (mcp.Result, error) {
+				nextCalled = true
+				return nil, nil
+			})
+			_, err := PersonaMiddleware()(next)(context.Background(), "tools/call", personaReq(extra))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "forbidden")
+			assert.False(t, nextCalled)
+		})
+	}
 }
