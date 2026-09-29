@@ -22,7 +22,6 @@ go_test(
         "//libs/go/grpcauth",
         "//libs/go/whagent",
         "@com_github_modelcontextprotocol_go_sdk//auth",
-        "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
 )
