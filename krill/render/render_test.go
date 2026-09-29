@@ -114,7 +114,7 @@ func TestRender_ProducesFourFileLayout(t *testing.T) {
 	assert.Contains(t, files.CurrentStateMD, "This section is intentionally not rendered.")
 	assert.Contains(t, files.CurrentStateMD, "ARCHITECTURE.md",
 		"a reader must be told where the survey is, not merely that it is absent")
-	assert.Contains(t, files.CurrentStateMD, "Nothing was lost in migrating")
+	assert.Contains(t, files.CurrentStateMD, "remains in this file's git history")
 	assert.NotContains(t, files.CurrentStateMD, "No entity in krill's model backs this section",
 		"that wording reads as a gap in krill's model and invites a new entity type")
 	assert.NotContains(t, files.CurrentStateMD, "will be filled",
@@ -822,6 +822,28 @@ func TestRender_CapabilityMapDefaultsToHeadlines(t *testing.T) {
 	assert.NotContains(t, files.CapabilityMapMD, "**FR1**")
 }
 
+// By default PRODUCT.md carries headlines only: no persona/decision/note bodies.
+func TestRender_ProductMDDefaultsToHeadlines(t *testing.T) {
+	src := &fakeSource{
+		Doc: reqDoc(nil, nil),
+		Notes: []store.Note{{
+			ID:            uuid.New(),
+			Kind:          store.NoteKind("scope-note"),
+			CurrentStatus: store.NoteLifecycleStatus("noted"),
+			Body:          "First sentence. SECOND-SENTENCE-BODY\n\nmore",
+		}},
+	}
+	src.Doc.Decisions = []slice.DecisionEntity{{EntityRef: newRef(), Name: "LB1 — Pick X", DisplayNumber: 1, Body: strPtr("DECISION-BODY")}}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, "- **LB1** — Pick X")
+	assert.Contains(t, files.ProductMD, "First sentence.")
+	assert.NotContains(t, files.ProductMD, "DECISION-BODY")
+	assert.NotContains(t, files.ProductMD, "SECOND-SENTENCE-BODY")
+}
+
 // Headings inside a note body must nest under the document's own outline.
 func TestRender_NoteBodyHeadingsAreDemoted(t *testing.T) {
 	src := &fakeSource{
@@ -834,7 +856,7 @@ func TestRender_NoteBodyHeadingsAreDemoted(t *testing.T) {
 		}},
 	}
 
-	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.ProductMD, "\n#### Top\n")

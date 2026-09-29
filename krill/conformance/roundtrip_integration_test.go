@@ -175,7 +175,7 @@ func TestRoundTrip_KrillOwnBrief_EveryFR16EntityPresentInRenderedOutput(t *testi
 	require.Len(t, products, 1, "this scope must hold exactly the one product just imported -- no whagent_net or other product snuck in")
 	assert.Equal(t, "krill", products[0].Name)
 
-	files, err := render.Render(ctx, render.NewStoreSource(env.store), env.scopeID, report.ProductID)
+	files, err := render.Render(ctx, render.NewStoreSource(env.store), env.scopeID, report.ProductID, render.WithDetail(), render.WithDetail())
 	require.NoError(t, err, "rendering the freshly imported product must succeed")
 
 	// Build lookup tables from exactly the read paths render.Source
@@ -357,9 +357,9 @@ func TestRoundTrip_RenderTwice_ProducesIdenticalOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	src := render.NewStoreSource(env.store)
-	first, err := render.Render(ctx, src, env.scopeID, report.ProductID)
+	first, err := render.Render(ctx, src, env.scopeID, report.ProductID, render.WithDetail(), render.WithDetail())
 	require.NoError(t, err)
-	second, err := render.Render(ctx, src, env.scopeID, report.ProductID)
+	second, err := render.Render(ctx, src, env.scopeID, report.ProductID, render.WithDetail(), render.WithDetail())
 	require.NoError(t, err)
 
 	firstMap, secondMap := first.FileMap(), second.FileMap()

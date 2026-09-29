@@ -175,7 +175,7 @@ func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID, opts 
 	name := doc.Product.Name
 
 	return Files{
-		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals, notes),
+		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals, notes, o.detail),
 		CurrentStateMD:  renderCurrentStateMD(name, revision),
 		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc, o.detail),
 		RoadmapMD:       renderRoadmapMD(name, revision, milestones),
@@ -211,7 +211,23 @@ func header(productName, revisionID string, now time.Time) string {
 // callers never need to touch it.
 var nowFunc = time.Now
 
-func renderProductMD(name, revision string, doc slice.Document, personas []store.Persona, nonGoals []store.NonGoal, notes []store.Note) string {
+// firstSentence returns the first sentence of s (capped at 200 runes), for
+// headline-only renders.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "\n"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.Index(s, ". "); i >= 0 {
+		s = s[:i+1]
+	}
+	if r := []rune(s); len(r) > 200 {
+		s = string(r[:200]) + "…"
+	}
+	return s
+}
+
+func renderProductMD(name, revision string, doc slice.Document, personas []store.Persona, nonGoals []store.NonGoal, notes []store.Note, detail bool) string {
 	var b strings.Builder
 
 	b.WriteString(header(name, revision, nowFunc()))
@@ -224,6 +240,10 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 	b.WriteString("| Capability map | [`product/02-capability-map.md`](product/02-capability-map.md) |\n")
 	b.WriteString("| Roadmap | [`product/03-roadmap.md`](product/03-roadmap.md) |\n\n")
 
+	if !detail {
+		b.WriteString("_Headlines only: persona, decision, non-goal, and note bodies are not rendered here. Read them from krill (`get_product_slice`, `list_personas`, `list_non_goals`, `list_entity_notes`), or re-render with detail._\n\n")
+	}
+
 	b.WriteString("## Vision\n\n")
 	b.WriteString(strings.TrimSpace(doc.Product.Vision))
 	b.WriteString("\n\n")
@@ -235,7 +255,11 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		b.WriteString("**")
 		if p.Description != nil && strings.TrimSpace(*p.Description) != "" {
 			b.WriteString(" — ")
-			b.WriteString(strings.TrimSpace(*p.Description))
+			if detail {
+				b.WriteString(strings.TrimSpace(*p.Description))
+			} else {
+				b.WriteString(firstSentence(*p.Description))
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -244,11 +268,18 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 	b.WriteString("## Load-bearing decisions\n\n")
 	for _, d := range doc.Decisions {
 		title := cleanDecisionTitle(d.Name)
+		if !detail {
+			b.WriteString(fmt.Sprintf("- **LB%d** — %s\n", d.DisplayNumber, title))
+			continue
+		}
 		b.WriteString(fmt.Sprintf("### LB%d — %s\n\n", d.DisplayNumber, title))
 		if d.Body != nil && strings.TrimSpace(*d.Body) != "" {
 			b.WriteString(strings.TrimSpace(*d.Body))
 			b.WriteString("\n\n")
 		}
+	}
+	if !detail {
+		b.WriteString("\n")
 	}
 
 	b.WriteString("## Non-goals\n\n")
@@ -257,18 +288,18 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		if ng.Kind != store.NonGoalKindPermanent {
 			continue
 		}
-		writeNonGoalBullet(&b, ng)
+		writeNonGoalBullet(&b, ng, detail)
 	}
 	b.WriteString("\n**Explicitly *not* non-goals — deferred, not foreclosed:**\n\n")
 	for _, ng := range nonGoals {
 		if ng.Kind != store.NonGoalKindDeferred {
 			continue
 		}
-		writeNonGoalBullet(&b, ng)
+		writeNonGoalBullet(&b, ng, detail)
 	}
 
 	b.WriteString("\n")
-	renderNotesSection(&b, notes)
+	renderNotesSection(&b, notes, detail)
 
 	return b.String()
 }
@@ -285,13 +316,20 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 // being reinterpreted as part of this document's outline. The lifecycle
 // status is always shown: a `closed` or `deferred` note is history, and
 // presenting its body as current fact would be a lie.
-func renderNotesSection(b *strings.Builder, notes []store.Note) {
+func renderNotesSection(b *strings.Builder, notes []store.Note, detail bool) {
 	b.WriteString("## Notes\n\n")
 	if len(notes) == 0 {
 		b.WriteString("_No notes are recorded against this Product in krill._\n")
 		return
 	}
 	b.WriteString("Notes recorded against this Product in krill, oldest first. The status after each id is the note's own lifecycle status (`store.NoteLifecycleStatus`); anything other than `noted` is rendered for the record, not as current fact.\n")
+	if !detail {
+		b.WriteString("\n")
+		for _, n := range notes {
+			b.WriteString(fmt.Sprintf("- `%s` — %s — status: %s — %s\n", n.ID, n.Kind, n.CurrentStatus, firstSentence(strings.TrimLeft(n.Body, "# \n"))))
+		}
+		return
+	}
 	for _, n := range notes {
 		b.WriteString("\n**`")
 		b.WriteString(n.ID.String())
@@ -329,11 +367,11 @@ func demoteHeadings(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-func writeNonGoalBullet(b *strings.Builder, ng store.NonGoal) {
+func writeNonGoalBullet(b *strings.Builder, ng store.NonGoal, detail bool) {
 	b.WriteString("- **")
 	b.WriteString(ng.Name)
 	b.WriteString(".**")
-	if ng.Body != nil && strings.TrimSpace(*ng.Body) != "" {
+	if detail && ng.Body != nil && strings.TrimSpace(*ng.Body) != "" {
 		b.WriteString(" ")
 		b.WriteString(strings.TrimSpace(*ng.Body))
 	}
@@ -389,9 +427,10 @@ const currentStatePlaceholderBody = "This section is intentionally not rendered.
 	"none of those: it is a static description of a deployment that changes on " +
 	"its own schedule, not a spec of record anyone contributes to. So it is " +
 	"hand-authored, and it lives in this domain's `ARCHITECTURE.md`.\n\n" +
-	"Nothing was lost in migrating this domain's brief into krill — the survey " +
-	"was never in krill, and no future entity type is planned to bring it here. " +
-	"See `krill/render/README.md` for the same boundary stated in full.\n"
+	"A survey that was hand-authored here before the migration is not carried " +
+	"over: it remains in this file's git history, and no future entity type is " +
+	"planned to bring it into krill. See `krill/render/README.md` for the same " +
+	"boundary stated in full.\n"
 
 func renderCurrentStateMD(name, revision string) string {
 	var b strings.Builder
