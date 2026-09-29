@@ -64,6 +64,7 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 
 	mux.HandleFunc("/healthz", handleHealthz(pool))
 	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
+	mux.HandleFunc("GET /scope", handlers.GetScopeHandler(entities.Scopes()))
 
 	mux.Handle("POST /products", gate(handlers.CreateProductHandler(entities.Products())))
 	// Product discovery (issue #2941): ungated read, scope_id is a

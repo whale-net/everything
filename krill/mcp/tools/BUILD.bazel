@@ -47,12 +47,14 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//krill/api/handlers",
+        "//krill/caller",
         "//krill/mcp/server",
         "//krill/slice",
         "//krill/store",
         "//krill/work",
         "@com_github_google_jsonschema_go//jsonschema",
         "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],
 )
@@ -458,6 +460,7 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/auth",
         "//libs/go/migrate",
+        "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",

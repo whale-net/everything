@@ -1,81 +1,88 @@
-// This file (issue #2827) is the `init_session` MCP tool: the one gap that
-// left an MCP-only caller -- no direct Postgres access, no shell into the
-// cluster -- unable to use any krill write path at all. Every write tool
-// registered by this package requires a krill_session_id (design.go's
-// krillSessionInput), but the only way to mint one was api/handlers/
-// session.go's InitSessionHandler, an HTTP endpoint with no MCP wrapper,
-// which itself required a scope_id the caller had no way to discover.
-//
-// This tool closes both halves at once: it mirrors InitSessionHandler
-// field-for-field (reusing its exported handlers.SubjectRequest/
-// handlers.ParseSubject/handlers.InitSessionResponse rather than a second
-// copy of the same shapes and validation, per LB7), except scope_id --
-// this deployment's seeder (migrate/seed/seed.go) guarantees exactly one
-// scope row exists, so this tool resolves it itself via
-// store.ScopeStore.GetSole instead of asking the caller to supply or
-// discover a scope_id.
+// init_session and get_scope. init_session takes no arguments: the caller's
+// identity is derived from the verified credential (krill/caller) and the
+// scope is the deployment's sole scope (store.ScopeStore.GetSole, shared
+// with the api's GET /scope); a multi-scope deployment refuses until a
+// credential-to-scope mapping exists.
 package tools
 
 import (
 	"context"
 	"fmt"
 
+	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/krill/api/handlers"
+	"github.com/whale-net/everything/krill/caller"
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/store"
 )
 
-// initSessionInput is init_session's argument schema -- mirrors
-// api/handlers/session.go's initSessionRequest, minus scope_id (see this
-// file's package doc comment for why).
-type initSessionInput struct {
-	Acting           handlers.SubjectRequest `json:"acting" jsonschema:"Who is making this call."`
-	OnBehalfOf       handlers.SubjectRequest `json:"on_behalf_of" jsonschema:"Who this session's writes are attributed to. Pass the same triple as acting when a caller is acting for itself -- never inferred."`
-	WhagentSessionID *string                 `json:"whagent_session_id,omitempty" jsonschema:"The inbound whagent-net Claim.WhagentSessionID, if this call arrived through the whagent-net front door -- purely a correlation field, omit otherwise."`
-}
+// initSessionInput is empty by design: identity comes from the verified
+// credential and scope from the deployment, never from the client. The
+// generated schema rejects any supplied field.
+type initSessionInput struct{}
 
-// RegisterInitSession registers init_session (issue #2827): the one MCP
-// entry point that mints a krill_session_id, which every other write tool
-// on this mount requires as input. Backed by the same
-// store.SessionStore.InitSession every other InitSession caller
-// (api/handlers/session.go's InitSessionHandler, krill/importer) uses --
-// this tool is a third caller, not a fourth code path.
-//
-// No allowedPersonas restriction: any resolved persona (auth's
-// PersonaSwarmOperator or whagent-net's PersonaAgent) may mint a session,
-// exactly as InitSessionHandler accepts any caller today -- the MCP mount's
-// own two front doors (../server's PersonaMiddleware/
-// WhagentPersonaMiddleware) are the authentication this tool's HTTP twin
-// still defers to a later milestone (session.go's package doc comment).
+// getScopeInput is get_scope's (empty) argument schema.
+type getScopeInput struct{}
+
+// RegisterInitSession registers init_session: it mints a krill_session_id
+// attributed to the caller's verified identity (krill/caller) under the
+// deployment's sole scope. whagent_session_id comes from the whagent claim.
 func RegisterInitSession(reg *server.Registry, sessions store.SessionStore, scopes store.ScopeStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "init_session",
 		Description: "Mint a krill_session_id (FR3): the session id every other write tool on this mount requires as " +
-			"input. Call this first -- every other write tool rejects a missing or unknown krill_session_id. " +
+			"input. Takes no arguments -- your identity and scope are derived server-side from your credential. " +
+			"Call this first -- every other write tool rejects a missing or unknown krill_session_id. " +
 			"The response also carries scope_id, the value list_products, list_tasks, and the ops console tools take as input.",
-	}, []server.Persona{server.PersonaSwarmOperator, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in initSessionInput) (*mcp.CallToolResult, handlers.InitSessionResponse, error) {
+	}, []server.Persona{server.PersonaSwarmOperator, server.PersonaAgent}, func(ctx context.Context, req *mcp.CallToolRequest, _ initSessionInput) (*mcp.CallToolResult, handlers.InitSessionResponse, error) {
 		var zero handlers.InitSessionResponse
 
+		who, err := callerFromRequest(req)
+		if err != nil {
+			return nil, zero, err
+		}
 		scope, err := scopes.GetSole(ctx)
 		if err != nil {
 			return nil, zero, fmt.Errorf("resolve scope: %w", err)
 		}
 
-		acting, err := handlers.ParseSubject(in.Acting)
-		if err != nil {
-			return nil, zero, fmt.Errorf("acting: %w", err)
+		var wsid *string
+		if who.WhagentSessionID != "" {
+			wsid = &who.WhagentSessionID
 		}
-		onBehalfOf, err := handlers.ParseSubject(in.OnBehalfOf)
-		if err != nil {
-			return nil, zero, fmt.Errorf("on_behalf_of: %w", err)
-		}
-
-		id, err := sessions.InitSession(ctx, scope.ID, acting, onBehalfOf, in.WhagentSessionID)
+		id, err := sessions.InitSession(ctx, scope.ID, toStoreSubject(who.Acting), toStoreSubject(who.OnBehalfOf), wsid)
 		if err != nil {
 			return nil, zero, fmt.Errorf("init session: %w", err)
 		}
 		return nil, handlers.InitSessionResponse{SessionID: id.String(), ScopeID: scope.ID.String()}, nil
 	})
+}
+
+// RegisterGetScope registers get_scope: a read-only way to learn scope_id
+// without minting a session.
+func RegisterGetScope(reg *server.Registry, scopes store.ScopeStore) {
+	server.RegisterRead(reg, &mcp.Tool{
+		Name:        "get_scope",
+		Description: "Return this deployment's scope_id (the value list_products and list_tasks take) without minting a session.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ getScopeInput) (*mcp.CallToolResult, handlers.ScopeResponse, error) {
+		scope, err := scopes.GetSole(ctx)
+		if err != nil {
+			return nil, handlers.ScopeResponse{}, fmt.Errorf("resolve scope: %w", err)
+		}
+		return nil, handlers.ScopeResponse{ScopeID: scope.ID.String()}, nil
+	})
+}
+
+func callerFromRequest(req *mcp.CallToolRequest) (caller.Identity, error) {
+	var info *sdkauth.TokenInfo
+	if req != nil && req.Extra != nil {
+		info = req.Extra.TokenInfo
+	}
+	return caller.FromTokenInfo(info)
+}
+
+func toStoreSubject(s caller.Subject) store.Subject {
+	return store.Subject{Iss: s.Iss, Sub: s.Sub, Kind: store.SubjectKind(s.Kind)}
 }

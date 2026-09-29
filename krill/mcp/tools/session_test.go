@@ -20,6 +20,8 @@ package tools_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -41,6 +43,7 @@ import (
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/libs/go/whagent"
 )
 
 // ── seeding (mirrors design_test.go's world) ────────────────────────────────
@@ -131,6 +134,12 @@ func textOfSessionToolsResult(res *mcp.CallToolResult) string {
 
 // ── the end-to-end test ──────────────────────────────────────────────────────
 
+const (
+	sessionToolsHumanIss  = "https://keycloak.example.test/realms/humans"
+	sessionToolsWhagentIs = "https://whagent.example.test"
+	sessionToolsAudience  = "https://krill-mcp.example.test"
+)
+
 func TestMCPInitSession_EndToEnd(t *testing.T) {
 	ctx := context.Background()
 	entities, pool := newSessionToolsTestStore(t)
@@ -146,64 +155,167 @@ func TestMCPInitSession_EndToEnd(t *testing.T) {
 	product, err := entities.Products().Create(ctx, scopeID, "krill", "init_session e2e product")
 	require.NoError(t, err)
 
-	credentials := sessionToolsFakeCredentialStore{validToken: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567", identity: "swarm-operator-1"}
+	credentials := sessionToolsFakeCredentialStore{
+		validToken: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+		identity:   sessionToolsHumanIss + "|human-1",
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signer, err := whagent.New(priv, sessionToolsWhagentIs, "test-key-1")
+	require.NoError(t, err)
+	verifier, err := whagent.NewVerifierFromKey(pub, sessionToolsWhagentIs)
+	require.NoError(t, err)
+	agentToken, err := signer.Mint(ctx, whagent.MintRequest{
+		Subject:       "contributor-1",
+		SubjectIssuer: sessionToolsHumanIss,
+		Actor:         whagent.Actor{Subject: "agent-actor-1", AgentID: "krill-design-agent-v1"},
+		SessionID:     "whagent-session-42",
+		Audience:      sessionToolsAudience,
+	})
+	require.NoError(t, err)
 
 	designSrv := server.New()
+	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
+	tools.RegisterGetScope(designReg, entities.Scopes())
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 
-	handler := server.NewHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.ResourceMetadataConfig{})
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials,
+		server.WhagentAuthConfig{Verifier: verifier, Audience: sessionToolsAudience}, server.ResourceMetadataConfig{})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
 	designURL := ts.URL + "/mcp/design"
 	humanToken := credentials.validToken
 
-	t.Run("mints a session usable by another write tool on the same mount, with no scope_id ever supplied", func(t *testing.T) {
+	initSession := func(t *testing.T, cs *mcp.ClientSession) string {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "init_session", Arguments: map[string]any{}})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", textOfSessionToolsResult(res))
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		sid, ok := structured["session_id"].(string)
+		require.True(t, ok)
+		assert.Equal(t, scopeID.String(), structured["scope_id"])
+		return sid
+	}
+
+	t.Run("human init_session with no args records the verified identity and created_at", func(t *testing.T) {
 		cs := connectSessionToolsMCP(t, designURL, humanToken)
+		sid := initSession(t, cs)
+
+		sess, err := sessions.GetSession(ctx, store.SessionID(uuid.MustParse(sid)))
+		require.NoError(t, err)
+		want := store.Subject{Iss: sessionToolsHumanIss, Sub: "human-1", Kind: store.SubjectKindHuman}
+		assert.Equal(t, want, sess.Acting)
+		assert.Equal(t, want, sess.OnBehalfOf)
+		assert.Nil(t, sess.WhagentSessionID)
+		assert.False(t, sess.CreatedAt.IsZero())
 
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
-			Name: "init_session",
+			Name: "open_design_session",
 			Arguments: map[string]any{
-				"acting":       map[string]string{"iss": "https://keycloak.example.test/realms/humans", "sub": "human-1", "kind": "human"},
-				"on_behalf_of": map[string]string{"iss": "https://keycloak.example.test/realms/humans", "sub": "human-1", "kind": "human"},
+				"krill_session_id":   sid,
+				"product_id":         product.ID.String(),
+				"opening_submission": "human write",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", textOfSessionToolsResult(res))
+	})
+
+	t.Run("supplied identity and scope fields are rejected and never recorded", func(t *testing.T) {
+		cs := connectSessionToolsMCP(t, designURL, humanToken)
+		for _, field := range []string{"acting", "on_behalf_of", "scope_id", "whagent_session_id"} {
+			res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+				Name:      "init_session",
+				Arguments: map[string]any{field: map[string]string{"iss": "https://evil.example.test", "sub": "mallory", "kind": "human"}},
+			})
+			if err == nil {
+				assert.True(t, res.IsError, "supplying %s must be rejected", field)
+			}
+		}
+		var n int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM krill_session WHERE acting_sub = 'mallory'`).Scan(&n))
+		assert.Zero(t, n)
+	})
+
+	t.Run("whagent agent-kind session records the claim identity and writes a revision_event", func(t *testing.T) {
+		cs := connectSessionToolsMCP(t, designURL, agentToken)
+		sid := initSession(t, cs)
+
+		sess, err := sessions.GetSession(ctx, store.SessionID(uuid.MustParse(sid)))
+		require.NoError(t, err)
+		assert.Equal(t, store.Subject{Iss: sessionToolsWhagentIs, Sub: "agent-actor-1", Kind: store.SubjectKindAgent}, sess.Acting)
+		assert.Equal(t, store.Subject{Iss: sessionToolsHumanIss, Sub: "contributor-1", Kind: store.SubjectKindHuman}, sess.OnBehalfOf)
+		require.NotNil(t, sess.WhagentSessionID)
+		assert.Equal(t, "whagent-session-42", *sess.WhagentSessionID)
+		assert.False(t, sess.CreatedAt.IsZero())
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "open_design_session",
+			Arguments: map[string]any{
+				"krill_session_id":   sid,
+				"product_id":         product.ID.String(),
+				"opening_submission": "agent write",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", textOfSessionToolsResult(res))
+		opened, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+
+		res, err = cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "append_revision_event",
+			Arguments: map[string]any{
+				"krill_session_id":     sid,
+				"design_session_id":    opened["id"],
+				"event_type":           "answer",
+				"entity_deltas":        []map[string]any{},
+				"open_questions_delta": map[string]any{"opened": []map[string]any{}, "resolved": []string{}},
 			},
 		})
 		require.NoError(t, err)
 		require.False(t, res.IsError, "unexpected error: %s", textOfSessionToolsResult(res))
 
-		structured, ok := res.StructuredContent.(map[string]any)
-		require.True(t, ok)
-		sessionID, ok := structured["session_id"].(string)
-		require.True(t, ok, "response must carry session_id, not a bare id field")
-		require.NotEmpty(t, sessionID)
-		assert.Equal(t, scopeID.String(), structured["scope_id"], "response must hand back the resolved scope_id")
-
-		res, err = cs.CallTool(ctx, &mcp.CallToolParams{
-			Name: "open_design_session",
-			Arguments: map[string]any{
-				"krill_session_id":   sessionID,
-				"product_id":         product.ID.String(),
-				"opening_submission": "minted entirely over MCP, no direct Postgres access",
-			},
-		})
-		require.NoError(t, err)
-		assert.False(t, res.IsError, "unexpected error: %s", textOfSessionToolsResult(res))
+		var n int
+		require.NoError(t, pool.QueryRow(ctx, `
+			SELECT count(*) FROM revision_event WHERE acting_kind = 'agent' AND acting_sub = 'agent-actor-1'
+		`).Scan(&n))
+		assert.Positive(t, n, "an agent-kind session's write must land a revision_event")
 	})
 
-	t.Run("rejects a missing acting.sub before ever calling the store", func(t *testing.T) {
+	t.Run("get_scope works without a session and unauthenticated callers are rejected", func(t *testing.T) {
 		cs := connectSessionToolsMCP(t, designURL, humanToken)
-
-		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
-			Name: "init_session",
-			Arguments: map[string]any{
-				"acting":       map[string]string{"iss": "https://keycloak.example.test/realms/humans", "kind": "human"},
-				"on_behalf_of": map[string]string{"iss": "https://keycloak.example.test/realms/humans", "sub": "human-1", "kind": "human"},
-			},
-		})
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "get_scope", Arguments: map[string]any{}})
 		require.NoError(t, err)
-		assert.True(t, res.IsError)
-		assert.Contains(t, textOfSessionToolsResult(res), "acting")
+		require.False(t, res.IsError, "unexpected error: %s", textOfSessionToolsResult(res))
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, scopeID.String(), structured["scope_id"])
+
+		transport := &mcp.StreamableClientTransport{Endpoint: designURL, HTTPClient: &http.Client{}}
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+		bad, err := client.Connect(ctx, transport, nil)
+		if err == nil {
+			defer bad.Close()
+			_, err = bad.CallTool(ctx, &mcp.CallToolParams{Name: "get_scope", Arguments: map[string]any{}})
+		}
+		require.Error(t, err, "an unauthenticated get_scope must be rejected")
+	})
+
+	t.Run("multi-scope deployment refuses init_session and get_scope", func(t *testing.T) {
+		_, err := pool.Exec(ctx, `INSERT INTO scope (repo_full_name, default_branch) VALUES ('whale-net/second-scope', 'main')`)
+		require.NoError(t, err)
+
+		cs := connectSessionToolsMCP(t, designURL, humanToken)
+		for _, name := range []string{"init_session", "get_scope"} {
+			res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: map[string]any{}})
+			require.NoError(t, err)
+			assert.True(t, res.IsError, "%s must refuse when more than one scope exists", name)
+		}
 	})
 }
