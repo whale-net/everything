@@ -38,6 +38,43 @@ template inference"), since M1 runs against exactly one repo/scope.
 |----------|-----------|---------|-------------|
 | `KRILL_API_ADDR` | api | `:8080` | Address `api`'s HTTP surface listens on. |
 
+### `api` auth front door and roles
+
+Every `api` route except `/healthz` and `/readyz` requires
+`Authorization: Bearer` (401 without a valid one). Reads need the reader or
+operator persona, writes need operator (403 otherwise). Two doors verify the
+token: an opaque mcpauth credential (looked up in `mcp_credential`, whose
+`persona` column supplies the persona) or a Keycloak JWT. See
+`ARCHITECTURE/16-init-and-write-gate.md`.
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `KRILL_ROLE_OPERATOR` | api, mcp, ui | `""` | Keycloak realm role (read from `realm_access.roles` only -- never client roles) that resolves to the `swarm_operator` persona. **Unset means no identity is an operator: every write is refused (403).** |
+| `KRILL_ROLE_READER` | api, mcp, ui | `""` | Realm role that resolves to the `reader` persona (operator implies read). Unset means no identity is a reader. |
+| `KRILL_OIDC_ISSUER` | api, ui | `""` | Keycloak issuer. On `api` (which is where OIDC JWTs are verified) a JWT is verified only if its unverified `iss` equals this **exactly** -- the in-cluster and public URLs are different strings, so it must be the issuer the tokens actually carry. Needs `KRILL_OIDC_CLIENT_ID` too; with either unset the OIDC door is off and JWTs are rejected. `mcp` does not read it. |
+| `KRILL_OIDC_CLIENT_ID` | api, ui | `""` | On `api`, the audience expected in verified Keycloak tokens: the Keycloak client that mints them must carry an audience mapper (`aud` = this client id); see `libs/go/grpcauth/KEYCLOAK.md`. |
+
+Keycloak setup: create the two realm roles named by the variables above and
+grant them to the right principals. Machine callers need the **operator**
+role on their service account if they write: the importer, the renderer, and
+the Claude Code plugins' service accounts. Read-only callers need the reader
+role.
+
+`api` also builds an `auth.CredentialStore` over the same `PG_DATABASE_URL`
+pool with `PersonaColumn: "persona"` (migrations 027/028 add `persona` to
+`mcp_credential` and `mcp_auth_code`). If the store cannot be built (table
+missing), `api` logs a warning and rejects opaque tokens rather than failing
+to boot; the Keycloak door is unaffected.
+
+### Sessions
+
+`krill_session` rows expire after 12 hours idle (`store.SessionIdleTTL`, a Go
+constant, not configurable; migration 026's `last_used_at`, refreshed on
+mint and on each session-gated write). An expired session is refused with
+code `session_expired` (HTTP 401 / MCP tool error); a row with NULL
+`last_used_at` -- every session minted before the rollout -- counts as
+expired. Re-run `init_session` / `POST /sessions/init`.
+
 `api` exposes `/healthz` (a live database connectivity check, not a static
 200 -- `krill/api/main.go`'s doc comment), `POST /sessions/init` (FR3), the
 M1 entity write endpoints (FR1/FR2/FR4, issue #2490), and the
@@ -69,10 +106,6 @@ layer and the auth credential store read from it).
 | `KRILL_MCP_OAUTH_ISSUER` | — | The auth (human) front door's OAuth2 authorization server issuer identifier, advertised in RFC 9728 metadata's `authorization_servers`. |
 | `KRILL_MCP_WHAGENT_JWKS_URL` | — | whagent-net's own JWKS endpoint. Both this and `KRILL_MCP_WHAGENT_ISSUER` must be set to enable the agent front door (`server.WhagentAuthConfig`) -- left unset, `mcp` mounts only the auth door, mirroring `audience_score_system/mcp`'s own pre-FR12(a) fallback. |
 | `KRILL_MCP_WHAGENT_ISSUER` | — | whagent-net's own issuer identifier, verified against every whagent Claim `mcp` accepts. |
-| `KRILL_ROLE_OPERATOR` | api, mcp | `""` | Keycloak realm role (from `realm_access.roles`) that resolves to the `swarm_operator` persona. Unset means no identity is an operator. |
-| `KRILL_ROLE_READER` | api, mcp | `""` | Keycloak realm role that resolves to the `reader` persona (operator implies read). Unset means no identity is a reader. |
-| `KRILL_OIDC_ISSUER` | api | `""` | Keycloak issuer for the api's OIDC door; a JWT is verified only if its unverified `iss` equals this exactly. Needs `KRILL_OIDC_CLIENT_ID` too. |
-| `KRILL_OIDC_CLIENT_ID` | api | `""` | Audience the api expects in verified Keycloak tokens (see `libs/go/grpcauth/KEYCLOAK.md`). |
 
 The auth (human OAuth2) front door additionally requires its
 `mcp_credential`-shaped table to exist against the same `PG_DATABASE_URL`
@@ -108,6 +141,11 @@ migration `006_mcpauth_credential`).
 | `KRILL_UI_PUBLIC_URL` | *(required)* | This instance's own externally reachable URL -- `auth.ProviderConfig.Issuer`, the base every auth endpoint URL (`/authorize`, `/token`, `/register`, discovery metadata) is built from. Must match what `mcp`'s own `KRILL_MCP_OAUTH_ISSUER` advertises. |
 | `KRILL_MCP_PUBLIC_URL` | *(required)* | `mcp`'s own externally reachable URL -- `auth.ProviderConfig.Resource`. Must be byte-identical to `mcp`'s own `KRILL_MCP_PUBLIC_URL`. |
 | `KRILL_API_URL` | *(required)* | `api`'s base URL, the target `ui`'s app write client mints krill sessions against (`POST <KRILL_API_URL>/sessions/init`) and issues every mutating request to. Unset fails `ui`'s boot: a UI with no configured `api` cannot attribute a write to a real operator identity. |
+| `KRILL_ROLE_OPERATOR` / `KRILL_ROLE_READER` | `""` | Realm roles resolved into the persona stored on each minted mcpauth credential; see "`api` auth front door and roles" above. Unset operator role means credentials minted here carry no operator persona. |
+
+`ui` authenticates to `api` by forwarding the signed-in operator's own
+Keycloak access token (read from the DB-backed htmxauth session), so its
+`KRILL_OIDC_ISSUER` / `KRILL_OIDC_CLIENT_ID` must agree with `api`'s.
 
 The UI ships no bundler assets and no Node/npm toolchain: Tailwind and
 daisyUI reach the browser from pinned CDN `<link>`/`<script>` tags

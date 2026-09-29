@@ -1,21 +1,72 @@
 # `init` and the write gate (FR3, #2489, Implementation phase)
 
-`api` now exposes `POST /sessions/init` (`api/handlers/session.go`),
-wired in `routes.go`: a caller posts its acting and on-behalf-of `(iss,
-sub, kind)` triples (and, optionally, a `whagent_session_id` correlation
-value) and gets back the krill-native session id `InitSession` minted.
-**`init` is intentionally unauthenticated in M1** — no bearer-token
-verification is mounted on the `api` binary (see "No auth wired up on
-`api`" below); `init` trusts the caller's asserted identity fields rather
-than re-deriving them from a verified credential. This is a deliberate M1
-boundary, not an oversight: NFR1's two-front-door pattern (`auth` +
-`libs/go/whagent`) is scoped entirely to the separate `krill/mcp` binary
-(issue #2494) — `api`'s HTTP surface has no equivalent front door in this
-milestone. `krill/mcp` itself did not touch `krill_session` at all as of
-issue #2494; that changed with issue #2547's design-session write tools —
-see "The design-session MCP surface" below for how `krill/mcp/tools`
-validates a caller-presented krill session id without `krill/mcp/server`
-ever depending on `store.SessionStore`.
+`api` authenticates every request, then `POST /sessions/init`
+(`api/handlers/session.go`) mints the krill-native session from what that
+authentication verified -- the caller never asserts an identity.
+
+## The api auth front door
+
+`api/authdoor` wraps the whole mux (`api/main.go`). Every route except
+`/healthz` and `/readyz` needs `Authorization: Bearer`; a missing or invalid
+token is 401. Two doors verify it:
+
+- **Opaque mcpauth credential** (a token not shaped like a JWT): verified by
+  an `auth.CredentialStore` over `mcp_credential`, wired with
+  `PersonaColumn: "persona"`. The persona is the one stored at mint time
+  (migrations 027/028 add the column to `mcp_credential` and
+  `mcp_auth_code`). A credential with no persona -- anything minted before the
+  rollout -- is refused (403); the holder must re-authenticate.
+- **Keycloak JWT**: routed by its *unverified* `iss`, which must equal
+  `KRILL_OIDC_ISSUER` exactly (the in-cluster and public URLs differ, so
+  configure the one tokens actually carry), then verified against the
+  issuer's JWKS with audience `KRILL_OIDC_CLIENT_ID` (the client needs an
+  `aud` mapper). The persona comes from `realm_access.roles` only, never
+  client roles. The door is off unless both variables are set.
+
+`krill/mcp` keeps its own two doors (mcpauth for humans, whagent for agents;
+agents reach krill through MCP, not `api`) and shares the role mapping
+(`server.RoleConfig`). OIDC configuration is `api`-only.
+
+### Roles
+
+Authorization is by persona: reads need reader or operator (operator
+implies read); every non-GET/HEAD request needs operator, else 403.
+`KRILL_ROLE_OPERATOR` / `KRILL_ROLE_READER` name the Keycloak realm roles.
+**If `KRILL_ROLE_OPERATOR` is unset no identity is an operator, so every
+write is refused.** Service accounts that write -- the importer, the
+renderer, and the plugins' accounts -- must be granted the operator role in
+Keycloak.
+
+### `init`
+
+`InitSessionHandler` reads the verified caller from the door
+(`authdoor.FromContext`), takes the scope from `ScopeStore.GetSole`, and
+records the caller's acting / on-behalf-of subjects and any
+`whagent_session_id`. The body is ignored: no identity or scope field is
+accepted. The response is `{session_id, scope_id}`. The MCP `init_session`
+tool behaves the same and takes no arguments; `get_scope` reads `scope_id`
+without minting anything. `revision_event.acting_kind` accepts `agent`
+(migration 025).
+
+### Session expiry
+
+Gated writes touch `krill_session.last_used_at` (migration 026). A session
+unused for 12 hours (`store.SessionIdleTTL`) is refused with
+`session_expired`; NULL `last_used_at` counts as expired, so every session
+minted before the rollout is invalidated and must be re-`init`ed.
+
+### Rollout order
+
+1. Apply migrations 025-028 (`migrate`).
+2. Create the Keycloak realm roles, the `aud` mapper, and grant the operator
+   role to the writing service accounts.
+3. Set `KRILL_ROLE_*` on `api`/`mcp`/`ui` and `KRILL_OIDC_*` on `api`/`ui`.
+4. Deploy `api`, then `mcp` and `ui`. Callers that hold pre-rollout state
+   must refresh it: sessions via `init`, MCP credentials via
+   re-authentication.
+
+The write gate below is unchanged in shape: it still requires an
+`X-Krill-Session-Id`, now *in addition to* the bearer token.
 
 `api/handlers/gate.go` is the write gate every mutating endpoint in this
 milestone passes through (FR3's "write-only" clause): `RequireSession`
