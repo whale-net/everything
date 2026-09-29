@@ -78,13 +78,9 @@ func serveFormPost(mux *http.ServeMux, target string, form url.Values, cookies .
 // so an assertion here cannot pass by matching a hardcoded identity: only the
 // signed-in operator's own subject, resolved through the genuine htmxauth
 // sign-in callback, produces it.
-func assertInterventionAttribution(t *testing.T, api *fakeAPI, issuer, operatorSub string) {
+func assertInterventionAttribution(t *testing.T, api *fakeAPI, issuer, _ string) {
 	t.Helper()
-	init := api.initRequest(t)
-	assert.Equal(t, issuer, init.Acting.Iss, "acting issuer is the configured Keycloak realm")
-	assert.Equal(t, operatorSub, init.Acting.Sub, "acting sub is the signed-in operator's own subject")
-	assert.Equal(t, string(store.SubjectKindHuman), init.Acting.Kind)
-	assert.Equal(t, init.Acting, init.OnBehalfOf, "a signed-in operator acts for themselves")
+	assertOperatorAttribution(t, api, issuer)
 }
 
 // ---------------------------------------------------------------------------
