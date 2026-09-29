@@ -175,7 +175,7 @@ func TestRender_SeededProduct_ProducesFourFileLayout(t *testing.T) {
 	scopeID := createScope(t, ctx, pool, "whale-net/render-fr13-test")
 	seeded := seedProduct(t, ctx, entities, scopeID)
 
-	files, err := render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID)
+	files, err := render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.ProductMD, "# Widgets — Product brief")
@@ -261,7 +261,7 @@ func TestRender_ReadOnlyDatabaseHandle_Succeeds(t *testing.T) {
 	assert.Contains(t, writeErr.Error(), "read-only transaction")
 
 	roStore := store.New(roPool)
-	files, err := render.Render(ctx, render.NewStoreSource(roStore), seeded.ScopeID, seeded.ProductID)
+	files, err := render.Render(ctx, render.NewStoreSource(roStore), seeded.ScopeID, seeded.ProductID, render.WithDetail())
 	require.NoError(t, err, "Render must succeed reading through a connection that cannot write")
 	assert.Contains(t, files.ProductMD, "# Widgets — Product brief")
 }
@@ -298,7 +298,7 @@ func TestRender_AmendedDeferralRendersOnce(t *testing.T) {
 	_, err = entities.Amend().AmendDeferral(ctx, stale.ID, "C5 ships in a later milestone", "M2")
 	require.NoError(t, err)
 
-	files, err := render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID)
+	files, err := render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.RoadmapMD, "Deliberately deferred: C5 ships in a later milestone (→ M2)",
@@ -314,7 +314,7 @@ func TestRender_AmendedDeferralRendersOnce(t *testing.T) {
 	_, err = entities.Amend().AmendDeferral(ctx, stale.ID, "C5 ships in M2, which now also carries C6", "M2")
 	require.NoError(t, err)
 
-	files, err = render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID)
+	files, err = render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID, render.WithDetail())
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(files.RoadmapMD, "Deliberately deferred:"),
 		"still exactly one deferred line after two amendments")

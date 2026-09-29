@@ -141,7 +141,11 @@ func (f Files) FileMap() map[string]string {
 // milestone refs, which are keyed (scope, product, name) rather than by
 // product alone (see migration 004's comment on why: two different
 // products under the same scope may each have their own "M1").
-func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID) (Files, error) {
+func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID, opts ...Option) (Files, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	doc, err := src.GetProductSlice(ctx, productID)
 	if err != nil {
 		return Files{}, fmt.Errorf("get product slice: %w", err)
@@ -173,10 +177,23 @@ func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID) (File
 	return Files{
 		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals, notes),
 		CurrentStateMD:  renderCurrentStateMD(name, revision),
-		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc),
+		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc, o.detail),
 		RoadmapMD:       renderRoadmapMD(name, revision, milestones),
 	}, nil
 }
+
+type options struct {
+	detail bool
+}
+
+// Option tunes Render.
+type Option func(*options)
+
+// WithDetail renders every Requirement body under its capability in
+// product/02-capability-map.md. By default the map is headlines only --
+// krill's MCP surface (get_feature_slice) is the read path for full bodies,
+// and a full dump is too large to load into an agent's context.
+func WithDetail() Option { return func(o *options) { o.detail = true } }
 
 // header is the provenance line every generated file carries (LB5): the
 // entity this file was rendered from (a Product, by name and immutable
@@ -227,12 +244,11 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 	b.WriteString("## Load-bearing decisions\n\n")
 	for _, d := range doc.Decisions {
 		title := cleanDecisionTitle(d.Name)
-		b.WriteString(fmt.Sprintf("LB%d — %s\n", d.DisplayNumber, title))
+		b.WriteString(fmt.Sprintf("### LB%d — %s\n\n", d.DisplayNumber, title))
 		if d.Body != nil && strings.TrimSpace(*d.Body) != "" {
 			b.WriteString(strings.TrimSpace(*d.Body))
-			b.WriteString("\n")
+			b.WriteString("\n\n")
 		}
-		b.WriteString("\n")
 	}
 
 	b.WriteString("## Non-goals\n\n")
@@ -284,9 +300,33 @@ func renderNotesSection(b *strings.Builder, notes []store.Note) {
 		b.WriteString(" — status: ")
 		b.WriteString(string(n.CurrentStatus))
 		b.WriteString("\n\n")
-		b.WriteString(strings.TrimSpace(n.Body))
+		b.WriteString(demoteHeadings(strings.TrimSpace(n.Body)))
 		b.WriteString("\n")
 	}
+}
+
+var headingLineRe = regexp.MustCompile(`^(#{1,6})\s`)
+
+// demoteHeadings pushes any markdown heading in a note body down to level 4
+// or deeper so it nests under the document's own "## Notes" outline. Fenced
+// code blocks are left untouched.
+func demoteHeadings(body string) string {
+	lines := strings.Split(body, "\n")
+	inFence := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if m := headingLineRe.FindStringSubmatch(l); m != nil {
+			lvl := min(len(m[1])+3, 6)
+			lines[i] = strings.Repeat("#", lvl) + l[len(m[1]):]
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func writeNonGoalBullet(b *strings.Builder, ng store.NonGoal) {
@@ -405,7 +445,7 @@ func requirementCitations(doc slice.Document) map[uuid.UUID]string {
 	return out
 }
 
-func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
+func renderCapabilityMapMD(name, revision string, doc slice.Document, detail bool) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Capability map\n\n")
@@ -426,7 +466,10 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 	}
 	citations := requirementCitations(doc)
 
-	if len(doc.Requirements) > 0 {
+	if !detail {
+		b.WriteString("Headlines only: each `Cn` is a capability, with the count of Requirements that specify it. Requirement bodies are not rendered here — read them with krill's `get_feature_slice` / `get_requirement_slice` MCP tools, or re-render with detail.\n\n")
+	}
+	if detail && len(doc.Requirements) > 0 {
 		b.WriteString("Each `Cn` is a capability. Beneath it, the Requirements that specify it: `FRn` (functional) and `NFRn` (non-functional), with their bodies in full — a body carries the prohibitions and the refuted-hypothesis records, so it is never truncated or summarized here.\n\n")
 		b.WriteString("krill stores no display number for a Requirement, so `FRn`/`NFRn` are assigned at render time, per kind, counting down this file in the order the requirements appear. The bracketed id after each name resolves a citation exactly.\n")
 	}
@@ -441,6 +484,18 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 		b.WriteString("\n\n")
 		for _, f := range features {
 			reqs := requirementsByFeature[f.ID]
+			if !detail {
+				nFR, nNFR := 0, 0
+				for _, rq := range reqs {
+					if rq.Kind == "NFR" {
+						nNFR++
+					} else {
+						nFR++
+					}
+				}
+				b.WriteString(fmt.Sprintf("- **C%d** — %s (%d FR, %d NFR)\n", f.DisplayNumber, cleanFeatureTitle(f.Name), nFR, nNFR))
+				continue
+			}
 			if len(reqs) == 0 {
 				b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
 				continue
@@ -631,16 +686,16 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 			b.WriteString(*m.Outcome)
 		}
 		b.WriteString("\n\n")
-		b.WriteString("Status: ")
+		b.WriteString("- Status: ")
 		b.WriteString(string(m.Status))
 		b.WriteString("\n")
 		if len(m.Delivers) > 0 {
-			b.WriteString("Delivers: ")
+			b.WriteString("- Delivers: ")
 			b.WriteString(strings.Join(m.Delivers, ", "))
 			b.WriteString("\n")
 		}
 		if len(m.MustNotForeclose) > 0 {
-			b.WriteString("Must not foreclose: ")
+			b.WriteString("- Must not foreclose: ")
 			b.WriteString(strings.Join(m.MustNotForeclose, ", "))
 			b.WriteString("\n")
 		}
@@ -649,12 +704,12 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 			for i, d := range m.Deferrals {
 				items[i] = fmt.Sprintf("%s (→ %s)", d.Body, d.Destination)
 			}
-			b.WriteString("Deliberately deferred: ")
+			b.WriteString("- Deliberately deferred: ")
 			b.WriteString(strings.Join(items, "; "))
 			b.WriteString("\n")
 		}
 		if m.FRBudget != nil {
-			b.WriteString(fmt.Sprintf("FR budget: %d\n", *m.FRBudget))
+			b.WriteString(fmt.Sprintf("- FR budget: %d\n", *m.FRBudget))
 		}
 		b.WriteString("\n")
 	}
