@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 
@@ -44,17 +43,11 @@ var errNoOperator = errors.New("no resolved operator identity on this request")
 // there is exactly one scope row, so a browser has nothing to choose from
 // and nothing to be tricked into supplying.
 func (app *App) withKrillSession(ctx context.Context, fn func(context.Context, store.SessionID) error) error {
-	operator, ok := OperatorSubjectFromContext(ctx)
-	if !ok {
+	if _, ok := OperatorSubjectFromContext(ctx); !ok {
 		return errNoOperator
 	}
 
-	scope, err := app.scopes.GetSole(ctx)
-	if err != nil {
-		return fmt.Errorf("resolve scope: %w", err)
-	}
-
-	sessionID, err := app.writes.InitSession(ctx, scope.ID, operator)
+	sessionID, err := app.writes.InitSession(ctx)
 	if err != nil {
 		return err
 	}

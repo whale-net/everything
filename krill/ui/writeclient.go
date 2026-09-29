@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/apiclient"
 	"github.com/whale-net/everything/krill/store"
 )
 
@@ -59,25 +60,17 @@ func newWriteClient(cfg writeClientConfig) (*writeClient, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
+	if httpClient.Transport == nil || !isBearerTransport(httpClient.Transport) {
+		copied := *httpClient
+		copied.Transport = &apiclient.Transport{Base: httpClient.Transport}
+		httpClient = &copied
+	}
 	return &writeClient{baseURL: parsed, http: httpClient}, nil
 }
 
-// subjectRequest is the wire shape of one Subject in an init request --
-// mirrors krill/api/handlers' SubjectRequest field for field, redeclared
-// because this client speaks to `api` over HTTP rather than importing its
-// handler package.
-type subjectRequest struct {
-	Iss  string `json:"iss"`
-	Sub  string `json:"sub"`
-	Kind string `json:"kind"`
-}
-
-// initSessionRequest is POST /sessions/init's body (api/handlers/session.go).
-type initSessionRequest struct {
-	ScopeID    string         `json:"scope_id"`
-	Acting     subjectRequest `json:"acting"`
-	OnBehalfOf subjectRequest `json:"on_behalf_of"`
-}
+// initSessionRequest is POST /sessions/init's body. Identity and scope are
+// never sent: api derives both from the verified bearer token.
+type initSessionRequest struct{}
 
 // initSessionResponse is POST /sessions/init's response body
 // (api/handlers/session.go's InitSessionResponse).
@@ -86,21 +79,12 @@ type initSessionResponse struct {
 	ScopeID   string `json:"scope_id"`
 }
 
-func subjectRequestOf(subject store.Subject) subjectRequest {
-	return subjectRequest{Iss: subject.Iss, Sub: subject.Sub, Kind: string(subject.Kind)}
-}
-
-// InitSession mints a krill session scoped to scopeID whose acting and
-// on-behalf-of subjects are both operator -- a signed-in operator acts for
-// themselves, so the two are the same triple rather than one inferred from
-// the other (api/handlers/session.go's rule).
-func (c *writeClient) InitSession(ctx context.Context, scopeID uuid.UUID, operator store.Subject) (store.SessionID, error) {
+// InitSession mints a krill session for the caller ctx's bearer token
+// (apiclient.WithUserToken) verifies as; api records identity and scope
+// from that token, not from this request.
+func (c *writeClient) InitSession(ctx context.Context) (store.SessionID, error) {
 	var zero store.SessionID
-	body, err := json.Marshal(initSessionRequest{
-		ScopeID:    scopeID.String(),
-		Acting:     subjectRequestOf(operator),
-		OnBehalfOf: subjectRequestOf(operator),
-	})
+	body, err := json.Marshal(initSessionRequest{})
 	if err != nil {
 		return zero, fmt.Errorf("encode init request: %w", err)
 	}
@@ -159,4 +143,9 @@ func (c *writeClient) Write(ctx context.Context, sessionID store.SessionID, meth
 		return nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	return resp, nil
+}
+
+func isBearerTransport(rt http.RoundTripper) bool {
+	_, ok := rt.(*apiclient.Transport)
+	return ok
 }
