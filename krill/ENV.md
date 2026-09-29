@@ -4,7 +4,8 @@ M1 scaffolding (issue #2487) ships two binaries: `migrate` and `api`. Both
 read the variables below. `krill/importer/cmd`'s `import` CLI (issue
 #2492) reads `PG_DATABASE_URL` too (via a `--database-url` flag that
 defaults to it), but is not a deployed binary and takes its other inputs
-(`--path`, `--session-id`) as flags -- see `krill/README.md`'s Binaries
+(`--path`, `--session-id`) as flags -- with no `--session-id` it mints one
+from the api using the client-credentials variables below -- see `krill/README.md`'s Binaries
 table. `mcp` (issue #2494, FR10/NFR1) is a third binary and `ui` (the
 auth `/authorize` sign-in shell) a fourth; see their own sections
 below.
@@ -65,6 +66,14 @@ pool with `PersonaColumn: "persona"` (migrations 027/028 add `persona` to
 `mcp_credential` and `mcp_auth_code`). If the store cannot be built (table
 missing), `api` logs a warning and rejects opaque tokens rather than failing
 to boot; the Keycloak door is unaffected.
+
+### Importer client credentials
+
+| Variable (flag) | Purpose |
+|---|---|
+| `KRILL_API_URL` (`--api-url`) | api base URL; with no `--session-id`, `import` POSTs `/sessions/init` here. |
+| `KRILL_TOKEN_URL` (`--token-url`) | Keycloak token endpoint for the client_credentials grant. |
+| `KRILL_CLIENT_ID` / `KRILL_CLIENT_SECRET` (`--client-id` / `--client-secret`) | Service-account credentials (needs the operator role). |
 
 ### Sessions
 

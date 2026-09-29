@@ -21,6 +21,10 @@
 // logged WARNING and lets the run succeed anyway -- an Operator/Admin must
 // opt into "trust this partial import," never get one silently.
 //
+// Without --session-id, --api-url plus client credentials (--token-url,
+// --client-id, --client-secret / KRILL_TOKEN_URL, KRILL_CLIENT_ID,
+// KRILL_CLIENT_SECRET) mint the session via POST /sessions/init.
+//
 // Usage:
 //
 //	bazel run //krill/importer/cmd:import -- --path krill --session-id <uuid> --source-revision <sha>
@@ -35,6 +39,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/apiclient"
 	"github.com/whale-net/everything/krill/importer"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/libs/go/db"
@@ -53,23 +58,35 @@ func run() error {
 	sourceRevision := flag.String("source-revision", "", "repo commit SHA --path was imported from (required, FR12/NFR3: krill does not shell out to git to discover this)")
 	allowUnmapped := flag.Bool("allow-unmapped", false, "acknowledge a partial import: proceed (logged at WARNING) even if the report's coverage section names recognized-but-unmapped items (FR11); without this flag, any unmapped item is a non-zero exit")
 	databaseURL := flag.String("database-url", os.Getenv("PG_DATABASE_URL"), "Postgres connection string (defaults to PG_DATABASE_URL, then //libs/go/db's own fallback)")
+	apiURL := flag.String("api-url", os.Getenv("KRILL_API_URL"), "krill api base URL; with no --session-id, the importer mints a session via POST <api-url>/sessions/init using client credentials (defaults to KRILL_API_URL)")
+	tokenURL := flag.String("token-url", os.Getenv("KRILL_TOKEN_URL"), "Keycloak token endpoint for the client_credentials grant (defaults to KRILL_TOKEN_URL)")
+	clientID := flag.String("client-id", os.Getenv("KRILL_CLIENT_ID"), "client_credentials client id (defaults to KRILL_CLIENT_ID)")
+	clientSecret := flag.String("client-secret", os.Getenv("KRILL_CLIENT_SECRET"), "client_credentials client secret (defaults to KRILL_CLIENT_SECRET)")
 	flag.Parse()
 
 	if *path == "" {
 		return fmt.Errorf("--path is required")
 	}
-	if *sessionIDFlag == "" {
-		return fmt.Errorf("--session-id is required (FR3: import is gated on init)")
+	if *sessionIDFlag == "" && *apiURL == "" {
+		return fmt.Errorf("--session-id or --api-url (with client credentials) is required (FR3: import is gated on init)")
 	}
 	if *sourceRevision == "" {
 		return fmt.Errorf("--source-revision is required (FR12/NFR3: the commit SHA --path was imported from)")
 	}
-	sessionID, err := uuid.Parse(*sessionIDFlag)
-	if err != nil {
-		return fmt.Errorf("--session-id: invalid UUID: %w", err)
-	}
-
 	ctx := context.Background()
+	var sessionID uuid.UUID
+	if *sessionIDFlag != "" {
+		var err error
+		if sessionID, err = uuid.Parse(*sessionIDFlag); err != nil {
+			return fmt.Errorf("--session-id: invalid UUID: %w", err)
+		}
+	} else {
+		var err error
+		sessionID, err = mintSession(ctx, *apiURL, apiclient.ClientCredentialsConfig{TokenURL: *tokenURL, ClientID: *clientID, ClientSecret: *clientSecret})
+		if err != nil {
+			return fmt.Errorf("mint session: %w", err)
+		}
+	}
 	pool, err := db.NewPool(ctx, *databaseURL)
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
