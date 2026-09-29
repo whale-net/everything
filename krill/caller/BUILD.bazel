@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "caller",
+    srcs = ["caller.go"],
+    importpath = "github.com/whale-net/everything/krill/caller",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/identity",
+        "//libs/go/grpcauth",
+        "//libs/go/whagent",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+    ],
+)
+
+go_test(
+    name = "caller_test",
+    srcs = ["caller_test.go"],
+    embed = [":caller"],
+    deps = [
+        "//krill/identity",
+        "//libs/go/grpcauth",
+        "//libs/go/whagent",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

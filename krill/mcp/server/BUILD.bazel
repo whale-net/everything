@@ -17,6 +17,7 @@ go_library(
     importpath = "github.com/whale-net/everything/krill/mcp/server",
     visibility = ["//visibility:public"],
     deps = [
+        "//krill/caller",
         "//libs/go/logging",
         "//libs/go/auth",
         "//libs/go/mcpobs",
