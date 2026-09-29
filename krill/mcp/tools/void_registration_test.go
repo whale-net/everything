@@ -304,3 +304,7 @@ func voidTextOf(res *mcp.CallToolResult) string {
 }
 
 func intPtr(n int) *int { return &n }
+
+func (f voidSessionStore) UseSession(ctx context.Context, id store.SessionID) (store.Session, error) {
+	return f.GetSession(ctx, id)
+}

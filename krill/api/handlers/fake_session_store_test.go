@@ -55,3 +55,7 @@ func (f *fakeSessionStore) GetSession(ctx context.Context, id store.SessionID) (
 	}
 	return sess, nil
 }
+
+func (f *fakeSessionStore) UseSession(ctx context.Context, id store.SessionID) (store.Session, error) {
+	return f.GetSession(ctx, id)
+}
