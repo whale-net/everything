@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "apiclient",
+    srcs = ["apiclient.go"],
+    importpath = "github.com/whale-net/everything/krill/apiclient",
+    visibility = ["//krill:__subpackages__"],
+    deps = [
+        "@org_golang_x_oauth2//:oauth2",
+        "@org_golang_x_oauth2//clientcredentials",
+    ],
+)
+
+go_test(
+    name = "apiclient_test",
+    srcs = ["apiclient_test.go"],
+    embed = [":apiclient"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

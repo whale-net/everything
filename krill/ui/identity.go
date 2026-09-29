@@ -14,6 +14,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/whale-net/everything/krill/apiclient"
 	"github.com/whale-net/everything/krill/identity"
 	"github.com/whale-net/everything/krill/store"
 )
@@ -94,6 +95,14 @@ func (app *App) requireOperator(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unresolved operator identity", http.StatusUnauthorized)
 			return
 		}
-		next(w, r.WithContext(withOperatorSubject(r.Context(), subject)))
+		// The operator's access token rides every api call so api can
+		// verify identity itself; an unrefreshable session must re-login.
+		token, err := app.auth.GetAccessToken(r)
+		if err != nil {
+			http.Error(w, "access token unavailable: sign in again", http.StatusUnauthorized)
+			return
+		}
+		ctx := apiclient.WithUserToken(withOperatorSubject(r.Context(), subject), token)
+		next(w, r.WithContext(ctx))
 	}
 }
