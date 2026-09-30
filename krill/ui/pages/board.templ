@@ -1,0 +1,36 @@
+package pages
+
+// The read-only five-lane task board body for one milestone or
+// milepebble. Builders live in //krill/ui (board_page.go); cards reuse
+// TaskRow and TaskBadges from tasks.templ.
+
+// BoardAnchor is the DOM id of the board's content region; the Refresh
+// button's hx-target and the served fragment's root id.
+const BoardAnchor = "krill-task-board"
+
+// BoardColumn is one lane column with its task count.
+type BoardColumn struct {
+	Lane  string
+	Count int
+	Cards []TaskRow
+}
+
+// TaskBoardPage is the board view model.
+type TaskBoardPage struct {
+	Path         string
+	Name         string
+	LoadedAt     string // RFC3339
+	TasksPath    string
+	DeliveryPath string
+	Error        string
+	Columns      []BoardColumn
+	Milepebbles  []TaskMilepebbleLink
+}
+
+// TaskBoard renders the board region. Scaffold: real markup lands in the
+// implementation phase.
+templ TaskBoard(page TaskBoardPage) {
+	<section id={ BoardAnchor } data-krill="task-board">
+		<h2 class="text-xl font-semibold" data-krill="page-title">{ page.Name } -- board</h2>
+	</section>
+}

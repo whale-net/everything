@@ -28,6 +28,7 @@ go_library(
         "spec_page.go",
         "delivery_page.go",
         "task_page.go",
+        "board_page.go",
         "templ_render.go",
     ],
     embedsrcs = ["favicon.ico"],
