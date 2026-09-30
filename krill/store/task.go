@@ -152,13 +152,19 @@ type Task struct {
 
 // TaskSummary is one entry of ListTasksByMilestone's result (issue
 // #2941): the same summary fields get_task/GET /tasks/{id} already
-// return per task, without a second per-task fetch.
+// return per task, without a second per-task fetch. The claim, lease,
+// escalation and cancel fields mirror the task row so a reader can show
+// stuck-task state and the claim identity it observed.
 type TaskSummary struct {
-	ID           uuid.UUID
-	Title        string
-	CurrentLane  Lane
-	AttemptCount int
-	HasLiveClaim bool
+	ID                  uuid.UUID
+	Title               string
+	CurrentLane         Lane
+	AttemptCount        int
+	HasLiveClaim        bool
+	CurrentClaimID      *uuid.UUID
+	LeaseExpiresAt      *time.Time
+	CurrentEscalationID *uuid.UUID
+	CancelledAt         *time.Time
 }
 
 // CreateTaskParams is CreateTask's input (FR1). Exactly the fields
@@ -578,7 +584,8 @@ func (s taskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error) 
 
 func (s taskStore) ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]TaskSummary, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, title, current_lane, attempt_count, current_claim_id
+		SELECT id, title, current_lane, attempt_count, current_claim_id,
+			lease_expires_at, current_escalation_id, cancelled_at
 		FROM task
 		WHERE milestone_id = $1
 		ORDER BY created_at ASC, id ASC
@@ -591,15 +598,15 @@ func (s taskStore) ListTasksByMilestone(ctx context.Context, milestoneID uuid.UU
 	summaries := []TaskSummary{}
 	for rows.Next() {
 		var (
-			summary        TaskSummary
-			lane           string
-			currentClaimID *uuid.UUID
+			summary TaskSummary
+			lane    string
 		)
-		if err := rows.Scan(&summary.ID, &summary.Title, &lane, &summary.AttemptCount, &currentClaimID); err != nil {
+		if err := rows.Scan(&summary.ID, &summary.Title, &lane, &summary.AttemptCount, &summary.CurrentClaimID,
+			&summary.LeaseExpiresAt, &summary.CurrentEscalationID, &summary.CancelledAt); err != nil {
 			return nil, fmt.Errorf("scan task summary: %w", err)
 		}
 		summary.CurrentLane = Lane(lane)
-		summary.HasLiveClaim = currentClaimID != nil
+		summary.HasLiveClaim = summary.CurrentClaimID != nil
 		summaries = append(summaries, summary)
 	}
 	return summaries, rows.Err()

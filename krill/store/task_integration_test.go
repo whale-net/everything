@@ -21,6 +21,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -418,5 +419,42 @@ func TestTaskStore_ListTasksByMilestone(t *testing.T) {
 		assert.True(t, got[1].HasLiveClaim)
 		assert.Equal(t, 0, got[1].AttemptCount, "a claim never moves attempt_count -- only lapsed/abandoned attempts count")
 		assert.False(t, got[2].HasLiveClaim)
+	})
+
+	t.Run("claim, lease, escalation and cancel state", func(t *testing.T) {
+		escalationID := uuid.New()
+		_, err := db.Pool.Exec(ctx, `UPDATE task SET current_escalation_id = $1 WHERE id = $2`, escalationID, pebbleTaskIDs[2])
+		require.NoError(t, err)
+		_, err = db.Pool.Exec(ctx, `UPDATE task SET cancelled_at = NOW() WHERE id = $1`, pebbleTaskIDs[0])
+		require.NoError(t, err)
+
+		got, err := s.Tasks().ListTasksByMilestone(ctx, world.milepebbleID)
+		require.NoError(t, err)
+		require.Len(t, got, 3)
+
+		// Unclaimed, cancelled task.
+		assert.Nil(t, got[0].CurrentClaimID)
+		assert.Nil(t, got[0].LeaseExpiresAt)
+		assert.Nil(t, got[0].CurrentEscalationID)
+		require.NotNil(t, got[0].CancelledAt)
+
+		// Claimed task carries the row's claim id and lease expiry.
+		var rowClaimID uuid.UUID
+		var rowLease time.Time
+		require.NoError(t, db.Pool.QueryRow(ctx,
+			`SELECT current_claim_id, lease_expires_at FROM task WHERE id = $1`, pebbleTaskIDs[1]).Scan(&rowClaimID, &rowLease))
+		require.NotNil(t, got[1].CurrentClaimID)
+		assert.Equal(t, rowClaimID, *got[1].CurrentClaimID)
+		require.NotNil(t, got[1].LeaseExpiresAt)
+		assert.True(t, rowLease.Equal(*got[1].LeaseExpiresAt))
+		assert.Nil(t, got[1].CurrentEscalationID)
+		assert.Nil(t, got[1].CancelledAt)
+
+		// Escalated task.
+		assert.Nil(t, got[2].CurrentClaimID)
+		assert.Nil(t, got[2].LeaseExpiresAt)
+		require.NotNil(t, got[2].CurrentEscalationID)
+		assert.Equal(t, escalationID, *got[2].CurrentEscalationID)
+		assert.Nil(t, got[2].CancelledAt)
 	})
 }
