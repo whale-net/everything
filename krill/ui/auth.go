@@ -58,23 +58,23 @@ func (m mcpResolver) ResolveCallerPersona(r *http.Request) (string, bool) {
 // Postgres-backed ClientRegistry/AuthCodeStore, not auth's in-memory
 // defaults -- `/authorize`, `/token`, and `/register` can land on
 // different `ui` replicas.
-func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolver) (*auth.Provider, error) {
+func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolver) (*auth.Provider, auth.CredentialStore, error) {
 	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	clients, err := auth.NewPostgresClientRegistry(ctx, auth.ClientRegistryConfig{Pool: pool})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	authCodes, err := auth.NewPostgresAuthCodeStore(ctx, auth.AuthCodeStoreConfig{Pool: pool, PersonaColumn: "persona"})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return auth.NewProvider(auth.ProviderConfig{
+	provider, err := auth.NewProvider(auth.ProviderConfig{
 		Issuer:       cfg.UIPublicURL,
 		Resource:     cfg.MCPPublicURL,
 		ResourceName: "krill MCP",
@@ -84,4 +84,8 @@ func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver 
 		AuthCodes:    authCodes,
 		SignInURL:    "/login",
 	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return provider, credentials, nil
 }

@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
 
@@ -206,32 +209,25 @@ func TestNavIsActive(t *testing.T) {
 	}
 }
 
-// TestCredentialsPageTargetsSelfServeAPI guards the silent break: the
-// widget's JS addresses the self-serve JSON API at /credentials, which is
-// a different route from the page that hosts it. Repointing the page's
-// own path into the script would make the widget silently mint nothing
-// while the page still rendered perfectly.
-func TestCredentialsPageTargetsSelfServeAPI(t *testing.T) {
-	body := fetch(t, newTestMux(t), credentialsPath).Body.String()
+// TestCredentialsPageIsServerRendered guards the regression where the
+// page's script was emitted as visible text: the page must carry no
+// script and must drive its actions through htmx against the page's own
+// routes, not the self-serve JSON API.
+func TestCredentialsPageIsServerRendered(t *testing.T) {
+	app := newTestApp(t)
+	app.credentials = &fakeCredentials{}
+	mux := http.NewServeMux()
+	app.mountShellRoutes(mux)
 
-	for _, want := range []string{
-		`id="generate-btn"`,
-		`id="new-token-value"`,
-		`id="credentials-table"`,
-		`id="credentials-body"`,
-		`id="refresh-btn"`,
-		`fetch('/credentials'`,
-		"DELETE",
-	} {
+	body := fetch(t, mux, credentialsPath).Body.String()
+	for _, want := range []string{`id="credentials-results"`, `hx-post="` + credentialsPath + `"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("credentials page missing %q", want)
 		}
 	}
-	if strings.Contains(body, `fetch('`+credentialsPath+`'`) {
-		t.Errorf("credentials widget JS points at the page route %s, not the self-serve API /credentials", credentialsPath)
+	if strings.Contains(body, "fetch(") || strings.Contains(body, "async function") {
+		t.Error("credentials page renders script text")
 	}
-	// The widget only works if the self-serve API is still mounted on the
-	// same binary; assert the page's own route is distinct from it.
 	if credentialsPath == "/credentials" {
 		t.Error("credentialsPath collides with the self-serve API path; ServeMux would panic at boot")
 	}
@@ -444,5 +440,55 @@ func TestReadRoutes_AuthModeNoneAdmitsDevUser(t *testing.T) {
 	strict.devAuth = false
 	if got := get(strict); got != http.StatusForbidden {
 		t.Fatalf("devAuth off, no role: status %d, want 403", got)
+	}
+}
+
+// fakeCredentials is an in-memory auth.CredentialStore for handler tests.
+type fakeCredentials struct {
+	minted int
+	listed []auth.Credential
+}
+
+func (f *fakeCredentials) Mint(context.Context, string) (string, auth.Credential, error) {
+	f.minted++
+	return "raw-token", auth.Credential{ID: uuid.New()}, nil
+}
+
+func (f *fakeCredentials) Verify(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, nil
+}
+
+func (f *fakeCredentials) Revoke(context.Context, uuid.UUID, string) error { return nil }
+
+func (f *fakeCredentials) List(context.Context, string) ([]auth.Credential, error) {
+	return f.listed, nil
+}
+
+// An unresolvable identity must still answer 200 with the error inline and
+// must not mint anything: htmx does not swap on an error status.
+func TestCredentialsMint_UnresolvedIdentityRendersInlineError(t *testing.T) {
+	app := newTestApp(t)
+	store := &fakeCredentials{}
+	app.credentials = store
+	mux := http.NewServeMux()
+	app.mountShellRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, credentialsMintPath, nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if store.minted != 0 {
+		t.Errorf("minted %d credentials, want 0", store.minted)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `id="credentials-results"`) || !strings.Contains(body, "sign in again") {
+		t.Errorf("fragment missing swap target or inline error: %s", body)
+	}
+	if strings.Contains(body, "<html") {
+		t.Error("htmx request got the full page, want a bare fragment")
 	}
 }

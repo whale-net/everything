@@ -25,7 +25,7 @@ shell pages and none may ever be wrapped in `components.Layout`:**
 |---|---|
 | `/login`, `/auth/login`, `/auth/callback`, `/logout` | The sign-in flow itself; it has to render before there is a signed-in user to put in the chrome. |
 | `/authorize`, `/token`, `/register`, both discovery documents | Reachable before any credential exists. |
-| `POST`/`GET` `/credentials`, `DELETE` `/credentials/{id}` | `MountSelfServe`'s **JSON** self-serve API, not a page. |
+| `POST`/`GET` `/credentials`, `DELETE` `/credentials/{id}` | `MountSelfServe`'s **JSON** self-serve API, not a page. The credentials *page* (`/account/credentials`) is htmx and talks to the same `auth.CredentialStore` directly (`credentials_page.go`), not to this API. |
 | `/healthz` | JSON. |
 | `/favicon.ico` | A static asset, unauthenticated on purpose. |
 
@@ -383,11 +383,6 @@ So, when adding a write surface:
 
 ## Known exceptions
 
-- **The credential widget's script is not htmx**, on purpose — see
-  `pages/credentials.templ` for the reasoning. It is a `const` injected
-  with `templ.Raw` because templ escapes Go expressions inside `<script>`,
-  and the widget's script builds `'<tr><td ...>'` markup. Two tests in
-  `pages/credentials_test.go` guard both facts.
 - **`hx-boost` is never used.** The theme bootstrap in `buildHead` must
   run on every page load.
 - **There is no `/partials/` prefix**, by design — see the `HX-Request`
