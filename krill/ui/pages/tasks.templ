@@ -1,0 +1,59 @@
+package pages
+
+// The read-only task list body for one milestone or milepebble. Pure
+// builders that populate these view models live in //krill/ui
+// (task_page.go).
+
+import "github.com/whale-net/everything/libs/go/htmxui"
+
+// TasksAnchor is the DOM id of the task list's content region; the
+// Refresh button's hx-target and the served fragment's root id.
+const TasksAnchor = "krill-task-list"
+
+// TaskBadge is one derived stuck/claim state badge on a task.
+type TaskBadge struct {
+	Key   string // stable data-krill suffix, e.g. "live", "lease-expired"
+	Label string
+}
+
+// TaskRow is one task row. ClaimID and LeaseExpiresAt are the observed
+// claim identity, kept so a later write can be claim-guarded.
+type TaskRow struct {
+	ID             string
+	Title          string
+	Lane           string
+	Attempts       string // e.g. "2 of 3"
+	ClaimID        string
+	LeaseExpiresAt string // RFC3339, empty when unclaimed
+	DetailPath     string
+	Badges         []TaskBadge
+}
+
+// TaskMilepebbleLink links a cut milestone to one milepebble's views.
+type TaskMilepebbleLink struct {
+	Name      string
+	TasksPath string
+	BoardPath string
+}
+
+// TaskListPage is the task list view model.
+type TaskListPage struct {
+	Path         string
+	Name         string
+	LoadedAt     string // RFC3339
+	BoardPath    string
+	DeliveryPath string
+	Error        string
+	Tasks        []TaskRow
+	Milepebbles  []TaskMilepebbleLink
+}
+
+// TaskList renders the task list region. Scaffold: content lands with
+// the implementation phase.
+templ TaskList(page TaskListPage) {
+	<section id={ TasksAnchor } data-krill="task-list">
+		if page.Error != "" {
+			@htmxui.Alert(htmxui.AlertError, page.Error, nil)
+		}
+	</section>
+}
