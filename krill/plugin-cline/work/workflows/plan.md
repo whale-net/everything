@@ -4,7 +4,7 @@
 
 
 Turns a signed-off krill design into krill `Task` entities, by dispatching
-the `krill-planner` custom mode. Pure task breakdown — no code written, no branches
+the `krill-planner` agent. Pure task breakdown — no code written, no branches
 touched.
 
 ## Usage
@@ -50,20 +50,20 @@ than opening a second owner.
    separate status value for the two). Call
    `get_milestone_status_history {id}` and read the note on the latest
    `planned`-or-later transition instead — `planner` always names the
-   created task ids in that note (`the planner custom mode in .roomodes` step 4); a note that
+   created task ids in that note (`the krill-planner agent in .cline/agents` step 4); a note that
    names task ids means a prior `plan` run already created them, ask the
    user for that run's task manifest (there is no krill query to
    reconstruct it — CONVENTIONS.md) rather than re-running `planner`. A
    note that names a design-session/signoff event instead (no task ids)
    means this is genuinely the first planning pass — proceed. If the note
    is ambiguous, ask the user to confirm before dispatching `planner`.
-2. **Task breakdown.** Spawn a subagent (Cline: new_task) with the `krill-planner` custom mode as its mode — via `Agent` with
+2. **Task breakdown.** Spawn a subagent (Cline: new_task) with the `krill-planner` agent as its mode — via `Agent` with
    `model` set to `--planner-model` (default `opus`) — with the FeatureSet
    id and Milestone id. `planner` adds the Feature/Requirement entities to
    the milestone's `Delivers` set, creates krill Tasks with
    `create_task`/`declare_task_dependencies`, and sets the milestone's
    status — every one of these works from this dispatch today (see
-   `the planner custom mode in .roomodes`) — and returns the task manifest.
+   `the krill-planner agent in .cline/agents`) — and returns the task manifest.
 3. **Report.** Relay `planner`'s full task manifest (every task id, title,
    starting lane, dependency edges) to the user verbatim — **this is the
    only durable record of what was just created**; nothing else can

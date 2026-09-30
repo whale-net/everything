@@ -70,7 +70,7 @@ the `stakeholder-meeting` workflow <target> --add-persona "On-call SRE"
 
 
 
-5. **Collect feedback.** Dispatch one the `krill-stakeholder` custom mode subagent
+5. **Collect feedback.** Dispatch one the `krill-stakeholder` agent subagent
    **per persona, in parallel**. Each gets: the persona name, the
    design-session id (to read the spec from via `get_design_session_slice`),
    the meeting discussion URL, and the round number. Each posts its own
@@ -85,11 +85,11 @@ the `stakeholder-meeting` workflow <target> --add-persona "On-call SRE"
 7. **Route the outcome.**
    - **Cleared** — report to the user. If invoked from the `design` workflow,
      control returns there for hand-off to the `review` workflow.
-   - **Blocked, session not yet signed off** — spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode
+   - **Blocked, session not yet signed off** — spawn a subagent (Cline: new_task) with the `krill-producer` agent as its mode
      (Mode 2) with the design-session id and meeting discussion URL (it reads
      the minutes there, not from your prompt) to append an `answer` event
      resolving each `SB-<N>.<n>`, then
-     spawn a subagent (Cline: new_task) with the `krill-architect` custom mode as its mode for a fresh `reconciliation`. Once
+     spawn a subagent (Cline: new_task) with the `krill-architect` agent as its mode for a fresh `reconciliation`. Once
      clear, re-run this workflow for round `N+1`. Cap at 3 meeting rounds; if
      blockers persist, stop and summarize for the user.
    - **Blocked, design already signed off** — the plan is already the entity

@@ -28,7 +28,7 @@ the `implement` workflow <milestone-id> --max-subagents 2
    call `get_task {id}` on each to confirm current state rather than
    trusting the manifest's snapshot — create its branch/worktree exactly as
    `tools/project-manager/workflows/implement.md` describes, then
-   spawn a subagent (Cline: new_task) with the `krill-worker` custom mode as its mode with `<krill-session-id>`, `<task-id>`, and
+   spawn a subagent (Cline: new_task) with the `krill-worker` agent as its mode with `<krill-session-id>`, `<task-id>`, and
    `<worktree-path>` only (not an issue number, and not the task's
    title/body — worker reads those via `get_task`; CONVENTIONS.md "Subagent
    dispatch: ids, not bodies").
@@ -39,17 +39,17 @@ the `implement` workflow <milestone-id> --max-subagents 2
 4. Batch and hand off to `mergepush` exactly as project-manager's
    `implement` does — `mergepush` gets each ready task's `task_id` and
    branch name in place of `{task-issue-number, title}`, and reads title/body
-   itself via `get_task` (see `the mergepush custom mode in .roomodes`).
+   itself via `get_task` (see `the krill-mergepush agent in .cline/agents`).
 
 Every `worker`/`validator` dispatch you make has a working
-`claim_task`/`complete_task` surface — see `the worker custom mode in .roomodes`. A
+`claim_task`/`complete_task` surface — see `the krill-worker agent in .cline/agents`. A
 `forbidden` from either is a real regression; don't route around it,
 surface it in your own report as-is.
 
 ## Steps (no-Milestone GitHub fallback)
 
 Identical to `tools/project-manager/workflows/implement.md` — `<n>` is
-the GitHub tracking issue the `krill-planner` custom mode minted, dispatch
-the `krill-worker` custom mode/`validator`/`mergepush` in place of the
+the GitHub tracking issue the `krill-planner` agent minted, dispatch
+the `krill-worker` agent/`validator`/`mergepush` in place of the
 `project-manager:*` personas. Read that file for the full process; it is
 not duplicated here since none of it changed on this path.

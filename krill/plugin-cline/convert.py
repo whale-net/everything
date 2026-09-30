@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""One-off converter: krill Claude Code plugins -> Cline plugins."""
+"""Converter: krill Claude Code plugins -> Cline CLI plugins (agents + workflows)."""
 import json, os, re
 
-SRC = "/home/alex/whale_net/everything/krill/plugin"
-DST = "/home/alex/whale_net/everything-worktrees/krill-cline-plugins/krill/plugin-cline"
+# Works from any checkout/worktree: lives at <root>/krill/plugin-cline/convert.py
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(ROOT, "plugin")
+DST = os.path.join(ROOT, "plugin-cline")
 
 PERSONAS = ["system-validator", "quick-task", "stakeholder", "mergepush",
             "producer", "architect", "reviewer", "planner", "validator",
@@ -16,11 +18,11 @@ S = "|".join(SKILLS)
 def convert(text):
     # Persona dispatches (before skill rewrite)
     text = re.sub(r"[Dd]ispatches one `(?:krill-design|krill-work):(" + P + r")` subagent",
-                  lambda m: "Spawns one subagent (Cline: new_task) with the `krill-" + m.group(1) + "` custom mode as its mode", text)
+                  lambda m: "Spawns one subagent (Cline: new_task) with the `krill-" + m.group(1) + "` agent as its mode", text)
     text = re.sub(r"[Dd]ispatch `(?:krill-design|krill-work):(" + P + r")`",
-                  lambda m: ("Spawn" if m.group(0)[0] == "D" else "spawn") + " a subagent (Cline: new_task) with the `krill-" + m.group(1) + "` custom mode as its mode", text)
+                  lambda m: ("Spawn" if m.group(0)[0] == "D" else "spawn") + " a subagent (Cline: new_task) with the `krill-" + m.group(1) + "` agent as its mode", text)
     text = re.sub(r"`(?:krill-design|krill-work):(" + P + r")`",
-                  r"the `krill-\1` custom mode", text)
+                  r"the `krill-\1` agent", text)
     # Skill slash commands -> workflow wording
     text = re.sub(r"`?/?krill-(?:design|work):(" + S + r")`?", r"the `\1` workflow", text)
     # MCP tool names -> plain server/tool wording
@@ -28,24 +30,24 @@ def convert(text):
                   r"the \2 tool on the krill-mcp-\1 MCP server", text)
     text = re.sub(r"mcp__plugin_krill-(?:design|work)_krill-mcp-([a-z-]+)__\*",
                   r"the tools of the krill-mcp-\1 MCP server", text)
-    # Agent file paths -> custom modes (project-manager refs stay)
+    # Agent file paths -> agents (project-manager refs stay)
     text = re.sub(r"krill/plugin/(design|work)/agents/(\w+)\.md",
-                  r"the \2 custom mode in krill/plugin-cline/\1/.roomodes", text)
+                  r"the krill-\2 agent in krill/plugin-cline/\1/agents/\2.md", text)
     text = re.sub(r"(?<!project-manager/)(?<![\w/-])agents/([\w-]+)\.md",
-                  r"the \1 custom mode in .roomodes", text)
+                  r"the krill-\1 agent in .cline/agents", text)
     # Skill paths -> workflows
     text = re.sub(r"skills/([a-z-]+)/SKILL\.md", r"workflows/\1.md", text)
     # Shared locations
     text = re.sub(r"krill/plugin/shared/skills/([a-z-]+)/",
                   r"krill/plugin-cline/{design,work}/workflows/\1.md", text)
-    text = re.sub(r"shared/agents/help\.md", r"the krill-help custom mode in .roomodes", text)
+    text = re.sub(r"shared/agents/help\.md", r"the krill-help agent in .cline/agents", text)
     text = re.sub(r"krill/plugin/shared/CONVENTIONS\.md",
                   r"krill/plugin-cline/shared/CONVENTIONS.md", text)
     text = re.sub(r"krill/plugin/", "krill/plugin-cline/", text)
     # Claude-isms
-    text = re.sub(r"fresh `general-purpose` subagents?", "fresh subagents with the appropriate `krill-*` custom mode", text)
+    text = re.sub(r"fresh `general-purpose` subagents?", "fresh subagents with the appropriate `krill-*` agent", text)
     text = text.replace("a fresh `general-purpose` subagent",
-                        "a fresh subagent (Cline: new_task with the appropriate `krill-*` custom mode)")
+                        "a fresh subagent (Cline: new_task with the appropriate `krill-*` agent)")
     text = text.replace("`SendMessage`", "a `new_task` follow-up message")
     text = text.replace("SendMessage", "new_task")
     text = re.sub(r"Claude\s+Code", "Cline", text)
@@ -100,13 +102,22 @@ def workflow_md(skilldir, fm, body):
         return body[:nl] + "\n\n*" + desc + "*\n" + body[nl:] + "\n"
     return "# " + fm.get("name", skilldir).replace("-", " ").title() + "\n\n*" + desc + "*\n\n" + body + "\n"
 
+def agent_md(slug, desc, prompt):
+    # Cline CLI agent file: YAML frontmatter (name/description) + prompt body.
+    def yaml_str(s):
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return ("---\n"
+            f"name: {yaml_str('krill-' + slug)}\n"
+            f"description: {yaml_str(desc)}\n"
+            "---\n\n" + prompt.rstrip() + "\n")
+
 os.makedirs(DST, exist_ok=True)
 os.makedirs(os.path.join(DST, "shared"), exist_ok=True)
 for plugin in ["design", "work"]:
     pdst = os.path.join(DST, plugin)
     os.makedirs(os.path.join(pdst, "workflows"), exist_ok=True)
+    os.makedirs(os.path.join(pdst, "agents"), exist_ok=True)
     srv_suffix = plugin
-    modes = []
 
     agent_files = [os.path.join(SRC, plugin, "agents", f)
                    for f in sorted(os.listdir(os.path.join(SRC, plugin, "agents")))]
@@ -114,21 +125,18 @@ for plugin in ["design", "work"]:
         agent_files.append(os.path.join(SRC, "shared/agents/help.md"))
     for path in agent_files:
         fm, body = strip_fm(path)
-        body = apply_include(convert(body))
+        prompt = apply_include(convert(body)).strip()
         servers = "Uses the krill-mcp-* and krill-mcp-%s-* MCP servers." % srv_suffix
-        role = convert(fm.get("description", "")) + "\n\n" + body.strip()
-        if not role.endswith("."):
-            role += "."
-        role += " " + servers
+        if not prompt.endswith("."):
+            prompt += "."
+        prompt += " " + servers
+        desc_full = convert(fm.get("description", "")).strip()
         slug = "help" if "/shared/agents/" in path else os.path.basename(path)[:-3]
-        modes.append({
-            "slug": "krill-" + slug,
-            "name": "Krill " + slug.replace("-", " ").title(),
-            "roleDefinition": role,
-            "groups": ["read", "edit", "command", "mcp"],
-        })
-    with open(os.path.join(pdst, ".roomodes"), "w") as f:
-        json.dump(modes, f, indent=2)
+        # one-line description for the agent picker; full text stays in the body
+        desc = desc_full.split("\n")[0]
+        out = (desc_full + "\n\n" + prompt) if desc_full not in prompt else prompt
+        with open(os.path.join(pdst, "agents", "krill-" + slug + ".md"), "w") as f:
+            f.write(agent_md(slug, desc, out))
     with open(os.path.join(pdst, "mcp.json"), "w") as f:
         json.dump(mcp_servers(os.path.join(SRC, plugin, ".mcp.json")), f, indent=2)
 

@@ -36,11 +36,11 @@ Parameters (`--milestone`, `--personas`, `--stakeholder-rounds`,
      the `plan` workflow <feature-set-id>` — there's nothing left to do.
    - Given a bare description or nothing: proceed straight to step 2.
 
-2. **Design phase (subagent).** Dispatch a fresh subagents with the appropriate `krill-*` custom mode:
+2. **Design phase (subagent).** Dispatch a fresh subagents with the appropriate `krill-*` agent:
    invoke `Skill` with `workflow: "the `design` workflow"`, forwarding the target,
    `--milestone`, `--stakeholder-meeting` (always included), and
    `--stakeholder-rounds`/`--personas` if given. Add the same unattended-run
-   instruction project-manager's version does: apply `the producer custom mode in .roomodes`
+   instruction project-manager's version does: apply `the krill-producer agent in .cline/agents`
    Mode 0's "thinner input, note the assumptions" allowance immediately
    instead of pausing for live back-and-forth. Let it run to completion,
    then report back *only*:
@@ -57,18 +57,18 @@ Parameters (`--milestone`, `--personas`, `--stakeholder-rounds`,
    - **Blocked: stakeholder disagreement** → step 4.
 
 4. **Panel round.** Track a panel-round counter, starting at 1.
-   a. Spawn a subagent (Cline: new_task) with the `krill-reviewer` custom mode as its mode (model `opus`) with Mode: Ruling — the
+   a. Spawn a subagent (Cline: new_task) with the `krill-reviewer` agent as its mode (model `opus`) with Mode: Ruling — the
       design-session id, the meeting discussion URL, the round number. It
       appends a `ruling` revision event, posts its per-blocker reasoning as a
       comment on the meeting discussion, and returns the sustained/overruled
       counts plus that comment's URL.
-   b. Spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode (Mode 2) with the design-session id
+   b. Spawn a subagent (Cline: new_task) with the `krill-producer` agent as its mode (Mode 2) with the design-session id
       and the ruling comment URL (not the reasoning text — CONVENTIONS.md
       "Subagent dispatch: ids, not bodies"), instructing it to fold in every
       **sustained** item via an `answer` event (and a follow-up
       `propose_entities` call if a Requirement needs to change) and record
       every **overruled** item's rationale in the same event's notes.
-   c. Spawn a subagent (Cline: new_task) with the `krill-architect` custom mode as its mode for a fresh `reconciliation`. Loop
+   c. Spawn a subagent (Cline: new_task) with the `krill-architect` agent as its mode for a fresh `reconciliation`. Loop
       producer↔architect exactly as `design` steps 5-6 do until sign-off
       (cap 5 rounds).
    d. Once clear, invoke the `stakeholder-meeting` workflow
@@ -78,15 +78,15 @@ Parameters (`--milestone`, `--personas`, `--stakeholder-rounds`,
       disagreement (including `reviewer`'s prior rulings) to the user.
       Otherwise repeat from 4a.
 
-5. **Agent review (subagent).** Spawn a subagent (Cline: new_task) with the `krill-reviewer` custom mode as its mode (model
+5. **Agent review (subagent).** Spawn a subagent (Cline: new_task) with the `krill-reviewer` agent as its mode (model
    `opus`) with Mode: Agent review — the design-session id. It appends a
    `signoff` revision event (`approved` or `changes_requested`) with its
    reasoning in the dispatch response.
 
 6. **Route on the review decision.** Track a separate review-round counter.
    - **Approved** → step 7.
-   - **Changes requested** → spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode (Mode 2) and
-     the `krill-architect` custom mode for another round, then repeat step 5.
+   - **Changes requested** → spawn a subagent (Cline: new_task) with the `krill-producer` agent as its mode (Mode 2) and
+     the `krill-architect` agent for another round, then repeat step 5.
      Increment the counter each time; stop at `--max-panel-rounds`.
 
 7. **Report.** If this is a milestone of a product brief not hosted in

@@ -20,8 +20,8 @@ Subagent Usage.
 
 ## Steps
 
-1. Dispatch this plugin's `help` persona (the `krill-help` custom mode when run from
-   `krill-design`, the `krill-help` custom mode when run from `krill-work` — same file,
+1. Dispatch this plugin's `help` persona (the `krill-help` agent when run from
+   `krill-design`, the `krill-help` agent when run from `krill-work` — same file,
    symlinked) via `Agent`, passing the requester's question verbatim plus any
    design-session id / product id / issue number / URL they mentioned.
    Default model: `sonnet` — this is bounded single-turn triage against a

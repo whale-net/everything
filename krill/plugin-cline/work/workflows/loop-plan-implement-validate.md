@@ -15,7 +15,7 @@ subagent reads each task with `get_task {id}` (CONVENTIONS.md "Subagent
 dispatch: ids, not bodies"). A subagent missing the ids can still recover
 the task set itself with `list_tasks {milestone_id}` (CONVENTIONS.md "Work
 axis"). On the no-Milestone fallback, `<n>` is still
-the GitHub tracking issue the `krill-planner` custom mode mints.
+the GitHub tracking issue the `krill-planner` agent mints.
 
 On the Milestone path, every `worker`/`validator`/`system-validator`
 dispatch inside `implement`/`validate` has a working task-lifecycle tool
@@ -44,7 +44,7 @@ steps 1-7, with two substitutions:
    slice) ended in `signoff`/`approved` rather than checking a
    `plan:approved` label — same idempotency check the `plan` workflow step 1
    already does.
-2-7. Identical — dispatch fresh subagents with the appropriate `krill-*` custom mode invoking
+2-7. Identical — dispatch fresh subagents with the appropriate `krill-*` agent invoking
    the `plan` workflow/the `implement` workflow/the `validate` workflow in place
    of the `project-manager:*` workflows, same loop-control and final-
    verification mechanics. Read the original for the full step text; it is
