@@ -154,6 +154,39 @@ for skilldir in ["status", "help"]:
         with open(os.path.join(DST, plugin, "workflows", skilldir + ".md"), "w") as f:
             f.write(out)
 
+# Cline-native skills: .agents/skills/krill-<name>/SKILL.md.
+# The skills CLI scans exactly one level under .agents/skills (no subfolder
+# grouping), and the slash-command/skill name comes from frontmatter, not the
+# directory — so the name is rewritten with the krill- prefix here. Shared
+# skills (status/help) come from plugin/shared, matching the workflows above.
+def skill_md(slug, desc, body):
+    def yaml_str(s):
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return (("---\n"
+             f"name: {yaml_str('krill-' + slug)}\n"
+             f"description: {yaml_str(desc)}\n"
+             "---\n\n") + body.rstrip() + "\n")
+
+agents_skills = os.path.join(os.path.dirname(ROOT), ".agents", "skills")
+emitted = {}
+for skilldir in ["status", "help"]:
+    fm, body = strip_fm(os.path.join(SRC, "shared/skills", skilldir, "SKILL.md"))
+    emitted[skilldir] = (fm, body)
+for plugin in ["design", "work"]:
+    for skilldir in sorted(os.listdir(os.path.join(SRC, plugin, "skills"))):
+        if skilldir in ("status", "help"):
+            continue
+        fm, body = strip_fm(os.path.join(SRC, plugin, "skills", skilldir, "SKILL.md"))
+        emitted[skilldir] = (fm, body)
+os.makedirs(agents_skills, exist_ok=True)
+for skilldir, (fm, body) in sorted(emitted.items()):
+    desc = convert(fm.get("description", "")).strip()
+    out = skill_md(skilldir, desc, apply_include(convert(body)))
+    outdir = os.path.join(agents_skills, "krill-" + skilldir)
+    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, "SKILL.md"), "w") as f:
+        f.write(out)
+
 with open(os.path.join(SRC, "shared/CONVENTIONS.md")) as f:
     conv = apply_include(convert(f.read()))
 with open(os.path.join(DST, "shared/CONVENTIONS.md"), "w") as f:
