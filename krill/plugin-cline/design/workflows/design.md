@@ -21,9 +21,13 @@ the `design` workflow                                 # no args — ask what the
 
 ### Parameters
 
-`--milestone M<n>`, `--stakeholder-meeting`, `--stakeholder-rounds <n>`
-(default 2), `--personas "<a,b>"`, `--resume-agents` — see
-`tools/project-manager`'s `design` workflow for the full effect of each.
+| Parameter | Default | Effect |
+|---|---|---|
+| `--milestone M<n>` | none | Scope this design to one milestone of an approved product (the positional argument is then the product id). Producer specs only that milestone's outcome; architect also checks the draft against the milestone's `Must not foreclose` decisions. |
+| `--stakeholder-meeting` | off | After architect sign-off, run the `stakeholder-meeting` workflow: every persona in the spec gives a round of feedback, and any blocker goes back through the producer/architect loop before hand-off to review. |
+| `--stakeholder-rounds <n>` | `2` | Max stakeholder meeting rounds before stopping and summarizing standing blockers for the user. Implies `--stakeholder-meeting`. |
+| `--personas "<a,b>"` | spec personas | Meet with only these personas. Implies `--stakeholder-meeting`. |
+| `--resume-agents` | off | Continue the same producer/architect subagents via a `new_task` follow-up message (targeting `producer-<id>`/`architect-<id>`) for follow-up rounds within this invocation, instead of spawning fresh ones; falls back to a fresh dispatch if the name isn't a live agent. Never reaches across separate workflow invocations. |
 
 ## Steps
 

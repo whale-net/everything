@@ -1,8 +1,7 @@
 # krill plugins — shared conventions
 
 Shared contract for the `krill-design` and `krill-work` plugins. Fallback for
-mechanics not covered in a persona file itself. When a persona says "same as
-project-manager's X," see `tools/project-manager/CONVENTIONS.md`.
+mechanics not covered in a persona file itself.
 
 This file is symlinked into both plugins' directories — edit only here.
 
@@ -34,14 +33,14 @@ delivery-authoring tool (`create_product`, `create_feature_set`,
    `create_task` requires `milestone_id`; a bare FeatureSet/Requirement id
    is rejected (NFR7), and most domains' `PRODUCT.md` still isn't
    krill-hosted. For that case, `krill-work` falls back to
-   `tools/project-manager`'s GitHub Issues/Project mechanics verbatim —
+   GitHub Issues/a Project (see "No-Milestone GitHub fallback" below) —
    say so explicitly when you take this path.
 2. **`list_tasks` covers milestone-wide task discovery, but not
    claimability.** `list_tasks {milestone_id}` (ungated, any persona,
    `/mcp/work`, also `/mcp/design`) returns every task under a
    milestone/milepebble — id, title, `current_lane`, attempt count, and
    whether a claim is currently live — so `planner`'s hand-carried summary
-   is no longer the only way to find a milestone's task ids (see "Work
+   isn't the only way to find a milestone's task ids (see "Work
    axis" below). It does **not** filter by claimable: unresolved
    dependencies, the attempt cap, and an active escalation are invisible
    to it — `claim_task` still needs a `task_id` already in hand, and a
@@ -231,8 +230,7 @@ as the read-only tools below (`get_milestone`/`list_milepebbles`/
   in full and cut into milepebbles of at most 12 Requirements each (every
   Requirement delivered by exactly one milepebble). A milestone with no
   milepebbles cut yet is its own single milepebble, so the 12 applies to it
-  directly. This overrides `tools/project-manager/CONVENTIONS.md`'s
-  per-milestone default for krill-hosted milestones only.
+  directly.
 - `set_milestone_status {krill_session_id, milestone_id, status, note?}` —
   `status` is one of the fixed eight: `not started, in design, designed,
   planned, in progress, shipped, partially complete, abandoned`. Only the
@@ -360,11 +358,97 @@ aid, not a substitute for the real thing — still re-read each task's live
 state via `get_task {id}` before acting on it.
 
 For a FeatureSet with no krill Milestone to scope `create_task` to,
-`krill-work` runs entirely on GitHub Issues/a Project's `Status` field, like
-`project-manager` does. See `tools/project-manager/CONVENTIONS.md` §§
-"Project setup", "Task issues & swimlane progression", "Worker lifecycle",
-"Git hygiene" for those mechanics; every persona that falls back to them
-must say so in its output.
+`krill-work` runs on GitHub Issues and a Project's `Status` field instead —
+see "No-Milestone GitHub fallback" below. Every persona that takes that
+path must say so in its output.
+
+## No-Milestone GitHub fallback
+
+Used only when no krill Milestone scopes the work (see "Known
+limitations"). `OWNER` is `whale-net`, repo `whale-net/everything`.
+
+**Tracking issue and Project.** The tracking issue (number `<n>`) is the
+root of the plan; its comments are the race-free ledger (never edit its
+body for progress). Planner sets up the Project once, idempotently — check
+`gh issue view <n> --comments` for a `Project board: <url>` comment first:
+`gh project create --owner whale-net --title "Plan: <title> (#<n>)"
+--format json`, `gh project link <number> --owner whale-net --repo
+whale-net/everything`, then repurpose the built-in `Status` field to the
+swimlane options (`updateProjectV2Field` GraphQL mutation via `gh api
+graphql`): `Scaffold`, `Implementation`, `Testing`, `Validation`, `Done`,
+plus scope-note lanes `Noted`, `Carry-over`, `Deferred`. Finish with
+`gh issue comment <n> --body "Project board: <url>"`.
+
+**Task issues.** Planner creates one issue per cohesive vertical slice
+(not per file or per phase; no task-count cap), adds it to the Project, and
+sets `Status` to its starting lane (`gh issue create`, `gh project
+item-add`, `gh project item-edit ... --field Status --value <lane>`).
+Each body has `Part of #<n>`, an optional `Depends on: #<a>, #<b>` line,
+scope and acceptance criteria per phase, and file paths/targets. Sequence
+with expand-contract: additive tasks depend only on scaffolding; a task
+that changes or removes something existing callers use `Depends on:` every
+task that migrates those callers, so each task is safe to land on trunk on
+its own once validated.
+
+**Finding and claiming work.** Query one swimlane at a time: `gh project
+item-list <number> --owner whale-net --query "status:<Lane> no:assignee"
+--format json`, filtered with `jq` to bodies matching `Part of #<n>`. A
+task is ready only when every `Depends on:` issue is `CLOSED` — check all
+dependencies in one aliased `gh api graphql` call, not one call each.
+Claim with `gh issue edit <task> --add-assignee @me`.
+
+**Lane moves (same semantics as `complete_task` verdicts).** Worker
+finishes a phase: comment a summary, set `Status` to the next lane, remove
+the assignee. A failed test or validation criterion: comment the defect,
+set `Status` back to `Implementation`, remove the assignee. Validator
+passing `Validation`: `gh issue close <task> --comment "Validated: ..."`
+and set `Status` to `Done`. Phase commits use `scaffold:` / `feat:` /
+`test:` prefixes with `Part of #<n>` in the body.
+
+**Git hygiene.** Each task gets its own branch and worktree and, once
+pushed, its own small PR based on its real dependency's branch (or `main`),
+merged into `main` continuously as soon as the task is `Done` and its
+dependencies are already on trunk.
+- Only `implement`, `validate`, and `mergepush` run `git push`/`gh pr`;
+  `worker`/`validator` write code only inside the worktree they're handed.
+- Branch name: `pm[<attempt>]-<n>/<task-issue>-<slug>` (slug = 3-5 word
+  kebab-case of the issue title). Before creating a branch, look for an
+  existing `pm*-<n>/<task-issue>-*` branch (local, then remote) and reuse
+  it; mint `pm2-`, `pm3-`, ... only when a branch must be abandoned. Never
+  delete and recreate the same name.
+- Create with `git fetch origin main` then `git worktree add
+  .claude/worktrees/<task-issue> -b <branch> <fork-point>`, where
+  `<fork-point>` is `origin/main` (never local `main`) or the single
+  dependency's branch; with several dependency branches, fork from one and
+  `git merge --no-edit` the rest inside the worktree, resolving conflicts
+  before dispatching a worker. Set `git config rerere.enabled true` once.
+- `mergepush` pushes each branch from its worktree, opens/finds its PR
+  (`gh pr create --head <branch> --base <parent>`; title = task title,
+  body = `Task: #<task-issue>` plus 2-3 sentences of context, no closing
+  keyword), then merges `Done` tasks in dependency order with
+  `gh pr merge <branch> --squash` only when `mergeable` is `MERGEABLE` and
+  every check has finished green. Pending/failing checks are a
+  wait-for-next-batch condition, never a reason to merge anyway.
+- Before system validation, build a local, never-pushed integration branch
+  `pm-<n>-integration` from `main` by merging every task's tip.
+- Closing out: dispatch `mergepush` once more with every task as done,
+  verify every PR is `MERGED`, and comment `PRs: <url>, ...` on the
+  tracking issue (one `gh pr list --json number,url,headRefName` call).
+
+**System validation and scope notes.** After every task is `Done`,
+`system-validator` files finding issues on the Project at `Status:
+Validation` with `from:system-validator`; planner turns blocking findings
+into follow-up task issues starting in `Scaffold` or `Implementation`.
+Any persona noticing out-of-scope work files a scope-note issue at `Status:
+Noted` with `from:<persona>`; planner classifies each `Carry-over`
+(cross-cutting), `Deferred` (plan-specific cut), or closes it, and
+schedules real tasks for the first two.
+
+**Rate limits.** Never re-derive state the caller already resolved, batch
+same-shaped per-item calls (aliased GraphQL, one `gh pr list` + `jq`), and
+serialize anything touching `main`. On a `gh` rate-limit error (403 with
+`x-ratelimit-remaining: 0`, or the secondary-limit message), back off and
+retry once before reporting failure.
 
 ## Subagent dispatch: ids, not bodies
 
@@ -405,16 +489,22 @@ instead of interleaving ids through prose.
 
 ## Model tiers
 
-Same assignment as `project-manager` — see its CONVENTIONS.md § "Model
-tiers".
+| Persona | Model | Why |
+|---|---|---|
+| producer, architect, planner | `opus` | Deep reasoning for requirements gathering, architecture reconciliation, and task breakdown |
+| stakeholder | `sonnet` | Bounded single-persona critique; runs once per persona in parallel, so cost multiplies |
+| reviewer | `opus` | Stands in for a human judgment call (`loop-design-panel` only) |
+| worker, validator | `haiku` | Fast, cost-efficient execution of scoped swimlane tasks |
+| mergepush | `haiku` | Mechanical push/PR integration — no reasoning about code |
+| system-validator | `opus` (effort: max) | Comprehensive whole-system validation in a running environment |
+| help | `sonnet` | Bounded single-turn triage against a known decision table |
 
 ## API call volume
 
 For the design axis, prefer one `get_design_session`/`get_design_session_slice`
 call over re-deriving state from a replayed event log yourself. For the work
-axis, project-manager's § "API call volume & rate limits" principles
-(never re-derive resolved state, batch same-shaped `gh` calls, serialize
-anything touching `main`) apply unchanged.
+axis, never re-derive resolved state, batch same-shaped `gh` calls, and
+serialize anything touching `main`.
 
 ## Task lifecycle blocker (from shared/snippets)
 

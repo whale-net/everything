@@ -444,10 +444,8 @@ the FR5-FR9 spec surface, plus (issue #2547) `krill-mcp-design-tilt`
 per mount per environment, since each is its own pre-filtered MCP endpoint.
 It also carries the design-axis personas (`producer`/`architect`/`reviewer`/
 `stakeholder`) and skills (`product`/`design`/`review`/
-`stakeholder-meeting`/`loop-design-panel`) forked from
-`tools/project-manager` -- this is krill's first iteration of superseding
-that plugin, adapted to call krill's own MCP tools instead of driving
-GitHub Discussions. See `plugin/shared/CONVENTIONS.md`.
+`stakeholder-meeting`/`loop-design-panel`) which call krill's own MCP tools rather than driving GitHub
+Discussions. See `plugin/shared/CONVENTIONS.md`.
 
 `plugin/work/` (registered as `krill-work`) is the companion plugin for the
 work/execution axis: MCP access to the FR5-FR9 spec surface plus the same
@@ -455,10 +453,8 @@ work/execution axis: MCP access to the FR5-FR9 spec surface plus the same
 `create_task` also register there -- see "Delivery-axis endpoints" above),
 plus the work-axis personas (`planner`/`worker`/`validator`/
 `system-validator`/`mergepush`/`quick-task`) and skills
-(`plan`/`implement`/`validate`/`loop-plan-implement-validate`) forked from
-`tools/project-manager`. `quick-task` is the krill-aware, renamed fork of
-that plugin's lightweight `project-manager` persona -- see its own file for
-why. Milestone authoring/status and `create_task` (M3, M4 FR1) are real
+(`plan`/`implement`/`validate`/`loop-plan-implement-validate`) `quick-task` is the krill-aware lightweight persona -- see its own
+file for why. Milestone authoring/status and `create_task` (M3, M4 FR1) are real
 and used where a product is actually hosted in krill; task claim/
 heartbeat/complete/abandon/note, dependency declaration, and the
 `GET /tasks/{id}` payload document a worker uses to discover a task's

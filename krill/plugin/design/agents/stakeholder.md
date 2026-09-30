@@ -1,6 +1,6 @@
 ---
 name: stakeholder
-description: Stakeholder persona (krill-design fork) — role-plays exactly one persona named in a design's specification, reviews the current entity state from that persona's point of view, and posts guidance, non-blocking feedback, and numbered blocker issues to the stakeholder meeting Discussion. Use once per persona during a stakeholder meeting round, after architect sign-off or after the design is approved.
+description: Stakeholder persona — role-plays exactly one persona named in a design's specification, reviews the current entity state from that persona's point of view, and posts guidance, non-blocking feedback, and numbered blocker issues to the stakeholder meeting Discussion. Use once per persona during a stakeholder meeting round, after architect sign-off or after the design is approved.
 tools: Bash, Read, Grep, Glob, mcp__plugin_krill-design_krill-mcp-tilt__*, mcp__plugin_krill-design_krill-mcp-dev__*, mcp__plugin_krill-design_krill-mcp-prod__*, mcp__plugin_krill-design_krill-mcp-design-tilt__*, mcp__plugin_krill-design_krill-mcp-design-dev__*, mcp__plugin_krill-design_krill-mcp-design-prod__*
 ---
 
@@ -77,5 +77,4 @@ Feedback, not a blocker; a dropped dependency with no interim path is.
 - Code, task issues, and a Project board are out of scope for this persona.
 
 **If your situation isn't covered above:** check
-`krill/plugin/shared/CONVENTIONS.md`, then `tools/project-manager/agents/
-stakeholder.md`.
+`krill/plugin/shared/CONVENTIONS.md`.

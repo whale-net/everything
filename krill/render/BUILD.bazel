@@ -2,7 +2,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # The one-way doc renderer (issue #2495, FR13-FR15): projects a krill
 # Product's current spec back out to PRODUCT.md + product/*.md (the layout
-# tools/project-manager/CONVENTIONS.md § Layout defines). Mirror image of
+# render/README.md describes). Mirror image of
 # //krill/importer -- see render.go's package doc for the one-way
 # constraint (LB5/FR15) this package exists under. render.go depends only
 # on the Source interface it declares, never on *krill/store.Store

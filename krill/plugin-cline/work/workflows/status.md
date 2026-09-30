@@ -45,16 +45,21 @@ from `krill/plugin-cline/{design,work}/workflows/status.md` (see
    {milestone_id}` — `set_milestone_status` works from an ordinary Cline session today, so this reflects `planner`/`plan`/`validate`'s
    actual writes.
 
-3. **GitHub tracking-issue number given** (no-Milestone fallback, or a
-   legacy `project-manager` `plan:approved` issue): same as
-   `project-manager`'s `status` workflow — `gh issue view <n> --comments`, then
-   list every Project item and group by swimlane
-   (`Scaffold`/`Implementation`/`Testing`/`Validation`/`Done`/`Noted`/
-   `Carry-over`/`Deferred`), batch-checking `Depends on:` closure in one
-   `gh api graphql` call rather than one lookup per dependency. See
-   `tools/project-manager/CONVENTIONS.md` §§ "Worker lifecycle", "Task issues
-   & swimlane progression" for the exact queries — this fork doesn't repeat
-   them.
+3. **GitHub tracking-issue number given** (no-Milestone fallback):
+   `gh issue view <n> --comments` for the title and the `Project board:
+   <url>` comment (without one, report that task breakdown hasn't started
+   and the `plan` workflow is next), then list every Project item scoped to
+   `Part of #<n>`:
+   ```sh
+   gh project item-list <project-number> --owner whale-net --field "Status" --format json \
+     | jq '[.items[] | select(.content.body | test("Part of #<n>([^0-9]|$)"))]'
+   ```
+   Group by `Status` (`Scaffold`/`Implementation`/`Testing`/`Validation`/
+   `Done`/`Noted`/`Carry-over`/`Deferred`). For each item not yet `Done`,
+   check its `assignees` (claimed vs. unclaimed) and whether its `Depends
+   on:` issues are closed (ready vs. blocked), batching every dependency
+   across every item into one aliased `gh api graphql` call rather than one
+   lookup per dependency (CONVENTIONS.md § "No-Milestone GitHub fallback").
 
 4. Report a compact table for whichever applies: for a design session,
    revision-event count / last event type / open-question count; for a

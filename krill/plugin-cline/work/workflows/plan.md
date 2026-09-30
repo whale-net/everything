@@ -1,6 +1,6 @@
 # plan
 
-*Task breakdown (krill-work fork) — converts a krill-design design session that ended in a signoff revision event (signoff_status approved) into real krill Task entities when a Milestone exists (M3/M4), by dispatching the planner persona; no GitHub tracking issue or Project board on that path. Falls back to project-manager's GitHub Project mechanics only when no krill Milestone scopes the work. Idempotent. Run after the `review` workflow (or the `loop-design-panel` workflow) approves the design, before the `implement` workflow. Also the right target for "just create the tasks, don't start work" / "plan only".*
+*Task breakdown — converts a krill-design design session that ended in a signoff revision event (signoff_status approved) into real krill Task entities when a Milestone exists (M3/M4), by dispatching the planner persona; no GitHub tracking issue or Project board on that path. Falls back to a GitHub tracking issue and Project board only when no krill Milestone scopes the work. Idempotent. Run after the `review` workflow (or the `loop-design-panel` workflow) approves the design, before the `implement` workflow. Also the right target for "just create the tasks, don't start work" / "plan only".*
 
 
 Turns a signed-off krill design into krill `Task` entities, by dispatching
@@ -11,17 +11,20 @@ touched.
 
 ```
 the `plan` workflow <feature-set-id> --milestone-id <milestone-id>   # krill-hosted product: mints real Task entities, no GitHub
-the `plan` workflow <feature-set-id>                                 # no krill Milestone: GitHub Project fallback (project-manager mechanics)
+the `plan` workflow <feature-set-id>                                 # no krill Milestone: GitHub Project fallback
 the `plan` workflow <feature-set-id> --milestone-id <milestone-id> --planner-model sonnet
 ```
 
-`--planner-model <model>` — same meaning as project-manager's, default `opus`.
+`--planner-model <model>` — model override passed to the `Agent` call that
+dispatches `planner`, default `opus` (task breakdown is the highest-leverage
+reasoning step in the pipeline; running it as a subagent also keeps the
+Task/issue-creation traffic out of this workflow's context).
 `--milestone-id <id>` — pass when this FeatureSet's design was scoped to a
 Milestone already authored in krill (`create_milestone`, M3 — only possible
 for a product actually hosted in krill, e.g. krill's own domain or an
-imported one). Without it, `planner` falls back to `tools/project-manager`'s
-GitHub Issues/Project mechanics entirely (CONVENTIONS.md "Work axis") — this
-is a real krill capability gap (no Task container exists outside a
+imported one). Without it, `planner` falls back to a GitHub tracking issue and Project
+board entirely (CONVENTIONS.md "No-Milestone GitHub fallback") — this is a
+real krill capability gap (no Task container exists outside a
 Milestone), not a default worth avoiding when it doesn't apply.
 
 ## Steps (Milestone path)
@@ -72,8 +75,15 @@ than opening a second owner.
 
 ## Steps (no-Milestone GitHub fallback)
 
-Identical to `tools/project-manager/workflows/plan.md` — mint a tracking
-issue citing `krill feature-set-id: <id>`, set up the Project board,
-`gh issue list --search "krill feature-set-id: <id>"` for idempotency on a
-re-run. Read that file for the full process; it is not duplicated here
-since none of it changed on this path.
+1. **Idempotency check.** `gh issue list --search "krill feature-set-id:
+   <id>"`; if a tracking issue exists, `gh issue view <n> --comments` and
+   check for a `Project board: <url>` comment — if present, the breakdown
+   already ran: report the existing project number and its task issues
+   grouped by swimlane (the `status` workflow <n>`) and stop.
+2. **Confirm the design** signed off (as in step 1 above) and dispatch
+   the `krill-planner` agent with the FeatureSet id and no Milestone id, with
+   `model` set to `--planner-model`. It mints a tracking issue citing
+   `krill feature-set-id: <id>`, sets up the Project board, and creates
+   the task issues.
+3. **Report** the Project board URL and created task issues grouped by
+   starting swimlane, and point to the `implement` workflow <n>`.

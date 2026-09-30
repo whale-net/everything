@@ -202,7 +202,7 @@ func countMatches(t *testing.T, path string, re *regexp.Regexp) int {
 // source files themselves (see capabilityLinePattern/
 // milestoneHeadingPattern above), not hardcoded, since whagent_net's
 // capability map and roadmap grow independently of krill on their own
-// /project-manager:product cadence; personas, decisions, and non-goals
+// /krill-design:product cadence; personas, decisions, and non-goals
 // have stayed fixed in size since #2549 and are still checked verbatim.
 func TestFR11_WhagentNetImport_ParseOnly_EverySourceItemPresent(t *testing.T) {
 	root := whagentNetDocsRoot(t)

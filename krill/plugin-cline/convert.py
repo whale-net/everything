@@ -30,10 +30,10 @@ def convert(text):
                   r"the \2 tool on the krill-mcp-\1 MCP server", text)
     text = re.sub(r"mcp__plugin_krill-(?:design|work)_krill-mcp-([a-z-]+)__\*",
                   r"the tools of the krill-mcp-\1 MCP server", text)
-    # Agent file paths -> agents (project-manager refs stay)
+    # Agent file paths -> agents
     text = re.sub(r"krill/plugin/(design|work)/agents/(\w+)\.md",
                   r"the krill-\2 agent in krill/plugin-cline/\1/agents/\2.md", text)
-    text = re.sub(r"(?<!project-manager/)(?<![\w/-])agents/([\w-]+)\.md",
+    text = re.sub(r"(?<![\w/-])agents/([\w-]+)\.md",
                   r"the krill-\1 agent in .cline/agents", text)
     # Skill paths -> workflows
     text = re.sub(r"skills/([a-z-]+)/SKILL\.md", r"workflows/\1.md", text)

@@ -7,8 +7,7 @@ Drives the human review gate for a planned feature. Reviews the
 architect-approved draft in a krill DesignSession, and upon approval appends
 the `signoff` revision event that makes the design's proposed entities the
 approved plan — there is no root plan Issue to create (see
-`krill/plugin-cline/shared/CONVENTIONS.md`). Forked from
-`tools/project-manager/workflows/review`.
+`krill/plugin-cline/shared/CONVENTIONS.md`).
 
 ## Usage
 

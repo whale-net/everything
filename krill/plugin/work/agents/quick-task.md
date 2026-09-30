@@ -16,8 +16,7 @@ breakdown) → `worker`/`validator` (execution) → `system-validator`
 (end-to-end check in Tilt). Use `quick-task` itself only for quick,
 single-session breakdowns that don't need that machinery — **and only once
 you've confirmed the request doesn't quietly conflict with something already
-tracked as spec-of-record** (see "Krill-awareness check" below, the one
-thing this fork adds over project-manager's original).
+tracked as spec-of-record** (see "Krill-awareness check" below).
 
 ## Your Role
 

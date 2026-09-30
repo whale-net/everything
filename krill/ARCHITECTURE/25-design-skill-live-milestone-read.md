@@ -1,16 +1,13 @@
 # The design skill's live milestone read (FR21, root plan issue #2485)
 
-FR21 is M1's one concrete self-hosting *consumer*: `/project-manager:design
---milestone`'s milestone-read step (`tools/project-manager/skills/design/
-SKILL.md` step 2, and `tools/project-manager/agents/producer.md`'s
-"Milestone-scoped intake") reads `<domain>/product/03-roadmap.md` for every
+FR21 is M1's one concrete self-hosting *consumer*: the design skill's
+`--milestone` milestone-read step (`plugin/design/skills/design/SKILL.md`
+step 2, and the producer persona's "Milestone-scoped intake") reads `<domain>/product/03-roadmap.md` for every
 domain except krill's own — for krill, that step instead calls krill's own
 `get_product_slice` MCP tool (FR8, whole-product granularity — the same
 tool `krill/mcp/tools/slice.go` registers for FR5-FR9, issue #2494) over
 the MCP spec surface, ungated by `init` (a read, same as every FR5-FR9/FR11
-call — see "`init` and the write gate" above). See
-`tools/project-manager/CONVENTIONS.md` "krill's own milestone read is live,
-every other domain's is a file" for why this is a narrow, deliberate
+call — see "`init` and the write gate" above). This is a narrow, deliberate
 exception rather than the start of migrating every domain's read off the
 file.
 
@@ -44,8 +41,8 @@ association sets, plus status, for every milestone and milepebble under a
 Product at once (`list_product_delivery` MCP tool, `GET
 /products/{id}/delivery`). Both are real, callable surfaces today — this
 is the concrete capability M3's C13/C28 promised.
-**What remains unwired is the design skill's own call site**: `tools/
-project-manager/skills/design/SKILL.md` step 2 and `producer.md`'s
+**What remains unwired is the design skill's own call site**: the
+design skill's `SKILL.md` step 2 and the producer persona's
 milestone-scoped intake still call only `get_product_slice`, never
 `get_milestone` or `list_product_delivery` — wiring the design skill's
 krill-domain branch onto either of M3's new reads is explicitly out of
@@ -81,5 +78,5 @@ identical JSON shape) is already covered by issue #2494's own tests. The
 domain-branch decision in `SKILL.md`/`producer.md` itself (krill →
 live call, every other domain → file) is verified by diff review, per root
 plan issue #2485's own acceptance criteria, not by an automated test —
-`tools/project-manager` ships no Bazel targets to run one against.
+the design plugin ships no Bazel targets to run one against.
 
