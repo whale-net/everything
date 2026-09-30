@@ -1,0 +1,77 @@
+# review
+
+*The human review gate for a krill-design design — reviews an architect-approved draft in a krill DesignSession, then either approves it (appending a signoff revision event with signoff_status approved, which makes the proposed Feature/Requirement entities the approved plan) or routes feedback back through producer/architect. For an unattended run with no human reviewer, see the `loop-design-panel` workflow instead — it appends the same signoff event via its reviewer persona.*
+
+
+Drives the human review gate for a planned feature. Reviews the
+architect-approved draft in a krill DesignSession, and upon approval appends
+the `signoff` revision event that makes the design's proposed entities the
+approved plan — there is no root plan Issue to create (see
+`krill/plugin-cline/shared/CONVENTIONS.md`). Forked from
+`tools/project-manager/workflows/review`.
+
+## Usage
+
+```
+the `review` workflow <design-session-id>
+```
+
+## Steps
+
+1. Call `get_design_session {id}` and `list_open_questions {id, blocking:
+   true}`. Confirm the last `reconciliation` event left zero blocking open
+   questions (architect's sign-off signal — see `the architect custom mode in .roomodes`). If
+   not, report that the draft is not yet architect-approved and point the
+   user to the `design` workflow <id>`.
+
+2. Summarize for the user, via `get_design_session_slice {id}`:
+   - The current Feature/Requirement entities (user stories are in your
+     conversation history from intake, not a stored entity — recap from
+     context).
+   - Key points from architect's `reconciliation` events.
+
+3. Ask the user how to proceed:
+   - **Approve** — append the `signoff` event and release to implementation.
+   - **Request changes** — provide feedback for producer/architect to
+     address.
+
+4. **If approved:** spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode with the design-session
+   id to run Mode 3, or append the event directly:
+   ```
+   append_revision_event {
+     krill_session_id, design_session_id,
+     event_type: "signoff", signoff_status: "approved",
+     entity_deltas: []
+   }
+   ```
+   - **If this is a milestone of a product brief not hosted in krill** —
+     post `gh issue comment <product-issue> --body "Ledger: M<n> → planned
+     (<design-session-id>)"` on the tracking issue (never a body edit). **If
+     it's a krill-hosted milestone** — call `set_milestone_status
+     {milestone_id, status: "designed"}` then `{status: "planned"}`
+     instead (the edge table requires the `designed` rung between
+     `in design` and `planned` — CONVENTIONS.md; works from an ordinary
+     Cline dispatch today, whale-net/everything#2928).
+   - Tell the user the design is approved and that the `plan` workflow
+     <feature-set-id>` (plus `--milestone-id <id>` if one exists) is the
+     next step. **On the Milestone path, task breakdown is fully
+     krill-native — no GitHub Project or tracking issue at all** — `plan`
+     creates real krill `Task` entities via `create_task`/
+     `declare_task_dependencies` and returns a task manifest (see
+     `krill-work/CONVENTIONS.md` "Work axis"). Without a Milestone id, `plan`
+     still falls back to a GitHub Project/tracking issue (no krill Task
+     container exists outside a Milestone, NFR7 — a real capability gap, not
+     a default). If no stakeholder meeting was held, mention
+     the `stakeholder-meeting` workflow <design-session-id>` is still
+     available before implementation starts.
+
+5. **If changes requested:**
+   - Ask the user for feedback text.
+   - Spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode (Mode 2) with the design-session id
+     and the user's feedback text (live human input with no krill home yet —
+     the one body it gets) to append an `answer` event
+     addressing it (or, if it requires new/changed entities, a follow-up
+     `propose_entities` call) and update the draft.
+   - Spawn a subagent (Cline: new_task) with the `krill-architect` custom mode as its mode for a follow-up `reconciliation`.
+   - Once architect's `reconciliation` clears (zero blocking open
+     questions), return to step 2 to present the updated state to the user.

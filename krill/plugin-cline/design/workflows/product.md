@@ -1,0 +1,50 @@
+# product
+
+*Scope a product before any feature spec exists — interviews you for vision, personas, and a capability map, has the architect record current state and the load-bearing decisions that later capabilities depend on, then breaks the product into milestones as krill entities (Product, FeatureSet, LoadBearingDecision, Milestone). Run this first when a request is a whole product/app rather than one feature; each milestone is then specced with the `design` workflow <product-id> --milestone M<n>. Also the right target for "scope this out", "what should v1 be", "break this into milestones", or when a design has ballooned past ~20 FRs.*
+
+
+The artifact is krill entities (`Product`, `FeatureSet`,
+`LoadBearingDecision`, `Milestone` via a `DesignSession`), not a GitHub
+Discussion + committed `PRODUCT.md` + tracking issue — see
+`krill/plugin-cline/shared/CONVENTIONS.md` for the design-session mechanics.
+
+## The artifact
+
+One `Product` (name, vision); one `FeatureSet` per capability-map area (a
+`LoadBearingDecision` attaches to the `FeatureSet` it constrains, never the
+bare `Product`); one `Milestone` per roadmap entry. No `PRODUCT.md`, no
+tracking issue, no ledger comments — a krill-hosted milestone's status lives
+on the `Milestone` entity (`set_milestone_status`/
+`get_milestone_status_history`), and the entities are the durable record the
+moment they're written. Same hard rule as the original workflow: capability
+lines (`C7 — ...`), never a numbered FR, at this level.
+
+## Steps
+
+Follow `tools/project-manager/workflows/product.md`'s steps 1-9 (intake
+questions, load-bearing-decision format, roadmap-entry format, human gate,
+5-round reconciliation cap) with these substitutions:
+
+- **No GitHub Discussion** — intake happens directly in this session, same
+  as the `design` workflow step 3. Once intake settles a name/vision,
+  `create_product`, then `open_design_session {product_id,
+  opening_submission}` for the rest (current-state, load-bearing, roadmap).
+- **Producer/architect post `draft`/`reconciliation`/`signoff`
+  revision events**, not Discussion comments — same convention as `design`.
+- **Publish (step 7) writes the entities** — `create_feature_set` per
+  capability area, `create_load_bearing_decision` per LB,
+  `create_milestone` per roadmap entry. No PR, no tracking issue;
+  the `design` workflow <product-id> --milestone M1` reads them directly.
+- **Amendment (step 8)** is further `append_revision_event` calls (or a new
+  session) plus new/updated entities, never a hand edit.
+
+## Downstream
+
+```
+the `design` workflow <product-id> --milestone M1
+  → the `review` workflow → the `plan` workflow → the `implement` workflow → the `validate` workflow
+  → repeat for M2, M3, ...
+```
+
+`<product-id>` is the krill `Product` surrogate id, not a GitHub issue
+number.
