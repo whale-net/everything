@@ -309,6 +309,19 @@ in sync. `krill/ui/components/status.go` is a `.go` rather than a
 `libs/go/htmxui`'s own `templ_library` carries a `# keep` marker so
 gazelle does not collapse it. The app-level ones do not.
 
+## Task views
+
+`/spec/products/{id}/milestones/{mid}/tasks` (task_page.go,
+`pages/tasks.templ`) is the read-only task list for a milestone or
+milepebble, linked from each delivery-page row (which also links the
+`.../board` route). The container is resolved through the product's own
+delivery listing, so an id outside the product is an in-shell 404. A
+milestone with milepebbles cut shows links to theirs, never aggregated
+tasks. `taskStateBadges` derives the live / lease-expired / capped /
+escalated / cancelled badges that the board and detail views reuse; rows
+carry the observed claim id and lease expiry as `data-krill-*` attributes so
+a later write can be claim-guarded.
+
 ## Read gate
 
 Reads stay in-process (no api hop), so every read page is mounted through
