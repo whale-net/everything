@@ -4,7 +4,7 @@
 entrypoint, `bazel run //krill/importer/cmd:import -- --path <dir>
 --session-id <uuid>`) are the one-way markdown importer LB5 and PRODUCT.md's
 C8 describe: it parses a `PRODUCT.md` + `product/*.md` doc set (the layout
-`tools/project-manager/CONVENTIONS.md` § Layout defines) into
+`render/README.md` describes) into
 `krill/store`'s spec entities and prints FR16's entity-id report.
 
 **This is the only code path in `krill/` that ever parses a committed

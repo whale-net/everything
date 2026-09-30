@@ -32,7 +32,7 @@ This carve-out is narrow: it applies only to a domain's own
 `PRODUCT.md`/`product/*` once that domain's brief lives in krill (today,
 only `krill/` itself, per krill's own M1 self-hosting milestone). Every
 other domain's `PRODUCT.md` remains the ordinary
-hand-authored-via-`/project-manager:product` document `AGENTS.md`'s
+hand-authored document `AGENTS.md`'s
 Documentation Conventions describe, and `ARCHITECTURE.md`/`README.md`/
 `ENV.md`/`TOC.md` stay hand-written even for a krill-migrated domain —
 krill's own non-goals scope its renderer to the product doc set only (see

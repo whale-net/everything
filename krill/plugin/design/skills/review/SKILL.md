@@ -9,8 +9,7 @@ Drives the human review gate for a planned feature. Reviews the
 architect-approved draft in a krill DesignSession, and upon approval appends
 the `signoff` revision event that makes the design's proposed entities the
 approved plan — there is no root plan Issue to create (see
-`krill/plugin/shared/CONVENTIONS.md`). Forked from
-`tools/project-manager/skills/review`.
+`krill/plugin/shared/CONVENTIONS.md`).
 
 ## Usage
 

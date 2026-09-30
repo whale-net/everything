@@ -1,6 +1,6 @@
 // Package importer is the one-way markdown importer (issue #2492, FR16,
 // FR17): it parses a `PRODUCT.md` + `product/*.md` doc set (the layout
-// tools/project-manager/CONVENTIONS.md § Layout defines) into krill's spec
+// krill/render/README.md describes) into krill's spec
 // entities and reports what became what.
 //
 // One-way constraint (LB5, FR15): this is the *only* code path in `krill/`

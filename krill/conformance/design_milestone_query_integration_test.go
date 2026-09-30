@@ -1,7 +1,7 @@
 //go:build integration
 
 // This file proves the data half of FR21 (root plan issue #2485, task
-// issue #2500): `/project-manager:design --milestone`'s krill-domain
+// issue #2500): the design skill's `--milestone` krill-domain
 // read branches to a live call to krill's own `get_product_slice` (FR8)
 // instead of reading `krill/product/03-roadmap.md`. It shares
 // roundtrip_integration_test.go's testEnv/krillDocsRoot helpers (same
@@ -21,8 +21,8 @@
 // code every one of that surface's calls executes. The domain-branch
 // decision itself -- krill's own domain calls this live, every other
 // domain still reads the file -- lives in
-// tools/project-manager/skills/design/SKILL.md and
-// tools/project-manager/agents/producer.md, which ship no Bazel test
+// the design skill's SKILL.md and the producer persona (under
+// krill/plugin/design), which ship no Bazel test
 // target to exercise automatically; root plan issue #2485's own
 // acceptance criteria calls for verifying that one by diff review
 // instead.

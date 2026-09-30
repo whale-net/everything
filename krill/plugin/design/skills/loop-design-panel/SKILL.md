@@ -26,9 +26,18 @@ you it wasn't one — `status` and `get_design_session` both surface this.
 /krill-design:loop-design-panel <design-session-id> --personas "Operator,Release engineer" --max-panel-rounds 2
 ```
 
-Parameters (`--milestone`, `--personas`, `--stakeholder-rounds`,
-`--max-panel-rounds`, default 3) — see `tools/project-manager`'s
-`loop-design-panel` skill for the exact forwarding/capping semantics.
+- `--milestone M<n>` — forwarded to the initial `/krill-design:design`
+  dispatch (the positional argument becomes a product id).
+- `--personas "<a,b>"` — forwarded to the stakeholder meeting, both in the
+  initial `design` dispatch and in every panel round this skill runs
+  directly. Defaults to every persona named in the spec.
+- `--stakeholder-rounds <n>` — forwarded to the initial `design`
+  dispatch's own cap (default 2 there); *not* this skill's cap.
+- `--max-panel-rounds <n>` — this skill's own cap, applied separately to
+  stakeholder-disagreement rulings and agent-review changes-requested
+  rounds. Defaults to 3. Hitting it means a disagreement `reviewer`
+  genuinely can't settle; the loop stops and hands it to the user rather
+  than manufacturing a ruling.
 
 ## Steps
 
@@ -41,10 +50,11 @@ Parameters (`--milestone`, `--personas`, `--stakeholder-rounds`,
 2. **Design phase (subagent).** Dispatch a fresh `general-purpose` subagent:
    invoke `Skill` with `skill: "krill-design:design"`, forwarding the target,
    `--milestone`, `--stakeholder-meeting` (always included), and
-   `--stakeholder-rounds`/`--personas` if given. Add the same unattended-run
-   instruction project-manager's version does: apply `agents/producer.md`
-   Mode 0's "thinner input, note the assumptions" allowance immediately
-   instead of pausing for live back-and-forth. Let it run to completion,
+   `--stakeholder-rounds`/`--personas` if given. Add one explicit
+   unattended-run instruction: if intake is still needed, apply
+   `agents/producer.md` Mode 0's "thinner input, note the assumptions"
+   allowance immediately instead of pausing for live back-and-forth — the
+   description given is all the input there is. Let it run to completion,
    then report back *only*:
    - the design-session id,
    - one of: **ready for hand-off**, **blocked: stakeholder disagreement**

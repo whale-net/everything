@@ -57,7 +57,7 @@ editing.
 **What the renderer does not do.** It renders only the product doc set
 (`ARCHITECTURE.md`/`README.md`/`ENV.md`/`TOC.md` stay hand-written, per
 krill's own permanent non-goal). It renders no `Requirement` (FR/NFR):
-the product brief layout has zero FRs by design (`tools/project-manager/
-CONVENTIONS.md` § Product brief & milestones), so `slice.Document`'s
+the product brief layout has zero FRs by design (the brief layout puts requirements
+in per-milestone specs, not the brief), so `slice.Document`'s
 `Requirements` field is read by `GetProductSlice` but never rendered here.
 

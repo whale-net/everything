@@ -6,13 +6,13 @@
 
 Three findings change how M1 should be scoped:
 
-1. **The pipeline being replaced is 1,986 lines of markdown and zero lines of code.** `tools/project-manager/` has no implementation — the only executable it references is `tools/agentsync-mcp` (Python, file+`flock`). Migrating off it is a conventions migration, not a port. There is no legacy code to strangle and no compatibility window to design.
+1. **The workflow being replaced is 1,986 lines of markdown and zero lines of code.** It has no implementation — the only executable it references is `tools/agentsync-mcp` (Python, file+`flock`). Migrating off it is a conventions migration, not a port. There is no legacy code to strangle and no compatibility window to design.
 2. **Postgres-as-queue with `SKIP LOCKED` + lease + stale-reclaim already ships in this repo**, and its own migration comment says queue tables are explicitly *not* SCD2. That is an in-repo precedent that contradicts the intake's "SCD2 throughout" framing — see LB3.
 3. **`libs/go/whagent`'s shipped `Claim` already carries `act.AgentID` alongside `act.Subject`.** The wire slot for C24 (verifiable agent identity) exists today. C24 is cheap *if* krill's own records carry the same two-subject shape from M1 — see LB4.
 
 ## What exists and is reusable
 
-### `tools/project-manager/` — the pipeline being replaced
+### The markdown workflow being replaced
 
 Prose only: `CONVENTIONS.md` (557 lines, the contract), 11 `agents/*.md` personas, 11 `skills/*/SKILL.md` entry points, `plugin.json`, `mcp_config.json`. It has worked well, so the survey question is not "what's wrong with it" but **which parts are the product model and which parts are GitHub's shape leaking into the model.**
 
@@ -82,7 +82,7 @@ Prose only: `CONVENTIONS.md` (557 lines, the contract), 11 `agents/*.md` persona
 
 ## What is half-built or recently reverted
 
-**`tools/agentsync-mcp` is a live MCP server for a feature that was removed from the pipeline.** Commit `140be0e4 project-manager: remove agent-sync mode from design/product loops (#2074)` took agent-sync out of the design and product loops, but the server still exists, `tools/project-manager/mcp_config.json` still declares it, and `agents/architect.md` still documents an "Agent-sync mode" section. So the repo contains one prior attempt at agent-to-agent rendezvous, backed out of the loops that used it, with its plumbing still in place. That is the factual record.
+**`tools/agentsync-mcp` is a live MCP server for a feature that was removed from the pipeline.** Commit `140be0e4` (#2074) took agent-sync out of the design and product loops, but the server still exists, its MCP config still declares it, and `agents/architect.md` still documents an "Agent-sync mode" section. So the repo contains one prior attempt at agent-to-agent rendezvous, backed out of the loops that used it, with its plumbing still in place. That is the factual record.
 
 > **Retraction, by this section's author, applied by producer in round 3.** The original paragraph drew an inference from the above: that a withdrawn rendezvous primitive is evidence for holding krill's work surface at six verbs. Architect retracted the load-bearing part of that in its round-2 reconciliation — "arguing the six-verb hold *from* a withdrawal whose reason was never recorded is an argument from an undiagnosed event" — and authorized this edit; the requester has separately put `tools/agentsync-mcp` out of scope for krill entirely. The six-verb decision now stands on LB7 plus payload-enrichment-is-not-a-verb, in M4's design notes, and is stronger without the crutch. Nothing else in this brief leans on the retracted inference.
 

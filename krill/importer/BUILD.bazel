@@ -1,8 +1,8 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # The one-way markdown importer (issue #2492, FR16, FR17): parses a
-# PRODUCT.md + product/*.md doc set (tools/project-manager/CONVENTIONS.md §
-# Layout) into krill/store entities and reports the entity id each became.
+# PRODUCT.md + product/*.md doc set (the layout render/README.md
+# describes) into krill/store entities and reports the entity id each became.
 # See importer.go's package doc for the one-way constraint (LB5/FR15) this
 # package exists under. Parse (parse.go) never touches krill/store -- write
 # (write.go) is the only file in this package that does -- so a later

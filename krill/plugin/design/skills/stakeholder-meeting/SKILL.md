@@ -53,7 +53,7 @@ Callable directly, or automatically by `/krill-design:design
    anchor:
    - **Has an anchor** (the design was announced via a `Ledger:` comment on
      a product tracking issue — i.e. not a krill-hosted product/milestone)
-     — post the link comment there, same as project-manager's.
+     — post the `Stakeholder meeting round <N>: <meeting-discussion-url>` link comment there.
    - **No anchor** (a krill-hosted product/milestone, tracked purely via
      `set_milestone_status`/`get_milestone_status` — there is no tracking
      issue to comment on) — call `record_note {entity_kind: "feature_set",

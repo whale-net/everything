@@ -3,19 +3,19 @@
 Product discussion: https://github.com/whale-net/everything/discussions/2463
 Origin issue: https://github.com/whale-net/everything/issues/2423
 
-This file is the index. Vision, Personas, Load-bearing decisions, and Non-goals are inline; the three sections with no natural ceiling are split out (`tools/project-manager/CONVENTIONS.md` § Layout):
+This file is the index. Vision, Personas, Load-bearing decisions, and Non-goals are inline; the three sections with no natural ceiling are split out:
 
 | Section | File | Read it when |
 |---|---|---|
 | Current state | [`product/01-current-state.md`](product/01-current-state.md) | Checking what already exists, what is in the way, and what is genuinely missing before scoping a milestone |
 | Capability map | [`product/02-capability-map.md`](product/02-capability-map.md) | Citing a `Cn` from an FR, or deciding whether a request is a new capability |
-| Roadmap | [`product/03-roadmap.md`](product/03-roadmap.md) | Running `/project-manager:design <tracking-issue> --milestone M<n>`; the milestone entry is the scope contract |
+| Roadmap | [`product/03-roadmap.md`](product/03-roadmap.md) | Running `/krill-design:design <tracking-issue> --milestone M<n>`; the milestone entry is the scope contract |
 
 Live milestone status is not in this file or its splits — it is the last `Ledger: M<n> → <status>` comment on the tracking issue (`Product: krill`, label `product:approved`).
 
 ## Vision
 
-Krill is the spec-of-record and work-tracking substrate for agent swarms — **unifying all the personas the way Jira did for humans, except for agents.** Today a product's requirements are flat markdown read cold in one pass and its work lives in GitHub Issues, Discussions, and Projects; nearly every convention the `project-manager` pipeline carries (zero FRs in a brief, doc-splitting thresholds, drafts hidden in gists, "the last ledger comment wins") is a workaround for that shape, and GitHub's rate limits cap how many agents can run against it at once. Krill replaces *read the document* with *query the slice you need*: requirements, decisions, and work become typed entities with history, so an agent receives exactly the context its task requires and nothing else, and the markdown everyone reads today becomes a generated projection rather than the source. A year out it is three things at once — a console a Swarm Operator checks, a platform requirements get shaped on, and the surface agents actually perform work through.
+Krill is the spec-of-record and work-tracking substrate for agent swarms — **unifying all the personas the way Jira did for humans, except for agents.** Today a product's requirements are flat markdown read cold in one pass and its work lives in GitHub Issues, Discussions, and Projects; nearly every convention of the markdown-and-GitHub workflow (zero FRs in a brief, doc-splitting thresholds, drafts hidden in gists, "the last ledger comment wins") is a workaround for that shape, and GitHub's rate limits cap how many agents can run against it at once. Krill replaces *read the document* with *query the slice you need*: requirements, decisions, and work become typed entities with history, so an agent receives exactly the context its task requires and nothing else, and the markdown everyone reads today becomes a generated projection rather than the source. A year out it is three things at once — a console a Swarm Operator checks, a platform requirements get shaped on, and the surface agents actually perform work through.
 
 ## Personas
 

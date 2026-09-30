@@ -11,8 +11,8 @@ import (
 )
 
 // ParsedProduct is the in-memory result of parsing one product's
-// `PRODUCT.md` + `product/*.md` doc set (tools/project-manager/
-// CONVENTIONS.md § Layout: Vision, Personas, Load-bearing decisions,
+// `PRODUCT.md` + `product/*.md` doc set (krill/render/README.md:
+// Vision, Personas, Load-bearing decisions,
 // Non-goals inline in PRODUCT.md; Current state, Capability map, Roadmap
 // split out). Parse never touches a database -- it is safe to run against a
 // doc set this milestone does not import (see Testing's whagent_net
@@ -114,8 +114,8 @@ var (
 )
 
 // Parse reads rootPath's `PRODUCT.md` and `product/{01-current-state,
-// 02-capability-map,03-roadmap}.md` (the layout tools/project-manager/
-// CONVENTIONS.md § Layout defines) and returns the entities found. It
+// 02-capability-map,03-roadmap}.md` (the layout
+// krill/render/README.md describes) and returns the entities found. It
 // returns an error naming any bare `M<n>` reference in the roadmap that the
 // roadmap's own headings never define (FR17's "fail loudly" clause) -- it
 // never partially writes anything, since Parse alone never writes at all.

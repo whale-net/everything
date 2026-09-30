@@ -22,7 +22,7 @@
   amend/history surface for Product, FeatureSet, or Feature (issue #2493
   scopes FR11/FR12 to Requirement and LoadBearingDecision only). FR5-FR9's
   read path exists (issue #2491, see "The scoped-slice query" above); FR21
-  wires `/project-manager:design --milestone`'s krill-domain read to it
+  wires the design skill's `--milestone` krill-domain read to it
   (issue #2500, see "The design skill's live milestone read" above) —
   a `Delivers`-only version of "filter that read to just one milestone" now
   exists (`slice.Querier.GetMilestoneDeliversSlice`, issue #2721, see "The
