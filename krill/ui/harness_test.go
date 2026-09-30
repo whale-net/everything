@@ -114,7 +114,7 @@ func newFakeIDP(t *testing.T, sub string) *fakeIDP {
 			return
 		}
 		writeTestJSON(w, http.StatusOK, map[string]any{
-			"access_token": "krill-ui-test-access-token",
+			"access_token": testAccessToken,
 			"token_type":   "Bearer",
 			"expires_in":   3600,
 			"id_token":     idToken,
@@ -133,7 +133,7 @@ func (idp *fakeIDP) signIDToken(issuer, sub string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal header: %w", err)
 	}
-	claims, err := json.Marshal(map[string]any{
+	claimMap := map[string]any{
 		"iss":                issuer,
 		"sub":                sub,
 		"aud":                testClientID,
@@ -142,7 +142,8 @@ func (idp *fakeIDP) signIDToken(issuer, sub string) (string, error) {
 		"preferred_username": "operator",
 		"name":               "Test Operator",
 		"email":              "operator@example.com",
-	})
+	}
+	claims, err := json.Marshal(claimMap)
 	if err != nil {
 		return "", fmt.Errorf("marshal claims: %w", err)
 	}
@@ -323,22 +324,6 @@ func (a *fakeAPI) onRequest(f apiResponder) {
 	a.respond = f
 }
 
-// initRequest returns the recorded POST /sessions/init body, failing if
-// no such request was made.
-func (a *fakeAPI) initRequest(t *testing.T) initSessionRequest {
-	t.Helper()
-
-	for _, req := range a.recorded() {
-		if req.Path == "/sessions/init" {
-			var parsed initSessionRequest
-			require.NoError(t, json.Unmarshal(req.Body, &parsed), "init body: %s", req.Body)
-			return parsed
-		}
-	}
-	t.Fatalf("no POST /sessions/init reached api; recorded: %+v", a.recorded())
-	return initSessionRequest{}
-}
-
 // writeRequest returns the one recorded request that is not the session
 // init -- i.e. the write under test -- failing if there is not exactly one.
 func (a *fakeAPI) writeRequest(t *testing.T) recordedRequest {
@@ -395,33 +380,31 @@ func serveWithCookie(mux *http.ServeMux, method, target, body string, cookies ..
 	return rec
 }
 
-// assertOperatorAttribution asserts the recorded init request minted the
-// krill session under the operator's real (iss, sub) as BOTH subjects --
-// the one assertion every UI write's attribution reduces to.
-func assertOperatorAttribution(t *testing.T, api *fakeAPI, issuer string) {
+// testAccessToken is the access token the fake IdP issues at sign-in.
+const testAccessToken = "krill-ui-test-access-token"
+
+// assertOperatorAttribution asserts the UI leaves identity to api: the init
+// body carries no identity or scope, and every request to api (init and
+// write) forwards the signed-in operator's access token as Bearer.
+func assertOperatorAttribution(t *testing.T, api *fakeAPI, _ string) {
 	t.Helper()
 
-	init := api.initRequest(t)
-	assert.Equal(t, issuer, init.Acting.Iss, "acting issuer must be the configured Keycloak realm")
-	assert.Equal(t, testOperatorSub, init.Acting.Sub, "acting sub must be the signed-in operator's subject")
-	assert.Equal(t, string(store.SubjectKindHuman), init.Acting.Kind)
-	assert.Equal(t, init.Acting, init.OnBehalfOf, "a signed-in operator acts for themselves")
-	assert.Equal(t, testScopeID.String(), init.ScopeID)
+	var sawInit bool
+	for _, req := range api.recorded() {
+		assert.Equal(t, "Bearer "+testAccessToken, req.Header.Get("Authorization"), "%s %s must forward the operator's access token", req.Method, req.Path)
+		if req.Path == "/sessions/init" {
+			sawInit = true
+			assert.JSONEq(t, "{}", string(req.Body), "init body must not assert identity or scope")
+		}
+	}
+	assert.True(t, sawInit, "no POST /sessions/init reached api")
 }
 
 // assertFreshOperatorAttribution is assertOperatorAttribution for a test
-// that minted its own subject: iss and sub are the values that test's fake
-// IdP signs with, sub being a uuid.NewString() minted per test so the
-// assertion can never be satisfied by a hardcoded identity.
-func assertFreshOperatorAttribution(t *testing.T, api *fakeAPI, iss, sub string) {
+// with its own IdP; the token is the same fixed fake-IdP value.
+func assertFreshOperatorAttribution(t *testing.T, api *fakeAPI, iss, _ string) {
 	t.Helper()
-
-	init := api.initRequest(t)
-	assert.Equal(t, iss, init.Acting.Iss, "acting issuer must be the fake IdP's real issuer")
-	assert.Equal(t, sub, init.Acting.Sub, "acting sub must be the operator who just signed in")
-	assert.Equal(t, string(store.SubjectKindHuman), init.Acting.Kind)
-	assert.Equal(t, init.Acting, init.OnBehalfOf, "a signed-in operator acts for themselves")
-	assert.Equal(t, testScopeID.String(), init.ScopeID)
+	assertOperatorAttribution(t, api, iss)
 }
 
 func writeTestJSON(w http.ResponseWriter, status int, v any) {

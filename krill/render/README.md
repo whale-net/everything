@@ -104,6 +104,9 @@ check:
    bazel run //krill/render/cmd:render -- --product krill --out <dir> \
      --database-url "postgres://<reader-user>:<password>@localhost:5433/krill_<env>?sslmode=require"
    ```
+   The capability map is headlines only by default (a `Cn` line with its
+   FR/NFR counts); read Requirement bodies via krill's `get_feature_slice`
+   MCP tool, or pass `--detail` to render them in full.
 4. Diff `<dir>` against the committed files before deciding whether to
    commit the refresh — a re-render is not guaranteed content-equivalent to
    what's committed (see "Known content gaps" below).

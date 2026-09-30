@@ -33,7 +33,9 @@ go_library(
     importpath = "github.com/whale-net/everything/krill/ui",
     visibility = ["//visibility:private"],
     deps = [
+        "//krill/apiclient",
         "//krill/identity",
+        "//krill/mcp/server",
         "//krill/slice",
         "//krill/store",
         "//krill/ui/components",
@@ -67,10 +69,12 @@ go_test(
     name = "ui_test",
     srcs = [
         "harness_test.go",
+        "read_gate_test.go",
         "writes_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
+        "//krill/apiclient",
         "//krill/store",
         "//libs/go/htmxauth",
         "@com_github_google_uuid//:uuid",
@@ -117,6 +121,7 @@ go_test(
     ],
     embed = [":ui_lib"],
     deps = [
+        "//krill/apiclient",
         "//krill/store",
         "//libs/go/htmxauth",
         "@com_github_google_uuid//:uuid",

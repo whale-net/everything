@@ -36,6 +36,10 @@ type ScopeStore interface {
 	GetSole(ctx context.Context) (Scope, error)
 }
 
+// ErrAmbiguousScope is returned by GetSole when the deployment holds more
+// than one scope: no credential-to-scope mapping exists to pick one.
+var ErrAmbiguousScope = errors.New("multiple scopes: no credential-to-scope mapping exists")
+
 type scopeStore struct{ pool *pgxpool.Pool }
 
 var _ ScopeStore = scopeStore{}
@@ -74,6 +78,13 @@ func (s scopeStore) GetSole(ctx context.Context) (Scope, error) {
 	}
 	if err != nil {
 		return Scope{}, fmt.Errorf("get sole scope: %w", err)
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM scope`).Scan(&n); err != nil {
+		return Scope{}, fmt.Errorf("count scopes: %w", err)
+	}
+	if n > 1 {
+		return Scope{}, ErrAmbiguousScope
 	}
 	return scope, nil
 }

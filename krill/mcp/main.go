@@ -95,6 +95,11 @@ type config struct {
 	// audience_score_system/mcp's own pre-FR12(a) fallback.
 	WhagentJWKSURL string
 	WhagentIssuer  string
+	// RoleOperator and RoleReader (KRILL_ROLE_OPERATOR / KRILL_ROLE_READER)
+	// are the realm roles that resolve to the operator and reader
+	// personas. Unset means no identity holds that persona.
+	RoleOperator string
+	RoleReader   string
 }
 
 func loadConfig() config {
@@ -105,6 +110,8 @@ func loadConfig() config {
 		OAuthIssuer:    os.Getenv("KRILL_MCP_OAUTH_ISSUER"),
 		WhagentJWKSURL: os.Getenv("KRILL_MCP_WHAGENT_JWKS_URL"),
 		WhagentIssuer:  os.Getenv("KRILL_MCP_WHAGENT_ISSUER"),
+		RoleOperator:   os.Getenv("KRILL_ROLE_OPERATOR"),
+		RoleReader:     os.Getenv("KRILL_ROLE_READER"),
 	}
 }
 
@@ -198,6 +205,7 @@ func run() error {
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
+	tools.RegisterGetScope(designReg, entities.Scopes())
 	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals(), entities.Features(), entities.Requirements())
 	// amend_requirement/amend_load_bearing_decision: SCD2 corrections, the MCP twin of POST /{requirements,load-bearing-decisions}/{id}/amend.
 	// reparent_feature rides the same fan-out: it is the move verb an amend
@@ -320,7 +328,7 @@ func run() error {
 	// initializeAuthDeps degrade-and-log convention for every other
 	// optional dependency: the agent front door below never depends on
 	// this succeeding.
-	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
 	if err != nil {
 		logger.Warn("auth credential store unavailable; the auth (human) front door will reject every call until its migration is applied", "error", err)
 		credentials = rejectingCredentialStore{}
@@ -351,6 +359,7 @@ func run() error {
 		handler = server.NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, server.WhagentAuthConfig{
 			Verifier: whagentVerifier,
 			Audience: cfg.MCPPublicURL,
+			Issuer:   cfg.WhagentIssuer,
 		}, resourceMeta)
 	} else {
 		handler = server.NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, resourceMeta)

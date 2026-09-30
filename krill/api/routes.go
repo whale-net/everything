@@ -54,7 +54,7 @@ import (
 // githubToken is KRILL_GITHUB_TOKEN (see main.go's config/../ENV.md) --
 // threaded through to //krill/forge.GitHubClient, the one dependency
 // POST /pointer-artifacts has that no other route in this binary does.
-func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
+func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, identity handlers.IdentityFunc) {
 	sessions := store.NewSessionStore(pool)
 	entities := store.New(pool)
 	gate := handlers.RequireSession(sessions)
@@ -63,7 +63,8 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	assembler := work.NewAssembler(entities.Tasks(), querier)
 
 	mux.HandleFunc("/healthz", handleHealthz(pool))
-	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
+	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions, entities.Scopes(), identity))
+	mux.HandleFunc("GET /scope", handlers.GetScopeHandler(entities.Scopes()))
 
 	mux.Handle("POST /products", gate(handlers.CreateProductHandler(entities.Products())))
 	// Product discovery (issue #2941): ungated read, scope_id is a

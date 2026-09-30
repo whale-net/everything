@@ -43,6 +43,11 @@ import (
 // krill/migrate/seed's forge-coordinate specifics, just a valid scope_id),
 // and returns a ready store.SessionStore plus that scope's id.
 func newTestSessionStore(t *testing.T) (store.SessionStore, uuid.UUID) {
+	s, scopeID, _ := newTestSessionStoreWithPool(t)
+	return s, scopeID
+}
+
+func newTestSessionStoreWithPool(t *testing.T) (store.SessionStore, uuid.UUID, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -64,7 +69,7 @@ func newTestSessionStore(t *testing.T) (store.SessionStore, uuid.UUID) {
 		INSERT INTO scope (repo_full_name, default_branch) VALUES ($1, $2) RETURNING id
 	`, "whale-net/session-test", "main").Scan(&scopeID))
 
-	return store.NewSessionStore(pool), scopeID
+	return store.NewSessionStore(pool), scopeID, pool
 }
 
 func strPtr(s string) *string { return &s }
@@ -157,4 +162,77 @@ func TestGetSession_UnknownID_ReturnsErrSessionNotFound(t *testing.T) {
 
 	_, err := sessions.GetSession(ctx, store.SessionID(uuid.New()))
 	assert.ErrorIs(t, err, store.ErrSessionNotFound)
+}
+
+// TestUseSession_FreshSession_AcceptedAndRefreshed proves a just-minted
+// session passes the write check and its last_used_at moves forward.
+func TestUseSession_FreshSession_AcceptedAndRefreshed(t *testing.T) {
+	ctx := context.Background()
+	sessions, scopeID, pool := newTestSessionStoreWithPool(t)
+	self := store.Subject{Iss: "https://issuer.example.com", Sub: "a", Kind: store.SubjectKindService}
+	id, err := sessions.InitSession(ctx, scopeID, self, self, nil)
+	require.NoError(t, err)
+
+	// Backdate to 1h ago so the refresh is observable.
+	_, err = pool.Exec(ctx, `UPDATE krill_session SET last_used_at = NOW() - interval '1 hour' WHERE id = $1`, uuid.UUID(id))
+	require.NoError(t, err)
+	before, err := sessions.GetSession(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, before.LastUsedAt)
+
+	used, err := sessions.UseSession(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, self, used.Acting)
+	require.NotNil(t, used.LastUsedAt)
+	assert.True(t, used.LastUsedAt.After(*before.LastUsedAt), "UseSession must refresh last_used_at")
+}
+
+func TestUseSession_IdleOver12Hours_ReturnsErrSessionExpired(t *testing.T) {
+	ctx := context.Background()
+	sessions, scopeID, pool := newTestSessionStoreWithPool(t)
+	self := store.Subject{Iss: "https://issuer.example.com", Sub: "a", Kind: store.SubjectKindService}
+	id, err := sessions.InitSession(ctx, scopeID, self, self, nil)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE krill_session SET last_used_at = NOW() - interval '13 hours' WHERE id = $1`, uuid.UUID(id))
+	require.NoError(t, err)
+
+	_, err = sessions.UseSession(ctx, id)
+	assert.ErrorIs(t, err, store.ErrSessionExpired)
+}
+
+func TestUseSession_NullLastUsedAt_ReturnsErrSessionExpired(t *testing.T) {
+	ctx := context.Background()
+	sessions, scopeID, pool := newTestSessionStoreWithPool(t)
+	self := store.Subject{Iss: "https://issuer.example.com", Sub: "a", Kind: store.SubjectKindService}
+	id, err := sessions.InitSession(ctx, scopeID, self, self, nil)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE krill_session SET last_used_at = NULL WHERE id = $1`, uuid.UUID(id))
+	require.NoError(t, err)
+
+	_, err = sessions.UseSession(ctx, id)
+	assert.ErrorIs(t, err, store.ErrSessionExpired)
+}
+
+func TestUseSession_UnknownID_ReturnsErrSessionNotFound(t *testing.T) {
+	sessions, _ := newTestSessionStore(t)
+	_, err := sessions.UseSession(context.Background(), store.SessionID(uuid.New()))
+	assert.ErrorIs(t, err, store.ErrSessionNotFound)
+}
+
+// TestGetSession_DoesNotRefreshLastUsedAt proves reads are not "uses".
+func TestGetSession_DoesNotRefreshLastUsedAt(t *testing.T) {
+	ctx := context.Background()
+	sessions, scopeID, pool := newTestSessionStoreWithPool(t)
+	self := store.Subject{Iss: "https://issuer.example.com", Sub: "a", Kind: store.SubjectKindService}
+	id, err := sessions.InitSession(ctx, scopeID, self, self, nil)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE krill_session SET last_used_at = NOW() - interval '1 hour' WHERE id = $1`, uuid.UUID(id))
+	require.NoError(t, err)
+
+	first, err := sessions.GetSession(ctx, id)
+	require.NoError(t, err)
+	second, err := sessions.GetSession(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, first.LastUsedAt)
+	assert.True(t, first.LastUsedAt.Equal(*second.LastUsedAt))
 }

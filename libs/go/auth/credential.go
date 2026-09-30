@@ -26,6 +26,17 @@ type Credential struct {
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	RevokedAt  *time.Time
+
+	// Persona is the persona resolved at Mint time. Empty unless the store
+	// was configured with StoreConfig.PersonaColumn (opt-in).
+	Persona string
+}
+
+// PersonaResolver resolves an identity to the persona persisted on a newly
+// minted credential. Optional: only consulted when
+// StoreConfig.PersonaColumn is set.
+type PersonaResolver interface {
+	ResolvePersona(ctx context.Context, identity string) (string, error)
 }
 
 // CredentialStore is the mint/verify/revoke/list lifecycle for MCP bearer
@@ -136,6 +147,15 @@ type StoreConfig struct {
 	// generated SQL is cheap insurance against a future pgx or Postgres
 	// version regressing the implicit-cast behavior silently.
 	IdentityCast string
+
+	// PersonaColumn, when set, names a nullable TEXT column the store
+	// reads and writes the credential's persona through. Unset (the
+	// default) leaves generated SQL unchanged.
+	PersonaColumn string
+
+	// PersonaResolver supplies the persona written at Mint when
+	// PersonaColumn is set. With a nil resolver the column is written NULL.
+	PersonaResolver PersonaResolver
 }
 
 // NewCredentialStore constructs a CredentialStore backed by cfg.Pool and
@@ -173,6 +193,12 @@ func NewCredentialStore(ctx context.Context, cfg StoreConfig) (CredentialStore, 
 		}
 	}
 
+	if cfg.PersonaColumn != "" {
+		if err := validateIdentifier(cfg.PersonaColumn, "PersonaColumn"); err != nil {
+			return nil, err
+		}
+	}
+
 	s := &pgxCredentialStore{cfg: cfg}
 
 	if err := s.probeTable(ctx); err != nil {
@@ -203,7 +229,11 @@ func (s *pgxCredentialStore) probeTable(ctx context.Context) error {
 
 // columns is the RETURNING/SELECT column list, in Credential scan order.
 func (s *pgxCredentialStore) columns() string {
-	return fmt.Sprintf("id, %s, token_hash, created_at, last_used_at, revoked_at", s.cfg.IdentityColumn)
+	cols := fmt.Sprintf("id, %s, token_hash, created_at, last_used_at, revoked_at", s.cfg.IdentityColumn)
+	if s.cfg.PersonaColumn != "" {
+		cols += ", " + s.cfg.PersonaColumn
+	}
+	return cols
 }
 
 // identityCastSuffix returns the "::<type>" suffix to append after an
@@ -221,10 +251,35 @@ func (s *pgxCredentialStore) identityPlaceholder(paramNum int) string {
 	return fmt.Sprintf("%s = $%d%s", s.cfg.IdentityColumn, paramNum, s.identityCastSuffix())
 }
 
-func scanCredential(row pgx.Row) (Credential, error) {
+func (s *pgxCredentialStore) scanCredential(row pgx.Row) (Credential, error) {
 	var c Credential
-	err := row.Scan(&c.ID, &c.Identity, &c.TokenHash, &c.CreatedAt, &c.LastUsedAt, &c.RevokedAt)
+	if s.cfg.PersonaColumn == "" {
+		err := row.Scan(&c.ID, &c.Identity, &c.TokenHash, &c.CreatedAt, &c.LastUsedAt, &c.RevokedAt)
+		return c, err
+	}
+	var persona *string
+	err := row.Scan(&c.ID, &c.Identity, &c.TokenHash, &c.CreatedAt, &c.LastUsedAt, &c.RevokedAt, &persona)
+	if persona != nil {
+		c.Persona = *persona
+	}
 	return c, err
+}
+
+// mintQuery renders the INSERT for Mint; the persona column and its $3
+// parameter appear only when PersonaColumn is set.
+func (s *pgxCredentialStore) mintQuery() string {
+	if s.cfg.PersonaColumn == "" {
+		return fmt.Sprintf(`
+		INSERT INTO %s (%s, token_hash)
+		VALUES ($1%s, $2)
+		RETURNING %s
+	`, s.cfg.TableName, s.cfg.IdentityColumn, s.identityCastSuffix(), s.columns())
+	}
+	return fmt.Sprintf(`
+		INSERT INTO %s (%s, token_hash, %s)
+		VALUES ($1%s, $2, $3)
+		RETURNING %s
+	`, s.cfg.TableName, s.cfg.IdentityColumn, s.cfg.PersonaColumn, s.identityCastSuffix(), s.columns())
 }
 
 // generateToken returns a high-entropy (crypto/rand), hex-encoded bearer
@@ -256,13 +311,24 @@ func (s *pgxCredentialStore) Mint(ctx context.Context, identity string) (string,
 		return "", Credential{}, fmt.Errorf("auth: generate credential token: %w", err)
 	}
 
-	query := fmt.Sprintf(`
-		INSERT INTO %s (%s, token_hash)
-		VALUES ($1%s, $2)
-		RETURNING %s
-	`, s.cfg.TableName, s.cfg.IdentityColumn, s.identityCastSuffix(), s.columns())
+	args := []any{identity, hashToken(rawToken)}
+	if s.cfg.PersonaColumn != "" {
+		var persona *string
+		if p := personaFromContext(ctx); p != "" {
+			persona = &p
+		} else if s.cfg.PersonaResolver != nil {
+			p, err := s.cfg.PersonaResolver.ResolvePersona(ctx, identity)
+			if err != nil {
+				return "", Credential{}, fmt.Errorf("auth: resolve persona: %w", err)
+			}
+			if p != "" {
+				persona = &p
+			}
+		}
+		args = append(args, persona)
+	}
 
-	cred, err := scanCredential(s.cfg.Pool.QueryRow(ctx, query, identity, hashToken(rawToken)))
+	cred, err := s.scanCredential(s.cfg.Pool.QueryRow(ctx, s.mintQuery(), args...))
 	if err != nil {
 		return "", Credential{}, fmt.Errorf("auth: insert credential: %w", err)
 	}
@@ -282,7 +348,7 @@ func (s *pgxCredentialStore) Verify(ctx context.Context, rawToken string) (strin
 		RETURNING %s
 	`, s.cfg.TableName, s.columns())
 
-	cred, err := scanCredential(s.cfg.Pool.QueryRow(ctx, query, hashToken(rawToken)))
+	cred, err := s.scanCredential(s.cfg.Pool.QueryRow(ctx, query, hashToken(rawToken)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", Credential{}, ErrInvalidCredential
@@ -326,7 +392,7 @@ func (s *pgxCredentialStore) List(ctx context.Context, identity string) ([]Crede
 
 	var creds []Credential
 	for rows.Next() {
-		c, err := scanCredential(rows)
+		c, err := s.scanCredential(rows)
 		if err != nil {
 			return nil, fmt.Errorf("auth: scan credential: %w", err)
 		}

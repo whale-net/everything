@@ -1,19 +1,8 @@
-// Package handlers is krill api's HTTP handler layer. This file
-// (issue #2489, FR3) is the `init` endpoint: it decodes a caller's acting
-// and on-behalf-of subject assertions, mints a krill-native session id via
-// krill/store's InitSession, and returns it. No authentication front door
-// is mounted on krill's `api` binary in M1 (ARCHITECTURE.md "Open items" --
-// that is NFR1's two-front-door pattern, scoped to the separate `krill/mcp`
-// binary in issue #2494) -- `init` therefore trusts the caller's asserted
-// identity fields rather than verifying a bearer credential itself. See
-// gate.go for the write gate every mutating endpoint after this one passes
-// through.
-//
-// This handler is no longer the only way to mint a session (issue #2827):
-// krill/mcp/tools' init_session tool wraps the same store.SessionStore.
-// InitSession call for an MCP-only caller, reusing SubjectRequest/
-// ParseSubject/InitSessionResponse below rather than a second copy of this
-// file's request/response shapes and validation.
+// Package handlers is krill api's HTTP handler layer. This file holds the
+// `init` endpoint (POST /sessions/init) and GET /scope. init derives the
+// session's identity from the api auth front door's verified caller and its
+// scope from the deployment; krill/mcp/tools' init_session shares
+// InitSessionResponse and ParseSubject.
 package handlers
 
 import (
@@ -21,8 +10,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/google/uuid"
-
+	"github.com/whale-net/everything/krill/caller"
 	"github.com/whale-net/everything/krill/store"
 )
 
@@ -39,17 +27,6 @@ type SubjectRequest struct {
 	Kind string `json:"kind" jsonschema:"Either human, service or agent."`
 }
 
-// initSessionRequest is InitSessionHandler's request body. Acting and
-// OnBehalfOf are both required and are never inferred from one another --
-// a caller acting for itself must send identical triples for both (FR3's
-// doc comment on store.SessionStore.InitSession).
-type initSessionRequest struct {
-	ScopeID          string         `json:"scope_id"`
-	Acting           SubjectRequest `json:"acting"`
-	OnBehalfOf       SubjectRequest `json:"on_behalf_of"`
-	WhagentSessionID *string        `json:"whagent_session_id,omitempty"`
-}
-
 // InitSessionResponse is InitSessionHandler's response body. Exported
 // (issue #2827) so krill/mcp/tools' init_session tool returns this exact
 // value rather than an MCP-local mirror (LB7, the same rule IDResponse's
@@ -62,51 +39,45 @@ type InitSessionResponse struct {
 	ScopeID   string `json:"scope_id"`
 }
 
-// InitSessionHandler returns the `init` endpoint (FR3): POST /sessions/init.
-// It is deliberately not wrapped by RequireSession (gate.go) -- init is how
-// a caller obtains a session id in the first place, so it cannot itself
-// require one.
-func InitSessionHandler(sessions store.SessionStore) http.HandlerFunc {
+// IdentityFunc returns the verified caller of a request (from the api's auth
+// front door), or false when there is none.
+type IdentityFunc func(*http.Request) (caller.Identity, bool)
+
+// InitSessionHandler returns POST /sessions/init. The caller's identity comes
+// from the verified credential via identity and the scope from the
+// deployment's sole scope; the body carries no identity or scope fields and
+// is ignored. It is not wrapped by RequireSession -- init mints the session.
+func InitSessionHandler(sessions store.SessionStore, scopes store.ScopeStore, identity IdentityFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-
-		var req initSessionRequest
-		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		who, ok := identity(r)
+		if !ok {
+			writeJSONError(w, http.StatusUnauthorized, "unauthenticated")
 			return
 		}
-
-		scopeID, err := uuid.Parse(req.ScopeID)
+		scope, err := scopes.GetSole(r.Context())
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			writeJSONError(w, http.StatusConflict, fmt.Sprintf("resolve scope: %v", err))
 			return
 		}
-
-		acting, err := ParseSubject(req.Acting)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("acting: %v", err))
-			return
+		var wsid *string
+		if who.WhagentSessionID != "" {
+			wsid = &who.WhagentSessionID
 		}
-
-		onBehalfOf, err := ParseSubject(req.OnBehalfOf)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("on_behalf_of: %v", err))
-			return
-		}
-
-		id, err := sessions.InitSession(r.Context(), scopeID, acting, onBehalfOf, req.WhagentSessionID)
+		id, err := sessions.InitSession(r.Context(), scope.ID, toStoreSubject(who.Acting), toStoreSubject(who.OnBehalfOf), wsid)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "failed to init session")
 			return
 		}
-
-		writeJSON(w, http.StatusCreated, InitSessionResponse{SessionID: id.String(), ScopeID: scopeID.String()})
+		writeJSON(w, http.StatusCreated, InitSessionResponse{SessionID: id.String(), ScopeID: scope.ID.String()})
 	}
+}
+
+func toStoreSubject(s caller.Subject) store.Subject {
+	return store.Subject{Iss: s.Iss, Sub: s.Sub, Kind: store.SubjectKind(s.Kind)}
 }
 
 // ParseSubject validates and converts a SubjectRequest into a store.Subject.
@@ -143,8 +114,27 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // returns -- a single "error" field, never a shape that varies by endpoint.
 type jsonError struct {
 	Error string `json:"error"`
+	Code  string `json:"code,omitempty"`
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, jsonError{Error: msg})
+}
+
+// ScopeResponse is GET /scope's body.
+type ScopeResponse struct {
+	ScopeID string `json:"scope_id"`
+}
+
+// GetScopeHandler returns GET /scope: the deployment's sole scope_id,
+// resolved by the same store.ScopeStore.GetSole the MCP get_scope tool uses.
+func GetScopeHandler(scopes store.ScopeStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, err := scopes.GetSole(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusConflict, fmt.Sprintf("resolve scope: %v", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, ScopeResponse{ScopeID: scope.ID.String()})
+	}
 }

@@ -12,6 +12,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
 
@@ -250,4 +252,71 @@ func TestWhagentPersonaMiddleware_ResolvesPersonaAgentUnconditionally(t *testing
 	require.NoError(t, err)
 	assert.True(t, nextCalled)
 	assert.Equal(t, PersonaAgent, gotPersona, "every whagent-routed call resolves to PersonaAgent unconditionally -- a whagent Claim never carries a human profile")
+}
+
+// ── persona-at-the-door routing ──────────────────────────────────────────────
+
+type doorFakeStore struct {
+	fakeCredentialStore
+	persona  string
+	verified *int
+}
+
+func (f doorFakeStore) Verify(ctx context.Context, raw string) (string, auth.Credential, error) {
+	*f.verified++
+	id, c, err := f.fakeCredentialStore.Verify(ctx, raw)
+	c.Persona = f.persona
+	return id, c, err
+}
+
+func TestDualAuthHTTPHandler_PersonaAtTheDoor(t *testing.T) {
+	const (
+		issuer   = "https://whagent.example.test"
+		audience = "https://krill-mcp.example.test"
+		opaque   = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+	)
+	signer, verifier := newTestWhagentVerifier(t, issuer)
+	cfg := WhagentAuthConfig{Verifier: verifier, Audience: audience, Issuer: issuer}
+
+	run := func(persona, bearer string) (int, bool, int) {
+		reads := 0
+		store := doorFakeStore{fakeCredentialStore: fakeCredentialStore{validToken: opaque, identity: "u"}, persona: persona, verified: &reads}
+		called := false
+		inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { called = true })
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		rec := httptest.NewRecorder()
+		DualAuthHTTPHandler(inner, store, cfg, nil).ServeHTTP(rec, req)
+		return rec.Code, called, reads
+	}
+
+	t.Run("persona-less credential is 403 and never reaches the handler", func(t *testing.T) {
+		code, called, _ := run("", opaque)
+		assert.Equal(t, http.StatusForbidden, code)
+		assert.False(t, called)
+	})
+	t.Run("credential with a persona reaches the handler", func(t *testing.T) {
+		code, called, _ := run("reader", opaque)
+		assert.Equal(t, http.StatusOK, code)
+		assert.True(t, called)
+	})
+	t.Run("whagent call never reads the credential row", func(t *testing.T) {
+		token, err := signer.Mint(context.Background(), whagent.MintRequest{
+			Subject: "h", SubjectIssuer: "https://kc.example.test", Actor: whagent.Actor{Subject: "a", AgentID: "x"},
+			SessionID: "s", Audience: audience,
+		})
+		require.NoError(t, err)
+		code, called, reads := run("", token)
+		assert.Equal(t, http.StatusOK, code)
+		assert.True(t, called)
+		assert.Zero(t, reads)
+	})
+	t.Run("Keycloak JWT is rejected without touching either verifier", func(t *testing.T) {
+		hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256"}`))
+		pl := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://keycloak.example.test/realms/humans"}`))
+		code, called, reads := run("swarm_operator", hdr+"."+pl+".c2ln")
+		assert.Equal(t, http.StatusUnauthorized, code)
+		assert.False(t, called)
+		assert.Zero(t, reads)
+	})
 }

@@ -1,0 +1,40 @@
+{
+  "mcpServers": {
+    "krill-mcp-tilt": {
+      "type": "streamableHttp",
+      "url": "http://localhost:8084/mcp/spec",
+      "headers": {
+        "Authorization": "Bearer dev-local"
+      },
+      "alwaysAllow": []
+    },
+    "krill-mcp-dev": {
+      "type": "streamableHttp",
+      "url": "https://dev-mcp.krill.whalenet.dev/mcp/spec",
+      "alwaysAllow": []
+    },
+    "krill-mcp-prod": {
+      "type": "streamableHttp",
+      "url": "https://mcp.krill.whalenet.app/mcp/spec",
+      "alwaysAllow": []
+    },
+    "krill-mcp-work-tilt": {
+      "type": "streamableHttp",
+      "url": "http://localhost:8084/mcp/work",
+      "headers": {
+        "Authorization": "Bearer dev-local"
+      },
+      "alwaysAllow": []
+    },
+    "krill-mcp-work-dev": {
+      "type": "streamableHttp",
+      "url": "https://dev-mcp.krill.whalenet.dev/mcp/work",
+      "alwaysAllow": []
+    },
+    "krill-mcp-work-prod": {
+      "type": "streamableHttp",
+      "url": "https://mcp.krill.whalenet.app/mcp/work",
+      "alwaysAllow": []
+    }
+  }
+}

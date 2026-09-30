@@ -93,7 +93,7 @@ func (f recutFakeCredentialStore) Mint(context.Context, string) (string, auth.Cr
 
 func (f recutFakeCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	if rawToken == f.validToken {
-		return f.identity, auth.Credential{Identity: f.identity}, nil
+		return f.identity, auth.Credential{Identity: f.identity, Persona: "swarm_operator"}, nil
 	}
 	return "", auth.Credential{}, auth.ErrInvalidCredential
 }

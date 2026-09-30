@@ -201,7 +201,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(25), latest, "expected the latest migration source version to be 25 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event, 022_non_goal_promotion, 023_single_delivery_parent, 024_milestone_deferral_scd2, 025_revision_event_agent_kind) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(28), latest, "expected the latest migration source version to be 28 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed, 020_milestone_scd2, 021_void_event, 022_non_goal_promotion, 023_single_delivery_parent, 024_milestone_deferral_scd2, 025_revision_event_agent_kind, 026_session_last_used_at, 027_mcp_credential_persona, 028_mcp_auth_code_persona) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
@@ -209,12 +209,12 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	// must exist, version must land clean at the latest. 023 adds no table
 	// -- it is a data fix over rows 004/010 already created, covered on its
 	// own by TestMigration023_*.
-	require.NoError(t, runner.Up(), "apply migrations 001-025")
+	require.NoError(t, runner.Up(), "apply migrations 001-028")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(25), version)
+	assert.Equal(t, uint(28), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -273,7 +273,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(25), version)
+	assert.Equal(t, uint(28), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")

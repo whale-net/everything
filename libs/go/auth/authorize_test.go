@@ -385,3 +385,63 @@ func TestAuthorize_InvalidParams_RedirectWithError(t *testing.T) {
 		})
 	}
 }
+
+// personaResolver is a stubResolver that also implements PersonaCaller.
+type personaResolver struct {
+	stubResolver
+	persona   string
+	personaOK bool
+}
+
+func (p *personaResolver) ResolveCallerPersona(*http.Request) (string, bool) {
+	return p.persona, p.personaOK
+}
+
+func TestAuthorize_PersonaCaller_RoleLessIdentityRefused(t *testing.T) {
+	pr := &personaResolver{stubResolver: stubResolver{identity: "person-1", ok: true}}
+	ts := newAuthTestServer(t, func(cfg *ProviderConfig) { cfg.Resolver = pr })
+
+	redirectURI := "https://client.example.com/callback"
+	client := ts.registerClient(t, redirectURI)
+	_, challenge := genPKCEPair(t)
+
+	resp := ts.doAuthorize(t, url.Values{
+		"response_type":         {"code"},
+		"client_id":             {client.ClientID},
+		"redirect_uri":          {redirectURI},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"state":                 {"s1"},
+	})
+
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "access_denied", loc.Query().Get("error"))
+	assert.Empty(t, loc.Query().Get("code"), "no authorization code may be issued to a role-less identity")
+}
+
+func TestAuthorize_PersonaCaller_ResolvedPersonaIssuesCode(t *testing.T) {
+	pr := &personaResolver{stubResolver: stubResolver{identity: "person-1", ok: true}, persona: "reader", personaOK: true}
+	ts := newAuthTestServer(t, func(cfg *ProviderConfig) { cfg.Resolver = pr })
+
+	redirectURI := "https://client.example.com/callback"
+	client := ts.registerClient(t, redirectURI)
+	_, challenge := genPKCEPair(t)
+
+	resp := ts.doAuthorize(t, url.Values{
+		"response_type":         {"code"},
+		"client_id":             {client.ClientID},
+		"redirect_uri":          {redirectURI},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	})
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	require.NoError(t, err)
+	require.NotEmpty(t, loc.Query().Get("code"))
+
+	saved, err := ts.provider.cfg.AuthCodes.Consume(context.Background(), loc.Query().Get("code"))
+	require.NoError(t, err)
+	assert.Equal(t, "reader", saved.Persona)
+}

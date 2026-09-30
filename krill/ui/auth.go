@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -24,8 +25,27 @@ import (
 // The pair itself is resolved by identity.go's operatorIdentity, shared
 // with this binary's own app write path so both front doors attribute a
 // caller to the exact same (iss, sub) values.
-func (app *App) mcpCallerResolver() auth.CallerResolverFunc {
-	return app.operatorEncodedIdentity
+//
+// It also implements auth.PersonaCaller: the persona is resolved from the
+// verified session's realm_access.roles, and an identity holding neither
+// configured role is refused -- /authorize mints no credential for it.
+func (app *App) mcpCallerResolver() auth.CallerResolver {
+	return mcpResolver{app: app}
+}
+
+type mcpResolver struct{ app *App }
+
+func (m mcpResolver) ResolveCaller(r *http.Request) (string, bool) {
+	return m.app.operatorEncodedIdentity(r)
+}
+
+func (m mcpResolver) ResolveCallerPersona(r *http.Request) (string, bool) {
+	user, err := m.app.auth.CurrentUser(r)
+	if err != nil {
+		return "", false
+	}
+	persona, ok := m.app.roles.ResolvePersona(user.Roles)
+	return string(persona), ok
 }
 
 // setupMCPAuth constructs auth's OAuth2 authorization-server front end
@@ -38,8 +58,8 @@ func (app *App) mcpCallerResolver() auth.CallerResolverFunc {
 // Postgres-backed ClientRegistry/AuthCodeStore, not auth's in-memory
 // defaults -- `/authorize`, `/token`, and `/register` can land on
 // different `ui` replicas.
-func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolverFunc) (*auth.Provider, error) {
-	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
+func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolver) (*auth.Provider, error) {
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +69,7 @@ func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver 
 		return nil, err
 	}
 
-	authCodes, err := auth.NewPostgresAuthCodeStore(ctx, auth.AuthCodeStoreConfig{Pool: pool})
+	authCodes, err := auth.NewPostgresAuthCodeStore(ctx, auth.AuthCodeStoreConfig{Pool: pool, PersonaColumn: "persona"})
 	if err != nil {
 		return nil, err
 	}

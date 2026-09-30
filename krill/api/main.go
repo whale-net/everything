@@ -17,7 +17,12 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/krill/api/authdoor"
+	"github.com/whale-net/everything/krill/caller"
+	"github.com/whale-net/everything/krill/mcp/server"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 )
 
@@ -36,13 +41,40 @@ type config struct {
 	// pointer issue. Only POST /pointer-artifacts needs it; every other
 	// endpoint in this binary ignores it. See ../ENV.md.
 	GitHubToken string
+	// RoleOperator and RoleReader (KRILL_ROLE_OPERATOR / KRILL_ROLE_READER)
+	// are the realm roles that resolve to the operator and reader
+	// personas. Unset means no identity holds that persona.
+	RoleOperator string
+	RoleReader   string
+	// OIDCIssuer/OIDCClientID (KRILL_OIDC_ISSUER / KRILL_OIDC_CLIENT_ID)
+	// configure the Keycloak door; both must be set to enable it.
+	OIDCIssuer   string
+	OIDCClientID string
+	// DevAuthToken (KRILL_DEV_AUTH_TOKEN) is a static operator bearer for
+	// local dev; refused unless Env (KRILL_ENV) is "dev".
+	DevAuthToken string
+	Env          string
+}
+
+// validate rejects configs that must never boot.
+func (c config) validate() error {
+	if c.DevAuthToken != "" && c.Env != "dev" {
+		return fmt.Errorf("KRILL_DEV_AUTH_TOKEN is only allowed with KRILL_ENV=dev")
+	}
+	return nil
 }
 
 func loadConfig() config {
 	return config{
-		Addr:        getEnv("KRILL_API_ADDR", ":8080"),
-		DatabaseURL: os.Getenv("PG_DATABASE_URL"),
-		GitHubToken: os.Getenv("KRILL_GITHUB_TOKEN"),
+		Addr:         getEnv("KRILL_API_ADDR", ":8080"),
+		DatabaseURL:  os.Getenv("PG_DATABASE_URL"),
+		GitHubToken:  os.Getenv("KRILL_GITHUB_TOKEN"),
+		RoleOperator: os.Getenv("KRILL_ROLE_OPERATOR"),
+		RoleReader:   os.Getenv("KRILL_ROLE_READER"),
+		OIDCIssuer:   os.Getenv("KRILL_OIDC_ISSUER"),
+		OIDCClientID: os.Getenv("KRILL_OIDC_CLIENT_ID"),
+		DevAuthToken: os.Getenv("KRILL_DEV_AUTH_TOKEN"),
+		Env:          os.Getenv("KRILL_ENV"),
 	}
 }
 
@@ -62,6 +94,9 @@ func main() {
 
 func run() error {
 	cfg := loadConfig()
+	if err := cfg.validate(); err != nil {
+		return err
+	}
 
 	logging.Configure(logging.Config{
 		ServiceName:   "krill-api",
@@ -82,11 +117,35 @@ func run() error {
 	defer pool.Close()
 
 	mux := http.NewServeMux()
-	setupRoutes(mux, pool, cfg.GitHubToken)
+	setupRoutes(mux, pool, cfg.GitHubToken, func(r *http.Request) (caller.Identity, bool) {
+		c, ok := authdoor.FromContext(r.Context())
+		return c.Identity, ok
+	})
+
+	doorCfg := authdoor.Config{
+		Roles:    server.RoleConfig{OperatorRole: cfg.RoleOperator, ReaderRole: cfg.RoleReader},
+		DevToken: cfg.DevAuthToken,
+	}
+	if cfg.DevAuthToken != "" {
+		logger.Warn("KRILL_DEV_AUTH_TOKEN set: static dev operator token accepted (KRILL_ENV=dev)")
+	}
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
+	if err != nil {
+		logger.Warn("mcpauth credential store unavailable; opaque tokens will be rejected", "error", err)
+	} else {
+		doorCfg.Credentials = credentials
+	}
+	if cfg.OIDCIssuer != "" && cfg.OIDCClientID != "" {
+		verifier, err := grpcauth.NewOIDCVerifier(ctx, cfg.OIDCIssuer, cfg.OIDCClientID)
+		if err != nil {
+			return fmt.Errorf("oidc verifier: %w", err)
+		}
+		doorCfg.OIDC, doorCfg.OIDCIssuer = verifier, cfg.OIDCIssuer
+	}
 
 	httpServer := &http.Server{
 		Addr:         cfg.Addr,
-		Handler:      otelhttp.NewHandler(mux, "krill-api"),
+		Handler:      otelhttp.NewHandler(authdoor.Middleware(doorCfg)(mux), "krill-api"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
