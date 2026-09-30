@@ -42,6 +42,7 @@ type taskFixture struct {
 	pid, mid, mpID, cutID uuid.UUID
 	tasks                 *fakeTaskLister
 	mux                   *http.ServeMux
+	app                   *App
 }
 
 func newTaskFixture(t *testing.T) *taskFixture {
@@ -53,6 +54,7 @@ func newTaskFixture(t *testing.T) *taskFixture {
 		{ID: f.cutID, Name: "Cut", Milepebbles: []slice.MilepebbleListingEntry{{ID: f.mpID, Name: "Pebble"}}},
 	}}
 	app := &App{spec: &fakeSpecReader{listing: listing}, tasks: f.tasks}
+	f.app = app
 	f.mux = http.NewServeMux()
 	f.mux.HandleFunc("GET /spec/products/{id}/milestones/{mid}/tasks", app.handleTaskList)
 	return f
