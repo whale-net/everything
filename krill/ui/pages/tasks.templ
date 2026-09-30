@@ -1,0 +1,134 @@
+package pages
+
+// The read-only task list body for one milestone or milepebble. Pure
+// builders that populate these view models live in //krill/ui
+// (task_page.go).
+
+import "github.com/whale-net/everything/libs/go/htmxui"
+
+// TasksAnchor is the DOM id of the task list's content region; the
+// Refresh button's hx-target and the served fragment's root id.
+const TasksAnchor = "krill-task-list"
+
+// TaskBadge is one derived stuck/claim state badge on a task.
+type TaskBadge struct {
+	Key   string // stable data-krill suffix, e.g. "live", "lease-expired"
+	Label string
+}
+
+// TaskRow is one task row. ClaimID and LeaseExpiresAt are the observed
+// claim identity, kept so a later write can be claim-guarded.
+type TaskRow struct {
+	ID             string
+	Title          string
+	Lane           string
+	Attempts       string // e.g. "2 of 3"
+	ClaimID        string
+	LeaseExpiresAt string // RFC3339, empty when unclaimed
+	DetailPath     string
+	Badges         []TaskBadge
+}
+
+// TaskMilepebbleLink links a cut milestone to one milepebble's views.
+type TaskMilepebbleLink struct {
+	Name      string
+	TasksPath string
+	BoardPath string
+}
+
+// TaskListPage is the task list view model.
+type TaskListPage struct {
+	Path         string
+	Name         string
+	LoadedAt     string // RFC3339
+	BoardPath    string
+	DeliveryPath string
+	Error        string
+	Tasks        []TaskRow
+	Milepebbles  []TaskMilepebbleLink
+}
+
+// taskBadgeVariant maps a badge key to its colour; keys come from the
+// pure helper in task_page.go.
+func taskBadgeVariant(key string) htmxui.BadgeVariant {
+	switch key {
+	case "live":
+		return htmxui.BadgeInfo
+	case "lease-expired", "capped":
+		return htmxui.BadgeWarning
+	case "escalated", "cancelled":
+		return htmxui.BadgeError
+	}
+	return htmxui.BadgeNeutral
+}
+
+// TaskBadges renders a task's derived state badges, one per state.
+templ TaskBadges(badges []TaskBadge) {
+	for _, b := range badges {
+		@htmxui.Badge(b.Label, taskBadgeVariant(b.Key), htmxui.BadgeSizeSM, true, templ.Attributes{
+			"data-krill": "task-badge-" + b.Key,
+		})
+	}
+}
+
+// TaskList renders the task list region: the whole region is the served
+// fragment and the Refresh target.
+templ TaskList(page TaskListPage) {
+	<section id={ TasksAnchor } data-krill="task-list">
+		<div class="flex items-start justify-between gap-4 mb-2">
+			<div>
+				<h2 class="text-xl font-semibold" data-krill="page-title">{ page.Name } -- tasks</h2>
+				<p class="mt-1 text-sm text-base-content/70">
+					Loaded at <span data-krill="loaded-at">{ page.LoadedAt }</span>
+				</p>
+				<p class="mt-1 text-sm">
+					<a href={ templ.URL(page.BoardPath) } class="link link-primary" data-krill="board-link">Board</a>
+					<span class="mx-1">|</span>
+					<a href={ templ.URL(page.DeliveryPath) } class="link link-primary" data-krill="delivery-link">Back to delivery</a>
+				</p>
+			</div>
+			<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
+				hx-get={ templ.URL(page.Path) }
+				hx-target={ "#" + TasksAnchor }
+				hx-swap="outerHTML">
+				Refresh
+			</button>
+		</div>
+		if page.Error != "" {
+			<div data-krill="task-list-error">
+				@htmxui.Alert(htmxui.AlertError, page.Error, nil)
+			</div>
+		} else if len(page.Milepebbles) > 0 {
+			<div data-krill="milepebble-links">
+				@htmxui.EmptyState("Tasks live on this milestone's milepebbles.", "Open a milepebble's task list or board.", "", "", templ.Attributes{})
+				<ul class="mt-2 list-disc pl-5 space-y-1">
+					for _, mp := range page.Milepebbles {
+						<li data-krill="milepebble-link">
+							<strong>{ mp.Name }</strong>
+							<a href={ templ.URL(mp.TasksPath) } class="link link-primary ml-2" data-krill="milepebble-tasks-link">Tasks</a>
+							<a href={ templ.URL(mp.BoardPath) } class="link link-primary ml-2" data-krill="milepebble-board-link">Board</a>
+						</li>
+					}
+				</ul>
+			</div>
+		} else if len(page.Tasks) == 0 {
+			<div data-krill="task-list-empty">
+				@htmxui.EmptyState("No tasks", "This milestone or milepebble has no tasks yet.", "", "", templ.Attributes{})
+			</div>
+		} else {
+			<ol class="mt-4 space-y-2">
+				for _, t := range page.Tasks {
+					<li data-krill="task-row" data-krill-task-id={ t.ID } data-krill-claim-id={ t.ClaimID } data-krill-lease-expires-at={ t.LeaseExpiresAt } class="flex flex-wrap items-center gap-2 text-sm">
+						<a href={ templ.URL(t.DetailPath) } class="link link-primary" data-krill="task-title">{ t.Title }</a>
+						@htmxui.Badge(t.Lane, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "task-lane"})
+						<span data-krill="task-attempts">{ t.Attempts }</span>
+						@TaskBadges(t.Badges)
+						if t.LeaseExpiresAt != "" {
+							<span class="text-base-content/70" data-krill="task-lease">lease until { t.LeaseExpiresAt }</span>
+						}
+					</li>
+				}
+			</ol>
+		}
+	</section>
+}

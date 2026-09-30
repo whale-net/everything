@@ -517,6 +517,7 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// /spec/products/{id} prefix as the spec pages above, so it cannot
 	// collide with the sibling spec routes or the /spec landing.
 	mux.HandleFunc(specProductPath+"/delivery", app.readerRoute(app.handleSpecDelivery))
+	mux.HandleFunc(specProductPath+"/milestones/{mid}/tasks", app.readerRoute(app.handleTaskList))
 
 	// The design-session write surface (design_write.go), hung off the read
 	// views above: the list page's "open a session" form and a session detail

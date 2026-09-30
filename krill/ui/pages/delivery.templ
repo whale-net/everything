@@ -50,6 +50,8 @@ type DeliveryBreakdown struct {
 // partially complete, its shipped/unshipped breakdown.
 type DeliveryMilepebble struct {
 	ID        string
+	TasksPath string
+	BoardPath string
 	Name      string
 	Outcome   string
 	Status    string // one of the eight-value store.MilestoneStatus set
@@ -59,6 +61,8 @@ type DeliveryMilepebble struct {
 // DeliveryMilestone is one milestone row with its nested milepebbles.
 type DeliveryMilestone struct {
 	ID          string
+	TasksPath   string
+	BoardPath   string
 	Name        string
 	Outcome     string
 	FRBudget    string // the stored budget, empty when unset
@@ -149,6 +153,12 @@ templ breakdownBlock(b *DeliveryBreakdown) {
 	</div>
 }
 
+// taskLinks links a container's read-only task list and board.
+templ taskLinks(tasksPath, boardPath string) {
+	<a href={ templ.URL(tasksPath) } class="link link-primary ml-2 text-sm" data-krill="delivery-tasks-link">Tasks</a>
+	<a href={ templ.URL(boardPath) } class="link link-primary ml-2 text-sm" data-krill="delivery-board-link">Board</a>
+}
+
 // Delivery renders a product's milestone roadmap -- list_product_delivery's
 // shape, with get_delivery_breakdown's per-item detail inlined for each
 // partially-complete container (FR 4398c532).
@@ -165,6 +175,7 @@ templ Delivery(page DeliveryPage) {
 						<strong>{ m.Name }</strong>
 						@entityID(m.ID)
 						@statusBadge(m.Status)
+						@taskLinks(m.TasksPath, m.BoardPath)
 						if m.FRBudget != "" {
 							<span class="badge badge-ghost badge-sm">FR budget { m.FRBudget }</span>
 						}
@@ -181,6 +192,7 @@ templ Delivery(page DeliveryPage) {
 										<strong>{ mp.Name }</strong>
 										@entityID(mp.ID)
 										@statusBadge(mp.Status)
+										@taskLinks(mp.TasksPath, mp.BoardPath)
 										if mp.Outcome != "" {
 											<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(mp.Outcome))</div>
 										}

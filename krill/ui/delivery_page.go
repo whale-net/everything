@@ -117,6 +117,8 @@ func deliveryPageOf(product store.Product, listing slice.DeliveryListing, breakd
 	for _, m := range listing.Milestones {
 		entry := pages.DeliveryMilestone{
 			ID:        m.ID.String(),
+			TasksPath: milestoneTasksPath(productID, m.ID),
+			BoardPath: milestoneBoardPath(productID, m.ID),
 			Name:      m.Name,
 			Outcome:   deref(m.Outcome),
 			FRBudget:  frBudgetString(m.FRBudget),
@@ -126,6 +128,8 @@ func deliveryPageOf(product store.Product, listing slice.DeliveryListing, breakd
 		for _, mp := range m.Milepebbles {
 			entry.Milepebbles = append(entry.Milepebbles, pages.DeliveryMilepebble{
 				ID:        mp.ID.String(),
+				TasksPath: milestoneTasksPath(productID, mp.ID),
+				BoardPath: milestoneBoardPath(productID, mp.ID),
 				Name:      mp.Name,
 				Outcome:   deref(mp.Outcome),
 				Status:    string(mp.Status),
