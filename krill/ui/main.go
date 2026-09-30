@@ -518,6 +518,7 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// collide with the sibling spec routes or the /spec landing.
 	mux.HandleFunc(specProductPath+"/delivery", app.readerRoute(app.handleSpecDelivery))
 	mux.HandleFunc(specProductPath+"/milestones/{mid}/tasks", app.readerRoute(app.handleTaskList))
+	mux.HandleFunc(specProductPath+"/milestones/{mid}/tasks/{tid}", app.readerRoute(app.handleTaskDetail))
 	mux.HandleFunc(specProductPath+"/milestones/{mid}/board", app.readerRoute(app.handleTaskBoard))
 
 	// The design-session write surface (design_write.go), hung off the read
