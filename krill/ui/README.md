@@ -322,6 +322,20 @@ escalated / cancelled badges that the board and detail views reuse; rows
 carry the observed claim id and lease expiry as `data-krill-*` attributes so
 a later write can be claim-guarded.
 
+<!-- BEGIN task-detail section (task 9599fc1f) -->
+### Task detail
+
+`/spec/products/{id}/milestones/{mid}/tasks/{tid}` (task_detail_page.go,
+`pages/task_detail.templ`) is the read-only task detail. It composes
+`GetTaskByID`, `ListDependencies`, `ListNotesForTask`, the current claim
+row and the task's spec slice (`MilestoneDeliversSlice`, the same document
+`get_task` embeds); no history query is added. A task id unknown, or whose
+milestone is not `{mid}`, is an in-shell 404. Dependencies and notes each
+render an inline alert on a read failure. The region carries
+`data-krill-claim-id` / `data-krill-lease-expires-at` for later
+claim-guarded writes; it has no form or `hx-post`.
+<!-- END task-detail section -->
+
 ## Read gate
 
 Reads stay in-process (no api hop), so every read page is mounted through

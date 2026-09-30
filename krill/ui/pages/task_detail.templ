@@ -43,6 +43,10 @@ type TaskDetailPage struct {
 	Notes          []TaskNoteRow
 	NotesError     string
 	SliceJSON      string
+	SliceError     string
+	ClaimSummary   string // e.g. "session ..., claimed at ..."; empty when unclaimed
+	State          string
+	Escalation     string
 	TasksPath      string
 	BoardPath      string
 	ContainerName  string
@@ -66,8 +70,86 @@ templ TaskDetail(page TaskDetailPage) {
 			<a href={ templ.URL(page.TasksPath) } class="link link-primary" data-krill="tasks-link">Back to { page.ContainerName } tasks</a>
 			<a href={ templ.URL(page.BoardPath) } class="link link-primary ml-2" data-krill="board-link">Board</a>
 		</p>
-		if page.NotesError != "" {
-			@htmxui.Alert(htmxui.AlertError, page.NotesError, nil)
+		<dl class="mt-4 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+			<dt class="font-semibold">Current lane</dt>
+			<dd data-krill="task-lane">{ page.Lane }</dd>
+			<dt class="font-semibold">Lane sequence</dt>
+			<dd data-krill="task-lane-sequence">
+				for i, l := range page.LaneSequence {
+					if i > 0 {
+						<span class="mx-1">&rarr;</span>
+					}
+					<span>{ l }</span>
+				}
+			</dd>
+			<dt class="font-semibold">Attempts</dt>
+			<dd data-krill="task-attempts">{ page.Attempts } (lease-lapse and abandon attempts count toward the cap)</dd>
+			<dt class="font-semibold">State</dt>
+			<dd data-krill="task-state">{ page.State }</dd>
+			if page.Escalation != "" {
+				<dt class="font-semibold">Escalation</dt>
+				<dd data-krill="task-escalation">{ page.Escalation }</dd>
+			}
+			<dt class="font-semibold">Claim</dt>
+			<dd data-krill="task-claim">
+				if page.ClaimID == "" {
+					Not claimed
+				} else {
+					{ page.ClaimSummary }
+					if page.LeaseExpiresAt != "" {
+						<span data-krill="task-lease">lease until { page.LeaseExpiresAt }</span>
+					}
+				}
+			</dd>
+		</dl>
+		if page.Body != "" {
+			<h3 class="mt-4 font-semibold">Description</h3>
+			<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ page.Body }</pre>
 		}
+		<h3 class="mt-4 font-semibold">Dependencies</h3>
+		<div data-krill="task-deps">
+			if page.DepsError != "" {
+				@htmxui.Alert(htmxui.AlertError, page.DepsError, nil)
+			} else if len(page.Deps) == 0 {
+				<p class="text-sm text-base-content/70">No dependencies</p>
+			} else {
+				<ul class="list-disc pl-5 text-sm">
+					for _, d := range page.Deps {
+						<li data-krill="task-dep">
+							<a href={ templ.URL(d.DetailPath) } class="link link-primary">{ d.Title }</a>
+							if d.Lane != "" {
+								<span class="ml-2 text-base-content/70">{ d.Lane }</span>
+							}
+						</li>
+					}
+				</ul>
+			}
+		</div>
+		<h3 class="mt-4 font-semibold">Notes</h3>
+		<div data-krill="task-notes">
+			if page.NotesError != "" {
+				@htmxui.Alert(htmxui.AlertError, page.NotesError, nil)
+			} else if len(page.Notes) == 0 {
+				<p class="text-sm text-base-content/70">No notes</p>
+			} else {
+				<ul class="space-y-2 text-sm">
+					for _, n := range page.Notes {
+						<li data-krill="task-note">
+							@htmxui.Badge(n.Kind, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-kind"})
+							@htmxui.Badge(n.Status, htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-status"})
+							<pre class="whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
+						</li>
+					}
+				</ul>
+			}
+		</div>
+		<h3 class="mt-4 font-semibold">Spec slice</h3>
+		<div data-krill="task-slice">
+			if page.SliceError != "" {
+				@htmxui.Alert(htmxui.AlertError, page.SliceError, nil)
+			} else {
+				<pre class="overflow-x-auto text-xs">{ page.SliceJSON }</pre>
+			}
+		</div>
 	</section>
 }
