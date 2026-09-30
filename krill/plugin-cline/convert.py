@@ -43,12 +43,12 @@ def convert(text):
                   r"krill/plugin-cline/shared/CONVENTIONS.md", text)
     text = re.sub(r"krill/plugin/", "krill/plugin-cline/", text)
     # Claude-isms
-    text = text = re.sub(r"fresh `general-purpose` subagents?", "fresh subagents with the appropriate `krill-*` custom mode", text)
+    text = re.sub(r"fresh `general-purpose` subagents?", "fresh subagents with the appropriate `krill-*` custom mode", text)
     text = text.replace("a fresh `general-purpose` subagent",
                         "a fresh subagent (Cline: new_task with the appropriate `krill-*` custom mode)")
     text = text.replace("`SendMessage`", "a `new_task` follow-up message")
     text = text.replace("SendMessage", "new_task")
-    text = text = re.sub(r"Claude\s+Code", "Cline", text)
+    text = re.sub(r"Claude\s+Code", "Cline", text)
     text = re.sub(r"TaskCreate/TaskUpdate(/TaskList)?", "Cline's built-in task tracking", text)
     # Terminology
     text = re.sub(r"\bskills\b", "workflows", text)
@@ -57,11 +57,13 @@ def convert(text):
     text = re.sub(r"\bslash command\b", "workflow invocation", text)
     return text
 
-SNIPPET = open(os.path.join(SRC, "shared/snippets/task-lifecycle-blocker.md")).read().strip()
+with open(os.path.join(SRC, "shared/snippets/task-lifecycle-blocker.md")) as f:
+    SNIPPET = f.read().strip()
 SNIPPET_SECTION = "## Task lifecycle blocker (from shared/snippets)\n\n" + SNIPPET.replace("Claude Code", "Cline") + "\n"
 
 def strip_fm(path):
-    raw = open(path).read()
+    with open(path) as f:
+        raw = f.read()
     m = re.match(r"^---\n(.*?)\n---\n", raw, re.S)
     fm, body = {}, raw
     if m:
@@ -79,7 +81,8 @@ def apply_include(body):
     return body
 
 def mcp_servers(src):
-    data = json.load(open(src))["mcpServers"]
+    with open(src) as f:
+        data = json.load(f)["mcpServers"]
     out = {}
     for name, cfg in data.items():
         entry = {"type": "streamableHttp", "url": cfg["url"]}
@@ -124,24 +127,29 @@ for plugin in ["design", "work"]:
             "roleDefinition": role,
             "groups": ["read", "edit", "command", "mcp"],
         })
-    json.dump(modes, open(os.path.join(pdst, ".roomodes"), "w"), indent=2)
-    json.dump(mcp_servers(os.path.join(SRC, plugin, ".mcp.json")),
-              open(os.path.join(pdst, "mcp.json"), "w"), indent=2)
+    with open(os.path.join(pdst, ".roomodes"), "w") as f:
+        json.dump(modes, f, indent=2)
+    with open(os.path.join(pdst, "mcp.json"), "w") as f:
+        json.dump(mcp_servers(os.path.join(SRC, plugin, ".mcp.json")), f, indent=2)
 
     for skilldir in sorted(os.listdir(os.path.join(SRC, plugin, "skills"))):
         fm, body = strip_fm(os.path.join(SRC, plugin, "skills", skilldir, "SKILL.md"))
-        open(os.path.join(pdst, "workflows", skilldir + ".md"), "w").write(
-            workflow_md(skilldir, fm, apply_include(convert(body))))
+        out = workflow_md(skilldir, fm, apply_include(convert(body)))
+        with open(os.path.join(pdst, "workflows", skilldir + ".md"), "w") as f:
+            f.write(out)
 
 # shared skills -> both plugins
 for skilldir in ["status", "help"]:
     fm, body = strip_fm(os.path.join(SRC, "shared/skills", skilldir, "SKILL.md"))
     out = workflow_md(skilldir, fm, apply_include(convert(body)))
     for plugin in ["design", "work"]:
-        open(os.path.join(DST, plugin, "workflows", skilldir + ".md"), "w").write(out)
+        with open(os.path.join(DST, plugin, "workflows", skilldir + ".md"), "w") as f:
+            f.write(out)
 
-conv = apply_include(convert(open(os.path.join(SRC, "shared/CONVENTIONS.md")).read()))
-open(os.path.join(DST, "shared/CONVENTIONS.md"), "w").write(conv)
+with open(os.path.join(SRC, "shared/CONVENTIONS.md")) as f:
+    conv = apply_include(convert(f.read()))
+with open(os.path.join(DST, "shared/CONVENTIONS.md"), "w") as f:
+    f.write(conv)
 
 print("done")
 
