@@ -152,6 +152,7 @@ go_test(
         "spec_page_test.go",
         "spec_parity_test.go",
         "delivery_page_test.go",
+        "task_page_test.go",
         "templ_render_test.go",
         "favicon_test.go",
     ],
