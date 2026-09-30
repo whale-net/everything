@@ -62,7 +62,7 @@ the `design` workflow                                 # no args — ask what the
    step 2). There is no separate "intake discussion" artifact to create —
    the DesignSession's own event log is the durable record. Conduct the
    interview conversationally directly in this session (do not delegate —
-   it needs live back-and-forth), following `the producer custom mode in .roomodes` Mode 0 —
+   it needs live back-and-forth), following `the krill-producer agent in .cline/agents` Mode 0 —
    including recording each interview round as a `draft` revision event, so
    the interview lives on the session rather than only in this context.
    If step 1 turned up real overlap, open with those issue numbers. If this
@@ -74,13 +74,13 @@ the `design` workflow                                 # no args — ask what the
 4. **Draft the specification.** Dispatch with an explicit `name: "producer-
    <design-session-id>"` (and `name: "architect-<design-session-id>"` for
    architect) so a later round has a stable target under `--resume-agents`.
-   Spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode with the design-session id (not the
+   Spawn a subagent (Cline: new_task) with the `krill-producer` agent as its mode with the design-session id (not the
    interview transcript — producer reads the recorded `draft` rounds via
    `get_design_session`; CONVENTIONS.md "Subagent dispatch: ids, not
    bodies"), instructing it to run Mode 1: append a `draft` revision event
    and `propose_entities` for the Requirements gathered.
 
-5. **Reconcile.** Spawn a subagent (Cline: new_task) with the `krill-architect` custom mode as its mode with the design-session
+5. **Reconcile.** Spawn a subagent (Cline: new_task) with the `krill-architect` agent as its mode with the design-session
    id, instructing it to run its Process: reconcile against repo
    conventions, appending one `reconciliation` event (with open blocking
    questions, or none if clean).
@@ -89,8 +89,8 @@ the `design` workflow                                 # no args — ask what the
 
 6. **Loop until architect sign-off.**
    - If architect's `reconciliation` event opened blocking questions:
-     spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode to run Mode 2 (append an `answer`
-     event resolving them), then spawn a subagent (Cline: new_task) with the `krill-architect` custom mode as its mode again.
+     spawn a subagent (Cline: new_task) with the `krill-producer` agent as its mode to run Mode 2 (append an `answer`
+     event resolving them), then spawn a subagent (Cline: new_task) with the `krill-architect` agent as its mode again.
    - Repeat until architect's `reconciliation` event has zero open blocking
      questions (check via `list_open_questions {blocking: true}`), or cap at
      5 rounds and summarize for the user if stuck.
@@ -100,10 +100,10 @@ the `design` workflow                                 # no args — ask what the
 7. **Stakeholder meeting (only with `--stakeholder-meeting`).** Once
    architect has signed off, invoke the `stakeholder-meeting` workflow
    <design-session-id>` — passing `--personas` through. Cleared → step 8.
-   Blocked → spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode (Mode 2) with the
+   Blocked → spawn a subagent (Cline: new_task) with the `krill-producer` agent as its mode (Mode 2) with the
    design-session id and meeting discussion URL (not the blocker text) to
    answer the consolidated blockers via an `answer` event, dispatch
-   the `krill-architect` custom mode for a fresh `reconciliation`, hold the next
+   the `krill-architect` agent for a fresh `reconciliation`, hold the next
    round. Cap at `--stakeholder-rounds`; if blockers still stand, stop and
    summarize — unless running inside `loop-design-panel`, which takes over
    with its `reviewer` subagent instead.

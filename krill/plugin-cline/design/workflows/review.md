@@ -20,7 +20,7 @@ the `review` workflow <design-session-id>
 
 1. Call `get_design_session {id}` and `list_open_questions {id, blocking:
    true}`. Confirm the last `reconciliation` event left zero blocking open
-   questions (architect's sign-off signal — see `the architect custom mode in .roomodes`). If
+   questions (architect's sign-off signal — see `the krill-architect agent in .cline/agents`). If
    not, report that the draft is not yet architect-approved and point the
    user to the `design` workflow <id>`.
 
@@ -35,7 +35,7 @@ the `review` workflow <design-session-id>
    - **Request changes** — provide feedback for producer/architect to
      address.
 
-4. **If approved:** spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode with the design-session
+4. **If approved:** spawn a subagent (Cline: new_task) with the `krill-producer` agent as its mode with the design-session
    id to run Mode 3, or append the event directly:
    ```
    append_revision_event {
@@ -67,11 +67,11 @@ the `review` workflow <design-session-id>
 
 5. **If changes requested:**
    - Ask the user for feedback text.
-   - Spawn a subagent (Cline: new_task) with the `krill-producer` custom mode as its mode (Mode 2) with the design-session id
+   - Spawn a subagent (Cline: new_task) with the `krill-producer` agent as its mode (Mode 2) with the design-session id
      and the user's feedback text (live human input with no krill home yet —
      the one body it gets) to append an `answer` event
      addressing it (or, if it requires new/changed entities, a follow-up
      `propose_entities` call) and update the draft.
-   - Spawn a subagent (Cline: new_task) with the `krill-architect` custom mode as its mode for a follow-up `reconciliation`.
+   - Spawn a subagent (Cline: new_task) with the `krill-architect` agent as its mode for a follow-up `reconciliation`.
    - Once architect's `reconciliation` clears (zero blocking open
      questions), return to step 2 to present the updated state to the user.
