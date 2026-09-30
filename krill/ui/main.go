@@ -168,6 +168,10 @@ type App struct {
 	// app.auth.
 	mcpProvider *auth.Provider
 
+	// credentials is the store behind both the self-serve JSON API and the
+	// credentials page's htmx handlers (credentials_page.go).
+	credentials auth.CredentialStore
+
 	// writes is the client this binary's own app pages use to issue krill
 	// writes (writeclient.go): it mints a krill session whose acting /
 	// on-behalf-of subjects are the signed-in operator's real (iss, sub)
@@ -285,11 +289,12 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	// 006) and fail loudly, naming the table, if it hasn't been applied
 	// yet -- exactly like htmxauth.NewDBSessionManager's ui_sessions probe
 	// above.
-	mcpProvider, err := setupMCPAuth(ctx, pool, cfg, app.mcpCallerResolver())
+	mcpProvider, credentials, err := setupMCPAuth(ctx, pool, cfg, app.mcpCallerResolver())
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize auth provider: %w", err)
 	}
 	app.mcpProvider = mcpProvider
+	app.credentials = credentials
 
 	// The write client is what this binary's own app pages call krill's
 	// write API through; an unusable APIBaseURL is startup-fatal for the
@@ -474,7 +479,9 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/{$}", app.readerRoute(app.handleShellHome))
 	mux.HandleFunc(opsPath, app.readerRoute(app.handleOps))
 	mux.HandleFunc(designPath, app.readerRoute(app.handleDesign))
-	mux.HandleFunc(credentialsPath, app.readerRoute(app.handleCredentials))
+	mux.HandleFunc("GET "+credentialsPath, app.readerRoute(app.handleCredentials))
+	mux.HandleFunc("POST "+credentialsMintPath, app.readerRoute(app.handleMintCredential))
+	mux.HandleFunc("POST "+credentialsPath+"/{id}/revoke", app.readerRoute(app.handleRevokeCredential))
 
 	// The ops console's read views (ops.go), each behind the same sign-in
 	// gate as the area roots. Reads are behind readerRoute and attribute nothing, so

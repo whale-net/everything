@@ -6,48 +6,38 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestCredentials_PreservesTheSelfServeContract is the regression guard
-// on the deliberate non-conversion in credentialsScript. The widget talks
-// to app.mcpProvider's self-serve JSON API, not to an htmx fragment, so
-// every id the script binds to and the fetch() targets it uses must
-// survive the templ port untouched -- if any of them drifts, the widget
-// silently stops working in the browser with no server-side signal.
-func TestCredentials_PreservesTheSelfServeContract(t *testing.T) {
-	body := renderBody(t, Credentials())
+func TestCredentialsResults_IsAnHtmxSwapTarget(t *testing.T) {
+	body := renderBody(t, CredentialsResults(CredentialsData{
+		MintAction: "/account/credentials",
+		Rows: []CredentialRow{
+			{ID: "a", CreatedAt: "t", RevokeAction: "/account/credentials/a/revoke"},
+			{ID: "b", CreatedAt: "t", Revoked: true, RevokeAction: "/account/credentials/b/revoke"},
+		},
+	}))
 
-	for _, id := range []string{
-		"generate-btn",
-		"new-token",
-		"new-token-value",
-		"credentials-table",
-		"credentials-body",
-		"refresh-btn",
-	} {
-		assert.Contains(t, body, `id="`+id+`"`, "the widget script binds to #%s", id)
-	}
-	assert.Contains(t, body, `fetch('/credentials'`)
-	assert.Contains(t, body, `fetch('/credentials/'`)
+	assert.Contains(t, body, `id="credentials-results"`)
+	assert.Contains(t, body, `hx-post="/account/credentials"`)
+	assert.Contains(t, body, `hx-post="/account/credentials/a/revoke"`)
+	assert.NotContains(t, body, `/account/credentials/b/revoke`, "a revoked row has no revoke control")
+	assert.NotContains(t, body, "<script")
 }
 
-// TestCredentials_ScriptMarkupIsNotEscaped guards the reason the script
-// is a const injected with templ.Raw rather than inline templ: templ
-// escapes Go expressions inside <script>, which would turn the widget's
-// '<tr><td colspan="4">' row markup into visible entities and break every
-// table it builds.
-func TestCredentials_ScriptMarkupIsNotEscaped(t *testing.T) {
-	body := renderBody(t, Credentials())
-
-	assert.Contains(t, body, `'<tr><td colspan="4">failed to load credentials</td></tr>'`,
-		"row markup inside the script must not be HTML-escaped")
-	assert.NotContains(t, body, "&lt;tr&gt;",
-		"an escaped <tr> means templ escaped the script body")
-}
-
-func TestCredentials_RendersTheOneTimeWarning(t *testing.T) {
+func TestCredentialsResults_RendersTheOneTimeToken(t *testing.T) {
 	// An operator who leaves this page without the token cannot get it
 	// back, so the warning is load-bearing copy, not decoration.
-	body := renderBody(t, Credentials())
+	body := renderBody(t, CredentialsResults(CredentialsData{NewToken: "tok-123"}))
+	assert.Contains(t, body, `value="tok-123"`)
 	assert.Contains(t, body, "it will not be shown again")
+
+	body = renderBody(t, CredentialsResults(CredentialsData{}))
+	assert.NotContains(t, body, "it will not be shown again")
+	assert.Contains(t, body, "No credentials yet")
+}
+
+func TestCredentialsResults_RendersErrorInline(t *testing.T) {
+	body := renderBody(t, CredentialsResults(CredentialsData{Error: "Could not generate a token."}))
+	assert.Contains(t, body, "Could not generate a token.")
+	assert.Contains(t, body, `id="credentials-results"`)
 }
 
 func TestAreaIndex_RendersOneLinkedRowPerEntry(t *testing.T) {
