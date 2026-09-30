@@ -378,3 +378,17 @@ So, when adding a write surface:
   run on every page load.
 - **There is no `/partials/` prefix**, by design — see the `HX-Request`
   section.
+
+<!-- BEGIN task board section (kept separate from the task-list docs above) -->
+## Task board
+
+`/spec/products/{id}/milestones/{mid}/board` (`board_page.go`,
+`pages/board.templ`) is the read-only five-lane board for a milestone or
+milepebble. It reuses the task list's read (`ListTasksByMilestone`), route
+scoping, badges and cut-milestone milepebble links. Columns are always
+Scaffold, Implementation, Testing, Validation, Done (with counts, empty
+ones included); a task is a card only in its current-lane column. Cards
+link to task detail and carry the observed claim id and lease expiry as
+`data-krill-*` attributes. The region (`BoardAnchor`) is the `HX-Request`
+fragment and the Refresh target; there is no polling and no write control.
+<!-- END task board section -->

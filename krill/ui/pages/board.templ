@@ -1,5 +1,11 @@
 package pages
 
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
 // The read-only five-lane task board body for one milestone or
 // milepebble. Builders live in //krill/ui (board_page.go); cards reuse
 // TaskRow and TaskBadges from tasks.templ.
@@ -27,10 +33,70 @@ type TaskBoardPage struct {
 	Milepebbles  []TaskMilepebbleLink
 }
 
-// TaskBoard renders the board region. Scaffold: real markup lands in the
-// implementation phase.
+// TaskBoard renders the board region: the whole region is the served
+// fragment and the Refresh target.
 templ TaskBoard(page TaskBoardPage) {
 	<section id={ BoardAnchor } data-krill="task-board">
-		<h2 class="text-xl font-semibold" data-krill="page-title">{ page.Name } -- board</h2>
+		<div class="flex items-start justify-between gap-4 mb-2">
+			<div>
+				<h2 class="text-xl font-semibold" data-krill="page-title">{ page.Name } -- board</h2>
+				<p class="mt-1 text-sm text-base-content/70">
+					Loaded at <span data-krill="loaded-at">{ page.LoadedAt }</span>
+				</p>
+				<p class="mt-1 text-sm">
+					<a href={ templ.URL(page.TasksPath) } class="link link-primary" data-krill="list-link">List</a>
+					<span class="mx-1">|</span>
+					<a href={ templ.URL(page.DeliveryPath) } class="link link-primary" data-krill="delivery-link">Back to delivery</a>
+				</p>
+			</div>
+			<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
+				hx-get={ templ.URL(page.Path) }
+				hx-target={ "#" + BoardAnchor }
+				hx-swap="outerHTML">
+				Refresh
+			</button>
+		</div>
+		if page.Error != "" {
+			<div data-krill="task-board-error">
+				@htmxui.Alert(htmxui.AlertError, page.Error, nil)
+			</div>
+		} else if len(page.Milepebbles) > 0 {
+			<div data-krill="milepebble-links">
+				@htmxui.EmptyState("Tasks live on this milestone's milepebbles.", "Open a milepebble's task list or board.", "", "", templ.Attributes{})
+				<ul class="mt-2 list-disc pl-5 space-y-1">
+					for _, mp := range page.Milepebbles {
+						<li data-krill="milepebble-link">
+							<strong>{ mp.Name }</strong>
+							<a href={ templ.URL(mp.TasksPath) } class="link link-primary ml-2" data-krill="milepebble-tasks-link">Tasks</a>
+							<a href={ templ.URL(mp.BoardPath) } class="link link-primary ml-2" data-krill="milepebble-board-link">Board</a>
+						</li>
+					}
+				</ul>
+			</div>
+		} else {
+			<div class="mt-4 grid grid-cols-5 gap-3" data-krill="board-columns">
+				for _, col := range page.Columns {
+					<div data-krill="board-column" data-krill-lane={ col.Lane } class="min-w-0">
+						<h3 class="font-semibold mb-2" data-krill="column-header">
+							{ col.Lane } (<span data-krill="column-count">{ strconv.Itoa(col.Count) }</span>)
+						</h3>
+						<ul class="space-y-2">
+							for _, t := range col.Cards {
+								<li data-krill="board-card" data-krill-task-id={ t.ID } data-krill-claim-id={ t.ClaimID } data-krill-lease-expires-at={ t.LeaseExpiresAt } class="card bg-base-200 p-2 text-sm space-y-1">
+									<a href={ templ.URL(t.DetailPath) } class="link link-primary" data-krill="task-title">{ t.Title }</a>
+									<div data-krill="task-attempts">{ t.Attempts }</div>
+									<div class="flex flex-wrap gap-1">
+										@TaskBadges(t.Badges)
+									</div>
+									if t.LeaseExpiresAt != "" {
+										<div class="text-base-content/70" data-krill="task-lease">lease until { t.LeaseExpiresAt }</div>
+									}
+								</li>
+							}
+						</ul>
+					</div>
+				}
+			</div>
+		}
 	</section>
 }
