@@ -16,7 +16,7 @@ import (
 // the render that resolves it must come back clean.
 func TestRenderedOutput_ReferencesResolveToRenderedContent(t *testing.T) {
 	src := mappingNoteSrc()
-	files, err := render.Render(t.Context(), src, uuid.New(), src.Doc.Product.ID)
+	files, err := render.Render(t.Context(), src, uuid.New(), src.Doc.Product.ID, render.WithDetail())
 	require.NoError(t, err)
 
 	assertNoDanglingReferences(t, files)
@@ -30,7 +30,7 @@ func TestRenderedOutput_GuardCatchesTheRealDefect(t *testing.T) {
 	src := mappingNoteSrc()
 	src.Notes = nil
 
-	files, err := render.Render(t.Context(), src, uuid.New(), src.Doc.Product.ID)
+	files, err := render.Render(t.Context(), src, uuid.New(), src.Doc.Product.ID, render.WithDetail())
 	require.NoError(t, err)
 
 	require.Contains(t, files.ProductMD, "See the mapping note on this Product",

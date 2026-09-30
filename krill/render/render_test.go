@@ -65,7 +65,7 @@ func TestRender_ProducesFourFileLayout(t *testing.T) {
 		},
 	}
 
-	files, err := render.Render(ctx, src, scopeID, productID)
+	files, err := render.Render(ctx, src, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 
 	fm := files.FileMap()
@@ -114,7 +114,7 @@ func TestRender_ProducesFourFileLayout(t *testing.T) {
 	assert.Contains(t, files.CurrentStateMD, "This section is intentionally not rendered.")
 	assert.Contains(t, files.CurrentStateMD, "ARCHITECTURE.md",
 		"a reader must be told where the survey is, not merely that it is absent")
-	assert.Contains(t, files.CurrentStateMD, "Nothing was lost in migrating")
+	assert.Contains(t, files.CurrentStateMD, "remains in this file's git history")
 	assert.NotContains(t, files.CurrentStateMD, "No entity in krill's model backs this section",
 		"that wording reads as a gap in krill's model and invites a new entity type")
 	assert.NotContains(t, files.CurrentStateMD, "will be filled",
@@ -168,7 +168,7 @@ func TestRender_DisplayNumbersStableAcrossReorder(t *testing.T) {
 		FeatureSets:   []slice.FeatureSetEntity{featureSet},
 		Features:      []slice.FeatureEntity{x, y, z},
 	}}
-	beforeFiles, err := render.Render(ctx, before, scopeID, productID)
+	beforeFiles, err := render.Render(ctx, before, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 	assert.Contains(t, beforeFiles.CapabilityMapMD, "- **C1** — X\n")
 	assert.Contains(t, beforeFiles.CapabilityMapMD, "- **C2** — Y\n")
@@ -187,7 +187,7 @@ func TestRender_DisplayNumbersStableAcrossReorder(t *testing.T) {
 		FeatureSets:   []slice.FeatureSetEntity{featureSet},
 		Features:      []slice.FeatureEntity{y, x, w, z},
 	}}
-	afterFiles, err := render.Render(ctx, after, scopeID, productID)
+	afterFiles, err := render.Render(ctx, after, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C1** — X\n", "X keeps its stored citation despite the reorder")
@@ -219,7 +219,7 @@ func TestRender_FeatureNamePrefixStripped(t *testing.T) {
 		Features:      []slice.FeatureEntity{f1, f2},
 	}}
 
-	files, err := render.Render(ctx, src, scopeID, productID)
+	files, err := render.Render(ctx, src, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.CapabilityMapMD, "- **C1** — Do the thing\n")
@@ -274,7 +274,7 @@ func TestRender_MustNotForecloseRendersFromAssociationRows(t *testing.T) {
 		},
 	}
 
-	files, err := render.Render(ctx, src, scopeID, productID)
+	files, err := render.Render(ctx, src, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.RoadmapMD, "### M1")
@@ -318,7 +318,7 @@ func TestRender_OutcomeFRBudgetAndDeferralsRenderFromMilestoneRows(t *testing.T)
 		},
 	}
 
-	files, err := render.Render(ctx, src, scopeID, productID)
+	files, err := render.Render(ctx, src, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.RoadmapMD, "### M1 — An Agent can do the thing")
@@ -365,7 +365,7 @@ func TestRender_MilepebbleRefsExcludedFromRoadmap(t *testing.T) {
 		},
 	}
 
-	files, err := render.Render(ctx, src, scopeID, productID)
+	files, err := render.Render(ctx, src, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.RoadmapMD, "### M1", "the real milestone must still render")
@@ -414,7 +414,7 @@ func TestRender_BacklogRefsExcludedFromRoadmap(t *testing.T) {
 		},
 	}
 
-	files, err := render.Render(ctx, src, scopeID, productID)
+	files, err := render.Render(ctx, src, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.RoadmapMD, "### M1", "the real milestone must still render")
@@ -431,7 +431,7 @@ func TestRender_NoProductRow_ReturnsError(t *testing.T) {
 	productID := uuid.New()
 	src := &fakeSource{Doc: slice.Document{SchemaVersion: slice.SchemaVersion}}
 
-	_, err := render.Render(ctx, src, uuid.New(), productID)
+	_, err := render.Render(ctx, src, uuid.New(), productID, render.WithDetail())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), productID.String())
 }
@@ -463,12 +463,12 @@ func TestRender_RoadmapCarriesCurrentStatus(t *testing.T) {
 		},
 	}
 
-	files, err := render.Render(ctx, src, scopeID, productID)
+	files, err := render.Render(ctx, src, scopeID, productID, render.WithDetail())
 	require.NoError(t, err)
 
-	assert.Contains(t, files.RoadmapMD, "### M1\n\nStatus: shipped\n")
-	assert.Contains(t, files.RoadmapMD, "### M2\n\nStatus: in progress\n")
-	assert.Contains(t, files.RoadmapMD, "### M3\n\nStatus: not started\n")
+	assert.Contains(t, files.RoadmapMD, "### M1\n\n- Status: shipped\n")
+	assert.Contains(t, files.RoadmapMD, "### M2\n\n- Status: in progress\n")
+	assert.Contains(t, files.RoadmapMD, "### M3\n\n- Status: not started\n")
 	assert.Contains(t, files.RoadmapMD, "**current** delivery status",
 		"the rendered status must be unambiguous that it is the current one, not history")
 }
@@ -502,7 +502,7 @@ func TestRender_MilestoneWithNoTransitionsRendersHonestStatus(t *testing.T) {
 				Statuses:      tc.statuses(milestoneID),
 			}
 
-			files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+			files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 			require.NoError(t, err)
 
 			assert.Contains(t, files.RoadmapMD, "Status: not started")
@@ -528,7 +528,7 @@ func TestRender_RoadmapReadsStatusesInOneBatch(t *testing.T) {
 		},
 	}
 
-	_, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	_, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	require.Len(t, src.StatusCalls, 1, "statuses must be read in one batch, not one call per milestone")
@@ -550,7 +550,7 @@ func TestRender_RoadmapStatusBatchExcludesNonMilestoneRefs(t *testing.T) {
 		},
 	}
 
-	_, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	_, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	require.Len(t, src.StatusCalls, 1)
@@ -589,7 +589,7 @@ func TestRender_ProductNotesRenderVerbatim(t *testing.T) {
 	src := mappingNoteSrc()
 	productID := src.Doc.Product.ID
 
-	files, err := render.Render(context.Background(), src, uuid.New(), productID)
+	files, err := render.Render(context.Background(), src, uuid.New(), productID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.ProductMD, "## Notes")
@@ -607,7 +607,7 @@ func TestRender_ProductNoteMultilineBodyRendersIntact(t *testing.T) {
 	src := mappingNoteSrc()
 	src.Notes[0].Body = body
 
-	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.ProductMD, body)
@@ -626,7 +626,7 @@ func TestRender_ProductNoteLifecycleStatusIsRendered(t *testing.T) {
 			src := mappingNoteSrc()
 			src.Notes[0].CurrentStatus = status
 
-			files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+			files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID, render.WithDetail())
 			require.NoError(t, err)
 
 			assert.Contains(t, files.ProductMD, "status: "+string(status))
@@ -638,7 +638,7 @@ func TestRender_ProductWithNoNotesRendersEmptySection(t *testing.T) {
 	src := mappingNoteSrc()
 	src.Notes = nil
 
-	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID, render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.ProductMD, "## Notes")
@@ -652,7 +652,7 @@ func TestRender_ProductWithNoNotesRendersEmptySection(t *testing.T) {
 func TestRender_MappingNotePointerResolves(t *testing.T) {
 	src := mappingNoteSrc()
 
-	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID, render.WithDetail())
 	require.NoError(t, err)
 
 	pointer := "See the mapping note on this Product"
@@ -698,7 +698,7 @@ func TestRender_RequirementBodiesRenderInFull(t *testing.T) {
 		[]slice.RequirementEntity{req(f1.ID, "FR", "Handle the thing", &body)},
 	)}
 
-	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.CapabilityMapMD, "**FR1** — Handle the thing")
@@ -721,7 +721,7 @@ func TestRender_RequirementsNumberPerKind(t *testing.T) {
 		},
 	)}
 
-	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	cap := files.CapabilityMapMD
@@ -741,7 +741,7 @@ func TestRender_RequirementNumberingIsDocumentedAndResolvable(t *testing.T) {
 	r := req(f1.ID, "FR", "Handle the thing", strPtr("body"))
 	src := &fakeSource{Doc: reqDoc([]slice.FeatureEntity{f1}, []slice.RequirementEntity{r})}
 
-	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.CapabilityMapMD, "krill stores no display number for a Requirement",
@@ -762,7 +762,7 @@ func TestRender_RequirementWithNoBodyRendersCleanly(t *testing.T) {
 		},
 	)}
 
-	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.CapabilityMapMD, "**FR1** — nil body")
@@ -780,7 +780,7 @@ func TestRender_RequirementNamePrefixStripped(t *testing.T) {
 		[]slice.RequirementEntity{req(f1.ID, "FR", "FR7 — Handle the thing", strPtr("body"))},
 	)}
 
-	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.CapabilityMapMD, "**FR1** — Handle the thing")
@@ -793,9 +793,74 @@ func TestRender_RequirementNamePrefixStripped(t *testing.T) {
 func TestRender_ProductWithNoRequirementsKeepsBulletForm(t *testing.T) {
 	src := &fakeSource{Doc: reqDoc([]slice.FeatureEntity{newFeature("F1", 1)}, nil)}
 
-	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
 	require.NoError(t, err)
 
 	assert.Contains(t, files.CapabilityMapMD, "- **C1** — F1")
 	assert.NotContains(t, files.CapabilityMapMD, "krill stores no display number for a Requirement")
+}
+
+// By default the capability map is headlines only: a count per capability,
+// no requirement bodies, and a pointer at the MCP read path.
+func TestRender_CapabilityMapDefaultsToHeadlines(t *testing.T) {
+	f1 := newFeature("F1", 1)
+	src := &fakeSource{Doc: reqDoc(
+		[]slice.FeatureEntity{f1},
+		[]slice.RequirementEntity{
+			req(f1.ID, "FR", "first", strPtr("SECRET-BODY")),
+			req(f1.ID, "NFR", "second", strPtr("other body")),
+			req(f1.ID, "FR", "third", nil),
+		},
+	)}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "- **C1** — F1 (2 FR, 1 NFR)")
+	assert.Contains(t, files.CapabilityMapMD, "get_feature_slice")
+	assert.NotContains(t, files.CapabilityMapMD, "SECRET-BODY")
+	assert.NotContains(t, files.CapabilityMapMD, "**FR1**")
+}
+
+// By default PRODUCT.md carries headlines only: no persona/decision/note bodies.
+func TestRender_ProductMDDefaultsToHeadlines(t *testing.T) {
+	src := &fakeSource{
+		Doc: reqDoc(nil, nil),
+		Notes: []store.Note{{
+			ID:            uuid.New(),
+			Kind:          store.NoteKind("scope-note"),
+			CurrentStatus: store.NoteLifecycleStatus("noted"),
+			Body:          "First sentence. SECOND-SENTENCE-BODY\n\nmore",
+		}},
+	}
+	src.Doc.Decisions = []slice.DecisionEntity{{EntityRef: newRef(), Name: "LB1 — Pick X", DisplayNumber: 1, Body: strPtr("DECISION-BODY")}}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, "- **LB1** — Pick X")
+	assert.Contains(t, files.ProductMD, "First sentence.")
+	assert.NotContains(t, files.ProductMD, "DECISION-BODY")
+	assert.NotContains(t, files.ProductMD, "SECOND-SENTENCE-BODY")
+}
+
+// Headings inside a note body must nest under the document's own outline.
+func TestRender_NoteBodyHeadingsAreDemoted(t *testing.T) {
+	src := &fakeSource{
+		Doc: reqDoc(nil, nil),
+		Notes: []store.Note{{
+			ID:            uuid.New(),
+			Kind:          store.NoteKind("scope-note"),
+			CurrentStatus: store.NoteLifecycleStatus("noted"),
+			Body:          "# Top\n\ntext\n\n```\n# not a heading\n```\n\n## Sub",
+		}},
+	}
+
+	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), render.WithDetail())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.ProductMD, "\n#### Top\n")
+	assert.Contains(t, files.ProductMD, "\n##### Sub")
+	assert.Contains(t, files.ProductMD, "\n# not a heading\n", "fenced content is untouched")
+	assert.NotContains(t, files.ProductMD, "\n# Top\n")
 }

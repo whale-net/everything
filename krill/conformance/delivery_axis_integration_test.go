@@ -366,7 +366,7 @@ func TestDeliveryAxis_EndToEndLifecycle_EveryStepReassertsCapturedIDs(t *testing
 	// product/*.md from krill's own record; milepebble and backlog rows
 	// never leak into product/03-roadmap.md. -----------------------------
 
-	files, err := render.Render(ctx, render.NewStoreSource(env.store), env.scopeID, product.ID)
+	files, err := render.Render(ctx, render.NewStoreSource(env.store), env.scopeID, product.ID, render.WithDetail())
 	require.NoError(t, err)
 	assert.Contains(t, files.RoadmapMD, "### M-A — ship the whole delivery axis, provably", "issue #2970: the outcome sentence must render in the milestone heading")
 	assert.Contains(t, files.RoadmapMD, "FR budget: 5", "issue #2970: the current (revised) FR budget must render, not the superseded initial one")
