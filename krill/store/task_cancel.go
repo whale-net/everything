@@ -39,6 +39,15 @@ type CancelTaskParams struct {
 	Reason     *string
 	Acting     Subject
 	OnBehalfOf Subject
+
+	// ExpectedClaimID is the claim the caller's row showed open (a
+	// Claimed-row cancel). ExpectedEscalationID is the escalation it
+	// showed active (an Escalated-row cancel). Each is optional and each,
+	// when supplied, must still be current or the cancel is refused with
+	// ErrObservedStateMismatch; both nil leaves the call unguarded,
+	// exactly as today.
+	ExpectedClaimID      *uuid.UUID
+	ExpectedEscalationID *uuid.UUID
 }
 
 // CancelResult is CancelTask's return value: the task cancelled, the

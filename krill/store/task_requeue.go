@@ -49,6 +49,13 @@ type RequeueParams struct {
 	Reason     *string
 	Acting     Subject
 	OnBehalfOf Subject
+
+	// ExpectedEscalationID is the escalation the caller's row showed
+	// active, taken from that row rather than re-derived. Non-nil, it
+	// refuses the requeue with ErrObservedStateMismatch when the task's
+	// current escalation is not that one -- including the task holding
+	// none. Nil leaves the call unguarded, exactly as today.
+	ExpectedEscalationID *uuid.UUID
 }
 
 // RequeueResult is RequeueTask's return value: the escalation this call

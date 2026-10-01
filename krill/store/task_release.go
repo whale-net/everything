@@ -45,6 +45,13 @@ type ReleaseParams struct {
 	Reason     *string
 	Acting     Subject
 	OnBehalfOf Subject
+
+	// ExpectedClaimID is the claim the caller's row showed open, taken from
+	// that row rather than re-derived. Non-nil, it refuses the release
+	// with ErrObservedStateMismatch when the task's current open claim is
+	// not that claim -- including the task holding none. Nil leaves the
+	// call unguarded, exactly as today.
+	ExpectedClaimID *uuid.UUID
 }
 
 // ReleaseResult is ReleaseLease's return value: the claim force-closed,

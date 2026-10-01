@@ -89,6 +89,9 @@ func isUniqueViolation(err error) bool {
 //     task_lease.go) -- the caller's claim is gone, not current        -> 409
 //   - store.ErrTaskNotClaimed (ReleaseLease's own named FR8 rejection,
 //     task_release.go) -- nothing to release                          -> 409
+//   - store.ErrObservedStateMismatch (the observed-state guard shared by
+//     release/requeue/cancel/escalate, task_observed_state.go) -- the
+//     claim or escalation the caller observed is no longer current    -> 409
 //   - store.ErrNameConflict (an amend's replacement name collides with a
 //     live sibling, errors.go) / a scope-qualified unique-constraint
 //     violation                                                  -> 409
@@ -116,6 +119,11 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrTaskCancelled),
 		errors.Is(err, store.ErrClaimNotCurrent),
 		errors.Is(err, store.ErrTaskNotClaimed),
+		// The observed-state guard's own refusal: the claim the caller
+		// observed is no longer current, so the request was well-formed and
+		// the answer is the same for every guarded intervention -- re-read
+		// the row and decide again (release, escalate).
+		errors.Is(err, store.ErrObservedStateMismatch),
 		errors.Is(err, store.ErrNameConflict),
 		// Void's two refusals (FR 2a3a8eef). Both are conflicts, not bad
 		// requests: the request was well-formed, but the target is spoken

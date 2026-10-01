@@ -25,6 +25,14 @@ import (
 // gated session, never this body (NFR6).
 type cancelTaskRequest struct {
 	Reason *string `json:"reason"`
+
+	// ExpectedClaimID is the claim the caller's row showed open (a
+	// Claimed-row cancel); ExpectedEscalationID is the escalation it
+	// showed active (an Escalated-row cancel). Either may be omitted, and
+	// an omitted one leaves that half of the call unguarded; a supplied
+	// one that is no longer current is refused with 409.
+	ExpectedClaimID      *uuid.UUID `json:"expected_claim_id,omitempty"`
+	ExpectedEscalationID *uuid.UUID `json:"expected_escalation_id,omitempty"`
 }
 
 // CancelTaskHandler returns the work-axis cancel endpoint (FR7): POST
@@ -54,11 +62,13 @@ func CancelTaskHandler(tasks store.TaskStore, assembler *work.Assembler) http.Ha
 		}
 
 		if _, err := tasks.CancelTask(r.Context(), store.CancelTaskParams{
-			ScopeID:    sess.ScopeID,
-			TaskID:     taskID,
-			Reason:     req.Reason,
-			Acting:     sess.Acting,
-			OnBehalfOf: sess.OnBehalfOf,
+			ScopeID:              sess.ScopeID,
+			TaskID:               taskID,
+			Reason:               req.Reason,
+			Acting:               sess.Acting,
+			OnBehalfOf:           sess.OnBehalfOf,
+			ExpectedClaimID:      req.ExpectedClaimID,
+			ExpectedEscalationID: req.ExpectedEscalationID,
 		}); err != nil {
 			writeCancelStoreError(w, err)
 			return
@@ -81,7 +91,8 @@ func writeCancelStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, store.ErrTaskAlreadyCancelled):
+	case errors.Is(err, store.ErrTaskAlreadyCancelled),
+		errors.Is(err, store.ErrObservedStateMismatch):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "failed to cancel task")
