@@ -45,6 +45,13 @@ type ReleaseParams struct {
 	Reason     *string
 	Acting     Subject
 	OnBehalfOf Subject
+
+	// ExpectedClaimID is the claim the caller's row showed open, taken from
+	// that row rather than re-derived. Non-nil, it refuses the release
+	// with ErrObservedStateMismatch when the task's current open claim is
+	// not that claim -- including the task holding none. Nil leaves the
+	// call unguarded, exactly as today.
+	ExpectedClaimID *uuid.UUID
 }
 
 // ReleaseResult is ReleaseLease's return value: the claim force-closed,
@@ -84,6 +91,14 @@ type ReleaseResult struct {
 //  5. Appends one `task_intervention_event` row (action='release',
 //     escalation_event_id=NULL -- only requeue names one).
 //
+// Between steps 1 and the force-close, ReleaseParams.ExpectedClaimID is
+// compared against the claim just read (checkObservedClaim,
+// task_observed_state.go), still under the same row lock and before
+// anything is written: a non-nil id that is no longer the task's current
+// claim -- including the task holding none -- is refused with
+// ErrObservedStateMismatch, ahead of ErrTaskNotClaimed. Nil is unguarded,
+// exactly as before.
+//
 // Otherwise (below cap) the task is claimable again immediately (M4 FR3).
 // current_lane is never touched -- release is not a verdict.
 func (s taskStore) ReleaseLease(ctx context.Context, params ReleaseParams) (ReleaseResult, error) {
@@ -110,6 +125,12 @@ func (s taskStore) ReleaseLease(ctx context.Context, params ReleaseParams) (Rele
 	}
 	if cancelledAt != nil {
 		return ReleaseResult{}, fmt.Errorf("%w: task id %s", ErrTaskCancelled, params.TaskID)
+	}
+	// The guard runs before ErrTaskNotClaimed, so a release carrying a claim
+	// id the task no longer holds reads as "the state changed since you
+	// looked" rather than as the action being illegal.
+	if err := checkObservedClaim(params.TaskID, currentClaimID, params.ExpectedClaimID); err != nil {
+		return ReleaseResult{}, err
 	}
 	if currentClaimID == nil {
 		return ReleaseResult{}, fmt.Errorf("%w: task id %s", ErrTaskNotClaimed, params.TaskID)

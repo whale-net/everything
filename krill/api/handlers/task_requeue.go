@@ -26,6 +26,12 @@ import (
 // gated session, never this body (NFR6).
 type requeueTaskRequest struct {
 	Reason *string `json:"reason"`
+
+	// ExpectedEscalationID is the escalation the caller's row showed
+	// active. Omitted, the requeue is unguarded exactly as before;
+	// supplied, an escalation that is no longer current is refused with
+	// 409.
+	ExpectedEscalationID *uuid.UUID `json:"expected_escalation_id,omitempty"`
 }
 
 // RequeueTaskHandler returns the work-axis requeue endpoint (FR6): POST
@@ -55,11 +61,12 @@ func RequeueTaskHandler(tasks store.TaskStore, assembler *work.Assembler) http.H
 		}
 
 		if _, err := tasks.RequeueTask(r.Context(), store.RequeueParams{
-			ScopeID:    sess.ScopeID,
-			TaskID:     taskID,
-			Reason:     req.Reason,
-			Acting:     sess.Acting,
-			OnBehalfOf: sess.OnBehalfOf,
+			ScopeID:              sess.ScopeID,
+			TaskID:               taskID,
+			Reason:               req.Reason,
+			Acting:               sess.Acting,
+			OnBehalfOf:           sess.OnBehalfOf,
+			ExpectedEscalationID: req.ExpectedEscalationID,
 		}); err != nil {
 			writeRequeueStoreError(w, err)
 			return
@@ -83,7 +90,8 @@ func writeRequeueStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrTaskNotEscalated),
-		errors.Is(err, store.ErrTaskCancelled):
+		errors.Is(err, store.ErrTaskCancelled),
+		errors.Is(err, store.ErrObservedStateMismatch):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "failed to requeue task")

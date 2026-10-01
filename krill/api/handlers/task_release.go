@@ -25,6 +25,11 @@ import (
 // gated session, never this body (NFR6).
 type releaseTaskRequest struct {
 	Reason *string `json:"reason"`
+
+	// ExpectedClaimID is the claim the caller's row showed open. Omitted,
+	// the release is unguarded exactly as before; supplied, a claim that
+	// is no longer current is refused with 409.
+	ExpectedClaimID *uuid.UUID `json:"expected_claim_id,omitempty"`
 }
 
 // ReleaseTaskHandler returns the work-axis release endpoint (FR8): POST
@@ -54,11 +59,12 @@ func ReleaseTaskHandler(tasks store.TaskStore, assembler *work.Assembler) http.H
 		}
 
 		if _, err := tasks.ReleaseLease(r.Context(), store.ReleaseParams{
-			ScopeID:    sess.ScopeID,
-			TaskID:     taskID,
-			Reason:     req.Reason,
-			Acting:     sess.Acting,
-			OnBehalfOf: sess.OnBehalfOf,
+			ScopeID:         sess.ScopeID,
+			TaskID:          taskID,
+			Reason:          req.Reason,
+			Acting:          sess.Acting,
+			OnBehalfOf:      sess.OnBehalfOf,
+			ExpectedClaimID: req.ExpectedClaimID,
 		}); err != nil {
 			writeStoreError(w, err)
 			return

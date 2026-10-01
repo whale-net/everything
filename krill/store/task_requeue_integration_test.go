@@ -75,11 +75,11 @@ func requeueTestComplete(t *testing.T, ctx context.Context, s *store.Store, db *
 func driveThrashCapHeldAtImplementation(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, scopeID, taskID uuid.UUID, self store.Subject) store.TaskLaneResult {
 	t.Helper()
 	require.Equal(t, 3, store.DefaultThrashCap, "this fixture's fixed pass/fail sequence assumes DefaultThrashCap == 3")
-	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictPass) // Scaffold -> Implementation, thrash 0
-	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictFail) // Implementation -> Scaffold, thrash 1
-	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictPass) // Scaffold -> Implementation, thrash 1
-	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictFail) // Implementation -> Scaffold, thrash 2
-	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictPass) // Scaffold -> Implementation, thrash 2
+	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictPass)        // Scaffold -> Implementation, thrash 0
+	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictFail)        // Implementation -> Scaffold, thrash 1
+	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictPass)        // Scaffold -> Implementation, thrash 1
+	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictFail)        // Implementation -> Scaffold, thrash 2
+	requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictPass)        // Scaffold -> Implementation, thrash 2
 	return requeueTestComplete(t, ctx, s, db, scopeID, taskID, self, store.VerdictFail) // held at Implementation, thrash 3 (capped)
 }
 
@@ -519,4 +519,163 @@ func TestTaskStore_RequeueTask_DoubleRequeue_Refused(t *testing.T) {
 	assert.Equal(t, 0, got.ThrashCount, "the refused second requeue must not have touched thrash_count")
 
 	assert.Equal(t, interventionRowsAfterFirstRequeue, countRows(t, ctx, db, "task_intervention_event", task.ID), "the refused second requeue must write no additional task_intervention_event row")
+}
+
+// TestTaskStore_RequeueTask_ExpectedEscalationID_Matches_Succeeds is the
+// observed-state guard's happy path on requeue: guarding the escalation
+// the caller's escalated row named still resolves exactly that escalation.
+func TestTaskStore_RequeueTask_ExpectedEscalationID_Matches_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "guarded requeue", self)
+	escalated, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	escalationID := escalated.EscalationEvent.ID
+
+	result, err := s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedEscalationID: &escalationID,
+	})
+	require.NoError(t, err, "a requeue guarding the escalation that is still current must succeed")
+	assert.Equal(t, escalationID, result.EscalationEventID)
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CurrentEscalationID)
+}
+
+// TestTaskStore_RequeueTask_ExpectedEscalationID_Stale_Refused is the
+// guard on requeue: a requeue posted from a stale escalated row is refused
+// with ErrObservedStateMismatch, writes no intervention event, and leaves
+// the escalation that is current now in place -- a requeue resets counters
+// and returns the task to claimable, so acting on a superseded escalation
+// would strand the task in the wrong state.
+func TestTaskStore_RequeueTask_ExpectedEscalationID_Stale_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "stale requeue", self)
+	first, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	second, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, first.EscalationEvent.ID, second.EscalationEvent.ID)
+
+	interventionRowsBefore := countRows(t, ctx, db, "task_intervention_event", task.ID)
+
+	_, err = s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedEscalationID: &first.EscalationEvent.ID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+	assert.NotErrorIs(t, err, store.ErrTaskNotEscalated, "the mismatch must be distinguishable from the not-escalated legality refusal")
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.CurrentEscalationID)
+	assert.Equal(t, second.EscalationEvent.ID, *got.CurrentEscalationID, "the escalation that is current now must survive a requeue guarded by a stale id")
+	assert.Equal(t, interventionRowsBefore, countRows(t, ctx, db, "task_intervention_event", task.ID), "a refused guarded requeue must write no task_intervention_event row")
+}
+
+// TestTaskStore_RequeueTask_ExpectedEscalationID_NoCurrentEscalation_Mismatch
+// is the "task holds none" case: a supplied expected escalation id against
+// a non-escalated task is the mismatch refusal, not ErrTaskNotEscalated.
+func TestTaskStore_RequeueTask_ExpectedEscalationID_NoCurrentEscalation_Mismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "requeue not escalated", self)
+
+	_, err := s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedEscalationID: &uuid.Nil,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+	assert.NotErrorIs(t, err, store.ErrTaskNotEscalated)
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_intervention_event", task.ID), "a refused guarded requeue must write no task_intervention_event row")
+}
+
+// TestTaskStore_RequeueTask_Cancelled_BeatsObservedMismatch is the check
+// order on requeue: FR7's dead-letter state a requeue can never reopen is
+// reported as cancelled, not as an observed-state mismatch, whatever the
+// caller expected.
+func TestTaskStore_RequeueTask_Cancelled_BeatsObservedMismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "requeue cancelled", self)
+	escalated, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	escalationID := escalated.EscalationEvent.ID
+	_, err = s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedEscalationID: &escalationID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrTaskCancelled, "the cancelled refusal runs ahead of the observed-state guard even when the expected escalation is current")
+	assert.NotErrorIs(t, err, store.ErrObservedStateMismatch)
+}
+
+// TestTaskStore_RequeueTask_NoExpectedEscalationID_Unguarded is the
+// back-compat half: a requeue omitting the expected id behaves exactly as
+// before, resolving whatever escalation is current.
+func TestTaskStore_RequeueTask_NoExpectedEscalationID_Unguarded(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "unguarded requeue", self)
+	first, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	second, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	result, err := s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err, "omitting the expected id must leave today's behaviour untouched")
+	assert.Equal(t, second.EscalationEvent.ID, result.EscalationEventID)
+	assert.NotEqual(t, first.EscalationEvent.ID, result.EscalationEventID)
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/slice"
@@ -121,16 +122,20 @@ func TestEscalateTaskHandler_UnknownField_Rejected(t *testing.T) {
 // TestEscalateTaskHandler_StoreRejection_MappedToStatus proves
 // writeStoreError maps EscalateTask's own named rejections onto the right
 // status: ErrTaskEscalated (this task's own choice for an already-
-// escalated task) and ErrTaskCancelled to 409, ErrNotFound to 400 -- never
-// a 500 for any of them.
+// escalated task), ErrTaskCancelled and the observed-state guard's
+// ErrObservedStateMismatch to 409, ErrNotFound to 400 -- never a 500 for
+// any of them.
 func TestEscalateTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err  error
 		want int
 	}{
 		"already escalated": {store.ErrTaskEscalated, http.StatusConflict},
-		"cancelled":          {store.ErrTaskCancelled, http.StatusConflict},
-		"not found":          {store.ErrNotFound, http.StatusBadRequest},
+		"cancelled":         {store.ErrTaskCancelled, http.StatusConflict},
+		// The observed-state guard's own refusal gets the same 409 as every
+		// other guarded intervention, and never a 500.
+		"observed state mismatch": {store.ErrObservedStateMismatch, http.StatusConflict},
+		"not found":               {store.ErrNotFound, http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sessions, _, sessionIDStr := newTestSession(t)
@@ -142,4 +147,33 @@ func TestEscalateTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
 		})
 	}
+}
+
+// TestEscalateTaskHandler_ExpectedClaimID_PassThroughAndOptional covers the
+// observed-state guard's HTTP surface: expected_claim_id is decoded off the
+// body and handed to the store as the claim the caller's row observed, and
+// omitting it leaves the escalation unguarded exactly as before.
+func TestEscalateTaskHandler_ExpectedClaimID_PassThroughAndOptional(t *testing.T) {
+	sessions, _, sessionIDStr := newTestSession(t)
+	claimID := uuid.New()
+
+	t.Run("supplied", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		assembler := work.NewAssembler(tasks, slice.NewQuerier(nil))
+
+		doEscalateTaskRequest(t, handlers.EscalateTaskHandler(tasks, assembler), sessions, sessionIDStr, uuid.New().String(),
+			`{"expected_claim_id":"`+claimID.String()+`"}`)
+
+		require.NotNil(t, tasks.gotEscalateParams.ExpectedClaimID, "the body's expected_claim_id must reach the store")
+		assert.Equal(t, claimID, *tasks.gotEscalateParams.ExpectedClaimID)
+	})
+
+	t.Run("omitted", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		assembler := work.NewAssembler(tasks, slice.NewQuerier(nil))
+
+		doEscalateTaskRequest(t, handlers.EscalateTaskHandler(tasks, assembler), sessions, sessionIDStr, uuid.New().String(), `{}`)
+
+		assert.Nil(t, tasks.gotEscalateParams.ExpectedClaimID, "an omitted expected_claim_id must leave the escalation unguarded, exactly as today")
+	})
 }

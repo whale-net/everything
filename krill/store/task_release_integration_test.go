@@ -315,3 +315,175 @@ func TestTaskStore_ReleaseLease_CancelledTask_Refused(t *testing.T) {
 
 	assert.Equal(t, 0, countRows(t, ctx, db, "task_attempt", task.ID), "a refused release must write no task_attempt row")
 }
+
+// TestTaskStore_ReleaseLease_ExpectedClaimID_Matches_Succeeds is the
+// observed-state guard's happy path: a release carrying the claim the
+// caller's own row read returned succeeds exactly as an unguarded one
+// does, force-closing that very claim.
+func TestTaskStore_ReleaseLease_ExpectedClaimID_Matches_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "guarded release", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	result, err := s.Tasks().ReleaseLease(ctx, store.ReleaseParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &claim.ID,
+	})
+	require.NoError(t, err, "a release guarding the claim that is still current must succeed")
+	assert.Equal(t, claim.ID, result.ClaimID, "the guarded claim is the one force-closed")
+
+	closed, err := s.Tasks().GetClaimByID(ctx, claim.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, closed.ReleasedAt)
+}
+
+// TestTaskStore_ReleaseLease_ExpectedClaimID_Stale_Refused is the guard's
+// whole point: a Release posted from a stale page (the claim the operator's
+// row showed was reclaimed in the meantime, so a different claim is current)
+// is refused with ErrObservedStateMismatch and writes nothing -- most
+// importantly, the claim that became current is never force-closed by it.
+func TestTaskStore_ReleaseLease_ExpectedClaimID_Stale_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "stale release", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	staleClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	// The observed claim's lease lapses and another session reclaims the
+	// task, so a different claim is current by the time the stale page's
+	// Release is posted.
+	expireTaskLease(t, ctx, db, task.ID)
+	secondSessionID := claimTestSession(t, ctx, db, scopeID, self)
+	currentClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: secondSessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, staleClaim.ID, currentClaim.ID)
+
+	interventionRowsBefore := countRows(t, ctx, db, "task_intervention_event", task.ID)
+	attemptRowsBefore := countRows(t, ctx, db, "task_attempt", task.ID)
+	stateBefore, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+
+	_, err = s.Tasks().ReleaseLease(ctx, store.ReleaseParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaim.ID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+	assert.NotErrorIs(t, err, store.ErrTaskNotClaimed, "the mismatch must be distinguishable from the not-claimed legality refusal")
+
+	current, err := s.Tasks().GetClaimByID(ctx, currentClaim.ID)
+	require.NoError(t, err)
+	assert.Nil(t, current.ReleasedAt, "a release guarded by a stale claim id must never force-close the claim that is current now")
+
+	assert.Equal(t, interventionRowsBefore, countRows(t, ctx, db, "task_intervention_event", task.ID), "a refused guarded release must write no task_intervention_event row")
+	assert.Equal(t, attemptRowsBefore, countRows(t, ctx, db, "task_attempt", task.ID), "a refused guarded release must write no task_attempt row")
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, stateBefore.AttemptCount, got.AttemptCount, "a refused guarded release must not have incremented attempt_count")
+}
+
+// TestTaskStore_ReleaseLease_ExpectedClaimID_NoCurrentClaim_MismatchWins
+// is Release's own mismatch rule: an expected claim id supplied while the
+// task holds no claim at all is the mismatch refusal, not
+// ErrTaskNotClaimed, so the API's mapping of the two never overlaps.
+func TestTaskStore_ReleaseLease_ExpectedClaimID_NoCurrentClaim_MismatchWins(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "claim already gone", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = s.Tasks().ReleaseLease(ctx, store.ReleaseParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	_, err = s.Tasks().ReleaseLease(ctx, store.ReleaseParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &claim.ID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+	assert.NotErrorIs(t, err, store.ErrTaskNotClaimed, "a supplied expected id on an unclaimed task is the mismatch refusal, never task-not-claimed")
+}
+
+// TestTaskStore_ReleaseLease_Cancelled_BeatsObservedMismatch is the check
+// order every guarded call shares: a stale double-submitted Cancel gets
+// already-cancelled, not the mismatch, whatever it expected.
+func TestTaskStore_ReleaseLease_Cancelled_BeatsObservedMismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "cancelled then released", self)
+	_, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	staleClaim := uuid.New()
+	_, err = s.Tasks().ReleaseLease(ctx, store.ReleaseParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaim,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrTaskCancelled, "the cancelled refusal runs ahead of the observed-state guard")
+	assert.NotErrorIs(t, err, store.ErrObservedStateMismatch)
+}
+
+// TestTaskStore_ReleaseLease_NoExpectedClaimID_Unguarded is the
+// back-compat half: with the parameter omitted the call behaves exactly as
+// it did before the guard existed, releasing whatever claim is current.
+func TestTaskStore_ReleaseLease_NoExpectedClaimID_Unguarded(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "unguarded release", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	staleClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	expireTaskLease(t, ctx, db, task.ID)
+	currentClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self), Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, staleClaim.ID, currentClaim.ID)
+
+	result, err := s.Tasks().ReleaseLease(ctx, store.ReleaseParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err, "omitting the expected id must leave today's behaviour untouched")
+	assert.Equal(t, currentClaim.ID, result.ClaimID)
+}

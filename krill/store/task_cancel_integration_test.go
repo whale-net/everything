@@ -335,3 +335,349 @@ func fetchTaskNoteRows(t *testing.T, ctx context.Context, db *dbtest.Postgres, t
 	require.NoError(t, rows.Err())
 	return out
 }
+
+// TestTaskStore_CancelTask_ExpectedClaimID_Matches_Succeeds is the
+// observed-state guard's happy path for a Claimed-row cancel: supplying the
+// claim the row named still cancels, force-closing that claim.
+func TestTaskStore_CancelTask_ExpectedClaimID_Matches_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "guarded claimed-row cancel", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	result, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &claim.ID,
+	})
+	require.NoError(t, err, "a cancel guarding the claim that is still current must succeed")
+	assert.True(t, result.ClaimForceClosed)
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.CancelledAt)
+}
+
+// TestTaskStore_CancelTask_ExpectedEscalationID_Matches_Succeeds is the
+// Escalated-row half: supplying the escalation the row named still cancels
+// an escalated task (FR7's rule), leaving the escalation itself untouched.
+func TestTaskStore_CancelTask_ExpectedEscalationID_Matches_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "guarded escalated-row cancel", self)
+	escalationID := setTaskEscalated(t, ctx, db, task.ID)
+
+	result, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedEscalationID: &escalationID,
+	})
+	require.NoError(t, err, "a cancel guarding the escalation that is still current must succeed")
+	assert.False(t, result.ClaimForceClosed)
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.CancelledAt)
+	require.NotNil(t, got.CurrentEscalationID, "cancel never clears current_escalation_id -- the escalation's history is left as the record it was")
+	assert.Equal(t, escalationID, *got.CurrentEscalationID, "a guarded escalated-row cancel must still leave exactly that escalation current")
+}
+
+// TestTaskStore_CancelTask_ExpectedClaimID_Stale_Refused is the guard on a
+// Claimed-row cancel: a cancel posted from a stale page is refused with
+// ErrObservedStateMismatch, writes nothing, and never force-closes the
+// claim that became current in the meantime.
+func TestTaskStore_CancelTask_ExpectedClaimID_Stale_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "stale claimed-row cancel", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	staleClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	expireTaskLease(t, ctx, db, task.ID)
+	currentClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self), Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, staleClaim.ID, currentClaim.ID)
+
+	_, err = s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaim.ID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+	assert.NotErrorIs(t, err, store.ErrTaskAlreadyCancelled)
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CancelledAt, "a refused guarded cancel must not have cancelled the task")
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_intervention_event", task.ID), "a refused guarded cancel must write no task_intervention_event row")
+
+	stillOpen, err := s.Tasks().GetClaimByID(ctx, currentClaim.ID)
+	require.NoError(t, err)
+	assert.Nil(t, stillOpen.ReleasedAt, "a cancel guarded by a stale claim id must never force-close the claim that is current now")
+}
+
+// TestTaskStore_CancelTask_ExpectedEscalationID_Stale_Refused is the
+// Escalated-row guard: a cancel guarding a superseded escalation is
+// refused and writes nothing.
+func TestTaskStore_CancelTask_ExpectedEscalationID_Stale_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "stale escalated-row cancel", self)
+	staleEscalationID := setTaskEscalated(t, ctx, db, task.ID)
+	_, err := s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	currentEscalationID := setTaskEscalated(t, ctx, db, task.ID)
+	require.NotEqual(t, staleEscalationID, currentEscalationID)
+
+	_, err = s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedEscalationID: &staleEscalationID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CancelledAt, "a refused guarded cancel must not have cancelled the task")
+	require.NotNil(t, got.CurrentEscalationID)
+	assert.Equal(t, currentEscalationID, *got.CurrentEscalationID, "the escalation that is current now must survive a cancel guarded by a stale id")
+}
+
+// TestTaskStore_CancelTask_ExpectedClaimID_NoClaim_Mismatch is cancel's own
+// mismatch rule: an expected claim id supplied while the task holds no
+// claim is the mismatch refusal -- cancel has no not-claimed legality
+// refusal to confuse it with, and the supplied id is what makes the
+// difference.
+func TestTaskStore_CancelTask_ExpectedClaimID_NoClaim_Mismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "cancel unclaimed", self)
+	staleClaim := uuid.New()
+
+	_, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaim,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CancelledAt, "a refused guarded cancel must not have cancelled the task")
+}
+
+// TestTaskStore_CancelTask_ExpectedEscalationID_NoEscalation_Mismatch is
+// the same rule for the escalation half of an Escalated-row cancel.
+func TestTaskStore_CancelTask_ExpectedEscalationID_NoEscalation_Mismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "cancel not escalated", self)
+	staleEscalation := uuid.New()
+
+	_, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedEscalationID: &staleEscalation,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CancelledAt, "a refused guarded cancel must not have cancelled the task")
+}
+
+// TestTaskStore_CancelTask_AlreadyCancelled_BeatsObservedMismatch is the
+// check order every guarded call shares, seen from cancel: a stale
+// double-submitted Cancel gets already-cancelled, not the mismatch -- even
+// though cancel has no legality refusal for "holds no claim", so the
+// mismatch is what an unguarded double submit would otherwise hit.
+func TestTaskStore_CancelTask_AlreadyCancelled_BeatsObservedMismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "cancel twice guarded", self)
+	_, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	staleClaim := uuid.New()
+	_, err = s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaim,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrTaskAlreadyCancelled, "the already-cancelled refusal runs ahead of the observed-state guard")
+	assert.NotErrorIs(t, err, store.ErrObservedStateMismatch)
+	assert.Equal(t, 1, countRows(t, ctx, db, "task_intervention_event", task.ID), "exactly one intervention event may ever exist for the task")
+}
+
+// TestTaskStore_CancelTask_NoExpectedIDs_Unguarded is the back-compat
+// half: with both ids omitted the cancel behaves exactly as before, on
+// both a claimed and an escalated task.
+func TestTaskStore_CancelTask_NoExpectedIDs_Unguarded(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	claimedTask := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "unguarded claimed cancel", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	staleClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: claimedTask.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	expireTaskLease(t, ctx, db, claimedTask.ID)
+	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: claimedTask.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self), Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	result, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: claimedTask.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err, "omitting both ids must leave today's behaviour untouched")
+	assert.True(t, result.ClaimForceClosed)
+	_ = staleClaim
+
+	escalatedTask := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "unguarded escalated cancel", self)
+	setTaskEscalated(t, ctx, db, escalatedTask.ID)
+	_, err = s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: escalatedTask.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err, "omitting both ids must leave an escalated task cancellable exactly as before")
+}
+
+// TestTaskStore_CancelTask_BothExpectedIDs_Succeeds is the guard's both-ids
+// happy path: a task holding a claim and an escalation at once (a claim
+// taken while an escalation was current) cancelled with both ids supplied
+// still cancels -- the two ids are each checked against their own column,
+// not against each other.
+func TestTaskStore_CancelTask_BothExpectedIDs_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "guarded both-ids cancel", self)
+	// Claim first, then escalate: an escalated task is excluded from
+	// task_claimable_idx, so the claim has to predate the escalation.
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self), Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	escalationID := setTaskEscalated(t, ctx, db, task.ID)
+
+	result, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &claim.ID, ExpectedEscalationID: &escalationID,
+	})
+	require.NoError(t, err, "both ids current must let the cancel through")
+	assert.True(t, result.ClaimForceClosed)
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.CancelledAt)
+}
+
+// TestTaskStore_CancelTask_BothExpectedIDs_EitherMismatchRefused is "each
+// id that is supplied must match", with both supplied: a cancel whose claim
+// id is current but whose escalation id is stale (and the mirror) is
+// refused. This is what stops a cancel from being guarded on the id the
+// caller happened to look at while the other moved on unseen.
+func TestTaskStore_CancelTask_BothExpectedIDs_EitherMismatchRefused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	// A claim matching while the escalation is stale.
+	staleEscalationTask := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "stale escalation half", self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: staleEscalationTask.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self), Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	staleEscalationID := setTaskEscalated(t, ctx, db, staleEscalationTask.ID)
+	// Resolve that escalation and record a second one, so the caller's id is
+	// stale while a different escalation is current.
+	_, err = s.Tasks().RequeueTask(ctx, store.RequeueParams{
+		ScopeID: scopeID, TaskID: staleEscalationTask.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	currentEscalationID := setTaskEscalated(t, ctx, db, staleEscalationTask.ID)
+	require.NotEqual(t, staleEscalationID, currentEscalationID)
+
+	interventionRowsBefore := countRows(t, ctx, db, "task_intervention_event", staleEscalationTask.ID)
+
+	_, err = s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: staleEscalationTask.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &claim.ID, ExpectedEscalationID: &staleEscalationID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch, "a matching claim id must not excuse a stale escalation id")
+
+	got, err := s.Tasks().GetTaskByID(ctx, staleEscalationTask.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CancelledAt, "a refused guarded cancel must not have cancelled the task")
+	assert.Equal(t, interventionRowsBefore, countRows(t, ctx, db, "task_intervention_event", staleEscalationTask.ID),
+		"a refused guarded cancel must write no task_intervention_event row of its own")
+	stillOpen, err := s.Tasks().GetClaimByID(ctx, claim.ID)
+	require.NoError(t, err)
+	assert.Nil(t, stillOpen.ReleasedAt, "a refused cancel must never force-close the claim")
+
+	// The mirror: an escalation matching while the claim id is stale.
+	staleClaimTask := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "stale claim half", self)
+	matchingEscalationID := setTaskEscalated(t, ctx, db, staleClaimTask.ID)
+	staleClaimID := uuid.New()
+
+	_, err = s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: staleClaimTask.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaimID, ExpectedEscalationID: &matchingEscalationID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch, "a matching escalation id must not excuse a stale claim id")
+
+	got, err = s.Tasks().GetTaskByID(ctx, staleClaimTask.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CancelledAt, "a refused guarded cancel must not have cancelled the task")
+	require.NotNil(t, got.CurrentEscalationID)
+	assert.Equal(t, matchingEscalationID, *got.CurrentEscalationID, "the escalation that is current now must survive")
+}
