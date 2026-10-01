@@ -16,9 +16,7 @@ package tools
 import (
 	"context"
 	"fmt"
-	"reflect"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -492,28 +490,8 @@ var _ productDeliveryQuerier = (*slice.Querier)(nil)
 // slice.Querier.ListProductDelivery's own contract.
 type listProductDeliveryInput struct {
 	ProductID string   `json:"product_id" jsonschema:"The Product surrogate id to list delivery for, as a UUID string."`
+	View      string   `json:"view,omitempty" jsonschema:"Optional response shape: omitted for the full listing, or summary for only each milestone's id, name, status and each milepebble's id and status."`
 	Statuses  []string `json:"statuses,omitempty" jsonschema:"Optional list of MilestoneStatus values to filter to (see get_milestone_status for the fixed eight-value set) -- omitted or empty means all statuses."`
-}
-
-// listProductDeliveryOutputSchema is list_product_delivery's advertised
-// output schema for slice.DeliveryListing, computed once. Required for the
-// same reason slice.go's sliceDocumentOutputSchema is (see its own doc
-// comment): DeliveryListing nests slice.Document values (Delivers/
-// MustNotForeclose), and jsonschema-go's default reflection over
-// uuid.UUID (an [16]byte array) does not match encoding/json's real
-// string marshaling of it.
-var listProductDeliveryOutputSchema = mustListProductDeliveryOutputSchema()
-
-func mustListProductDeliveryOutputSchema() *jsonschema.Schema {
-	s, err := jsonschema.For[slice.DeliveryListing](&jsonschema.ForOptions{
-		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
-			reflect.TypeFor[uuid.UUID](): {Type: "string"},
-		},
-	})
-	if err != nil {
-		panic(fmt.Errorf("krill/mcp/tools: building DeliveryListing output schema: %w", err))
-	}
-	return s
 }
 
 // RegisterListProductDelivery registers list_product_delivery (issue
@@ -527,9 +505,13 @@ func RegisterListProductDelivery(reg *server.Registry, products store.ProductSto
 	server.RegisterRead(reg, &mcp.Tool{
 		Name:         "list_product_delivery",
 		Description:  "List every milestone and milepebble under a Product, filterable by status (FR11) -- answers 'what is planned versus what is merely spec'd' for a whole product.",
-		OutputSchema: listProductDeliveryOutputSchema,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listProductDeliveryInput) (*mcp.CallToolResult, slice.DeliveryListing, error) {
-		var zero slice.DeliveryListing
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listProductDeliveryInput) (*mcp.CallToolResult, any, error) {
+		var zero any
+
+		view := slice.DeliveryView(in.View)
+		if view != slice.DeliveryViewFull && view != slice.DeliveryViewSummary {
+			return nil, zero, fmt.Errorf("view: must be empty or \"summary\"")
+		}
 
 		productID, err := uuid.Parse(in.ProductID)
 		if err != nil {
@@ -553,6 +535,9 @@ func RegisterListProductDelivery(reg *server.Registry, products store.ProductSto
 		listing, err := querier.ListProductDelivery(ctx, product.ScopeID, productID, statuses)
 		if err != nil {
 			return nil, zero, err
+		}
+		if view == slice.DeliveryViewSummary {
+			return nil, listing.Summary(), nil
 		}
 		return nil, listing, nil
 	})

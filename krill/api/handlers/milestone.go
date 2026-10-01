@@ -620,7 +620,14 @@ func GetProductDeliveryHandler(products store.ProductStore, querier productDeliv
 			return
 		}
 
-		writeJSON(w, http.StatusOK, listing)
+		switch slice.DeliveryView(r.URL.Query().Get("view")) {
+		case slice.DeliveryViewFull:
+			writeJSON(w, http.StatusOK, listing)
+		case slice.DeliveryViewSummary:
+			writeJSON(w, http.StatusOK, listing.Summary())
+		default:
+			writeJSONError(w, http.StatusBadRequest, "view: must be empty or \"summary\"")
+		}
 	}
 }
 
