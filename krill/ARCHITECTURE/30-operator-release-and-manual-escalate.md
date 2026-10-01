@@ -72,3 +72,22 @@ accurate answer, and lets the caller re-fetch the task payload
 already active. Both verbs also refuse an already-cancelled task
 (`ErrTaskCancelled`) — cancel's dead-letter state is terminal for both
 (`task_cancel.go`'s own FR7 doc comment).
+
+## Design choice: a Done-lane task cannot be escalated
+
+`EscalateTask` refuses a task already in the terminal `Done` lane with
+`ErrTaskAlreadyDone`, checked in the same row-locked transaction as the
+cancelled refusal and ahead of the escalation write. A finished task has no
+recovery left to perform, so the escalation could only strand an
+intervention event on a task no claim or requeue can act on again.
+
+This one does get its own sentinel rather than reusing an existing error,
+because none of the four neighbours is the same condition: `ErrTaskCancelled`
+is a dead-lettered task, `ErrTaskEscalated` is a task with one live
+escalation, and `ErrObservedStateMismatch` says the caller's observed claim
+moved — each with a different next step. The API maps it to 409 through
+the same `writeStoreError` case as the observed-state refusal rather than a
+second status table. The check is on the `Done` lane specifically, not on
+position in the lane sequence, and applies to manual escalations only: the
+automatic counter-driven reasons are recorded by `complete`/`reclaim` paths
+that never reach a `Done` lane.

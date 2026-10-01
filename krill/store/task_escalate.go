@@ -73,7 +73,9 @@ type EscalateResult struct {
 // row-locks the `task` (SELECT ... FOR UPDATE, the same lock ClaimTask/
 // CompleteTask/AbandonClaim/ReleaseLease take):
 //
-//  1. Refuses a cancelled task (ErrTaskCancelled), nothing written.
+//  1. Refuses a cancelled task (ErrTaskCancelled) and a task already in the
+//     terminal Done lane (ErrTaskAlreadyDone -- a finished task has no
+//     recovery left for an operator to perform), nothing written.
 //  2. recordEscalationTx (task_escalation.go) with reason='manual',
 //     counter_value/cap_value NULL (a manual escalation has no triggering
 //     counter), lane_at_escalation=task.current_lane, acting subject=the
@@ -136,6 +138,15 @@ func (s taskStore) EscalateTask(ctx context.Context, params EscalateParams) (Esc
 	}
 	if cancelledAt != nil {
 		return EscalateResult{}, fmt.Errorf("%w: task id %s", ErrTaskCancelled, params.TaskID)
+	}
+	// A task in the terminal Done lane is finished: there is no recovery
+	// left for an operator to perform, so an escalation here would only
+	// strand an intervention event on a task no claim or requeue can act
+	// on. Checked beside the cancelled refusal, ahead of the
+	// observed-state guard, since it is a statement about the task itself
+	// rather than about what moved since the caller's read.
+	if Lane(currentLane) == LaneDone {
+		return EscalateResult{}, fmt.Errorf("%w: task id %s", ErrTaskAlreadyDone, params.TaskID)
 	}
 	// The guard runs on the claim just read, under the same row lock and
 	// before the escalation is recorded, so a claim that changed since the
