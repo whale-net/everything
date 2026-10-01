@@ -150,6 +150,10 @@ type Note struct {
 	// TransitionNoteLifecycle. See this struct's own doc comment.
 	CurrentStatus NoteLifecycleStatus
 
+	// SupersedesNoteID names the older note this row amends (029), nil
+	// for an original note.
+	SupersedesNoteID *uuid.UUID
+
 	// CreatedByActing/CreatedByOnBehalfOf are always populated (NFR3,
 	// LB4) -- RecordNote is the only write path onto this table, and it
 	// is only ever called by a caller with an active session (NFR6),
@@ -192,7 +196,7 @@ func validateNoteTarget(params RecordNoteParams) error {
 	return nil
 }
 
-const noteColumns = `id, scope_id, task_id, entity_kind, entity_id, kind, body, current_status, ` +
+const noteColumns = `id, scope_id, task_id, entity_kind, entity_id, kind, body, current_status, supersedes_note_id, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
@@ -201,7 +205,7 @@ func scanNote(row pgx.Row) (Note, error) {
 	var entityKind *string
 	var actingKind, onBehalfOfKind string
 	err := row.Scan(
-		&n.ID, &n.ScopeID, &n.TaskID, &entityKind, &n.EntityID, &n.Kind, &n.Body, &n.CurrentStatus,
+		&n.ID, &n.ScopeID, &n.TaskID, &entityKind, &n.EntityID, &n.Kind, &n.Body, &n.CurrentStatus, &n.SupersedesNoteID,
 		&n.CreatedByActing.Iss, &n.CreatedByActing.Sub, &actingKind,
 		&n.CreatedByOnBehalfOf.Iss, &n.CreatedByOnBehalfOf.Sub, &onBehalfOfKind,
 		&n.CreatedAt,
