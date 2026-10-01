@@ -69,13 +69,7 @@ type MilestoneResponse struct {
 	FRBudget         *int                    `json:"fr_budget"`
 	Delivers         []string                `json:"delivers"`
 	MustNotForeclose []string                `json:"must_not_foreclose"`
-	Deferrals        []MilestoneDeferralWire `json:"deferrals"`
-}
-
-// MilestoneDeferralWire is one entry of MilestoneResponse.Deferrals.
-type MilestoneDeferralWire struct {
-	Body        string `json:"body"`
-	Destination string `json:"destination"`
+	Deferrals        []slice.DeferralDTO      `json:"deferrals"`
 }
 
 // NewMilestoneResponse builds a MilestoneResponse from a
@@ -92,10 +86,7 @@ func NewMilestoneResponse(ref store.MilestoneRef, delivers, mustNotForeclose []s
 	for i, m := range mustNotForeclose {
 		mustNotForecloseIDs[i] = m.EntityID.String()
 	}
-	deferralWires := make([]MilestoneDeferralWire, len(deferrals))
-	for i, d := range deferrals {
-		deferralWires[i] = MilestoneDeferralWire{Body: d.Body, Destination: d.Destination}
-	}
+	deferralWires := slice.NewDeferralDTOs(deferrals)
 
 	return MilestoneResponse{
 		ID:               ref.ID.String(),

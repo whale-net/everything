@@ -64,7 +64,7 @@ type MilestoneListingEntry struct {
 	Status           store.MilestoneStatus     `json:"status"`
 	Delivers         Document                  `json:"delivers"`
 	MustNotForeclose Document                  `json:"must_not_foreclose"`
-	Deferrals        []store.MilestoneDeferral `json:"deferrals"`
+	Deferrals        []DeferralDTO             `json:"deferrals"`
 
 	// ShippedCount/UnshippedCount are populated only when Status is
 	// store.MilestoneStatusPartiallyComplete -- issue #2686's per-item
@@ -258,7 +258,7 @@ func (q *Querier) buildMilestoneListingEntry(ctx context.Context, m store.Milest
 		Status:           status,
 		Delivers:         delivers,
 		MustNotForeclose: mustNotForeclose,
-		Deferrals:        deferrals,
+		Deferrals:        NewDeferralDTOs(deferrals),
 		Milepebbles:      milepebbles,
 	}
 
