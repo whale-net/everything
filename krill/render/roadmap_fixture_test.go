@@ -51,3 +51,12 @@ func TestRender_RoadmapHasOneBlockPerMilestoneIncludingAbandoned(t *testing.T) {
 	assert.Equal(t, n, blocks)
 	assert.Contains(t, files.RoadmapMD, "Status: abandoned")
 }
+
+func TestRender_RoadmapPreambleCountIsDerived(t *testing.T) {
+	for _, n := range []int{3, 12} {
+		src := manyMilestonesSource(n)
+		files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID, render.WithDetail())
+		require.NoError(t, err)
+		assert.Contains(t, files.RoadmapMD, fmt.Sprintf("%d milestones (1 abandoned)", n))
+	}
+}

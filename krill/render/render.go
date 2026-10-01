@@ -717,6 +717,15 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 	b.WriteString("\n# Roadmap\n\n")
 	b.WriteString("_`Status` is each milestone's **current** delivery status, derived from krill's append-only `milestone_status_event` history (`store.MilestoneStatusEventStore.CurrentStatuses`). A milestone with no recorded transition is `not started` — that is krill's own derivation from the absence of history, not a rendered default._\n\n")
 
+	abandoned := 0
+	for _, m := range milestones {
+		if m.Status == store.MilestoneStatusAbandoned {
+			abandoned++
+		}
+	}
+	// Count is computed from the rendered set, never hardcoded.
+	b.WriteString(fmt.Sprintf("%d milestones (%d abandoned), one block each below.\n\n", len(milestones), abandoned))
+
 	for _, m := range milestones {
 		b.WriteString("### ")
 		b.WriteString(m.ID)
