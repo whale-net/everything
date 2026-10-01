@@ -325,12 +325,18 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		}
 		writeNonGoalBullet(&b, ng)
 	}
-	b.WriteString("\n**Explicitly *not* non-goals — deferred, not foreclosed:**\n\n")
+	var deferred []store.NonGoal
 	for _, ng := range nonGoals {
-		if ng.Kind != store.NonGoalKindDeferred {
-			continue
+		if ng.Kind == store.NonGoalKindDeferred {
+			deferred = append(deferred, ng)
 		}
-		writeNonGoalBullet(&b, ng)
+	}
+	// A Product with no deferred entries gets no heading rather than an empty one.
+	if len(deferred) > 0 {
+		b.WriteString("\n**Explicitly *not* non-goals — deferred, not foreclosed:**\n\n")
+		for _, ng := range deferred {
+			writeNonGoalBullet(&b, ng)
+		}
 	}
 
 	b.WriteString("\n")
@@ -467,13 +473,37 @@ const currentStatePlaceholderBody = "This section is intentionally not rendered.
 	"planned to bring it into krill. See `krill/render/README.md` for the same " +
 	"boundary stated in full.\n"
 
+var (
+	// A stored survey that opens with its own "# Current state" title.
+	surveyTitleRe = regexp.MustCompile(`(?i)^\s*# +current state[ \t]*\r?\n`)
+	// A leading "Part of the [... product brief](...)." navigation sentence.
+	surveyPartOfRe = regexp.MustCompile(`(?i)^\s*Part of the \[[^\]\n]*product brief\]\([^)\n]*\)\.?[ \t]*`)
+)
+
+// stripSurveyPreamble drops the title and navigation sentence a stored
+// survey may open with, since the renderer emits its own "# Current state"
+// title. The rest of the body is returned verbatim; a survey with a
+// different opening is untouched.
+func stripSurveyPreamble(body string) string {
+	rest := body
+	if loc := surveyTitleRe.FindStringIndex(rest); loc != nil {
+		rest = rest[loc[1]:]
+	}
+	if loc := surveyPartOfRe.FindStringIndex(rest); loc != nil {
+		rest = rest[loc[1]:]
+	}
+	if len(rest) == len(body) {
+		return body
+	}
+	return strings.TrimLeft(rest, "\r\n")
+}
+
 func renderCurrentStateMD(name, revision string, stored *string) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Current state\n\n")
 	if stored != nil {
-		// Stored survey is emitted verbatim: no escaping, trimming, or truncation.
-		b.WriteString(*stored)
+		b.WriteString(stripSurveyPreamble(*stored))
 		return b.String()
 	}
 	b.WriteString(currentStatePlaceholderBody)

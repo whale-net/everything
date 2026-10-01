@@ -56,6 +56,9 @@ relationships, and data flow anyway. `ARCHITECTURE.md`, `README.md`,
 A Product may also store a survey in krill (`set_product_current_state`
 on the design mount; read back with `get_product_current_state` or
 `get_product_slice`). `product/01-current-state.md` then renders it
+after the renderer's own `# Current state` title. A leading `# Current state`
+heading and a leading "Part of the [... product brief](...)" sentence in the
+stored body are dropped so the file has exactly one H1; everything else is
 verbatim -- no escaping, trimming, or truncation. When none is stored it
 renders as a placeholder that points at `<domain>/ARCHITECTURE.md`. It is not a gap waiting to be
 filled, and no entity type is planned to fill it. Making krill hold this
@@ -129,23 +132,21 @@ from at all:
   file so a reader has somewhere to go — it does not read as "krill lost
   this", and it does not promise a future entity type. See "What 'the
   product doc set' covers" above.
-- **`product/03-roadmap.md` renders the structured facts, not the reasoning
-  prose behind them.** A milestone's outcome sentence, **current delivery
-  status**, FR budget, and the bare `Delivers`/`Must not foreclose`/
-  `Deliberately deferred` id lists do render (issue #2970). Status comes
-  from the append-only `milestone_status_event` history via
-  `Source.ListMilestoneStatuses` → `CurrentStatuses`; a milestone with no
-  recorded transition renders `not started`, which is krill's own derivation
-  from the absence of history (FR8), not a default the renderer invented.
-  The paragraph of *why* each `Must not foreclose` entry matters, "Notes for
-  design," and pre-agreed over-budget-cut rationale do not — krill has no
-  schema slot for that prose.
+- **`product/03-roadmap.md` renders what krill stores per milestone**: the
+  outcome sentence, **current delivery status**, FR budget, the
+  `Delivers`/`Must not foreclose`/`Deliberately deferred`/`Ships alongside`
+  lists, the milestone's free-form notes (scope, sequencing, and the
+  must-not-foreclose reasoning), and `Later coverage` with each protecting
+  decision's optional rationale. Status comes from the append-only
+  `milestone_status_event` history via `Source.ListMilestoneStatuses` →
+  `CurrentStatuses`; a milestone with no recorded transition renders `not
+  started`, which is krill's own derivation from the absence of history (FR8).
+  What is missing is data, not renderer: a milestone or edge with no notes or
+  rationale recorded renders without them.
 
-Practical consequence: don't delete or stop maintaining that prose in the
-committed hand-authored files on the assumption a re-render will preserve
-it — it won't. Re-rendering on top of those files today would silently
-drop it, per this doc's "A hand edit... is silently lost" rule above,
-applied to prose rather than a hand edit.
+Practical consequence: prose that has no entity in krill (the (b) list below)
+is dropped by a re-render, per this doc's "A hand edit... is silently lost"
+rule above, applied to prose rather than a hand edit.
 
 ## Notes render into `PRODUCT.md`
 
@@ -255,34 +256,14 @@ Closing them means new schema, which is a milestone — see the follow-up.
    music poll onto Temporal "is four tasks and two tables", and routing to
    new channels "needs no schema work" because `slackspecialchannel` already
    maps a type to channels. This is FeatureSet-level prose with no slot.
-3. **`03-roadmap.md` — the entire `Ships alongside` field.** The definition
-   paragraph ("names non-capability work (removals, defect fixes, schema
-   shapes) that a milestone must land for its outcome sentence to be true"),
-   plus M1's block — the V1 removal, the dead-code removal, the doc rewrite,
-   and the `slackspecialchannel` retention — and M4's block — the
-   `poll`/`polloption`/`pollvote` tables, `docs/poll.md`, and the `/wpoll`
-   Slack-app registration. `MilestoneRef` has no such column, and this is the
-   single largest loss in the whole accounting.
-4. **`03-roadmap.md` — M1's scope paragraph**, "This is an onboarding
-   milestone: existing behavior only, no new user-facing features." A
-   milestone's *shape* is not its outcome sentence, and no field holds it.
-5. **`03-roadmap.md` — M4's independence paragraph**, "Independent of
-   M1–M3: it needs no V1 removal, no service contract, and no whagent_net.
-   It can ship before M1 closes." Sequencing advice is not a
-   `Delivers`/`Deferral` row.
-6. **`03-roadmap.md` — the parenthetical rationales inside M4's
-   `Must not foreclose`.** The render emits the bare `LB1, LB3`; the
-   committed file explains *why* LB1 is safe ("C9 may later render an
-   agent's question as a poll — a poll is keyed by its own ID and Slack
-   message ts, not by a producer route") and why LB3 is ("votes are
-   recorded by the voter's Slack user ID, never FCM's"). This is the general
-   shape of the gap: `entity_milestone` records *which* entity, never *why*.
-7. **`03-roadmap.md` — the per-bullet "why" in "Later coverage".** The
-   section itself renders from recorded `lb_protects_feature` edges. An edge
-   carries an optional `rationale` (set via `add_lb_protects`), rendered as
-   `- C9 — <name>: LB3 — <rationale>`; with several protectors each is
-   `LB1 (<r1>), LB3 (<r3>)`. The gap remains only where no rationale has
-   been recorded on the edge.
+
+Items that used to be listed here as lost now have a home in krill and render:
+`Ships alongside` rows, a milestone's scope and sequencing notes (M1's
+"onboarding milestone" paragraph, M4's independence paragraph), M4's
+`Must not foreclose` reasoning, and the per-capability "why" in `Later
+coverage` (an optional `rationale` on the `lb_protects_feature` edge, set via
+`add_lb_protects`). They are data in krill: a Product whose entities lack that
+data still renders without it.
 
 ### (c) Correctly dropped — krill's model supersedes it
 
@@ -324,15 +305,11 @@ Closing them means new schema, which is a milestone — see the follow-up.
 
 ### Closing the (b) list
 
-Fixing (b) means giving krill somewhere to put milestone and feature-set
-prose: a `Ships alongside` field on `MilestoneRef`, a prose field for a
-milestone's scope and sequencing, a rationale on `EntityMilestone`, and a
-FeatureSet-level "cheap later" list. That is model design + migration +
+Fixing the remaining (b) items means giving krill somewhere to put the jump
+table's reading guidance and a FeatureSet-level "cheap later" list. That is model design + migration +
 authoring API + MCP tool + render — **a milestone, not a task**, the same
 sizing that retired the current-state entity question. It is filed as a
-follow-up rather than attempted here, and until it lands, **do not commit a
-rendered `03-roadmap.md`** expecting it to be a replacement for the
-hand-authored one.
+follow-up rather than attempted here, and until it lands, a rendered brief omits those two items.
 
 ### The renderer is still one-way
 
