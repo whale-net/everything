@@ -978,3 +978,64 @@ func TestAmendDeferral_UnknownIDIsNotFound(t *testing.T) {
 	assert.Equal(t, 3, total, "one original plus one successor per amend, none deleted")
 	assert.Equal(t, 1, current, "the FOR UPDATE + valid_to IS NULL row-lock is what makes each amend close the current row rather than re-closing an already-closed one")
 }
+
+// TestAmendMilepebble_RevisesNameAndOutcome_LeavesBudgetHistoryAndDeliveryUntouched
+// proves amend_milepebble: a new SCD2 revision under the same id, with the
+// FR budget, status history and delivery axis unchanged; a milestone id is
+// refused.
+func TestAmendMilepebble_RevisesNameAndOutcome_LeavesBudgetHistoryAndDeliveryUntouched(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "")
+	require.NoError(t, err)
+	fs, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "Spec Entities", nil)
+	require.NoError(t, err)
+	feature, err := s.Features().Create(ctx, scopeID, fs.ID, "SCD2 Store", nil)
+	require.NoError(t, err)
+
+	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M9", "outcome", nil, acting, acting)
+	require.NoError(t, err)
+	require.NoError(t, s.MilestoneAuthoring().AddDelivers(ctx, scopeID, milestone.ID, feature.ID, acting, acting))
+	budget := 5
+	pebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "P1", "pebble outcome", &budget, acting, acting)
+	require.NoError(t, err)
+	require.NoError(t, s.MilestoneAuthoring().AddMilepebbleDelivers(ctx, scopeID, pebble.ID, feature.ID, acting, acting))
+	_, err = s.MilestoneStatus().RecordTransition(ctx, scopeID, pebble.ID, store.MilestoneStatusInProgress, nil, acting, acting)
+	require.NoError(t, err)
+
+	count := func(table string) int {
+		var n int
+		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE milestone_id = $1`, pebble.ID).Scan(&n))
+		return n
+	}
+	deliversBefore, eventsBefore := count("entity_milestone"), count("milestone_status_event")
+	require.Equal(t, 1, deliversBefore)
+	require.Equal(t, 1, eventsBefore)
+
+	amended, err := s.Amend().AmendMilepebble(ctx, pebble.ID, "P1 (renamed)", strPtrAmend("revised pebble outcome"))
+	require.NoError(t, err)
+
+	assert.Equal(t, pebble.ID, amended.ID)
+	assert.NotEqual(t, pebble.RevisionID, amended.RevisionID)
+	assert.Equal(t, "P1 (renamed)", amended.Name)
+	require.NotNil(t, amended.Outcome)
+	assert.Equal(t, "revised pebble outcome", *amended.Outcome)
+	assert.Equal(t, store.MilestoneKindMilepebble, amended.Kind)
+	require.NotNil(t, amended.FRBudget)
+	assert.Equal(t, budget, *amended.FRBudget, "FR budget is carried forward")
+	require.NotNil(t, amended.ParentMilestoneID)
+	assert.Equal(t, milestone.ID, *amended.ParentMilestoneID)
+	assertSuperseded(t, ctx, db, "milestone_ref", pebble.ID)
+
+	assert.Equal(t, deliversBefore, count("entity_milestone"))
+	assert.Equal(t, eventsBefore, count("milestone_status_event"))
+	status, err := s.MilestoneStatus().CurrentStatus(ctx, pebble.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MilestoneStatusInProgress, status)
+
+	_, err = s.Amend().AmendMilepebble(ctx, milestone.ID, "nope", nil)
+	require.ErrorIs(t, err, store.ErrNotFound, "a milestone id is not a milepebble")
+}

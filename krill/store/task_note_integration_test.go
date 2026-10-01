@@ -526,3 +526,60 @@ func TestTaskNoteStore_ListNotesForEntity_OrderingStatusAndKind(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, mismatched, "a feature_set's notes must never list under the product kind")
 }
+
+// TestTaskNoteStore_AmendNote_AppendsSupersedingRow_OldRowRetained proves
+// amend_note: a new row carrying kind, target and lifecycle status, the old
+// row retained, and a second amend of the superseded row refused.
+func TestTaskNoteStore_AmendNote_AppendsSupersedingRow_OldRowRetained(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+	taskID, _ := seedTaskNoteWorld(t, ctx, s, scopeID, self)
+
+	old, err := s.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID: scopeID, TaskID: &taskID, Kind: store.NoteKindScopeNote, Body: "typo here", Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = s.Tasks().TransitionNoteLifecycle(ctx, store.TransitionNoteLifecycleParams{
+		ScopeID: scopeID, NoteID: old.ID, Status: store.NoteLifecycleStatusDeferred, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	amended, err := s.Tasks().AmendNote(ctx, store.AmendNoteParams{
+		ScopeID: scopeID, NoteID: old.ID, Body: "typo fixed", Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, old.ID, amended.ID)
+	assert.Equal(t, "typo fixed", amended.Body)
+	assert.Equal(t, store.NoteKindScopeNote, amended.Kind)
+	assert.Equal(t, store.NoteLifecycleStatusDeferred, amended.CurrentStatus)
+	require.NotNil(t, amended.TaskID)
+	assert.Equal(t, taskID, *amended.TaskID)
+	require.NotNil(t, amended.SupersedesNoteID)
+	assert.Equal(t, old.ID, *amended.SupersedesNoteID)
+
+	notes, err := s.Tasks().ListNotesForTask(ctx, scopeID, taskID)
+	require.NoError(t, err)
+	require.Len(t, notes, 2, "the old row is retained")
+	byID := map[uuid.UUID]store.Note{}
+	for _, n := range notes {
+		byID[n.ID] = n
+	}
+	assert.Equal(t, "typo here", byID[old.ID].Body, "old row body is unchanged")
+
+	_, err = s.Tasks().AmendNote(ctx, store.AmendNoteParams{
+		ScopeID: scopeID, NoteID: old.ID, Body: "again", Acting: self, OnBehalfOf: self,
+	})
+	require.ErrorIs(t, err, store.ErrNoteAlreadySuperseded)
+
+	_, err = s.Tasks().AmendNote(ctx, store.AmendNoteParams{
+		ScopeID: scopeID, NoteID: amended.ID, Body: "", Acting: self, OnBehalfOf: self,
+	})
+	require.ErrorIs(t, err, store.ErrEmptyNoteBody)
+
+	_, err = s.Tasks().AmendNote(ctx, store.AmendNoteParams{
+		ScopeID: uuid.New(), NoteID: amended.ID, Body: "x", Acting: self, OnBehalfOf: self,
+	})
+	require.Error(t, err, "cross-scope amend is refused")
+}

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -172,4 +173,39 @@ func TestListTaskNotesHandler_TaskNotFound_Returns404(t *testing.T) {
 	rec := doTaskNotesGetRequest(t, handlers.ListTaskNotesHandler(tasks), uuid.New().String())
 
 	assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+}
+
+// TestAmendNoteHandler_GatedAndScopedFromSession proves amend_note's HTTP
+// twin: no session is rejected before the store, and a valid one passes the
+// path id and body with scope/subjects from the session.
+func TestAmendNoteHandler_GatedAndScopedFromSession(t *testing.T) {
+	sessions, scopeID, sessionIDStr := newTestSession(t)
+	oldID, newID := uuid.New(), uuid.New()
+	tasks := &fakeTaskStore{}
+	tasks.amendNoteResult = store.Note{ID: newID}
+
+	do := func(sessionHeader string) *httptest.ResponseRecorder {
+		mux := http.NewServeMux()
+		mux.Handle("POST /notes/{id}/amend", handlers.RequireSession(sessions)(handlers.AmendNoteHandler(tasks)))
+		req := httptest.NewRequest(http.MethodPost, "/notes/"+oldID.String()+"/amend", strings.NewReader(`{"body": "fixed"}`))
+		if sessionHeader != "" {
+			req.Header.Set("X-Krill-Session-Id", sessionHeader)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := do("")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, uuid.Nil, tasks.amendNoteParams.NoteID, "an ungated request must never reach the store")
+
+	rec = do(sessionIDStr)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var resp idResponseBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, newID.String(), resp.ID)
+	assert.Equal(t, oldID, tasks.amendNoteParams.NoteID)
+	assert.Equal(t, scopeID, tasks.amendNoteParams.ScopeID)
+	assert.Equal(t, "fixed", tasks.amendNoteParams.Body)
 }
