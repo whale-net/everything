@@ -733,7 +733,8 @@ func writeRequirement(b *strings.Builder, rq slice.RequirementEntity, citation s
 // deferral) -- nothing in krill's schema backs that prose today.
 type milestoneEntry struct {
 	Number           int
-	ID               string // "M1".."Mn"
+	Minor            int    // the ".m" of "M<n>.<m>"; 0 for a bare "M<n>"
+	ID               string // "M1".."Mn", or "Mn.m"
 	Outcome          *string
 	Status           store.MilestoneStatus
 	FRBudget         *int
@@ -744,8 +745,9 @@ type milestoneEntry struct {
 	ShipsAlongside   []store.MilestoneShipsAlongside
 }
 
-// milestoneNumRe extracts the numeric suffix of a bare "M<n>" identifier.
-var milestoneNumRe = regexp.MustCompile(`^M(\d+)$`)
+// milestoneNumRe extracts the major and optional minor of a bare "M<n>" or
+// "M<n>.<m>" identifier (an independent milestone sequenced between M<n> and M<n+1>).
+var milestoneNumRe = regexp.MustCompile(`^M(\d+)(?:\.(\d+))?$`)
 
 func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.UUID, doc slice.Document) ([]milestoneEntry, error) {
 	refs, err := src.ListMilestoneRefs(ctx, scopeID, productID)
@@ -820,12 +822,16 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			return nil, fmt.Errorf("list ships alongside for milestone %s: %w", ref.Name, err)
 		}
 
-		num := 0
+		num, minor := 0, 0
 		if m := milestoneNumRe.FindStringSubmatch(ref.Name); m != nil {
 			num, _ = strconv.Atoi(m[1])
+			if m[2] != "" {
+				minor, _ = strconv.Atoi(m[2])
+			}
 		}
 		entries = append(entries, milestoneEntry{
 			Number:           num,
+			Minor:            minor,
 			ID:               ref.Name,
 			Outcome:          ref.Outcome,
 			Status:           milestoneStatusLabel(statuses, ref.ID),
@@ -838,7 +844,12 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		})
 	}
 
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Number < entries[j].Number })
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Number != entries[j].Number {
+			return entries[i].Number < entries[j].Number
+		}
+		return entries[i].Minor < entries[j].Minor
+	})
 	return entries, nil
 }
 
