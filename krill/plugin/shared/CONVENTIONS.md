@@ -60,8 +60,9 @@ registers it.
 
 ## Session bootstrapping
 
-Every write tool on `/mcp/design` requires a `krill_session_id` (every read
-tool is ungated). Mint one first: `init_session {}` (no arguments) →
+Every write tool on `/mcp/design` and `/mcp/work` — including `claim_task`,
+`heartbeat_task`, `complete_task` and `abandon_task` — requires a
+`krill_session_id` (every read tool is ungated). Mint one first: `init_session {}` (no arguments) →
 `{session_id, scope_id}` — no persona restriction. Your identity
 (`acting`/`on_behalf_of`, and `whagent_session_id` for a whagent-net agent) is
 derived server-side from your verified credential; the tool accepts no
@@ -401,6 +402,27 @@ same-shaped per-item calls (one `gh pr list` + `jq`), and serialize anything
 touching `main`. On a `gh` rate-limit error (403 with
 `x-ratelimit-remaining: 0`, or the secondary-limit message), back off and
 retry once before reporting failure.
+
+## Working a task outside the swimlane loop
+
+A krill `Task`'s lane moves only through `complete_task`, which requires a
+live claim from `claim_task`. Code changed in a krill-hosted domain without
+them leaves the task unclaimed and its lane stale, so any session that does a
+task's work itself — not just a dispatched `worker`/`validator` — follows the
+same order:
+
+1. `init_session {}` (or reuse a still-valid id).
+2. `claim_task` **before** the first edit; stop if it's refused.
+3. `heartbeat_task` best-effort between long steps (the lease is 15 min,
+   but `complete_task` doesn't check expiry — only a competing claim or a
+   reclaim sweep takes the task away).
+4. End with `complete_task` (pass/fail) or `abandon_task`; never let a claim
+   lapse.
+5. Put `krill task: <task-id>` at the end of each commit message.
+
+`/krill-work:work-task` runs this for one task. If the work has no task yet,
+create one under the right milestone (`/krill-work:plan`, or `create_task`)
+before starting, rather than doing it untracked.
 
 ## Subagent dispatch: ids, not bodies
 

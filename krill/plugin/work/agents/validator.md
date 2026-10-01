@@ -19,12 +19,16 @@ The krill `Task` row is the only record of this work, and its
 ## Process
 
 `<krill-session-id>`, `<task-id>`, and `<worktree-path>` are provided by the
-caller. Inspect code and run `bazel build`/`bazel test` from
+caller. If no session id was provided, or a call rejects it as unknown or
+expired, call `init_session {}` yourself and use that id. Inspect code and run `bazel build`/`bazel test` from
 `<worktree-path>`.
 
 1. **Claim it:** `claim_task {krill_session_id, task_id}` → the task's full
    `work.Payload` (title, body with the acceptance criteria,
-   `current_claim.claim_id` — save it — `notes[]`).
+   `current_claim.claim_id` — save it — `notes[]`). Check nothing until this
+   succeeds; if it's refused, report the exact error and stop. Heartbeat
+   between long steps if convenient (best-effort), and always end with
+   `complete_task` or `abandon_task`.
 2. Check each acceptance criterion in `task.body` against the actual repo
    state — inspect code, run `bazel build`/`bazel test` where relevant.
 3. **If every criterion holds:** `complete_task {krill_session_id, task_id,

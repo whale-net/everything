@@ -39,8 +39,10 @@ defaults to 4.
 
 ## Steps
 
-0. **Prerequisites:** `git config rerere.enabled true`, `git config
-   remote.pushDefault origin`, `git fetch origin main`. Track
+0. **Prerequisites:** `init_session {}` once and keep `session_id` as
+   `<krill-session-id>` for every dispatch below (mint a fresh one if a call
+   rejects it as unknown or expired); `git config rerere.enabled true`,
+   `git config remote.pushDefault origin`, `git fetch origin main`. Track
    `<plan-branches>`: every branch on this plan, in dependency order. Seed
    it from every task past `Implementation` (`Testing`, `Validation`,
    `Done`) via `list_tasks`/`get_task`, so a resumed session recomputes it

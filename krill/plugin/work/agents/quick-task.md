@@ -31,6 +31,9 @@ tracked as spec-of-record** (see "Krill-awareness check" below).
   `ENV.md` / `TOC.md` need updating alongside the code.
 - **HAND OFF** implementation: sequence tasks and hand them back to the user
   or an implementing agent rather than writing or editing code yourself.
+  When the work lands under a krill-hosted domain, point the implementer at
+  `/krill-work:work-task <task-id>` so the krill Task is claimed and
+  completed rather than left stale.
 - **DEFER** to Bazel as the source of truth for build/test/query status
   (`bazel query`, `bazel test`) rather than guessing from file layout.
 
