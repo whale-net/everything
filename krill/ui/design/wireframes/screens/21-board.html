@@ -1,35 +1,31 @@
 <!-- wf: name="board" title="Board" -->
 <div class="space-y-4">
-  <p class="wf-note">Primary object: lane. Primary action: open a task. Columns scroll horizontally below lg instead of a fixed five-column grid. Read-only: no drag and drop.</p>
+  <p class="wf-note">Primary object: lane. Primary action: open a task. Scope control: all incomplete milestones (swimlane per milestone), one milestone, or one milepebble. Lanes scroll horizontally below lg. Read-only, no drag and drop. The Tasks list takes the same scope control.</p>
   <div class="flex flex-wrap items-center gap-3">
     <h1 class="text-2xl font-semibold">Board</h1>
     <div class="join">
       <a class="join-item btn btn-sm" href="#/tasks">List</a>
       <a class="join-item btn btn-sm btn-active">Board</a>
     </div>
-    <select class="select select-bordered" aria-label="Milestone"><option>M5 Escalation console</option></select>
+    <div class="flex-1"></div>
+    <span class="text-sm text-base-content/70" title="2026-09-30 14:02:11 UTC">Updated 8 seconds ago</span>
   </div>
-  <div class="flex gap-3 overflow-x-auto pb-2">
-    <div class="w-72 shrink-0 space-y-2">
-      <h2 class="font-semibold flex items-center gap-2">Scaffold <span class="badge badge-ghost">1</span></h2>
-      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Note lifecycle migration</a><div class="flex gap-1"><span class="badge badge-warning badge-soft badge-sm">manual</span></div><span class="text-sm text-base-content/70">0 of 3 attempts</span></div></div>
+  <div class="flex flex-wrap items-center gap-2">
+    <div class="join" role="group" aria-label="Board scope">
+      <a class="join-item btn btn-active">All incomplete milestones</a>
+      <a class="join-item btn">Milestone</a>
+      <a class="join-item btn">Milepebble</a>
     </div>
-    <div class="w-72 shrink-0 space-y-2">
-      <h2 class="font-semibold flex items-center gap-2">Implementation <span class="badge badge-ghost">2</span></h2>
-      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Wire claim guard into release handler</a><div class="flex gap-1"><span class="badge badge-error badge-soft badge-sm">escalated</span></div><span class="text-sm text-base-content/70">3 of 3 attempts</span></div></div>
-      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Requeue resets counters</a><div class="flex gap-1"><span class="badge badge-info badge-soft badge-sm">claimed</span></div><span class="text-sm text-base-content/70">1 of 3 attempts. Lease in 14 min</span></div></div>
-    </div>
-    <div class="w-72 shrink-0 space-y-2">
-      <h2 class="font-semibold flex items-center gap-2">Testing <span class="badge badge-ghost">2</span></h2>
-      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Paginate ListClaimedTasks</a><div class="flex gap-1"><span class="badge badge-warning badge-soft badge-sm">lease expired</span></div><span class="text-sm text-base-content/70">2 of 3 attempts</span></div></div>
-    </div>
-    <div class="w-72 shrink-0 space-y-2">
-      <h2 class="font-semibold flex items-center gap-2">Validation <span class="badge badge-ghost">1</span></h2>
-      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Open-notes console view</a><span class="text-sm text-base-content/70">0 of 3 attempts</span></div></div>
-    </div>
-    <div class="w-72 shrink-0 space-y-2">
-      <h2 class="font-semibold flex items-center gap-2">Done <span class="badge badge-success">3</span></h2>
-      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Claimed console view</a></div></div>
-    </div>
+    <p class="wf-note">When "Milestone" is chosen a milestone select appears; "Milepebble" adds a second select for the milepebble. The URL carries the scope.</p>
+  </div>
+  <div class="overflow-x-auto pb-2 space-y-6">
+    <section class="space-y-2 w-max min-w-full">
+      <h2 class="flex items-center gap-2 text-lg font-semibold"><a class="link" href="#/milestone-detail">M5 Escalation console</a><span class="badge badge-warning">in progress</span><span class="text-sm font-normal text-base-content/70">6 of 9 done</span></h2>
+      <div class="flex gap-3"><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Scaffold <span class="badge badge-ghost">1</span></h3><div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Note lifecycle migration</a><div class="flex gap-1 flex-wrap"><span class="badge badge-warning badge-soft badge-sm">manual</span><span class="badge badge-outline badge-sm">Interventions</span></div><span class="text-sm text-base-content/70">0 of 3 attempts</span></div></div></div><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Implementation <span class="badge badge-ghost">2</span></h3><div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Wire claim guard into release handler</a><div class="flex gap-1 flex-wrap"><span class="badge badge-error badge-soft badge-sm">escalated</span><span class="badge badge-outline badge-sm">Interventions</span></div><span class="text-sm text-base-content/70">3 of 3 attempts</span></div></div><div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Requeue resets counters</a><div class="flex gap-1 flex-wrap"><span class="badge badge-info badge-soft badge-sm">claimed</span><span class="badge badge-outline badge-sm">Interventions</span></div><span class="text-sm text-base-content/70">1 of 3 attempts. Lease in 14 min</span></div></div></div><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Testing <span class="badge badge-ghost">1</span></h3><div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Paginate ListClaimedTasks</a><div class="flex gap-1 flex-wrap"><span class="badge badge-warning badge-soft badge-sm">lease expired</span><span class="badge badge-outline badge-sm">Console views</span></div><span class="text-sm text-base-content/70">2 of 3 attempts</span></div></div></div><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Validation <span class="badge badge-ghost">1</span></h3><div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Open-notes console view</a><div class="flex gap-1 flex-wrap"><span class="badge badge-outline badge-sm">Console views</span></div><span class="text-sm text-base-content/70">0 of 3 attempts</span></div></div></div><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Done <span class="badge badge-success">1</span></h3><div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Claimed console view</a><div class="flex gap-1 flex-wrap"><span class="badge badge-outline badge-sm">Console views</span></div><span class="text-sm text-base-content/70"></span></div></div></div></div>
+    </section>
+    <section class="space-y-2 w-max min-w-full">
+      <h2 class="flex items-center gap-2 text-lg font-semibold"><a class="link" href="#/milestone-detail">M6 UI facelift</a><span class="badge badge-info badge-soft">in design</span><span class="text-sm font-normal text-base-content/70">0 of 1 done</span></h2>
+      <div class="flex gap-3"><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Scaffold <span class="badge badge-ghost">1</span></h3><div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Workspace shell layout</a><div class="flex gap-1 flex-wrap"><span class="badge badge-outline badge-sm">Shell and overview</span></div><span class="text-sm text-base-content/70">0 of 3 attempts</span></div></div></div><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Implementation <span class="badge badge-ghost">0</span></h3></div><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Testing <span class="badge badge-ghost">0</span></h3></div><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Validation <span class="badge badge-ghost">0</span></h3></div><div class="w-72 shrink-0 space-y-2"><h3 class="font-semibold flex items-center gap-2">Done <span class="badge badge-success">0</span></h3></div></div>
+    </section>
   </div>
 </div>

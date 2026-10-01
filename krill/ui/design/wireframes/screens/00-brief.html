@@ -24,6 +24,7 @@
   <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2">
     <h2 class="card-title">Archetype: workspace</h2>
     <p>Six areas and a four-level object tree. Sidebar groups follow the tree; the product switcher replaces typing a product id. Detail pages get a properties rail.</p>
+    <p class="wf-note">The per-product switcher at the top of the sidebar is a deliberate stopgap: every page is scoped to one product. Cross-product views (a combined needs-attention queue, a combined board) are out of scope, and the shell must not foreclose moving the switcher or adding an "all products" scope later.</p>
     <p class="wf-note">First proof of the proposed workspace shell. Note that app-exemplars.md still lists krill as off-stack; it is already on templ + htmxui.</p>
   </div></div>
   <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2">
@@ -31,7 +32,9 @@
     <ul class="list-disc pl-5 space-y-1">
       <li>Landing pages become "at a glance" instead of link-and-blurb lists.</li>
       <li>Task and ops lists become real tables; lanes, states and verdicts are badges.</li>
-      <li>Board scrolls horizontally on narrow screens instead of a fixed 5-column grid.</li>
+      <li>Board scrolls horizontally on narrow screens instead of a fixed 5-column grid, and can show all incomplete milestones, one milestone, or one milepebble.</li>
+      <li>Sidebar groups have bold headings with indented items so the grouping reads at a glance.</li>
+      <li>Spec shows each feature set and feature with its description; attention items stay on the Work pages.</li>
       <li>Task detail gets a properties rail; raw spec JSON moves behind a disclosure.</li>
       <li>Cancel confirmation moves from a separate page to an in-row confirm.</li>
       <li>UUIDs become copy chips; timestamps become relative with the exact time on hover.</li>
