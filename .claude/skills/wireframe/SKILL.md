@@ -8,6 +8,8 @@ description: Iterate on UI wireframes with the user — create/edit screen fragm
 Drive UI design iteration using the wireframe kit (`tools/wireframe/README.md`).
 Screens are static daisyUI fragments with fake data; the assembler stitches
 them into one clickable `preview.html` the user opens locally.
+For *what* to design (layout archetype, page anatomy, quality floor),
+load the `design-htmx-ui` skill first; this skill covers the mechanics.
 
 ## Loop
 

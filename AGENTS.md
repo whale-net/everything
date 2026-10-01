@@ -154,6 +154,10 @@ Do not use synonyms (`assigned_at`/`unassigned_at`, `start_at`/`end_at`, etc.).
 
 For the close-and-open write path, current-value/point-in-time query patterns, the partial-index convention, and worked examples, see the `architecture-scd2` skill.
 
+## UI Design (htmx apps)
+
+Every web UI is Go + templ on `libs/go/htmxbase` + `libs/go/htmxui` with daisyUI semantic classes — no hand-written CSS. Each page has one primary object and one primary action; statuses render as badges; users never type IDs; mutations swap in place rather than full-page reload. Before designing, building, or reviewing any page, load the `design-htmx-ui` skill (layout archetypes, quality floor, interaction and confirmation rules). Color semantics live in `manmanv2/ui/DESIGN_SYSTEM.md`.
+
 ## GitHub Labels
 
 Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plugin's lifecycle labels (`product:*`, `plan:*`, `phase:*`, `status:*`), apply these when filing or triaging issues:
