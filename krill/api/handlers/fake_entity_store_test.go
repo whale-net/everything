@@ -284,6 +284,13 @@ func (f *fakeAmendStore) AmendProduct(ctx context.Context, id uuid.UUID, name, v
 	return store.Product{ID: id, Name: name, Vision: vision}, nil
 }
 
+func (f *fakeAmendStore) SetProductCurrentState(ctx context.Context, id uuid.UUID, state string) (store.Product, error) {
+	if err := f.record(amendCall{kind: "product_current_state", id: id, name: state}); err != nil {
+		return store.Product{}, err
+	}
+	return store.Product{ID: id, CurrentState: &state}, nil
+}
+
 func (f *fakeAmendStore) AmendFeatureSet(ctx context.Context, id uuid.UUID, name string, description *string) (store.FeatureSet, error) {
 	if err := f.record(amendCall{kind: "feature_set", id: id, name: name, description: description}); err != nil {
 		return store.FeatureSet{}, err
