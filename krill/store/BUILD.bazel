@@ -72,6 +72,7 @@ go_library(
         "task_claim.go",
         "task_complete.go",
         "task_console.go",
+        "task_console_filter.go",
         "task_dependency.go",
         "task_escalate.go",
         "task_escalation.go",

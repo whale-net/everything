@@ -27,15 +27,40 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
+// parseConsoleFilter turns the two optional narrowing arguments every
+// console queue read shares into the store's ConsoleFilter. An empty
+// string means "not narrowed", so the read stays exactly as wide as it
+// was before the filters existed.
+func parseConsoleFilter(productID, milestoneID string) (store.ConsoleFilter, error) {
+	var filter store.ConsoleFilter
+	if productID != "" {
+		id, err := uuid.Parse(productID)
+		if err != nil {
+			return store.ConsoleFilter{}, fmt.Errorf("product_id: invalid or missing UUID")
+		}
+		filter.ProductID = &id
+	}
+	if milestoneID != "" {
+		id, err := uuid.Parse(milestoneID)
+		if err != nil {
+			return store.ConsoleFilter{}, fmt.Errorf("milestone_id: invalid or missing UUID")
+		}
+		filter.MilestoneID = &id
+	}
+	return filter, nil
+}
+
 // listClaimedTasksInput is list_claimed_tasks' argument schema (FR4).
 // ScopeID is explicit input, not session-derived -- this is a read tool
 // (NFR6's gate is write-only), mirroring GET /console/claimed's own
 // required scope_id query parameter, since this query has no single
 // entity to resolve scope from.
 type listClaimedTasksInput struct {
-	ScopeID   string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
-	PageSize  int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
-	PageToken string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+	ScopeID     string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
+	ProductID   string `json:"product_id" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
+	MilestoneID string `json:"milestone_id" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
+	PageSize    int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken   string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
 }
 
 // listClaimedTasksOutput mirrors krill/api/handlers/console.go's HTTP
@@ -65,8 +90,14 @@ func RegisterListClaimedTasks(reg *server.Registry, tasks store.TaskStore) {
 			return nil, zero, fmt.Errorf("scope_id: invalid or missing UUID")
 		}
 
+		filter, err := parseConsoleFilter(in.ProductID, in.MilestoneID)
+		if err != nil {
+			return nil, zero, err
+		}
+
 		page, err := tasks.ListClaimedTasks(ctx, store.ListClaimedTasksParams{
-			ScopeID: scopeID,
+			ScopeID:       scopeID,
+			ConsoleFilter: filter,
 			Page: store.PageParams{
 				PageSize:          in.PageSize,
 				ContinuationToken: in.PageToken,
@@ -92,9 +123,11 @@ func RegisterListClaimedTasks(reg *server.Registry, tasks store.TaskStore) {
 // explicit input, not session-derived, since this is a read tool (NFR6's
 // gate is write-only).
 type listCancelledTasksInput struct {
-	ScopeID   string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
-	PageSize  int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
-	PageToken string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+	ScopeID     string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
+	ProductID   string `json:"product_id" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
+	MilestoneID string `json:"milestone_id" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
+	PageSize    int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken   string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
 }
 
 // listCancelledTasksOutput mirrors krill/api/handlers/console.go's HTTP
@@ -124,8 +157,14 @@ func RegisterListCancelledTasks(reg *server.Registry, tasks store.TaskStore) {
 			return nil, zero, fmt.Errorf("scope_id: invalid or missing UUID")
 		}
 
+		filter, err := parseConsoleFilter(in.ProductID, in.MilestoneID)
+		if err != nil {
+			return nil, zero, err
+		}
+
 		page, err := tasks.ListCancelledTasks(ctx, store.ListCancelledTasksParams{
-			ScopeID: scopeID,
+			ScopeID:       scopeID,
+			ConsoleFilter: filter,
 			Page: store.PageParams{
 				PageSize:          in.PageSize,
 				ContinuationToken: in.PageToken,
@@ -150,9 +189,11 @@ func RegisterListCancelledTasks(reg *server.Registry, tasks store.TaskStore) {
 // explicit input, not session-derived -- mirrors listClaimedTasksInput's own
 // posture for the same reason (see its own doc comment).
 type listOpenNotesInput struct {
-	ScopeID   string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
-	PageSize  int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
-	PageToken string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+	ScopeID     string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
+	ProductID   string `json:"product_id" jsonschema:"Optional product to narrow to; a note on a spec entity counts when that entity belongs to the product."`
+	MilestoneID string `json:"milestone_id" jsonschema:"Optional milestone or milepebble to narrow to; a note on a spec entity has none and is excluded."`
+	PageSize    int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken   string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
 }
 
 // listOpenNotesOutput mirrors krill/api/handlers/console.go's HTTP response
@@ -181,8 +222,14 @@ func RegisterListOpenNotes(reg *server.Registry, tasks store.TaskStore) {
 			return nil, zero, fmt.Errorf("scope_id: invalid or missing UUID")
 		}
 
+		filter, err := parseConsoleFilter(in.ProductID, in.MilestoneID)
+		if err != nil {
+			return nil, zero, err
+		}
+
 		page, err := tasks.ListOpenNotes(ctx, store.ListOpenNotesParams{
-			ScopeID: scopeID,
+			ScopeID:       scopeID,
+			ConsoleFilter: filter,
 			Page: store.PageParams{
 				PageSize:          in.PageSize,
 				ContinuationToken: in.PageToken,
@@ -208,9 +255,12 @@ func RegisterListOpenNotes(reg *server.Registry, tasks store.TaskStore) {
 // explicit input, not session-derived, since this is a read tool (NFR6's
 // gate is write-only).
 type listEscalatedTasksInput struct {
-	ScopeID   string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
-	PageSize  int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
-	PageToken string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+	ScopeID     string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
+	ProductID   string `json:"product_id" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
+	MilestoneID string `json:"milestone_id" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
+	Reason      string `json:"reason" jsonschema:"Optional escalation reason to narrow to: thrash-cap, attempt-cap or manual; absent returns every reason."`
+	PageSize    int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken   string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
 }
 
 // listEscalatedTasksOutput mirrors krill/api/handlers/console.go's HTTP
@@ -243,8 +293,21 @@ func RegisterListEscalatedTasks(reg *server.Registry, tasks store.TaskStore) {
 			return nil, zero, fmt.Errorf("scope_id: invalid or missing UUID")
 		}
 
+		filter, err := parseConsoleFilter(in.ProductID, in.MilestoneID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		var reason *store.EscalationReason
+		if in.Reason != "" {
+			parsed := store.EscalationReason(in.Reason)
+			reason = &parsed
+		}
+
 		page, err := tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
-			ScopeID: scopeID,
+			ScopeID:       scopeID,
+			ConsoleFilter: filter,
+			Reason:        reason,
 			Page: store.PageParams{
 				PageSize:          in.PageSize,
 				ContinuationToken: in.PageToken,

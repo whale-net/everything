@@ -60,11 +60,20 @@ type OpenNoteRow struct {
 	EntityContext *OpenNoteEntityContext
 }
 
-// ListOpenNotesParams is ListOpenNotes' input: scopeID (NFR1) plus this
-// query's own PageParams (NFR6).
+// ListOpenNotesParams is ListOpenNotes' input: scopeID (NFR1), the
+// optional ConsoleFilter narrowing, and this query's own PageParams
+// (NFR6). A milestone filter keeps only task-targeted notes, since a
+// note on a spec-axis entity has no delivery container; a product filter
+// also keeps entity-targeted notes whose entity belongs to that product.
 type ListOpenNotesParams struct {
 	ScopeID uuid.UUID
-	Page    PageParams
+	ConsoleFilter
+	Page PageParams
+}
+
+// Filters is the FilterSet ListOpenNotes' continuation token binds.
+func (p ListOpenNotesParams) Filters() FilterSet {
+	return p.ConsoleFilter.Filters()
 }
 
 // ListOpenNotes returns every note in params.ScopeID whose current_status
@@ -81,10 +90,14 @@ type ListOpenNotesParams struct {
 func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams) (Page[OpenNoteRow], error) {
 	pageSize := ResolvePageSize(params.Page.PageSize)
 
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return Page[OpenNoteRow]{}, err
+	}
+
 	var cursorTime *time.Time
 	var cursorID *uuid.UUID
 	if params.Page.ContinuationToken != "" {
-		cursor, err := DecodeContinuationToken(params.ScopeID, params.Page.ContinuationToken)
+		cursor, err := DecodeFilteredContinuationToken(params.ScopeID, params.Filters(), params.Page.ContinuationToken)
 		if err != nil {
 			return Page[OpenNoteRow]{}, err
 		}
@@ -100,6 +113,11 @@ func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams
 	// Fetch one extra row beyond pageSize -- its presence (trimmed off
 	// below) is exactly how NextToken is populated only when more rows
 	// genuinely remain, never as a guess.
+	//
+	// Implementation lane: add params.ConsoleFilter's predicate here --
+	// the container filter on the task join's mr, and, for a product
+	// filter only, the noted entity's own product resolved across
+	// whichever of the five NoteEntityKind tables the note names.
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			tn.id, tn.kind, tn.body, tn.created_at,
@@ -170,7 +188,7 @@ func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams
 	var nextToken string
 	if len(items) > pageSize {
 		last := items[pageSize-1]
-		nextToken = EncodeContinuationToken(params.ScopeID, Cursor{
+		nextToken = EncodeFilteredContinuationToken(params.ScopeID, params.Filters(), Cursor{
 			SortKey: last.CreatedAt.Format(time.RFC3339Nano),
 			ID:      last.NoteID,
 		})
