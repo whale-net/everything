@@ -150,7 +150,7 @@ type Note struct {
 	// TransitionNoteLifecycle. See this struct's own doc comment.
 	CurrentStatus NoteLifecycleStatus
 
-	// SupersedesNoteID names the older note this row amends (029), nil
+	// SupersedesNoteID names the older note this row amends (030), nil
 	// for an original note.
 	SupersedesNoteID *uuid.UUID
 

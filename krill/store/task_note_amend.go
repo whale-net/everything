@@ -1,5 +1,5 @@
 // AmendNote (FR e18afe39): amending a note appends a new task_note row whose
-// supersedes_note_id names the old row (029_note_supersession). The old row
+// supersedes_note_id names the old row (030_note_supersession). The old row
 // is retained; the new row keeps its kind, target and lifecycle status.
 package store
 
