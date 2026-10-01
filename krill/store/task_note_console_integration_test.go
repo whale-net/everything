@@ -490,3 +490,91 @@ func TestTaskNoteConsoleStore_ListOpenNotes_MilestoneFilter_ExcludesEntityNotes(
 	require.Len(t, byMilepebble.Items, 1, "a milepebble filter must keep only that milepebble's task notes")
 	assert.Equal(t, onMilepebble.ID, byMilepebble.Items[0].NoteID)
 }
+
+// TestTaskNoteConsoleStore_ListOpenNotes_FilterSurvivesContinuation is FR
+// a6cd917f's narrowing meeting FR 5713b7da's paging on the open-notes read:
+// a product-narrowed walk stays narrowed on every page, and the token that
+// walk carries binds the filter so it cannot be resumed as a different one.
+//
+// The two halves are separate on purpose. The walk catches a read whose
+// narrowing applied only to the first page -- the single-page
+// product-filter test above would pass that, since it never asks for a
+// second one. The token half catches the mirror: a read that issues a
+// scope-only token while filtering, which every page of that walk accepts
+// while narrowing nothing.
+func TestTaskNoteConsoleStore_ListOpenNotes_FilterSurvivesContinuation(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+
+	worldA := newNoteFilterWorld(t, ctx, s, scopeID, "A", self)
+	worldB := newNoteFilterWorld(t, ctx, s, scopeID, "B", self)
+
+	// Enough notes inside the filter to cross a page boundary, and enough
+	// outside it that a dropped predicate serves product B's notes rather
+	// than merely duplicating A's.
+	want := map[uuid.UUID]bool{}
+	for i := 0; i < 5; i++ {
+		want[recordOpenTaskNote(t, ctx, s, scopeID, worldA.taskID, fmt.Sprintf("a %d", i), self).ID] = true
+	}
+	for i := 0; i < 3; i++ {
+		recordOpenTaskNote(t, ctx, s, scopeID, worldB.taskID, fmt.Sprintf("b %d", i), self)
+	}
+
+	// Each product's own note is a second, differently-targeted row: the
+	// walk below must exclude it along with product B's, since a product
+	// filter keeps an entity note exactly when that entity is in the
+	// product.
+	productNoteB := recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindProduct, worldB.productID, "a note on B's product", self)
+
+	narrow := store.ConsoleFilter{ProductID: &worldA.productID}
+	const pageSize = 2
+
+	seen, pages := map[uuid.UUID]bool{}, 0
+	token := ""
+	for {
+		page, err := s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+			ScopeID: scopeID, ConsoleFilter: narrow,
+			Page: store.PageParams{PageSize: pageSize, ContinuationToken: token},
+		})
+		require.NoError(t, err)
+		pages++
+		require.Less(t, pages, 20, "the walk must terminate well within a sane number of pages")
+		for _, row := range page.Items {
+			require.False(t, seen[row.NoteID], "note %s seen twice across the filtered walk", row.NoteID)
+			seen[row.NoteID] = true
+		}
+		if page.NextToken == "" {
+			break
+		}
+		token = page.NextToken
+	}
+
+	assert.Greater(t, pages, 1, "the fixture must cross a page boundary, or this proves nothing about continuation under a filter")
+	assert.Equal(t, want, seen, "the filtered walk must visit exactly product A's notes -- no gaps, and no product B note leaking onto a later page")
+	assert.NotContains(t, seen, productNoteB.ID, "a note on another product's entity must never appear in this product's filtered walk")
+
+	// The token that walk carried must be bound to the product it was
+	// issued under: resuming it unfiltered (or under another product)
+	// would silently serve notes the caller never narrowed to.
+	_, err := s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID: scopeID,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: token},
+	})
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch, "a product-filtered token is never a valid unfiltered resume")
+
+	_, err = s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{ProductID: &worldB.productID},
+		Page:          store.PageParams{PageSize: 1, ContinuationToken: token},
+	})
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch, "a token issued under one product's filter is refused under another's")
+
+	_, err = s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: narrow,
+		Page:          store.PageParams{PageSize: 1, ContinuationToken: token},
+	})
+	assert.NoError(t, err, "the same filter set must resume normally")
+}

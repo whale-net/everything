@@ -644,3 +644,24 @@ func TestConsoleHandlers_MalformedFilterParam_Returns400(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
 }
+
+// TestConsoleHandlers_FilterAndReason_ReachStoreTogether is the API
+// surface's half of the two-filter intersection: a request naming a
+// product, a container and a reason hands all three to the store as one
+// ConsoleFilter plus one Reason, so the HTTP surface cannot drop the
+// reason (or either half of the filter) on the way through. The store
+// proves what that combination means; this proves it arrives.
+func TestConsoleHandlers_FilterAndReason_ReachStoreTogether(t *testing.T) {
+	scopeID, productID, milestoneID := uuid.New(), uuid.New(), uuid.New()
+
+	tasks := &fakeTaskStore{}
+	rec := httptest.NewRecorder()
+	query := "&product_id=" + productID.String() + "&milestone_id=" + milestoneID.String() + "&reason=manual"
+	handlers.ListEscalatedTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/escalated?scope_id="+scopeID.String()+query, nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	assert.Equal(t, store.ConsoleFilter{ProductID: &productID, MilestoneID: &milestoneID}, tasks.gotListEscalated.ConsoleFilter)
+	require.NotNil(t, tasks.gotListEscalated.Reason)
+	assert.Equal(t, store.EscalationReasonManual, *tasks.gotListEscalated.Reason)
+	assert.Equal(t, scopeID, tasks.gotListEscalated.ScopeID, "the filters narrow the scope they are given, never replace it")
+}

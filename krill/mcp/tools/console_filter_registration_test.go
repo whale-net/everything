@@ -17,6 +17,7 @@ package tools_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -249,4 +250,89 @@ func TestConsoleQueueTools_StoreRefusal_IsToolError(t *testing.T) {
 			assert.True(t, res.IsError, "a store refusal must be a tool error, never an empty page")
 		})
 	}
+}
+
+// TestConsoleQueueTools_FilterAndReason_ReachStoreTogether is the MCP
+// surface's half of the same two-filter intersection the API test proves:
+// a call naming a product, a container and a reason hands all three to the
+// store together, so the tool layer cannot drop the reason when a
+// container filter is also present (the shape a console filter plus a
+// reason chip produces in one call).
+func TestConsoleQueueTools_FilterAndReason_ReachStoreTogether(t *testing.T) {
+	scopeID, productID, milestoneID := uuid.New(), uuid.New(), uuid.New()
+	tasks := &consoleFilterTaskStore{}
+	cs := connectConsoleFilterTools(t, tasks)
+
+	callConsoleTool(t, cs, "list_escalated_tasks", "tasks", map[string]any{
+		"scope_id":     scopeID.String(),
+		"product_id":   productID.String(),
+		"milestone_id": milestoneID.String(),
+		"reason":       "manual",
+	})
+
+	assert.Equal(t, store.ConsoleFilter{ProductID: &productID, MilestoneID: &milestoneID}, tasks.escalatedParams.ConsoleFilter)
+	require.NotNil(t, tasks.escalatedParams.Reason)
+	assert.Equal(t, store.EscalationReasonManual, *tasks.escalatedParams.Reason)
+	assert.Equal(t, scopeID, tasks.escalatedParams.ScopeID)
+}
+
+// TestConsoleQueueTools_OptionalNarrowingIsNotRequiredInSchema is the
+// structural half of "optional": each console queue read's tool schema
+// marks only scope_id required. Without omitempty on the optional fields
+// the generated schema listed them as required, so every list_*_tasks call
+// demanded a product and a milestone -- a caller with no narrowing to
+// apply could not make the call at all. A handler-level call with the
+// arguments absent already exercises that (the SDK validates against the
+// schema before the handler runs); this asserts the schema itself, so the
+// contract is legible as a schema fact rather than only as a call that
+// happens to fail.
+func TestConsoleQueueTools_OptionalNarrowingIsNotRequiredInSchema(t *testing.T) {
+	cs := connectConsoleFilterTools(t, &consoleFilterTaskStore{})
+
+	schemas := map[string]*mcp.Tool{}
+	for tool, err := range cs.Tools(context.Background(), nil) {
+		require.NoError(t, err)
+		schemas[tool.Name] = tool
+	}
+
+	for _, tool := range consoleQueueTools {
+		found, ok := schemas[tool.name]
+		require.True(t, ok, "%s must be registered", tool.name)
+		raw, err := json.Marshal(found.InputSchema)
+		require.NoError(t, err)
+
+		var decoded struct {
+			Required   []string       `json:"required"`
+			Properties map[string]any `json:"properties"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		assert.Equal(t, []string{"scope_id"}, decoded.Required,
+			"%s must require only scope_id: product_id, milestone_id and page_size are all optional narrowings, and a schema that demands them makes an unnarrowed read uncallable", tool.name)
+
+		// The narrowing must still be advertised, optional or not -- a
+		// caller cannot pass an argument the schema never declares.
+		for _, field := range []string{"product_id", "milestone_id", "page_size", "page_token"} {
+			assert.Contains(t, decoded.Properties, field, "%s must advertise %s", tool.name, field)
+		}
+	}
+	assert.Contains(t, mustSchemaFields(t, schemas["list_escalated_tasks"]), "reason",
+		"list_escalated_tasks must advertise the reason narrowing")
+}
+
+// mustSchemaFields is the property-name set of one tool's input schema, for
+// the one assertion that needs the field list rather than the required list.
+func mustSchemaFields(t *testing.T, tool *mcp.Tool) []string {
+	t.Helper()
+	require.NotNil(t, tool, "the tool must be registered")
+	raw, err := json.Marshal(tool.InputSchema)
+	require.NoError(t, err)
+	var decoded struct {
+		Properties map[string]any `json:"properties"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	fields := make([]string, 0, len(decoded.Properties))
+	for name := range decoded.Properties {
+		fields = append(fields, name)
+	}
+	return fields
 }

@@ -1379,3 +1379,284 @@ func TestTaskStore_ConsoleQueueReads_TokenBindsFilterSet(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch, "a scope-only token never resumes a filtered request")
 }
+
+// TestTaskStore_ConsoleQueueReads_FilterSurvivesContinuation is FR
+// a6cd917f's narrowing meeting FR 5713b7da's paging: a narrowed read walks
+// its own narrowed set page by page, so every page -- not just the first
+// -- still excludes the rows outside the filter, and the walk terminates
+// having visited each of the filtered rows exactly once.
+//
+// The first page alone is what
+// TestTaskStore_ConsoleQueueReads_ProductFilter_KeepsOnlyThatProduct
+// proves, so a read that applied its filter only when no cursor was
+// present would pass that test and then leak another product's rows onto
+// page two. This walks all three task queue reads past their first page
+// to close that.
+func TestTaskStore_ConsoleQueueReads_FilterSurvivesContinuation(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+
+	productA, milestoneA := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+	_, milestoneB := consoleFilterTestProduct(t, ctx, s, scopeID, "B", self)
+
+	// Five rows inside the filter and three outside it, at a page size of
+	// two: the walk must cross a page boundary, and a page that quietly
+	// dropped the filter would then serve product B's rows rather than
+	// merely duplicating A's.
+	const inFilter, outOfFilter = 5, 3
+	claimedWant, cancelledWant, escalatedWant := map[uuid.UUID]bool{}, map[uuid.UUID]bool{}, map[uuid.UUID]bool{}
+	for i := 0; i < inFilter; i++ {
+		task, _ := claimTestTask(t, ctx, s, db, scopeID, milestoneA, fmt.Sprintf("claimed a %d", i), self)
+		claimedWant[task.ID] = true
+		task, _ = cancelTestTask(t, ctx, s, scopeID, milestoneA, fmt.Sprintf("cancelled a %d", i), self)
+		cancelledWant[task.ID] = true
+		task, _ = escalateTestTask(t, ctx, s, scopeID, milestoneA, fmt.Sprintf("escalated a %d", i), self)
+		escalatedWant[task.ID] = true
+	}
+	for i := 0; i < outOfFilter; i++ {
+		claimTestTask(t, ctx, s, db, scopeID, milestoneB, fmt.Sprintf("claimed b %d", i), self)
+		cancelTestTask(t, ctx, s, scopeID, milestoneB, fmt.Sprintf("cancelled b %d", i), self)
+		escalateTestTask(t, ctx, s, scopeID, milestoneB, fmt.Sprintf("escalated b %d", i), self)
+	}
+
+	narrow := store.ConsoleFilter{ProductID: &productA}
+	const pageSize = 2
+
+	t.Run("claimed", func(t *testing.T) {
+		seen, pages := map[uuid.UUID]bool{}, 0
+		token := ""
+		for {
+			page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+				ScopeID: scopeID, ConsoleFilter: narrow,
+				Page: store.PageParams{PageSize: pageSize, ContinuationToken: token},
+			})
+			require.NoError(t, err)
+			pages++
+			require.Less(t, pages, 20, "the walk must terminate well within a sane number of pages")
+			for _, row := range page.Items {
+				require.False(t, seen[row.TaskID], "task %s seen twice across the filtered walk", row.TaskID)
+				seen[row.TaskID] = true
+			}
+			if page.NextToken == "" {
+				break
+			}
+			token = page.NextToken
+		}
+		assert.Greater(t, pages, 1, "the fixture must cross a page boundary, or this proves nothing about continuation under a filter")
+		assert.Equal(t, claimedWant, seen, "the filtered walk must visit exactly product A's claimed tasks -- no gaps, and no product B row leaking onto a later page")
+	})
+
+	t.Run("cancelled", func(t *testing.T) {
+		seen, pages := map[uuid.UUID]bool{}, 0
+		token := ""
+		for {
+			page, err := s.Tasks().ListCancelledTasks(ctx, store.ListCancelledTasksParams{
+				ScopeID: scopeID, ConsoleFilter: narrow,
+				Page: store.PageParams{PageSize: pageSize, ContinuationToken: token},
+			})
+			require.NoError(t, err)
+			pages++
+			require.Less(t, pages, 20, "the walk must terminate well within a sane number of pages")
+			for _, row := range page.Items {
+				require.False(t, seen[row.TaskID], "task %s seen twice across the filtered walk", row.TaskID)
+				seen[row.TaskID] = true
+			}
+			if page.NextToken == "" {
+				break
+			}
+			token = page.NextToken
+		}
+		assert.Greater(t, pages, 1, "the fixture must cross a page boundary, or this proves nothing about continuation under a filter")
+		assert.Equal(t, cancelledWant, seen, "the filtered walk must visit exactly product A's cancelled tasks")
+	})
+
+	t.Run("escalated", func(t *testing.T) {
+		seen, pages := map[uuid.UUID]bool{}, 0
+		token := ""
+		for {
+			page, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+				ScopeID: scopeID, ConsoleFilter: narrow,
+				Page: store.PageParams{PageSize: pageSize, ContinuationToken: token},
+			})
+			require.NoError(t, err)
+			pages++
+			require.Less(t, pages, 20, "the walk must terminate well within a sane number of pages")
+			for _, row := range page.Items {
+				require.False(t, seen[row.TaskID], "task %s seen twice across the filtered walk", row.TaskID)
+				seen[row.TaskID] = true
+			}
+			if page.NextToken == "" {
+				break
+			}
+			token = page.NextToken
+		}
+		assert.Greater(t, pages, 1, "the fixture must cross a page boundary, or this proves nothing about continuation under a filter")
+		assert.Equal(t, escalatedWant, seen, "the filtered walk must visit exactly product A's escalated tasks")
+	})
+}
+
+// TestTaskStore_ListEscalatedTasks_ReasonBindsContinuationToken is FR
+// 5713b7da on the one filter the escalated read has that the other queue
+// reads do not: the reason is part of the request's filter set, so a token
+// issued under one reason is refused under another (and under none), never
+// answered as a page of the wrong reason's rows.
+//
+// The reason never appears in a ConsoleFilter, so the other three reads'
+// token proofs cannot reach this: they would all still pass with the
+// reason left out of ListEscalatedTasksParams.Filters entirely.
+func TestTaskStore_ListEscalatedTasks_ReasonBindsContinuationToken(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	_, milestone := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+
+	manual := store.EscalationReasonManual
+	for i := 0; i < 3; i++ {
+		escalateTestTask(t, ctx, s, scopeID, milestone, fmt.Sprintf("manual %d", i), self)
+	}
+	attempt := store.EscalationReasonAttemptCap
+	escalateViaAttemptCapTask(t, ctx, s, db, scopeID, milestone, "attempt-capped", self)
+
+	first, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID,
+		Reason:  &manual,
+		Page:    store.PageParams{PageSize: 1},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.NextToken)
+	require.Equal(t, manual, first.Items[0].Reason, "the fixture's first manual row must be the manual one, or the resume below proves nothing")
+
+	same, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID,
+		Reason:  &manual,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: first.NextToken},
+	})
+	require.NoError(t, err, "the same reason must resume normally")
+	require.Len(t, same.Items, 1)
+	assert.Equal(t, manual, same.Items[0].Reason)
+
+	_, err = s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID,
+		Reason:  &attempt,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: first.NextToken},
+	})
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch, "a token issued under one reason must be refused under another, never answered as a wrong-reason page")
+
+	_, err = s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: first.NextToken},
+	})
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch, "a reason-filtered token is never a valid unfiltered resume")
+
+	// The refusal must name no reason value and no cursor: a wrong-reason
+	// page is a scope-crossing-shaped leak if the token's payload escapes
+	// in the error.
+	_, err = s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID,
+		Reason:  &attempt,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: first.NextToken},
+	})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), first.NextToken, "the refusal must expose no cursor")
+}
+
+// escalateViaAttemptCapTask creates a task under milestoneID and drives it
+// to the attempt cap -- escalateViaAttemptCap's own fixture, kept separate
+// so the reason test does not have to thread a create call inline.
+func escalateViaAttemptCapTask(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, scopeID, milestoneID uuid.UUID, title string, self store.Subject) store.Task {
+	t.Helper()
+	task := createTestTask(t, ctx, s, scopeID, milestoneID, title, self)
+	escalateViaAttemptCap(t, ctx, s, db, scopeID, task.ID, self)
+	return task
+}
+
+// TestTaskStore_ListEscalatedTasks_ReasonComposesWithContainerFilter is the
+// two-filter intersection on the escalated read: a reason and a delivery
+// container named together keep exactly the rows satisfying both, so
+// neither filter is quietly dropped when the other is present -- the shape
+// a console filter plus a reason chip produces in one request.
+func TestTaskStore_ListEscalatedTasks_ReasonComposesWithContainerFilter(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	_, milestoneA := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+	_, milestoneB := consoleFilterTestProduct(t, ctx, s, scopeID, "B", self)
+
+	manualA, _ := escalateTestTask(t, ctx, s, scopeID, milestoneA, "manual in A", self)
+	escalateViaAttemptCapTask(t, ctx, s, db, scopeID, milestoneA, "attempt-capped in A", self)
+	manualB, _ := escalateTestTask(t, ctx, s, scopeID, milestoneB, "manual in B", self)
+
+	manual := store.EscalationReasonManual
+	byContainer := store.ConsoleFilter{MilestoneID: &milestoneA}
+
+	both, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID, ConsoleFilter: byContainer, Reason: &manual,
+	})
+	require.NoError(t, err)
+	require.Len(t, both.Items, 1, "a container filter and a reason filter must intersect, not either one alone")
+	assert.Equal(t, manualA.ID, both.Items[0].TaskID)
+
+	attempt := store.EscalationReasonAttemptCap
+	other, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID, ConsoleFilter: byContainer, Reason: &attempt,
+	})
+	require.NoError(t, err)
+	require.Len(t, other.Items, 1, "the attempt-capped row in A must still be reachable under A plus attempt-cap")
+	assert.NotEqual(t, manualA.ID, other.Items[0].TaskID)
+
+	containerOnly, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID, ConsoleFilter: byContainer,
+	})
+	require.NoError(t, err)
+	assert.Len(t, containerOnly.Items, 2, "with no reason named, the container filter alone keeps every reason in that container")
+
+	reasonOnly, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID, Reason: &manual,
+	})
+	require.NoError(t, err)
+	require.Len(t, reasonOnly.Items, 2, "with no container named, the reason filter alone keeps every container's manual rows")
+	assert.Contains(t, []uuid.UUID{reasonOnly.Items[0].TaskID, reasonOnly.Items[1].TaskID}, manualB.ID)
+}
+
+// TestTaskStore_ConsoleQueueReads_BothFilters_Intersect is the two-filter
+// shape neither single-filter test can reach: a product and one of its own
+// milestones named together. The pair must intersect -- the milestone's
+// rows, and only those -- rather than behave as though either one alone
+// were enough.
+//
+// The product test and the milestone test each pass one filter, so a
+// ConsoleFilter that treated the two clauses as alternatives (widening to
+// the union) would satisfy both of them and fail only here, where the
+// product holds a second milestone the caller did not name.
+func TestTaskStore_ConsoleQueueReads_BothFilters_Intersect(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+
+	productA, milestoneA := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+	// A second, uncut milestone in the same product: the row a union-
+	// instead-of-intersection filter would wrongly add.
+	sibling := consoleFilterTestMilestone(t, ctx, s, scopeID, productA, "A-sibling", self)
+	_, milestoneB := consoleFilterTestProduct(t, ctx, s, scopeID, "B", self)
+
+	onA, _ := claimTestTask(t, ctx, s, db, scopeID, milestoneA, "on A's first milestone", self)
+	onSibling, _ := claimTestTask(t, ctx, s, db, scopeID, sibling, "on A's other milestone", self)
+	claimTestTask(t, ctx, s, db, scopeID, milestoneB, "on B", self)
+
+	page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID: scopeID,
+		ConsoleFilter: store.ConsoleFilter{
+			ProductID:   &productA,
+			MilestoneID: &milestoneA,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1, "a product filter and one of its milestones must intersect: the named milestone's rows and nothing else")
+	assert.Equal(t, onA.ID, page.Items[0].TaskID)
+	assert.NotEqual(t, onSibling.ID, page.Items[0].TaskID, "the product's un-named sibling milestone must not survive the pair")
+}
