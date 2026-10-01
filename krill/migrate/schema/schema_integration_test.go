@@ -214,7 +214,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(30), version)
+	assert.Equal(t, uint(34), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -273,7 +273,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(30), version)
+	assert.Equal(t, uint(34), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -720,7 +720,7 @@ func TestMigration004_SchemaContract(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{
 		"revision_id", "id", "scope_id", "product_id", "name", "created_at",
-		"kind", "outcome", "fr_budget", "position", "parent_milestone_id",
+		"kind", "outcome", "fr_budget", "position", "parent_milestone_id", "notes",
 		"created_by_acting_iss", "created_by_acting_sub", "created_by_acting_kind",
 		"created_by_on_behalf_of_iss", "created_by_on_behalf_of_sub", "created_by_on_behalf_of_kind",
 		"valid_from", "valid_to",
