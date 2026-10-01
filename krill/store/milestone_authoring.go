@@ -431,7 +431,7 @@ func deliversTarget(ctx context.Context, q txQuerier, scopeID, milestoneID uuid.
 	var kind string
 	var productID uuid.UUID
 	err := q.QueryRow(ctx, `
-		SELECT kind, product_id FROM milestone_ref WHERE id = $1 AND scope_id = $2
+		SELECT kind, product_id FROM milestone_ref WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL
 	`, milestoneID, scopeID).Scan(&kind, &productID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", uuid.UUID{}, errParentNotFound("milestone_ref", milestoneID)
@@ -911,7 +911,7 @@ func (s milestoneAuthoringStore) ListShipsAlongside(ctx context.Context, milesto
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+milestoneShipsAlongsideColumns+`
 		FROM milestone_ships_alongside
-		WHERE milestone_id = $1
+		WHERE milestone_id = $1 AND valid_to IS NULL
 		ORDER BY position
 	`, milestoneID)
 	if err != nil {

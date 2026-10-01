@@ -331,3 +331,73 @@ func TestMilestoneAuthoringStore_NFR1_IdentityStability(t *testing.T) {
 	_, _, _, _, err = s.MilestoneAuthoring().GetMilestone(ctx, m3.ID)
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
+
+// AddShipsAlongside numbers rows 0,1,... per milestone and the rows read
+// back through ListShipsAlongside.
+func TestMilestoneAuthoringStore_AddShipsAlongside_PositionsAndList(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	acting := milestoneAuthoringTestSubject("operator")
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "")
+	require.NoError(t, err)
+	m1, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, acting, acting)
+	require.NoError(t, err)
+	m2, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M2", "", nil, acting, acting)
+	require.NoError(t, err)
+
+	first, err := s.MilestoneAuthoring().AddShipsAlongside(ctx, scopeID, m1.ID, "CI migration", acting, acting)
+	require.NoError(t, err)
+	second, err := s.MilestoneAuthoring().AddShipsAlongside(ctx, scopeID, m1.ID, "docs refresh", acting, acting)
+	require.NoError(t, err)
+	other, err := s.MilestoneAuthoring().AddShipsAlongside(ctx, scopeID, m2.ID, "elsewhere", acting, acting)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, first.Position)
+	assert.Equal(t, 1, second.Position)
+	assert.Equal(t, 0, other.Position, "positions are per milestone")
+
+	rows, err := s.MilestoneAuthoring().ListShipsAlongside(ctx, m1.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, []string{"CI migration", "docs refresh"}, []string{rows[0].Body, rows[1].Body})
+
+	// A superseded revision must not be listed or counted for position.
+	_, err = db.Pool.Exec(ctx, `UPDATE milestone_ships_alongside SET valid_to = NOW() WHERE id = $1`, first.ID)
+	require.NoError(t, err)
+	rows, err = s.MilestoneAuthoring().ListShipsAlongside(ctx, m1.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, second.ID, rows[0].ID)
+}
+
+// An amended deferral lists once, as its current revision.
+func TestMilestoneAuthoringStore_ListDeferrals_AmendedListsSingleCurrentRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newMilestoneAuthoringTestStore(t)
+	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
+	acting := milestoneAuthoringTestSubject("operator")
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "")
+	require.NoError(t, err)
+	m, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, acting, acting)
+	require.NoError(t, err)
+
+	d, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, m.ID, "controlling servers (C8)", "M3", nil, acting, acting)
+	require.NoError(t, err)
+	_, err = s.MilestoneAuthoring().AddDeferral(ctx, scopeID, m.ID, "untouched", "M3", nil, acting, acting)
+	require.NoError(t, err)
+	_, err = s.Amend().AmendDeferral(ctx, d.ID, "controlling servers (C9)", "M3", nil)
+	require.NoError(t, err)
+
+	rows, err := s.MilestoneAuthoring().ListDeferrals(ctx, m.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "controlling servers (C9)", rows[0].Body)
+	assert.Equal(t, "untouched", rows[1].Body)
+
+	_, _, _, viaGet, err := s.MilestoneAuthoring().GetMilestone(ctx, m.ID)
+	require.NoError(t, err)
+	assert.Len(t, viaGet, 2)
+}
