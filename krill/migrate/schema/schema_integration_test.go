@@ -568,6 +568,7 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 		"schema_migrations", "scope", "krill_session", "milestone_ref", "entity_milestone", "entity_milestone_active", "milestone_deferral", "milestone_ships_alongside", "pointer_artifact",
 		"mcp_credential", "mcp_oauth_client", "mcp_auth_code", "ui_sessions", "design_session", "revision_event", "import_completion",
 		"milestone_status_event", "delivery_shipment",
+		"lb_protects_feature", "lb_protects_feature_active",
 		"task", "task_dependency", "task_claim", "task_lease_event", "task_attempt", "task_note",
 		"task_escalation_event", "task_intervention_event", "task_note_lifecycle_event",
 		// The void tombstone register (021_void_event). It is a delivery-axis
