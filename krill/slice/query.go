@@ -441,12 +441,9 @@ func (q *Querier) GetRequirementSliceAsOf(ctx context.Context, requirementID uui
 
 // GetProductSliceAsOf is GetProductSlice assembled as of asOf.
 func (q *Querier) GetProductSliceAsOf(ctx context.Context, productID uuid.UUID, asOf time.Time) (Document, error) {
-	product, err := q.store.Products().GetCurrentByID(ctx, productID)
+	product, err := q.store.History().GetProductAsOf(ctx, productID, asOf)
 	if err != nil {
-		return Document{}, fmt.Errorf("get product: %w", err)
-	}
-	if !entityExistedAsOf(product.ValidFrom, asOf) {
-		return Document{}, fmt.Errorf("%w: product id %s as of %s", store.ErrNotFound, productID, asOf)
+		return Document{}, fmt.Errorf("get product as of: %w", err)
 	}
 
 	featureSets, err := q.store.FeatureSets().ListCurrentByProduct(ctx, productID)

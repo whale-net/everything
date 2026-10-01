@@ -320,3 +320,28 @@ func TestRender_AmendedDeferralRendersOnce(t *testing.T) {
 		"still exactly one deferred line after two amendments")
 	assert.Contains(t, files.RoadmapMD, "Deliberately deferred: C5 ships in M2, which now also carries C6 (→ M2)")
 }
+
+// A stored survey renders verbatim (>= 100 KB, markdown-hostile content
+// untouched); with none stored the fixed placeholder remains.
+func TestRender_StoredCurrentState_VerbatimAndPlaceholderFallback(t *testing.T) {
+	ctx := context.Background()
+	entities, pool, _ := newTestStore(t)
+	scopeID := createScope(t, ctx, pool, "whale-net/render-current-state-test")
+	product, err := entities.Products().Create(ctx, scopeID, "Widgets", "Make great widgets.")
+	require.NoError(t, err)
+
+	files, err := render.Render(ctx, render.NewStoreSource(entities), scopeID, product.ID)
+	require.NoError(t, err)
+	assert.Contains(t, files.CurrentStateMD, "This section is intentionally not rendered.")
+
+	survey := "# Survey\n\n<!-- raw -->\n| a | b |\n```\n*unescaped* `<tag>` \\ & \"q\"\n" +
+		strings.Repeat("0123456789abcdef\n", 7000) + "END-MARKER\n"
+	require.Greater(t, len(survey), 100*1024)
+	_, err = entities.Amend().SetProductCurrentState(ctx, product.ID, survey)
+	require.NoError(t, err)
+
+	files, err = render.Render(ctx, render.NewStoreSource(entities), scopeID, product.ID)
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(files.CurrentStateMD, "\n# Current state\n\n"+survey))
+	assert.NotContains(t, files.CurrentStateMD, "This section is intentionally not rendered.")
+}

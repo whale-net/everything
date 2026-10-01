@@ -27,6 +27,10 @@ type HistoryStore interface {
 	// asOf predates the entity's first revision, or id never existed.
 	GetRequirementAsOf(ctx context.Context, id uuid.UUID, asOf time.Time) (Requirement, error)
 
+	// GetProductAsOf mirrors GetRequirementAsOf for `product`, so an
+	// earlier current-state survey stays retrievable after a later revision.
+	GetProductAsOf(ctx context.Context, id uuid.UUID, asOf time.Time) (Product, error)
+
 	// ListRequirementVersions returns every revision of id, oldest first,
 	// each carrying its own ValidFrom and (for every revision but the
 	// current one) the ValidTo timestamp it was superseded at. Returns
@@ -59,6 +63,21 @@ func (s historyStore) GetRequirementAsOf(ctx context.Context, id uuid.UUID, asOf
 		return Requirement{}, fmt.Errorf("get requirement as of %s: %w", asOf, err)
 	}
 	return requirement, nil
+}
+
+func (s historyStore) GetProductAsOf(ctx context.Context, id uuid.UUID, asOf time.Time) (Product, error) {
+	product, err := scanProduct(s.pool.QueryRow(ctx, `
+		SELECT `+productColumns+`
+		FROM product
+		WHERE id = $1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to > $2)
+	`, id, asOf))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Product{}, fmt.Errorf("%w: product id %s as of %s", ErrNotFound, id, asOf)
+	}
+	if err != nil {
+		return Product{}, fmt.Errorf("get product as of %s: %w", asOf, err)
+	}
+	return product, nil
 }
 
 func (s historyStore) ListRequirementVersions(ctx context.Context, id uuid.UUID) ([]Requirement, error) {
