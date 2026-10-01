@@ -66,6 +66,10 @@ func (f fakeDesignSessions) ListByProduct(_ context.Context, productID uuid.UUID
 	return f.byProduct[productID], nil
 }
 
+func (f fakeDesignSessions) SummarizeByProduct(context.Context, uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	return store.ProductDesignSessionsSummary{}, f.err
+}
+
 // fakeRevisionEvents is an in-memory RevisionEventStore returning canned,
 // already-ordered logs and open questions.
 type fakeRevisionEvents struct {

@@ -17,6 +17,7 @@ go_library(
         "console.go",
         "delivery_shipment.go",
         "design.go",
+        "design_summary.go",
         "entity.go",
         "entity_note.go",
         "milestone.go",

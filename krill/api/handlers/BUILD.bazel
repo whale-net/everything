@@ -66,6 +66,7 @@ go_library(
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",
+        "design_session_summary.go",
         "entity_note.go",
         "feature.go",
         "featureset.go",

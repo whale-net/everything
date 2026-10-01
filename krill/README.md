@@ -344,6 +344,7 @@ never reachable from it. This is krill's first MCP **write** surface.
 | `get_design_session` | read | session + ordered revision log (FR2) | any resolved persona |
 | `get_design_session_slice` | read | `slice.Querier.GetEntitySetSlice` over the session's id union (FR5) | any resolved persona |
 | `list_open_questions` | read | derived open-question view (FR6) | any resolved persona |
+| `list_product_design_sessions` | read | `DesignSessionStore.SummarizeByProduct` -- one product's sessions with derived stage and open-question counts | any resolved persona |
 
 Every write tool takes a `krill_session_id` field -- the same id
 `POST /sessions/init` mints and the HTTP surface's `X-Krill-Session-Id`

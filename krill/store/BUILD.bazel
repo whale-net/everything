@@ -36,6 +36,7 @@ go_library(
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",
+        "design_session_summary.go",
         "errors.go",
         "lb_protects.go",
         "feature.go",

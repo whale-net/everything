@@ -132,6 +132,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, ide
 	// like every other read endpoint in this package.
 	mux.HandleFunc("GET /products/{id}/delivery", handlers.GetProductDeliveryHandler(entities.Products(), querier))
 
+	// GET /products/{id}/design-sessions (FR d0a63ffb) is a whole
+	// product's design-session aggregate -- stage and open-question counts
+	// per session plus the product-level blocking totals -- in one read,
+	// ungated like every other read endpoint in this package.
+	mux.HandleFunc("GET /products/{id}/design-sessions", handlers.ListProductDesignSessionsHandler(entities.DesignSessions()))
+
 	// The work axis (M4, issue #2719, FR1): a task scoped to exactly one
 	// milepebble, or to a milestone directly when that milestone has no
 	// milepebble cut.

@@ -82,6 +82,10 @@ func (f writeSurfaceSessions) ListByProduct(_ context.Context, productID uuid.UU
 	return f.byProduct[productID], nil
 }
 
+func (f writeSurfaceSessions) SummarizeByProduct(context.Context, uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	return store.ProductDesignSessionsSummary{}, errors.New("the browser write path must not summarize sessions through the store")
+}
+
 type writeSurfaceEvents struct {
 	bySession     map[uuid.UUID][]store.RevisionEvent
 	openQuestions map[uuid.UUID][]store.OpenQuestion
