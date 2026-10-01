@@ -204,6 +204,7 @@ go_test(
         "task_note_test.go",
         "task_observed_state_test.go",
         "task_payload_test.go",
+        "task_product_list_test.go",
         "task_reclaim_test.go",
         "task_release_test.go",
         "task_requeue_test.go",

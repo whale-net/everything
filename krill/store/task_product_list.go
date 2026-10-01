@@ -68,6 +68,16 @@ func (s ProductTaskScope) RequiresContainer() bool {
 	return s.Kind == ProductTaskScopeMilestone || s.Kind == ProductTaskScopeMilepebble
 }
 
+// completeContainerStatuses are the two statuses that take a container out
+// of the product-wide incomplete scope. This slice is the single source for
+// both the Go predicate and the SQL predicate the query runs -- see
+// incompleteContainerFilterSQL -- so neither copy of the rule can drift from
+// the other.
+var completeContainerStatuses = []MilestoneStatus{
+	MilestoneStatusShipped,
+	MilestoneStatusAbandoned,
+}
+
 // IsIncompleteContainerStatus is FR2's "incomplete" predicate, in one
 // place so no caller re-derives it: a container counts as incomplete
 // unless its own current status is shipped or abandoned -- so partially
@@ -77,7 +87,12 @@ func (s ProductTaskScope) RequiresContainer() bool {
 // one means MilestoneStatusNotStarted), never read from a column; see
 // milestone_status.go's CurrentStatus.
 func IsIncompleteContainerStatus(status MilestoneStatus) bool {
-	return status != MilestoneStatusShipped && status != MilestoneStatusAbandoned
+	for _, complete := range completeContainerStatuses {
+		if status == complete {
+			return false
+		}
+	}
+	return true
 }
 
 // ProductTaskMilestoneRef is one ProductTaskRow's milestone: the id, name
@@ -247,6 +262,20 @@ const currentContainerStatusSQL = `
 		LIMIT 1
 	), $1)`
 
+// incompleteContainerFilterSQL renders the product-wide scope's
+// "still in scope" predicate against the named container column: its
+// current status must not be one of completeContainerStatuses. Rendering
+// the list from the same slice IsIncompleteContainerStatus reads keeps the
+// SQL and the Go predicate from being two copies of one rule that can drift.
+func incompleteContainerFilterSQL(containerColumn string) string {
+	quoted := make([]string, len(completeContainerStatuses))
+	for i, status := range completeContainerStatuses {
+		quoted[i] = "'" + string(status) + "'"
+	}
+	return fmt.Sprintf(currentContainerStatusSQL, containerColumn) +
+		" NOT IN (" + strings.Join(quoted, ", ") + ")"
+}
+
 // ListProductTasks returns one page of params.ProductID's tasks over
 // params.Scope, with params.Lane/params.OnlyStuck applied, bounded and
 // continuable per params.Page (NFR6). Its continuation token is bound to
@@ -306,8 +335,7 @@ func (s taskStore) ListProductTasks(ctx context.Context, params ListProductTasks
 	containerFilter := ""
 	switch params.Scope.Kind {
 	case ProductTaskScopeIncomplete:
-		containerFilter = " AND c.kind <> 'backlog' AND " +
-			fmt.Sprintf(currentContainerStatusSQL, "c.id") + ` NOT IN ('shipped', 'abandoned')`
+		containerFilter = " AND c.kind <> 'backlog' AND " + incompleteContainerFilterSQL("c.id")
 	case ProductTaskScopeMilestone:
 		containerFilter = " AND (c.id = $4 OR c.parent_milestone_id = $4)"
 		args = append(args, params.Scope.ContainerID)
