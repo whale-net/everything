@@ -73,6 +73,7 @@ go_library(
         "task_escalation.go",
         "task_lease.go",
         "task_note.go",
+        "task_note_amend.go",
         "task_note_console.go",
         "task_note_lifecycle.go",
         "task_reclaim.go",
