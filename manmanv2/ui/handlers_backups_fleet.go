@@ -921,11 +921,11 @@ func (app *App) handleBackupConfigActionRemove(w http.ResponseWriter, r *http.Re
 
 // handleBackupConfigActionsReorder serves
 // "POST /backups/configs/{id}/actions/reorder" (FR15): submits the full
-// desired order as repeated action_ids form values -- each move-up/
-// move-down control in pages.backupConfigActionRow POSTs the entire
-// resulting order (an explicit, keyboard-accessible control, not a
-// drag-only interaction), never a partial swap instruction the server
-// would have to interpret.
+// desired order as action_ids form values (repeated, or one comma-joined
+// value as hx-vals sends it) -- each move-up/move-down control in
+// pages.backupConfigActionRow POSTs the entire resulting order (an
+// explicit, keyboard-accessible control, not a drag-only interaction),
+// never a partial swap instruction the server would have to interpret.
 func (app *App) handleBackupConfigActionsReorder(w http.ResponseWriter, r *http.Request, backupConfigID int64) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -939,13 +939,18 @@ func (app *App) handleBackupConfigActionsReorder(w http.ResponseWriter, r *http.
 
 	actionIDs := make([]int64, 0, len(r.Form["action_ids"]))
 	var mutateErr string
-	for _, raw := range r.Form["action_ids"] {
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			mutateErr = "Invalid reorder request."
+	for _, value := range r.Form["action_ids"] {
+		for _, raw := range strings.Split(value, ",") {
+			id, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				mutateErr = "Invalid reorder request."
+				break
+			}
+			actionIDs = append(actionIDs, id)
+		}
+		if mutateErr != "" {
 			break
 		}
-		actionIDs = append(actionIDs, id)
 	}
 	if mutateErr == "" {
 		if err := app.grpc.ReorderBackupConfigActions(ctx, backupConfigID, actionIDs); err != nil {

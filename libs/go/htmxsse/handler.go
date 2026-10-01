@@ -20,6 +20,20 @@ import (
 // for that event and does not close the stream.
 type Fragment func(*http.Request, string) ([]byte, error)
 
+// TopicAttr is the DOM attribute a page puts on each region a topic's
+// fragment replaces: a space-separated topic list, e.g.
+// data-sse-topic="deployment.7". A swap is addressed to every element whose
+// list contains the topic.
+const TopicAttr = "data-sse-topic"
+
+// validateTopic rejects topics that cannot be embedded verbatim in the
+// hx-target selector emitSwap writes.
+func validateTopic(topic string) {
+	if topic == "" || strings.ContainsAny(topic, " \t\r\n'\"\\<>&") {
+		panic(fmt.Sprintf("htmxsse: invalid topic %q: must be non-empty with no whitespace, quotes, backslash, <, > or &", topic))
+	}
+}
+
 // Handler creates an HTTP handler that upgrades a request to SSE and streams
 // events for the given topics using the provided fragment function.
 //
@@ -33,6 +47,9 @@ type Fragment func(*http.Request, string) ([]byte, error)
 func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 	if len(topics) == 0 {
 		panic("Handler requires at least one topic")
+	}
+	for _, topic := range topics {
+		validateTopic(topic)
 	}
 	// Sort topics for consistent ordering in baseline set encoding
 	sortedTopics := make([]string, len(topics))
@@ -224,13 +241,20 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 	}
 }
 
-// emitSwap writes a full state event (swap) to the response.
-// The event includes the topic name, the fragment data, and the baseline ID.
-// All writes use the Flusher to ensure atomicity and immediate delivery.
+// emitSwap writes a full-state swap to the response: an unnamed message
+// (htmx 4's hx-sse extension swaps unnamed messages and only dispatches
+// named ones as DOM events) whose payload is an <hx-partial> addressed to
+// every element carrying the topic in TopicAttr. The message id carries the
+// baseline set. All writes use the Flusher to ensure atomicity and
+// immediate delivery.
 func emitSwap(w http.ResponseWriter, flusher http.Flusher, topic string, fragment []byte, baselineID string) {
-	fmt.Fprintf(w, "event: %s\n", topic)
+	var payload bytes.Buffer
+	fmt.Fprintf(&payload, `<hx-partial hx-target="[%s~='%s']" hx-swap="innerHTML">`, TopicAttr, topic)
+	payload.Write(bytes.TrimSpace(fragment))
+	payload.WriteString("</hx-partial>")
+
 	fmt.Fprintf(w, "id: %s\n", baselineID)
-	writeDataField(w, bytes.TrimSpace(fragment))
+	writeDataField(w, payload.Bytes())
 	fmt.Fprint(w, "\n")
 	flusher.Flush()
 }

@@ -191,7 +191,7 @@ handler and its consumer/reaper.
 `GET /api/live/deployments` (`handleDeploymentsLiveSSE` in
 `handlers_sessions_live.go`, #1724) originally kept the `/sessions` list
 page's per-row live status current with no reload, via a server-scoped
-`hx-ext="sse"` region (`components.LiveRegion`, then still named
+`hx-sse:connect` region (`components.LiveRegion`, then still named
 `pages.DeploymentsLiveRegion`) wrapping each `pages.DeploymentRow`. Task
 #2372 (M6 navigation/disposition, FR17) retired that page to a redirect
 onto `/activity`; the route, its handler, and `resolveScopedServerGameConfigs`
@@ -237,7 +237,7 @@ in place.
 **When live updates are unavailable** (`app.sseHub == nil` -- no
 `RABBITMQ_URL`, or the broker was unreachable at startup, see `ENV.md`, or
 the fleet-wide authorized set is empty): `ActivityPageData.LiveUpdatesEnabled`
-is `false` and the page omits the `hx-ext="sse"`/`sse-connect`/indicator
+is `false` and the page omits the `hx-sse:connect`/indicator
 markup entirely rather than pointing it at a route that would only 503 --
 unlike `/sessions`'s degradation, Activity has no per-row poll fallback to
 drop to (FR15): it just renders its server-side snapshot.

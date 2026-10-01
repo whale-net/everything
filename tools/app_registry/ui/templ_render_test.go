@@ -40,9 +40,9 @@ func TestRenderTempl_ThemesCSSLoadsAfterDaisyUILink(t *testing.T) {
 }
 
 // TestRenderTempl_SSEExtensionScript_FR20a tests FR20(a): the rendered page
-// contains the pinned htmx SSE extension script (htmx.org@1.9.10/dist/ext/sse.js)
+// contains the pinned htmx SSE extension script (htmx.org@4.0.0/dist/ext/hx-sse.min.js)
 // AFTER the htmx core script, matching the required load order.
-// Failure: htmx 2.x SSE extension is incompatible with 1.9.10 core; the failure is silent.
+// Failure: without the extension script hx-sse:connect silently does nothing.
 //
 // This renders through htmxbase.Render (not buildHead() alone): the core
 // htmx script is loaded by htmxbase.LayoutData itself, before CustomHead is
@@ -63,7 +63,7 @@ func TestRenderTempl_SSEExtensionScript_FR20a(t *testing.T) {
 	page := buf.String()
 
 	// FR20(a): Must contain the pinned SSE extension URL
-	expectedSSEExtURL := "https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"
+	expectedSSEExtURL := "https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js"
 	if !strings.Contains(page, expectedSSEExtURL) {
 		t.Fatalf("FR20(a) violation: expected SSE extension script %q in page, got: %s", expectedSSEExtURL, page)
 	}

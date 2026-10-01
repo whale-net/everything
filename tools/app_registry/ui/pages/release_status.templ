@@ -97,14 +97,13 @@ script copyReleaseRunID(id string) {
 // release_run_id, showing per-target state through to completion (FR10),
 // with a live-pushed Targets region (FR8, FR11) once the SSE route feeding
 // it exists -- see this file's ReleaseStatusLiveBody doc comment. Modelled
-// on PromotionDetails' own hx-ext/indicator/reload-affordance shape
+// on PromotionDetails' own hx-sse:connect/indicator/reload-affordance shape
 // (promotion_details.templ), generalizing its FR29 pushed-region boundary
 // and FR23/FR24 live-indicator behavior to this screen.
 templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 	@components.Shell("Release Status", user) {
 		<div
-			hx-ext="sse"
-			sse-connect={ templ.URL("/releases/" + s.ReleaseRunID + "/status/sse") }
+			hx-sse:connect={ templ.URL("/releases/" + s.ReleaseRunID + "/status/sse") }
 			data-heartbeat-ms={ fmt.Sprint(s.HeartbeatIntervalMs) }
 		>
 			<div class="flex justify-between items-center mb-4">
@@ -142,7 +141,6 @@ templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 
 			<!-- FR14, FR15: Live/not-live indicator + reload affordance (outside the pushed region). Reload is the only recovery path from an expired/revoked session on this route. -->
 			@liveindicator.LiveIndicator(liveindicator.Options{
-				Topics:              []string{"release_run." + s.ReleaseRunID},
 				HeartbeatIntervalMs: s.HeartbeatIntervalMs,
 				ReloadHref:          "/releases/" + s.ReleaseRunID,
 			})
@@ -192,15 +190,15 @@ templ releaseStatusDetail(rel *pb.GetReleaseResponse, commits map[string]BuildCo
 }
 
 // releaseStatusLiveSwap wraps ReleaseStatusLiveBody in FR11's swap target.
-// The sse-swap key matches the routing key events.TopicForReleaseRun (a
-// separate, not-yet-landed task) will produce -- the same
-// "promotion."+id precedent promotion_details.templ's own sse-swap target
-// sets for that screen. The SSE route/handler that actually pushes into
+// The data-sse-topic value matches the routing key events.TopicForReleaseRun
+// (a separate, not-yet-landed task) will produce -- the same
+// "promotion."+id precedent promotion_details.templ's own data-sse-topic
+// target sets for that screen. The SSE route/handler that actually pushes into
 // this target does not exist yet (also a separate task); until it lands,
 // this div renders once on GET and simply never receives a push -- the
 // intended intermediate state.
 templ releaseStatusLiveSwap(rel *pb.GetReleaseResponse, commits map[string]BuildCommitInfo, releaseRunID string) {
-	<div sse-swap={ "release_run." + releaseRunID } id="release-status-body">
+	<div data-sse-topic={ "release_run." + releaseRunID } id="release-status-body">
 		@ReleaseStatusLiveBody(rel, commits)
 	</div>
 }

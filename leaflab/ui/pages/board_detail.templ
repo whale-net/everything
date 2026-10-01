@@ -70,7 +70,7 @@ type BoardRegionNudge struct {
 // failure leaves it empty, which renders the pickers as a "No regions yet"
 // hint rather than failing the page.
 //
-// NFR1: this page has no hx-trigger polling interval, no sse-connect, and
+// NFR1: this page has no hx-trigger polling interval, no hx-sse:connect, and
 // no WebSocket -- data reflects the last page load or navigation only. Do
 // not add any of those here; see the task issue's NFR1 section and the
 // render test guarding it. (The hx-post forms below swap fragments in

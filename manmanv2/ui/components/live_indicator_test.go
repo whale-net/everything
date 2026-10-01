@@ -16,22 +16,21 @@ func renderLiveRegion(t *testing.T, opts LiveRegionOptions) string {
 }
 
 // TestLiveRegion_SSEConnectAttribute covers the task's live_indicator_test.go
-// requirement: the sse-connect attribute must be wired to opts.SSEPath, and
-// the container must carry hx-ext="sse" so htmx actually attaches the SSE
-// extension to it.
+// requirement: the hx-sse:connect attribute must be wired to opts.SSEPath, and
+// the legacy hx-ext="sse" opt-in must be gone (htmx 4's hx-sse extension
+// activates from hx-sse:connect alone).
 func TestLiveRegion_SSEConnectAttribute(t *testing.T) {
 	html := renderLiveRegion(t, LiveRegionOptions{
 		SSEPath:             "/api/live/deployments",
-		Topics:              []string{"deployment.1"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/sessions",
 	})
 
-	if !strings.Contains(html, `sse-connect="/api/live/deployments"`) {
-		t.Errorf("expected sse-connect=%q, got body %q", "/api/live/deployments", html)
+	if !strings.Contains(html, `hx-sse:connect="/api/live/deployments"`) {
+		t.Errorf("expected hx-sse:connect=%q, got body %q", "/api/live/deployments", html)
 	}
-	if !strings.Contains(html, `hx-ext="sse"`) {
-		t.Errorf("expected hx-ext=\"sse\", got body %q", html)
+	if strings.Contains(html, `hx-ext`) {
+		t.Errorf("expected no hx-ext attribute, got body %q", html)
 	}
 }
 
@@ -40,7 +39,6 @@ func TestLiveRegion_SSEConnectAttribute(t *testing.T) {
 func TestLiveRegion_LiveStatusBadge(t *testing.T) {
 	html := renderLiveRegion(t, LiveRegionOptions{
 		SSEPath:             "/api/live/deployments",
-		Topics:              []string{"deployment.1"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/sessions",
 	})
@@ -61,7 +59,6 @@ func TestLiveRegion_LiveStatusBadge(t *testing.T) {
 func TestLiveRegion_ReloadHrefHonoured(t *testing.T) {
 	html := renderLiveRegion(t, LiveRegionOptions{
 		SSEPath:             "/api/live/activity",
-		Topics:              []string{"deployment.1"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/activity",
 	})
@@ -75,7 +72,7 @@ func TestLiveRegion_ReloadHrefHonoured(t *testing.T) {
 }
 
 // TestLiveRegion_ChildrenRenderInsideContainer proves the { children... }
-// slot renders inside the hx-ext="sse" container -- the shape every M5
+// slot renders inside the hx-sse:connect container -- the shape every M5
 // caller (Sessions originally, Activity today) relies on: rows rendered as
 // children live under the same SSE ancestor as the indicator/reload
 // affordance, never outside it.
@@ -83,7 +80,6 @@ func TestLiveRegion_ChildrenRenderInsideContainer(t *testing.T) {
 	var buf strings.Builder
 	err := LiveRegion(LiveRegionOptions{
 		SSEPath:             "/api/live/deployments",
-		Topics:              []string{"deployment.1"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/sessions",
 	}).Render(context.Background(), &buf)
@@ -92,9 +88,9 @@ func TestLiveRegion_ChildrenRenderInsideContainer(t *testing.T) {
 	}
 	html := buf.String()
 
-	regionIdx := strings.Index(html, `sse-connect="/api/live/deployments"`)
+	regionIdx := strings.Index(html, `hx-sse:connect="/api/live/deployments"`)
 	if regionIdx < 0 {
-		t.Fatalf("expected a container carrying sse-connect, got body %q", html)
+		t.Fatalf("expected a container carrying hx-sse:connect, got body %q", html)
 	}
 	statusIdx := strings.Index(html, `data-live-status`)
 	reloadIdx := strings.Index(html, `data-live-reload`)
@@ -103,25 +99,24 @@ func TestLiveRegion_ChildrenRenderInsideContainer(t *testing.T) {
 	}
 }
 
-// TestLiveRegion_TopicsForwardedToLiveIndicator proves LiveRegion's Topics
-// option -- the per-caller topic list, one entry per row for a per-row
-// table just as much as a single fleet-wide entry -- reaches
-// liveindicator.LiveIndicator so its hidden per-topic keepalive targets
-// actually get rendered; without this, htmx never registers a listener for
-// the heartbeat event and the indicator falsely reports "Not Live" on any
-// quiet stretch (see live_indicator.templ's doc comment).
-func TestLiveRegion_TopicsForwardedToLiveIndicator(t *testing.T) {
+// TestLiveRegion_IndicatorInsideContainerNoKeepaliveTargets proves the
+// LiveIndicator renders inside the hx-sse:connect container and that no
+// legacy per-topic sse-swap keepalive targets are emitted -- htmx 4's
+// hx-sse dispatches htmx:sse:after:message for every named event, so the
+// indicator needs no hidden listeners.
+func TestLiveRegion_IndicatorInsideContainerNoKeepaliveTargets(t *testing.T) {
 	html := renderLiveRegion(t, LiveRegionOptions{
 		SSEPath:             "/api/live/deployments",
-		Topics:              []string{"deployment.1", "deployment.2"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/sessions",
 	})
 
-	if !strings.Contains(html, `sse-swap="deployment.1-keepalive"`) {
-		t.Errorf("expected a hidden keepalive target for deployment.1, got body %q", html)
+	regionIdx := strings.Index(html, `hx-sse:connect="/api/live/deployments"`)
+	indicatorIdx := strings.Index(html, `class="live-indicator"`)
+	if regionIdx < 0 || indicatorIdx < regionIdx {
+		t.Errorf("expected the live indicator inside the hx-sse:connect container, got body %q", html)
 	}
-	if !strings.Contains(html, `sse-swap="deployment.2-keepalive"`) {
-		t.Errorf("expected a hidden keepalive target for deployment.2, got body %q", html)
+	if strings.Contains(html, "sse-swap") {
+		t.Errorf("expected no sse-swap attribute anywhere, got body %q", html)
 	}
 }

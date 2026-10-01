@@ -65,7 +65,7 @@ func renderWorkshopBatchStatus(t *testing.T, app *App, batchJobID string) string
 // hx-trigger="every ..." auto-updating mechanism may appear on this page.
 func assertNoAutoRefresh(t *testing.T, body string) {
 	t.Helper()
-	for _, marker := range []string{"hx-trigger=\"every", "hx-ext=\"sse\"", "sse-connect", "sse-swap"} {
+	for _, marker := range []string{"hx-trigger=\"every", "hx-ext=\"sse\"", "hx-sse:connect", "data-sse-topic"} {
 		if strings.Contains(body, marker) {
 			t.Errorf("expected no auto-refresh mechanism on the batch-status page, found marker %q", marker)
 		}

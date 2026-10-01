@@ -30,7 +30,7 @@ type ActivityPageData struct {
 	// LiveTopics is the fleet-wide authorized set's deployment topics
 	// (FR15, NFR10, #2277) -- handlers_activity.go's buildActivityPageData
 	// derives this from the exact same sgcByID handleActivityLiveSSE
-	// (handlers_activity_live.go) subscribes to, so the page's sse-swap
+	// (handlers_activity_live.go) subscribes to, so the page's data-sse-topic
 	// list and the stream's authorized set can never drift apart. Empty
 	// when the fleet-wide set is empty (a valid, handled state -- NFR10).
 	LiveTopics []string
@@ -101,7 +101,7 @@ templ Activity(layout components.LayoutData, data ActivityPageData) {
 		@components.HeroHeader("Activity", "Fleet-wide view of what is running now and what ran before")
 		@ActivityFilters(data.FilterGameID, data.FilterStatus)
 		if data.LiveUpdatesEnabled {
-			@ActivityLiveRegion(data.LiveTopics, data.HeartbeatIntervalMs) {
+			@ActivityLiveRegion(data.HeartbeatIntervalMs) {
 				@ActivityLiveContent(data)
 			}
 		} else {
@@ -116,10 +116,9 @@ templ Activity(layout components.LayoutData, data ActivityPageData) {
 // Activity's own fleet-wide SSE path and reload target -- see
 // handlers_activity_live.go's handleActivityLiveSSE doc comment for the
 // fleet-wide topic/authorization-set contract this pairs with.
-templ ActivityLiveRegion(liveTopics []string, heartbeatIntervalMs int) {
+templ ActivityLiveRegion(heartbeatIntervalMs int) {
 	@components.LiveRegion(components.LiveRegionOptions{
 		SSEPath:             "/api/live/activity",
-		Topics:              liveTopics,
 		HeartbeatIntervalMs: heartbeatIntervalMs,
 		ReloadHref:          "/activity",
 	}) {
@@ -127,20 +126,20 @@ templ ActivityLiveRegion(liveTopics []string, heartbeatIntervalMs int) {
 	}
 }
 
-// ActivityLiveContent is the sse-swap target wrapping both Live/History
-// tables (FR15). Unlike /sessions's per-row DeploymentRow targets, a
-// session moving live<->terminal moves it between these two tables rather
-// than updating one row in place, so the whole region -- not a single row
-// -- is the smallest correct swap unit here. sse-swap is set
-// unconditionally to the full fleet-wide topic list (data.LiveTopics,
-// comma-joined per htmx sse-ext's multi-event sse-swap syntax) so any
-// authorized deployment's status change re-renders both tables together.
+// ActivityLiveContent is the data-sse-topic target wrapping both
+// Live/History tables (FR15). Unlike /sessions's per-row DeploymentRow
+// targets, a session moving live<->terminal moves it between these two
+// tables rather than updating one row in place, so the whole region -- not
+// a single row -- is the smallest correct swap unit here. data-sse-topic is
+// set unconditionally to the full fleet-wide topic list (data.LiveTopics,
+// space-joined) so any authorized deployment's status change re-renders
+// both tables together.
 // ActivityLiveContentInner (below) is the exact same markup minus this
 // wrapper, rendered per delivery by handleActivityLiveSSE's fragment
 // (handlers_activity_live.go) so the two can never diverge -- mirrors
 // DeploymentRow/DeploymentRowInner's split in pages/sessions.templ.
 templ ActivityLiveContent(data ActivityPageData) {
-	<div id="activity-live-content" sse-swap={ strings.Join(data.LiveTopics, ",") }>
+	<div id="activity-live-content" data-sse-topic={ strings.Join(data.LiveTopics, " ") }>
 		@ActivityLiveContentInner(data)
 	</div>
 }

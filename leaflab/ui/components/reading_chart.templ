@@ -148,7 +148,7 @@ func excludedNoticeText(data ReadingChartData) string {
 // NFR1: nothing here polls. Every range change (a preset click or a
 // drag-select) is a single user-initiated fetch to
 // "/sensors/{sensor_id}/history/data" -- there is no hx-trigger interval,
-// no sse-connect, and no WebSocket anywhere in this component.
+// no hx-sse:connect, and no WebSocket anywhere in this component.
 templ ReadingChart(data ReadingChartData) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm">
 		<div class="card-body">

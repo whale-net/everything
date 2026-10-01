@@ -34,11 +34,11 @@ func TestBuildHead_ThemesCSSLoadsAfterDaisyUILink(t *testing.T) {
 }
 
 // TestBuildHead_HTMXSSEExtensionScript guards the htmx SSE extension
-// script buildHead must emit: session.templ's hx-ext="sse" (and its
-// sse-connect/sse-swap attributes) silently no-op without this script
+// script buildHead must emit: session.templ's hx-sse:connect (and its
+// data-sse-topic attributes) silently no-op without this script
 // loaded, so the session detail page never opens a live connection even
 // though the backend correctly publishes every committed event to the
-// bus (see buildHead's doc comment). Pinned to the same htmx.org@1.9.10
+// bus (see buildHead's doc comment). Pinned to the same htmx.org@4.0.0
 // build the already-loaded htmx core script uses (htmxbase.LayoutData
 // renders core before CustomHead), and asserted to load after the
 // daisyUI <link>/htmxui.ThemesCSS <style> pair so it cannot disturb the
@@ -48,7 +48,7 @@ func TestBuildHead_ThemesCSSLoadsAfterDaisyUILink(t *testing.T) {
 func TestBuildHead_HTMXSSEExtensionScript(t *testing.T) {
 	head := buildHead()
 
-	wantScript := `<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`
+	wantScript := `<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js"></script>`
 	sseScriptIdx := strings.Index(head, wantScript)
 	if sseScriptIdx < 0 {
 		t.Fatalf("expected pinned htmx SSE extension script %q in head, got: %s", wantScript, head)

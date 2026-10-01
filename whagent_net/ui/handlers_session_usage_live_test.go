@@ -115,7 +115,7 @@ func TestHandleSessionUsageEvents_PublishedEventProducesExactlyOneSwap(t *testin
 	stop()
 
 	body := w.Body.String()
-	if got := strings.Count(body, "event: "+topic+"\n"); got != 2 { // connect (1/10) + the delivered event (2/10)
+	if got := strings.Count(body, swapTarget(topic)); got != 2 { // connect (1/10) + the delivered event (2/10)
 		t.Fatalf("expected exactly 2 swaps for topic %s (connect + one delivered event), got %d in body %q", topic, got, body)
 	}
 	if !strings.Contains(body, "2 / 10") {

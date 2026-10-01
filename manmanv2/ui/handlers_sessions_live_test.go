@@ -224,29 +224,40 @@ func runLiveSSE(t *testing.T, app *App, target string, wait time.Duration) strin
 	return w.Body.String()
 }
 
-// extractSSEData returns the payload of the first "event: <topic>\n...data:
-// <payload>\n\n" swap block for topic, failing the test if none is found.
-func extractSSEData(t *testing.T, body, topic string) string {
-	t.Helper()
-	marker := "event: " + topic + "\n"
-	idx := strings.Index(body, marker)
-	if idx < 0 {
-		t.Fatalf("no %q event found in body %q", marker, body)
-	}
-	rest := body[idx+len(marker):]
-	const dataMarker = "\ndata: "
-	dataIdx := strings.Index(rest, dataMarker)
-	if dataIdx < 0 {
-		t.Fatalf("no data line found after %q in %q", marker, rest)
-	}
-	afterData := rest[dataIdx+len(dataMarker):]
-	end := strings.Index(afterData, "\n\n")
-	if end < 0 {
-		t.Fatalf("no terminating blank line after data for %q in %q", marker, afterData)
-	}
-	return afterData[:end]
+// swapTarget is the hx-target marker htmxsse writes on a topic's swap frame
+// (keepalives never contain it), so counting it counts that topic's swaps.
+func swapTarget(topic string) string {
+	return `hx-target="[` + htmxsse.TopicAttr + `~='` + topic + `']"`
 }
 
+// extractSSEData returns the fragment of the first swap frame for topic: the
+// frame's "data:" lines joined with "\n" (as EventSource does), with the
+// hx-partial wrapper removed. Fails the test if no such frame is found.
+func extractSSEData(t *testing.T, body, topic string) string {
+	t.Helper()
+	open := "<hx-partial " + swapTarget(topic) + ` hx-swap="innerHTML">`
+	const closeTag = "</hx-partial>"
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "data: "+open) {
+			continue
+		}
+		var data []string
+		for _, l := range lines[i:] {
+			if l == "" {
+				break
+			}
+			data = append(data, strings.TrimPrefix(l, "data: "))
+		}
+		payload := strings.Join(data, "\n")
+		if !strings.HasSuffix(payload, closeTag) {
+			t.Fatalf("swap frame for %q is missing %q: %q", topic, closeTag, payload)
+		}
+		return strings.TrimSuffix(strings.TrimPrefix(payload, open), closeTag)
+	}
+	t.Fatalf("no swap frame for topic %q found in body %q", topic, body)
+	return ""
+}
 // --- 1. Topic set scoped to the selected server's authorized SGCs (FR7) ---
 
 func TestHandleDeploymentsLiveSSE_TopicSetScopedToSelectedServer(t *testing.T) {
@@ -273,7 +284,7 @@ func TestHandleDeploymentsLiveSSE_TopicSetScopedToSelectedServer(t *testing.T) {
 
 	for _, sgcID := range []int64{101, 102} {
 		topic := events.TopicForDeployment(sgcID)
-		if !strings.Contains(body, "event: "+topic+"\n") {
+		if !strings.Contains(body, swapTarget(topic)) {
 			t.Errorf("expected an initial swap for in-scope topic %s, got body %q", topic, body)
 		}
 	}
@@ -301,7 +312,7 @@ func TestHandleDeploymentsLiveSSE_InitialFragmentMatchesDirectRender(t *testing.
 	body := runLiveSSE(t, app, "/api/live/deployments?server_id=1", 100*time.Millisecond)
 
 	topic := events.TopicForDeployment(55)
-	if got := strings.Count(body, "event: "+topic+"\n"); got != 1 {
+	if got := strings.Count(body, swapTarget(topic)); got != 1 {
 		t.Fatalf("expected exactly one initial swap for topic %s, got %d in body %q", topic, got, body)
 	}
 	got := extractSSEData(t, body, topic)
@@ -359,10 +370,10 @@ func TestHandleDeploymentsLiveSSE_PublishedEventSwapsOnlyThatTopic(t *testing.T)
 	<-done
 
 	body := w.Body.String()
-	if got := strings.Count(body, "event: "+topicA+"\n"); got != 2 { // connect + the delivered event
+	if got := strings.Count(body, swapTarget(topicA)); got != 2 { // connect + the delivered event
 		t.Errorf("expected 2 swaps for topic %s (connect + delivered event), got %d in body %q", topicA, got, body)
 	}
-	if got := strings.Count(body, "event: "+topicB+"\n"); got != 1 { // connect only
+	if got := strings.Count(body, swapTarget(topicB)); got != 1 { // connect only
 		t.Errorf("expected exactly 1 swap for topic %s (connect only, no event delivered), got %d in body %q", topicB, got, body)
 	}
 }
@@ -465,7 +476,7 @@ func TestHandleDeploymentsLiveSSE_HeartbeatUnchangedStateIsKeepalive(t *testing.
 
 	body := w.Body.String()
 	topic := events.TopicForDeployment(77)
-	swapCount := strings.Count(body, "event: "+topic+"\n")
+	swapCount := strings.Count(body, swapTarget(topic))
 	keepaliveCount := strings.Count(body, "event: "+topic+"-keepalive\n")
 
 	if swapCount != 1 {
@@ -597,10 +608,10 @@ func TestHandleDeploymentsLiveSSE_DeliveryErrorSkipsRowKeepsStreamOpen(t *testin
 	<-done
 
 	body := w.Body.String()
-	if got := strings.Count(body, "event: "+topicBad+"\n"); got != 1 { // connect only; the errored delivery added no bytes
+	if got := strings.Count(body, swapTarget(topicBad)); got != 1 { // connect only; the errored delivery added no bytes
 		t.Errorf("expected the errored delivery to add no swap for %s, got %d in body %q", topicBad, got, body)
 	}
-	if got := strings.Count(body, "event: "+topicGood+"\n"); got != 2 { // connect + the good delivery
+	if got := strings.Count(body, swapTarget(topicGood)); got != 2 { // connect + the good delivery
 		t.Errorf("expected the good delivery to still swap for %s after the other topic's error, got %d in body %q", topicGood, got, body)
 	}
 }

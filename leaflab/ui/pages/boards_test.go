@@ -276,7 +276,7 @@ func TestBoards_Name_UsesBoardNameAsPrimaryLabel(t *testing.T) {
 }
 
 // TestBoards_NoAutoRefreshMarkup is NFR1's guard: the rendered page must
-// never carry an hx-trigger polling interval or an sse-connect attribute,
+// never carry an hx-trigger polling interval or an hx-sse:connect attribute,
 // across every state this page can render (three boards, empty, and error).
 func TestBoards_NoAutoRefreshMarkup(t *testing.T) {
 	fixtures := map[string]templ.Component{
@@ -291,8 +291,8 @@ func TestBoards_NoAutoRefreshMarkup(t *testing.T) {
 	for name, component := range fixtures {
 		t.Run(name, func(t *testing.T) {
 			body := renderPage(t, component)
-			if strings.Contains(body, "sse-connect") {
-				t.Errorf("[%s] expected no sse-connect anywhere on the boards page (NFR1), got %q", name, body)
+			if strings.Contains(body, "hx-sse:connect") {
+				t.Errorf("[%s] expected no hx-sse:connect anywhere on the boards page (NFR1), got %q", name, body)
 			}
 			// hx-trigger with a time interval looks like `hx-trigger="every 5s"`
 			// or similar; a plain hx-trigger with no "every" clause (e.g. a

@@ -210,7 +210,7 @@ func TestHandleReleaseStatusSSE_Authenticated_ReturnsInitialFragment(t *testing.
 		t.Errorf("Content-Type = %q, want text/event-stream", ct)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "event: release_run.run-7") {
+	if !strings.Contains(body, swapTarget("release_run.run-7")) {
 		t.Errorf("expected an initial swap event on the release_run.run-7 topic before any event, body: %s", body)
 	}
 	if !strings.Contains(body, "platform-worker") {
@@ -278,7 +278,7 @@ func TestHandleReleaseStatusSSE_FR16_AllTargetsTerminalStillStreams(t *testing.T
 	<-done
 
 	body := recorder.Body.String()
-	if !strings.Contains(body, "event: release_run.run-9") {
+	if !strings.Contains(body, swapTarget("release_run.run-9")) {
 		t.Errorf("expected the initial swap event, body: %s", body)
 	}
 	if !strings.Contains(body, "release_run.run-9-keepalive") {
@@ -542,4 +542,10 @@ func TestReleaseStatusFragment_FR12NFR9_SingleGetBuildAcrossNRenders(t *testing.
 	if artifact.getBuildCalls != 1 {
 		t.Errorf("GetBuild calls = %d across %d renders, want exactly 1", artifact.getBuildCalls, n)
 	}
+}
+
+// swapTarget is the hx-target marker htmxsse writes on a topic's swap frame
+// (keepalives never contain it), so counting it counts that topic's swaps.
+func swapTarget(topic string) string {
+	return `hx-target="[` + htmxsse.TopicAttr + `~='` + topic + `']"`
 }

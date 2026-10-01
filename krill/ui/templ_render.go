@@ -26,7 +26,7 @@ import (
 // first makes the palette override silently lose to daisyUI's defaults
 // with no error anywhere. templ_render_test.go guards the order.
 //
-// htmx core (1.9.10) and Alpine (3.x) are loaded by htmxbase's own base
+// htmx core (4.x) and Alpine (3.x) are loaded by htmxbase's own base
 // layout, before CustomHead, so any htmx extension script appended here
 // is already ordered after core.
 //

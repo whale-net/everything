@@ -85,8 +85,7 @@ func syncEventSourceLabel(source string) string {
 templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 	@components.Shell("Promotion Details", user) {
 		<div
-			hx-ext="sse"
-			sse-connect={ templ.URL("/promotions/" + s.PromotionID + "/status/sse") }
+			hx-sse:connect={ templ.URL("/promotions/" + s.PromotionID + "/status/sse") }
 			data-heartbeat-ms={ fmt.Sprint(s.HeartbeatIntervalMs) }
 			class="promotion-details-container"
 		>
@@ -99,7 +98,6 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 
 			<!-- FR23, FR24: Live/not-live indicator + reload affordance (outside pushed region) -->
 			@liveindicator.LiveIndicator(liveindicator.Options{
-				Topics:              []string{"promotion." + s.PromotionID},
 				HeartbeatIntervalMs: s.HeartbeatIntervalMs,
 				ReloadHref:          "/promotions/" + s.PromotionID,
 			})
@@ -110,7 +108,7 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 				if s.RetryErr != "" {
 					<div role="alert" class="alert alert-error shadow-md mb-4"><span>Retry failed: { s.RetryErr }</span></div>
 				}
-				<div sse-swap={ "promotion." + s.PromotionID } class="promotion-details-body">
+				<div data-sse-topic={ "promotion." + s.PromotionID } class="promotion-details-body">
 					@PromotionDetailsBody(user, s.Details.GetDetails())
 				</div>
 			}

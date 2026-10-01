@@ -254,7 +254,7 @@ func promotionReadinessLabel(o pb.PromotionSyncOutcome, syncStatus, healthStatus
 // page's other `card bg-base-100 border border-base-300` sections) rather
 // than a loud daisyUI `alert` -- it is a summary of information already on
 // the page, not a warning that needs to interrupt the reader at the top.
-// Still rendered inside the same sse-swap region as the rest of
+// Still rendered inside the same data-sse-topic region as the rest of
 // PromotionDetailsBody so it updates in place as new PromotionSyncEvent
 // observations arrive, with no reload.
 templ PromotionReadinessBanner(o pb.PromotionSyncOutcome, syncStatus, healthStatus, operationPhase string) {

@@ -42,11 +42,11 @@ func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component
 // buildHead constructs the CustomHead markup: pinned Tailwind browser
 // build + daisyUI CDN <link>, then htmxui.ThemesCSS, then chatMarkdownCSS,
 // in that exact order (see the "Trap" doc comment above), then the htmx
-// SSE extension script session.templ's hx-ext="sse" (and its
-// sse-connect/sse-swap attributes) require to do anything at all --
-// without this script tag, htmx silently no-ops the unknown "sse"
-// extension and no live connection is ever opened, regardless of the
-// backend correctly publishing to the bus. Mirrors
+// SSE extension script session.templ's hx-sse:connect (and its
+// data-sse-topic attributes) require to do anything at all --
+// without this script tag the attribute is inert and no live connection
+// is ever opened, regardless of the backend correctly publishing to
+// the bus. Mirrors
 // manmanv2/ui/templ_render.go's and
 // tools/app_registry/ui/templ_render.go's identical buildHead line;
 // appended last, same as those two, since it has no ordering dependency on
@@ -62,7 +62,7 @@ func buildHead() string {
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
 <style>` + htmxui.ThemesCSS + `</style>
 <style>` + chatMarkdownCSS + `</style>
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js"></script>`
 }
 
 // chatMarkdownCSS gives goldmark-rendered markdown (components/session.templ's

@@ -15,6 +15,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// swapTarget is the hx-target marker emitSwap writes on a topic's swap frame.
+// Keepalives never contain it.
+func swapTarget(topic string) string {
+	return `hx-target="[` + TopicAttr + `~='` + topic + `']"`
+}
+
+// swapFrameOpen is the full opening tag of a topic's swap payload.
+func swapFrameOpen(topic string) string {
+	return "<hx-partial " + swapTarget(topic) + ` hx-swap="innerHTML">`
+}
+
 // TestFR5_FullStateOnConnect tests that full state is produced on connect
 func TestFR5_FullStateOnConnect(t *testing.T) {
 	fakeTransport := &fakeTransport{}
@@ -62,8 +73,8 @@ func TestFR5_FullStateOnConnect(t *testing.T) {
 
 	// Check response contains the swap event
 	body := w.Body.String()
-	require.Contains(t, body, "event: topic-a")
-	require.Contains(t, body, "data: {\"topic\": \"topic-a\", \"state\": \"current\"}")
+	require.Contains(t, body, swapTarget("topic-a"))
+	require.Contains(t, body, swapFrameOpen("topic-a")+"{\"topic\": \"topic-a\", \"state\": \"current\"}</hx-partial>")
 }
 
 // TestMultiLineFragmentSurvivesSSEFraming guards against a regression where
@@ -111,9 +122,19 @@ func TestMultiLineFragmentSurvivesSSEFraming(t *testing.T) {
 
 	// Every physical line of the fragment must carry its own "data:"
 	// prefix -- a continuation line without one is not part of the field
-	// per spec and a real EventSource client would drop it.
-	for _, line := range strings.Split(fragmentBody, "\n") {
-		require.Contains(t, body, "data: "+line+"\n")
+	// per spec and a real EventSource client would drop it. The first and
+	// last fragment lines share their data line with the hx-partial tags.
+	open, closeTag := swapFrameOpen("topic-a"), "</hx-partial>"
+	fragLines := strings.Split(fragmentBody, "\n")
+	for i, line := range fragLines {
+		want := line
+		if i == 0 {
+			want = open + want
+		}
+		if i == len(fragLines)-1 {
+			want += closeTag
+		}
+		require.Contains(t, body, "data: "+want+"\n")
 	}
 
 	// Reconstruct the data field the way EventSource does (join
@@ -124,7 +145,59 @@ func TestMultiLineFragmentSurvivesSSEFraming(t *testing.T) {
 			dataLines = append(dataLines, strings.TrimPrefix(line, "data: "))
 		}
 	}
-	require.Equal(t, fragmentBody, strings.Join(dataLines, "\n"))
+	require.Equal(t, open+fragmentBody+closeTag, strings.Join(dataLines, "\n"))
+}
+
+// TestSwapFrameShape pins the exact wire format of a single-line swap: an id
+// line, then the fragment wrapped in an hx-partial on one data line, with no
+// event name (htmx 4 only swaps unnamed messages).
+func TestSwapFrameShape(t *testing.T) {
+	h := NewHub(func(ctx context.Context) (Transport, error) { return &fakeTransport{}, nil }, DefaultConfig())
+	defer h.Close()
+
+	const frag = `<p class="x">hello</p>`
+	handler := Handler(h, []string{"topic-a"}, func(r *http.Request, topic string) ([]byte, error) {
+		return []byte("  " + frag + "\n"), nil
+	})
+
+	req := httptest.NewRequest("GET", "/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler(w, req)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Skip the leading "retry:" line; the frame starts at its id line.
+	lines := strings.Split(w.Body.String(), "\n")
+	start := 0
+	for start < len(lines) && !strings.HasPrefix(lines[start], "id: ") {
+		start++
+	}
+	require.GreaterOrEqual(t, len(lines), start+3, "no complete frame in %q", w.Body.String())
+	frame := lines[start:]
+	require.Contains(t, frame[0], "topic-a")
+	require.Equal(t, `data: `+swapFrameOpen("topic-a")+frag+`</hx-partial>`, frame[1])
+	require.Equal(t, "", frame[2], "frame must end with a blank line")
+	require.NotContains(t, w.Body.String(), "event: topic-a\n")
+}
+
+// TestHandlerPanicsOnInvalidTopic covers topics that cannot be embedded in
+// the hx-target selector.
+func TestHandlerPanicsOnInvalidTopic(t *testing.T) {
+	h := NewHub(func(ctx context.Context) (Transport, error) { return &fakeTransport{}, nil }, DefaultConfig())
+	defer h.Close()
+	fragment := func(r *http.Request, topic string) ([]byte, error) { return nil, nil }
+
+	for _, topic := range []string{"a b", "a'b", `a"b`, `a\b`, "a<b", "a>b", "a&b", "a\nb", ""} {
+		require.Panics(t, func() { Handler(h, []string{"ok", topic}, fragment) }, "topic %q", topic)
+	}
+	require.NotPanics(t, func() { Handler(h, []string{"release_run.run-7"}, fragment) })
 }
 
 // TestFR5_ReconnectBaselineSuppression tests that keepalive is emitted when baseline matches
@@ -196,7 +269,7 @@ func TestFR5_ReconnectBaselineSuppression(t *testing.T) {
 	body2 := w2.Body.String()
 	// When baseline matches, should emit keepalive, not swap
 	require.Contains(t, body2, "event: topic-a-keepalive")
-	require.NotContains(t, body2, "event: topic-a\n")
+	require.NotContains(t, body2, swapTarget("topic-a"))
 }
 
 // TestFR5_MultiTopicBaselineRule tests baseline suppression per topic
@@ -284,6 +357,9 @@ func TestFR5_MultiTopicBaselineRule(t *testing.T) {
 	}
 	// Should have keepalive for topic-a and swap for topic-b
 	require.True(t, len(eventLines) > 0)
+	require.Contains(t, body2, "event: topic-a-keepalive")
+	require.Contains(t, body2, swapTarget("topic-b"))
+	require.NotContains(t, body2, swapTarget("topic-a"))
 }
 
 // TestFR3_PerConnectionFragment tests that fragments are per-connection
@@ -410,7 +486,7 @@ func TestFR3_DeliveryTimeErrorPolicy(t *testing.T) {
 
 	// Stream should still have output (the successful fragments)
 	body := w.Body.String()
-	require.Contains(t, body, "event: topic-a")
+	require.Contains(t, body, swapTarget("topic-a"))
 }
 
 // TestNFR11_HeartbeatNoSwapOnUnchanged tests keepalive on heartbeat when unchanged
@@ -450,7 +526,7 @@ func TestNFR11_HeartbeatNoSwapOnUnchanged(t *testing.T) {
 
 	body := w.Body.String()
 	// Should have one initial swap
-	swapCount := strings.Count(body, "event: topic-a\n")
+	swapCount := strings.Count(body, swapTarget("topic-a"))
 	// And heartbeat keepalives (events without id should be keepalives)
 	keepaliveCount := strings.Count(body, "event: topic-a-keepalive")
 
@@ -646,6 +722,7 @@ func TestFR2_ResponseCommitOrdering(t *testing.T) {
 	// held in a proxy buffer until it trips its own idle timeout.
 	require.Equal(t, "no", w.Header().Get("X-Accel-Buffering"))
 	// Should have zero events (fragment errored)
+	require.NotContains(t, w.Body.String(), swapTarget("topic-a"))
 	require.NotContains(t, w.Body.String(), "event: topic-a")
 }
 
@@ -925,11 +1002,12 @@ func TestPN15_WholeBaselineSetInID(t *testing.T) {
 	for _, line := range lines {
 		if strings.HasPrefix(line, "id: ") {
 			lastID = strings.TrimPrefix(line, "id: ")
-		} else if strings.HasPrefix(line, "event: ") {
-			topic := strings.TrimPrefix(line, "event: ")
+		} else if lastID != "" {
 			// Only track actual swaps, not keepalives
-			if !strings.HasSuffix(topic, "-keepalive") && lastID != "" {
-				idToTopicSwap[lastID] = topic
+			for _, topic := range []string{"topic-a", "topic-b"} {
+				if strings.Contains(line, swapTarget(topic)) {
+					idToTopicSwap[lastID] = topic
+				}
 			}
 		}
 	}
@@ -1028,11 +1106,11 @@ func TestFR5_MultiTopicBaselineRuleComprehensive(t *testing.T) {
 	var aHasSwap, aHasKeepalive, bHasSwap, bHasKeepalive bool
 	lines = strings.Split(body2, "\n")
 	for _, line := range lines {
-		if line == "event: topic-a" {
+		if strings.Contains(line, swapTarget("topic-a")) {
 			aHasSwap = true
 		} else if line == "event: topic-a-keepalive" {
 			aHasKeepalive = true
-		} else if line == "event: topic-b" {
+		} else if strings.Contains(line, swapTarget("topic-b")) {
 			bHasSwap = true
 		} else if line == "event: topic-b-keepalive" {
 			bHasKeepalive = true
@@ -1065,8 +1143,8 @@ func TestFR5_MultiTopicBaselineRuleComprehensive(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	body3 := w3.Body.String()
-	require.Contains(t, body3, "event: topic-a\n", "topic-a should swap on fresh connect")
-	require.Contains(t, body3, "event: topic-b\n", "topic-b should swap on fresh connect")
+	require.Contains(t, body3, swapTarget("topic-a"), "topic-a should swap on fresh connect")
+	require.Contains(t, body3, swapTarget("topic-b"), "topic-b should swap on fresh connect")
 
 	cancel3()
 	<-done3

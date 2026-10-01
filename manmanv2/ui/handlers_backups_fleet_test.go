@@ -1120,6 +1120,31 @@ func TestHandleBackupConfigActionsReorder_ForwardsCompleteActionIDsSequenceThenR
 	}
 }
 
+// hx-vals (htmx 4) sends the order as one comma-joined action_ids value
+// rather than repeated fields; the handler must forward the same sequence.
+func TestHandleBackupConfigActionsReorder_AcceptsCommaJoinedActionIDs(t *testing.T) {
+	api := backupConfigActionsFixture()
+
+	form := url.Values{"action_ids": {"103,101,102"}}
+	code, body := postBackupConfigActionsSubrouteHTTP(t, api, 1, "reorder", form)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+	if api.lastReorderBackupConfigActionsReq == nil {
+		t.Fatal("expected POST .../actions/reorder to call ReorderBackupConfigActions")
+	}
+	got := api.lastReorderBackupConfigActionsReq.ActionIds
+	want := []int64{103, 101, 102}
+	if len(got) != len(want) {
+		t.Fatalf("ActionIds = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ActionIds = %v, want %v", got, want)
+		}
+	}
+}
+
 // Ordering assertion: moving the last action to the top produces a reorder
 // request whose first element is that action's id, and the re-rendered
 // panel shows it first.

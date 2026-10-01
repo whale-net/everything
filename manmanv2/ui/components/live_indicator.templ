@@ -10,23 +10,14 @@ import "github.com/whale-net/everything/libs/go/htmxsse/liveindicator"
 // at its own path, so the reload target is now a parameter rather than a
 // literal.
 type LiveRegionOptions struct {
-	// SSEPath is the hx-ext="sse" container's sse-connect target, e.g.
+	// SSEPath is the hx-sse:connect container's target, e.g.
 	// "/api/live/deployments".
 	SSEPath string
-	// Topics are the sse-swap event names this connection carries -- the
-	// same topic strings passed to the SSEPath handler (e.g.
-	// events.TopicForDeployment(id) per row, or a fleet-wide topic list).
-	// Forwarded straight to liveindicator.Options.Topics: the caller must
-	// list every topic it renders a swap target for under { children... },
-	// one entry per row for a per-row table just as much as a single entry
-	// for a combined region -- the caller already has this list (it needed
-	// the same IDs to render the rows/target in the first place).
-	Topics []string
 	// HeartbeatIntervalMs is the resolved server heartbeat interval, in
 	// milliseconds, used for the Not-Live debounce: the client waits one
-	// heartbeat interval after htmx:sseError/htmx:sseClose (or a missed
-	// heartbeat) before flipping the indicator, so a single dropped beat
-	// doesn't flap it.
+	// heartbeat interval after htmx:sse:error (or a missed heartbeat)
+	// before flipping the indicator, so a single dropped beat doesn't
+	// flap it.
 	HeartbeatIntervalMs int
 	// ReloadHref is the page to reload when the connection goes stale;
 	// "/sessions" for the existing sessions-page caller.
@@ -34,13 +25,13 @@ type LiveRegionOptions struct {
 }
 
 // LiveRegion is the not-live indicator lifted out of
-// pages/sessions.templ's DeploymentsLiveRegion (#1726): hx-ext="sse" +
-// sse-connect on the outer container (an ancestor of every per-row
-// sse-swap target the caller renders via { children... }, never itself a
-// swap target -- see libs/go/htmxsse/README.md's "Critical for adopters"
-// note: an sse-connect element that gets swapped re-attaches its
-// EventSource listener before the reconnect can carry Last-Event-ID,
-// breaking the reconnect-baseline suppression callers rely on).
+// pages/sessions.templ's DeploymentsLiveRegion (#1726): hx-sse:connect on
+// the outer container (an ancestor of every per-row data-sse-topic target
+// the caller renders via { children... }, never itself a swap target -- see
+// libs/go/htmxsse/README.md's "Critical for adopters" note: an
+// hx-sse:connect element that gets swapped re-opens its connection before
+// the reconnect can carry Last-Event-ID, breaking the reconnect-baseline
+// suppression callers rely on).
 //
 // Liveness detection is delegated to liveindicator.LiveIndicator (see its
 // package doc comment): this component used to run its own
@@ -50,12 +41,11 @@ type LiveRegionOptions struct {
 // "Not Live" even though the connection was healthy the whole time.
 // liveindicator fixes this the same way for every caller, static topic
 // list or per-row, so LiveRegion is now a thin wrapper: it still owns the
-// hx-ext="sse"/sse-connect container (the piece every caller needs
-// regardless of topic shape) and hands the rest to liveindicator.
+// hx-sse:connect container (the piece every caller needs regardless of
+// topic shape) and hands the rest to liveindicator.
 templ LiveRegion(opts LiveRegionOptions) {
-	<div hx-ext="sse" sse-connect={ opts.SSEPath }>
+	<div hx-sse:connect={ opts.SSEPath }>
 		@liveindicator.LiveIndicator(liveindicator.Options{
-			Topics:              opts.Topics,
 			HeartbeatIntervalMs: opts.HeartbeatIntervalMs,
 			ReloadHref:          opts.ReloadHref,
 		})

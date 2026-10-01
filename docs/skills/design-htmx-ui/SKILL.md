@@ -37,8 +37,20 @@ utilities, all from the pinned CDNs. That means:
 
 - No hand-written stylesheets. No raw palette classes (`bg-indigo-600`). No
   new Tailwind `dark:` pairs.
-- htmx is **1.9.10** with the 1.x SSE extension. Don't copy htmx 2.x
-  examples.
+- htmx is **4.0.0** (`libs/go/htmxbase`) plus the `hx-sse` extension where a
+  page streams. Don't copy htmx 1.x/2.x examples. The differences that bite:
+  - Attributes don't inherit; put `:inherited` on the parent
+    (`hx-target:inherited`).
+  - `hx-delete`/`hx-get` don't send the enclosing form; add
+    `hx-include="closest form"`.
+  - `hx-vals` sets an array value as one comma-joined field, not repeated
+    fields.
+  - `hx-ext` is gone (load the extension script). Events are
+    `htmx:after:swap`-style, and `hx-on:` uses the same names.
+  - 4xx/5xx would swap, but `htmxbase` sets `noSwap` and `history: "reload"`
+    (Back is a plain reload, so a handler never sees `HX-Request` for it).
+  - `HX-Trigger` fires on the requesting element after the swap; if the swap
+    removes that element, send `{"showToast": {"target": "body", ...}}`.
 - Alpine is loaded everywhere, but use it only for client-only UI state
   (open/closed, a reveal). Never use it for data.
 - Pages must look right in light, night and oled at minimum. `htmxui.Themes`
@@ -208,7 +220,9 @@ Each of these failures is present in at least one app today:
     misconfiguration.
 - **Loading.** Any request that can take over ~300ms shows `hx-indicator` on
   the control that fired it.
-- **Live data.** Use SSE via `libs/go/htmxsse` with the 1.x `sse` extension.
+- **Live data.** Use SSE via `libs/go/htmxsse`: `hx-sse:connect` on a
+  container and `data-sse-topic="<topic>"` on each region it swaps (see that
+  package's README; it needs the `hx-sse` extension script in the head).
   Use `hx-trigger="load, every 30s"` polling only for cheap summaries.
 - **URLs reflect state.** Tabs, filters, sorting and pagination go through
   GET forms or `hx-push-url`, so back, refresh and shared links work.

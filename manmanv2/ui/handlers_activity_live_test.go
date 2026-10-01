@@ -148,7 +148,7 @@ func TestHandleActivityLiveSSE_FleetWideTopicsSpanMultipleServers(t *testing.T) 
 
 	for _, sgcID := range []int64{55, 66} {
 		topic := events.TopicForDeployment(sgcID)
-		if !strings.Contains(body, "event: "+topic+"\n") {
+		if !strings.Contains(body, swapTarget(topic)) {
 			t.Errorf("expected an initial swap for fleet-wide topic %s (sgc %d, spans both servers), got body %q", topic, sgcID, body)
 		}
 	}
@@ -212,7 +212,7 @@ func TestHandleActivityLiveSSE_AuthorizationParityWithPageQuery(t *testing.T) {
 	var streamTopics []string
 	for _, sgcID := range []int64{55, 66} {
 		topic := events.TopicForDeployment(sgcID)
-		if strings.Contains(body, "event: "+topic+"\n") {
+		if strings.Contains(body, swapTarget(topic)) {
 			streamTopics = append(streamTopics, topic)
 		}
 	}
