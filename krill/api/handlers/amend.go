@@ -288,3 +288,52 @@ func AmendMilepebbleHandler(amend store.AmendStore) http.HandlerFunc {
 		finishAmend(w, err, amended.ID)
 	}
 }
+
+// setProductCurrentStateRequest is the body of POST /products/{id}/current-state.
+type setProductCurrentStateRequest struct {
+	CurrentState string `json:"current_state"`
+}
+
+// CurrentStateResponse is the dedicated current-state read's body. CurrentState
+// is null when no survey is stored.
+type CurrentStateResponse struct {
+	ID           string  `json:"id"`
+	CurrentState *string `json:"current_state"`
+}
+
+// SetProductCurrentStateHandler returns POST /products/{id}/current-state:
+// stores the survey markdown verbatim as a new SCD2 revision. Must be
+// mounted behind RequireSession.
+func SetProductCurrentStateHandler(amend store.AmendStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := beginAmend(w, r)
+		if !ok {
+			return
+		}
+		var req setProductCurrentStateRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+		product, err := amend.SetProductCurrentState(r.Context(), id, req.CurrentState)
+		finishAmend(w, err, product.ID)
+	}
+}
+
+// GetProductCurrentStateHandler returns GET /products/{id}/current-state:
+// the Product's stored survey, ungated.
+func GetProductCurrentStateHandler(products store.ProductStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+		product, err := products.GetCurrentByID(r.Context(), id)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, CurrentStateResponse{ID: product.ID.String(), CurrentState: product.CurrentState})
+	}
+}

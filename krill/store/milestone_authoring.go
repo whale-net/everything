@@ -41,6 +41,11 @@ type MilestoneAuthoringStore interface {
 	// the current value after two calls is always the latest.
 	SetFRBudget(ctx context.Context, milestoneID uuid.UUID, budget int, acting, onBehalfOf Subject) error
 
+	// SetMilestoneNotes replaces milestoneID's markdown design notes with
+	// notes, verbatim (no escaping or truncation). An empty string clears
+	// them back to unset. ErrNotFound if there is no current row.
+	SetMilestoneNotes(ctx context.Context, milestoneID uuid.UUID, notes string, acting, onBehalfOf Subject) error
+
 	// AddDelivers records that entityID (a Feature.ID or
 	// LoadBearingDecision.ID) is delivered by milestoneID -- an
 	// `entity_milestone` row with Relation=MilestoneRelationDelivers.
@@ -250,6 +255,21 @@ func (s milestoneAuthoringStore) SetOutcome(ctx context.Context, milestoneID uui
 	tag, err := s.pool.Exec(ctx, `UPDATE milestone_ref SET outcome = $1 WHERE id = $2 AND valid_to IS NULL`, outcome, milestoneID)
 	if err != nil {
 		return fmt.Errorf("update milestone_ref outcome: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: milestone id %s", ErrNotFound, milestoneID)
+	}
+	return nil
+}
+
+func (s milestoneAuthoringStore) SetMilestoneNotes(ctx context.Context, milestoneID uuid.UUID, notes string, acting, onBehalfOf Subject) error {
+	var val *string
+	if notes != "" {
+		val = &notes
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE milestone_ref SET notes = $1 WHERE id = $2 AND valid_to IS NULL`, val, milestoneID)
+	if err != nil {
+		return fmt.Errorf("update milestone_ref notes: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: milestone id %s", ErrNotFound, milestoneID)

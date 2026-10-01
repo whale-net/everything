@@ -41,9 +41,11 @@ type Product struct {
 	ScopeID    uuid.UUID
 	Name       string
 	Vision     string
-	Position   int
-	ValidFrom  time.Time
-	ValidTo    *time.Time
+	// CurrentState is the markdown current-state survey; nil when none stored.
+	CurrentState *string
+	Position     int
+	ValidFrom    time.Time
+	ValidTo      *time.Time
 }
 
 // FeatureSet is one row of `feature_set` (migration 002) -- a grouping of
@@ -250,6 +252,10 @@ type MilestoneRef struct {
 	// Outcome is the milestone's outcome sentence (FR1), NULL until
 	// CreateMilestone/SetOutcome sets it.
 	Outcome *string
+
+	// Notes is the milestone's markdown design rationale, NULL until
+	// set; carried forward across amends and stored verbatim.
+	Notes *string
 
 	// FRBudget is the milestone's FR budget (FR2), NULL until
 	// CreateMilestone/SetFRBudget sets it.

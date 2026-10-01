@@ -221,7 +221,7 @@ func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID, opts 
 
 	return Files{
 		ProductMD:       stampFile(renderProductMD(name, revision, doc, personas, nonGoals, notes, o.detail), stamp),
-		CurrentStateMD:  stampFile(renderCurrentStateMD(name, revision), stamp),
+		CurrentStateMD:  stampFile(renderCurrentStateMD(name, revision, doc.Product.CurrentState), stamp),
 		CapabilityMapMD: stampFile(renderCapabilityMapMD(name, revision, doc, o.detail, cheapExpensive), stamp),
 		RoadmapMD:       stampFile(renderRoadmapMD(name, revision, milestones, later), stamp),
 		Stamp:           stamp,
@@ -467,10 +467,15 @@ const currentStatePlaceholderBody = "This section is intentionally not rendered.
 	"planned to bring it into krill. See `krill/render/README.md` for the same " +
 	"boundary stated in full.\n"
 
-func renderCurrentStateMD(name, revision string) string {
+func renderCurrentStateMD(name, revision string, stored *string) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Current state\n\n")
+	if stored != nil {
+		// Stored survey is emitted verbatim: no escaping, trimming, or truncation.
+		b.WriteString(*stored)
+		return b.String()
+	}
 	b.WriteString(currentStatePlaceholderBody)
 	return b.String()
 }
@@ -643,6 +648,7 @@ type milestoneEntry struct {
 	Delivers         []string
 	MustNotForeclose []string
 	Deferrals        []store.MilestoneDeferral
+	Notes            string // markdown design notes, rendered verbatim; empty emits nothing
 	ShipsAlongside   []store.MilestoneShipsAlongside
 }
 
@@ -735,6 +741,7 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			Delivers:         prefixEach("C", delivers),
 			MustNotForeclose: prefixEach("LB", mustNot),
 			Deferrals:        deferrals,
+			Notes:            derefString(ref.Notes),
 			ShipsAlongside:   ships,
 		})
 	}
@@ -828,11 +835,25 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry, later [
 		if m.FRBudget != nil {
 			b.WriteString(fmt.Sprintf("- FR budget: %d\n", *m.FRBudget))
 		}
+		if m.Notes != "" {
+			b.WriteString("\n")
+			b.WriteString(m.Notes)
+			if !strings.HasSuffix(m.Notes, "\n") {
+				b.WriteString("\n")
+			}
+		}
 		b.WriteString("\n")
 	}
 
 	renderLaterCoverageMD(&b, later)
 	return b.String()
+}
+
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // laterEntry is one Later capability (a Feature no milestone or milepebble

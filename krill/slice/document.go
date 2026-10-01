@@ -40,6 +40,8 @@ type ProductEntity struct {
 	// creation order; nothing here stores or emits one.
 	Position int    `json:"position"`
 	Vision   string `json:"vision"`
+	// CurrentState is the stored current-state survey markdown; omitted when none stored.
+	CurrentState *string `json:"current_state,omitempty"`
 }
 
 // FeatureSetEntity is one FeatureSet's slice payload.

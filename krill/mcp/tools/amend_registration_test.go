@@ -87,6 +87,11 @@ func (f recordingAmendStore) AmendProduct(_ context.Context, id uuid.UUID, name,
 	return store.Product{ID: id, Name: name, Vision: vision}, nil
 }
 
+func (f recordingAmendStore) SetProductCurrentState(_ context.Context, id uuid.UUID, state string) (store.Product, error) {
+	*f.calls = append(*f.calls, amendCall{"product_current_state", id, state, nil})
+	return store.Product{ID: id, CurrentState: &state}, nil
+}
+
 func (f recordingAmendStore) AmendFeatureSet(_ context.Context, id uuid.UUID, name string, description *string) (store.FeatureSet, error) {
 	*f.calls = append(*f.calls, amendCall{"feature_set", id, name, nil})
 	return store.FeatureSet{ID: id, Name: name, Description: description}, nil

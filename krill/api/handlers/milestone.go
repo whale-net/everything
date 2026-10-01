@@ -32,6 +32,10 @@ type createMilestoneRequest struct {
 
 // setFRBudgetRequest is SetFRBudgetHandler's request body (FR2's revise
 // path).
+type setMilestoneNotesRequest struct {
+	Notes string `json:"notes"`
+}
+
 type setFRBudgetRequest struct {
 	FRBudget int `json:"fr_budget"`
 }
@@ -104,6 +108,7 @@ type MilestoneResponse struct {
 	Name             string                  `json:"name"`
 	Outcome          *string                 `json:"outcome"`
 	FRBudget         *int                    `json:"fr_budget"`
+	Notes            string                  `json:"notes"`
 	Delivers         []string                `json:"delivers"`
 	MustNotForeclose []string                `json:"must_not_foreclose"`
 	Deferrals        []slice.DeferralDTO      `json:"deferrals"`
@@ -126,7 +131,13 @@ func NewMilestoneResponse(ref store.MilestoneRef, delivers, mustNotForeclose []s
 	}
 	deferralWires := slice.NewDeferralDTOs(deferrals)
 
+	notes := ""
+	if ref.Notes != nil {
+		notes = *ref.Notes
+	}
+
 	return MilestoneResponse{
+		Notes:            notes,
 		ID:               ref.ID.String(),
 		ProductID:        ref.ProductID.String(),
 		Name:             ref.Name,
@@ -210,6 +221,41 @@ func SetFRBudgetHandler(milestones store.MilestoneAuthoringStore) http.HandlerFu
 		}
 
 		if err := milestones.SetFRBudget(r.Context(), id, req.FRBudget, sess.Acting, sess.OnBehalfOf); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, IDResponse{ID: id.String()})
+	}
+}
+
+// SetMilestoneNotesHandler returns the notes replace endpoint: POST
+// /milestones/{id}/notes. Must be mounted behind RequireSession.
+func SetMilestoneNotesHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		var req setMilestoneNotesRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+
+		if err := milestones.SetMilestoneNotes(r.Context(), id, req.Notes, sess.Acting, sess.OnBehalfOf); err != nil {
 			writeStoreError(w, err)
 			return
 		}

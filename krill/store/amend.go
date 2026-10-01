@@ -42,6 +42,12 @@ type AmendStore interface {
 	// vision as given. Returns ErrNotFound if id has no current row.
 	AmendProduct(ctx context.Context, id uuid.UUID, name, vision string) (Product, error)
 
+	// SetProductCurrentState closes the current row for id and inserts a
+	// successor carrying every other field unchanged, with current_state
+	// set to state verbatim (no trimming, escaping, or truncation).
+	// Returns ErrNotFound if id has no current row.
+	SetProductCurrentState(ctx context.Context, id uuid.UUID, state string) (Product, error)
+
 	// AmendFeatureSet closes the current row for id and inserts a successor
 	// carrying the closed row's id, scope_id, product_id, and position,
 	// with name and description as given.
@@ -175,11 +181,22 @@ func (s amendStore) AmendProduct(ctx context.Context, id uuid.UUID, name, vision
 	return supersede(ctx, s.pool, "product", productColumns, scanProduct, id,
 		func(ctx context.Context, q txQuerier, current Product) (Product, error) {
 			amended, err := scanProduct(q.QueryRow(ctx, `
-				INSERT INTO product (id, scope_id, name, vision, position)
-				VALUES ($1, $2, $3, $4, $5)
+				INSERT INTO product (id, scope_id, name, vision, current_state, position)
+				VALUES ($1, $2, $3, $4, $5, $6)
 				RETURNING `+productColumns,
-				current.ID, current.ScopeID, name, vision, current.Position))
+				current.ID, current.ScopeID, name, vision, current.CurrentState, current.Position))
 			return amended, errNameConflict("product", "insert amended product", err)
+		})
+}
+
+func (s amendStore) SetProductCurrentState(ctx context.Context, id uuid.UUID, state string) (Product, error) {
+	return supersede(ctx, s.pool, "product", productColumns, scanProduct, id,
+		func(ctx context.Context, q txQuerier, current Product) (Product, error) {
+			return scanProduct(q.QueryRow(ctx, `
+				INSERT INTO product (id, scope_id, name, vision, current_state, position)
+				VALUES ($1, $2, $3, $4, $5, $6)
+				RETURNING `+productColumns,
+				current.ID, current.ScopeID, current.Name, current.Vision, state, current.Position))
 		})
 }
 
@@ -260,7 +277,7 @@ func (s amendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name strin
 		func(ctx context.Context, q txQuerier, current MilestoneRef) (MilestoneRef, error) {
 			args := []any{
 				current.ID, current.ScopeID, current.ProductID, name, string(current.Kind), outcome,
-				current.FRBudget, current.Position, current.ParentMilestoneID,
+				current.FRBudget, current.Position, current.ParentMilestoneID, current.Notes,
 			}
 			args = append(args, subjectArgs(current.CreatedByActing)...)
 			args = append(args, subjectArgs(current.CreatedByOnBehalfOf)...)
@@ -268,11 +285,11 @@ func (s amendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name strin
 
 			amended, err := scanMilestoneRef(q.QueryRow(ctx, `
 				INSERT INTO milestone_ref (
-					id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id,
+					id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id, notes,
 					created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
 					created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind,
 					created_at
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 				RETURNING `+milestoneRefColumns, args...))
 			return amended, errNameConflict("milestone_ref", "insert amended milestone_ref", err)
 		})

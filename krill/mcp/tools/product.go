@@ -47,3 +47,54 @@ func RegisterListProducts(reg *server.Registry, products store.ProductStore) {
 		return nil, handlers.NewListProductsResponse(list), nil
 	})
 }
+
+type setProductCurrentStateInput struct {
+	krillSessionInput
+	ID           string `json:"id" jsonschema:"The surrogate id (LB2) of the Product, as a UUID string."`
+	CurrentState string `json:"current_state" jsonschema:"The current-state survey markdown, stored and rendered verbatim (no escaping or truncation)."`
+}
+
+// RegisterSetProductCurrentState registers set_product_current_state: stores
+// the Product's current-state survey as a new SCD2 revision under the same id.
+func RegisterSetProductCurrentState(reg *server.Registry, sessions store.SessionStore, amend store.AmendStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name: "set_product_current_state",
+		Description: "Set a Product's current-state survey (markdown) as a new SCD2 revision under the same id; " +
+			"name, vision, and position are unchanged. Rendered verbatim as product/01-current-state.md.",
+	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in setProductCurrentStateInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+		id, err := parseAmendID(ctx, sessions, in.KrillSessionID, in.ID)
+		if err != nil {
+			return nil, zero, err
+		}
+		product, err := amend.SetProductCurrentState(ctx, id, in.CurrentState)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: product.ID.String()}, nil
+	})
+}
+
+type getProductCurrentStateInput struct {
+	ID string `json:"id" jsonschema:"The surrogate id (LB2) of the Product, as a UUID string."`
+}
+
+// RegisterGetProductCurrentState registers get_product_current_state: the
+// Product's stored survey, ungated.
+func RegisterGetProductCurrentState(reg *server.Registry, products store.ProductStore) {
+	server.RegisterRead(reg, &mcp.Tool{
+		Name:        "get_product_current_state",
+		Description: "Return a Product's stored current-state survey markdown (null when none is stored).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getProductCurrentStateInput) (*mcp.CallToolResult, handlers.CurrentStateResponse, error) {
+		var zero handlers.CurrentStateResponse
+		id, err := uuid.Parse(in.ID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("id: invalid or missing UUID")
+		}
+		p, err := products.GetCurrentByID(ctx, id)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.CurrentStateResponse{ID: p.ID.String(), CurrentState: p.CurrentState}, nil
+	})
+}

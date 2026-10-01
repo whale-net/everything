@@ -17,6 +17,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -1093,4 +1094,103 @@ func TestDeferralCapability_ResolvesCurrentCnAtReadTime(t *testing.T) {
 	bogus := uuid.New()
 	_, err = s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "bad", "M2", &bogus, acting, acting)
 	require.Error(t, err)
+}
+
+func TestMilestoneNotes_SetReplaceAndCarryForwardAcrossAmend(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "")
+	require.NoError(t, err)
+	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M9", "outcome", nil, acting, acting)
+	require.NoError(t, err)
+
+	// Unset by default.
+	got, _, _, _, err := s.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Notes)
+
+	// Large, markup-heavy notes round-trip byte for byte.
+	big := strings.Repeat("## why <b>&amp;</b> `x` | y\n", 6000)
+	require.GreaterOrEqual(t, len(big), 100*1024)
+	require.NoError(t, s.MilestoneAuthoring().SetMilestoneNotes(ctx, milestone.ID, big, acting, acting))
+	got, _, _, _, err = s.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Notes)
+	assert.True(t, big == *got.Notes, "notes must round-trip unmodified")
+
+	// Replace.
+	require.NoError(t, s.MilestoneAuthoring().SetMilestoneNotes(ctx, milestone.ID, "v2 notes", acting, acting))
+
+	// Amend carries notes forward; the closed revision keeps its own.
+	amended, err := s.Amend().AmendMilestone(ctx, milestone.ID, "M9 (renamed)", nil)
+	require.NoError(t, err)
+	require.NotNil(t, amended.Notes)
+	assert.Equal(t, "v2 notes", *amended.Notes)
+
+	var closedNotes *string
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT notes FROM milestone_ref WHERE id = $1 AND valid_to IS NOT NULL`, milestone.ID).Scan(&closedNotes))
+	require.NotNil(t, closedNotes)
+	assert.Equal(t, "v2 notes", *closedNotes)
+
+	// Setting after an amend only touches the current revision.
+	require.NoError(t, s.MilestoneAuthoring().SetMilestoneNotes(ctx, milestone.ID, "v3 notes", acting, acting))
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT notes FROM milestone_ref WHERE id = $1 AND valid_to IS NOT NULL`, milestone.ID).Scan(&closedNotes))
+	assert.Equal(t, "v2 notes", *closedNotes)
+
+	// Clearing returns to unset; unknown id is ErrNotFound.
+	require.NoError(t, s.MilestoneAuthoring().SetMilestoneNotes(ctx, milestone.ID, "", acting, acting))
+	got, _, _, _, err = s.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Notes)
+	err = s.MilestoneAuthoring().SetMilestoneNotes(ctx, uuid.New(), "x", acting, acting)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// A current-state survey is a new SCD2 revision under the same id, survives
+// a name/vision amend, and an earlier survey stays readable as-of.
+func TestSetProductCurrentState_RevisionCarryForwardAndAsOf(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "vision")
+	require.NoError(t, err)
+	assert.Nil(t, product.CurrentState)
+
+	first, err := s.Amend().SetProductCurrentState(ctx, product.ID, "# survey one")
+	require.NoError(t, err)
+	assert.Equal(t, product.ID, first.ID)
+	assert.NotEqual(t, product.RevisionID, first.RevisionID)
+	require.NotNil(t, first.CurrentState)
+	assert.Equal(t, "# survey one", *first.CurrentState)
+	assert.Equal(t, "Krill", first.Name)
+	assert.Equal(t, "vision", first.Vision)
+
+	second, err := s.Amend().SetProductCurrentState(ctx, product.ID, "# survey two")
+	require.NoError(t, err)
+
+	amended, err := s.Amend().AmendProduct(ctx, product.ID, "krill2", "vision2")
+	require.NoError(t, err)
+	require.NotNil(t, amended.CurrentState, "name/vision amend must carry the survey forward")
+	assert.Equal(t, "# survey two", *amended.CurrentState)
+
+	atFirst, err := s.History().GetProductAsOf(ctx, product.ID, first.ValidFrom)
+	require.NoError(t, err)
+	require.NotNil(t, atFirst.CurrentState)
+	assert.Equal(t, "# survey one", *atFirst.CurrentState)
+	atSecond, err := s.History().GetProductAsOf(ctx, product.ID, second.ValidFrom)
+	require.NoError(t, err)
+	assert.Equal(t, "# survey two", *atSecond.CurrentState)
+
+	var n int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM product WHERE id = $1`, product.ID).Scan(&n))
+	assert.Equal(t, 4, n)
+
+	_, err = s.Amend().SetProductCurrentState(ctx, uuid.New(), "x")
+	assert.ErrorIs(t, err, store.ErrNotFound)
 }
