@@ -145,6 +145,7 @@ all — ungated reads).
 | `declare_task_dependencies` | write | `TaskStore.DeclareDependency` (FR2) | Swarm Operator | `/mcp/work` |
 | `get_task` | read | `work.Assembler.Assemble` (FR4, FR10) | any resolved persona | `/mcp/work`, `/mcp/design` |
 | `list_tasks` | read | `TaskStore.ListTasksByMilestone` (issue #2941) | any resolved persona | `/mcp/work`, `/mcp/design` |
+| `list_product_tasks` | read | `TaskStore.ListProductTasks` (FR cfcd1104) -- one paged, filterable list of a product's tasks over its incomplete milestones, one milestone, or one milepebble | any resolved persona | `/mcp/work` |
 | `claim_task` | write | `TaskStore.ClaimTask` (FR3, FR5) | Agent | `/mcp/work` |
 | `heartbeat_task` | write | `TaskStore.Heartbeat` (FR6) | Agent | `/mcp/work` |
 | `complete_task` | write | `TaskStore.CompleteTask` (FR8) | Agent | `/mcp/work` |

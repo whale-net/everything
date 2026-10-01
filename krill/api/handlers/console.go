@@ -465,12 +465,15 @@ func ListEscalatedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 }
 
 // writeConsoleQueryError maps a console query's store error onto this
-// package's one JSON error shape -- store.ErrTokenScopeMismatch and
-// store.ErrInvalidContinuationToken (paging.go) are caller errors (a
-// stale, cross-scope, or forged token), never a genuine store failure.
+// package's one JSON error shape -- store.ErrTokenScopeMismatch,
+// store.ErrTokenFilterMismatch and store.ErrInvalidContinuationToken
+// (paging.go) are caller errors (a stale, cross-scope, wrong-filter, or
+// forged token), never a genuine store failure.
 func writeConsoleQueryError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, store.ErrTokenScopeMismatch), errors.Is(err, store.ErrInvalidContinuationToken):
+	case errors.Is(err, store.ErrTokenScopeMismatch),
+		errors.Is(err, store.ErrTokenFilterMismatch),
+		errors.Is(err, store.ErrInvalidContinuationToken):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "internal error")

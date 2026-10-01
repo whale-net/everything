@@ -243,6 +243,15 @@ type TaskStore interface {
 	// inherently bounded, same reasoning as ListMilepebblesByMilestone.
 	ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]TaskSummary, error)
 
+	// ListProductTasks returns one page of a product's tasks across a
+	// scope of its delivery containers -- every incomplete milestone, one
+	// milestone, or one milepebble -- with optional lane and only-stuck
+	// filters (task_product_list.go, FR2). Bounded and continuable per
+	// params.Page (NFR6), with the token bound to the request's filter set
+	// (FR3), and refuses a container outside the product with
+	// ErrMilestoneOutsideProduct rather than an empty page (LB1).
+	ListProductTasks(ctx context.Context, params ListProductTasksParams) (Page[ProductTaskRow], error)
+
 	// ClaimTask is FR3/FR5's race-safe claim (task_claim.go, issue #2722):
 	// a single transaction that row-locks the `task` (SELECT ... FOR
 	// UPDATE), checks claimability (unclaimed or lease-expired,

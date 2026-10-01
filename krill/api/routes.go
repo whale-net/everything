@@ -100,6 +100,13 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, ide
 	// row (milepebble or uncut milestone), ungated read.
 	mux.HandleFunc("GET /milestones/{id}/tasks", handlers.ListTasksHandler(entities.Tasks()))
 
+	// The product-wide paged task read (FR cfcd1104): one page of a
+	// product's tasks across its incomplete milestones, one milestone, or
+	// one milepebble, with optional lane and only-stuck filters -- ungated
+	// and scope-resolved-from-the-product like GET /products/{id}/delivery.
+	// The per-container read above stays unchanged.
+	mux.HandleFunc("GET /products/{id}/tasks", handlers.ListProductTasksHandler(entities.Tasks(), entities.Products()))
+
 	// milestone_status_event (issue #2685, FR8/FR9/FR12) serves both a
 	// MilestoneKindMilestone and a MilestoneKindMilepebble row -- both are
 	// `milestone_ref` rows, so one route pair covers both without a

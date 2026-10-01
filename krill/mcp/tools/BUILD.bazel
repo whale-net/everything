@@ -39,6 +39,7 @@ go_library(
         "task_lease.go",
         "task_list.go",
         "task_note.go",
+        "task_product_list.go",
         "task_payload.go",
         "task_release.go",
         "task_requeue.go",
