@@ -149,7 +149,7 @@ func TestSensorHistory_NoDatePickerOrPanControl(t *testing.T) {
 }
 
 // TestSensorHistory_NoAutoRefreshMarkup is NFR1's guard: no hx-trigger
-// polling interval, no sse-connect, across every state this page can
+// polling interval, no hx-sse:connect, across every state this page can
 // render.
 func TestSensorHistory_NoAutoRefreshMarkup(t *testing.T) {
 	fixtures := map[string]struct {
@@ -164,8 +164,8 @@ func TestSensorHistory_NoAutoRefreshMarkup(t *testing.T) {
 	for name, f := range fixtures {
 		t.Run(name, func(t *testing.T) {
 			body := renderPage(t, SensorHistory(layoutData(), 3, "leaflab-aaaaaaaaaaaa", 1, "Soil Moisture", f.chartData, f.loadErr))
-			if strings.Contains(body, "sse-connect") {
-				t.Errorf("[%s] expected no sse-connect anywhere on the sensor history page (NFR1), got %q", name, body)
+			if strings.Contains(body, "hx-sse:connect") {
+				t.Errorf("[%s] expected no hx-sse:connect anywhere on the sensor history page (NFR1), got %q", name, body)
 			}
 			if strings.Contains(body, "hx-trigger") {
 				t.Errorf("[%s] expected no hx-trigger anywhere on the sensor history page (NFR1: no polling interval), got %q", name, body)

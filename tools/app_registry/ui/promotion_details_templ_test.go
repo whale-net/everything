@@ -11,9 +11,9 @@ import (
 )
 
 // TestPromotionDetails_FR29_TemplateStructure tests the template boundary for FR29:
-// the sse-swap target wraps exactly the output of @promotionDetailsBody and nothing else.
+// the data-sse-topic target wraps exactly the output of @promotionDetailsBody and nothing else.
 // This test verifies the key structural requirements:
-// - The sse-swap target is present
+// - The data-sse-topic target is present
 // - It contains promotionDetailsBody output
 // - It does NOT contain elements that should be outside the boundary
 func TestPromotionDetails_FR29_TemplateStructure(t *testing.T) {
@@ -50,45 +50,43 @@ func TestPromotionDetails_FR29_TemplateStructure(t *testing.T) {
 
 	html := buf.String()
 
-	// FR20(b): template should have hx-ext="sse"
-	if !strings.Contains(html, `hx-ext="sse"`) {
-		t.Errorf("FR20(b): template must contain hx-ext=\"sse\"; got: %s", html)
+	// FR20(b): template should have hx-sse:connect (and no legacy hx-ext opt-in)
+	if !strings.Contains(html, `hx-sse:connect=`) {
+		t.Errorf("FR20(b): template must contain hx-sse:connect attribute; got: %s", html)
+	}
+	if strings.Contains(html, `hx-ext=`) {
+		t.Errorf("FR20(b): template must not contain hx-ext; got: %s", html)
 	}
 
-	// FR20(b): template should have sse-connect
-	if !strings.Contains(html, `sse-connect=`) {
-		t.Errorf("FR20(b): template must contain sse-connect attribute; got: %s", html)
+	// FR29: template should have data-sse-topic target
+	if !strings.Contains(html, `data-sse-topic="promotion.test-promo"`) {
+		t.Errorf("FR29: template must contain data-sse-topic=\"promotion.test-promo\" target; got: %s", html)
 	}
 
-	// FR29: template should have sse-swap target
-	if !strings.Contains(html, `sse-swap="promotion.test-promo"`) {
-		t.Errorf("FR29: template must contain sse-swap=\"promotion.test-promo\" target; got: %s", html)
-	}
-
-	// FR29: sse-swap div must have the promotion-details-body class
+	// FR29: data-sse-topic div must have the promotion-details-body class
 	if !strings.Contains(html, `class="promotion-details-body"`) {
-		t.Errorf("FR29: sse-swap target must have class=\"promotion-details-body\"; got: %s", html)
+		t.Errorf("FR29: data-sse-topic target must have class=\"promotion-details-body\"; got: %s", html)
 	}
 
-	// FR29: The breadcrumbs must be present BUT NOT inside the sse-swap target
+	// FR29: The breadcrumbs must be present BUT NOT inside the data-sse-topic target
 	// (breadcrumbs are outside the pushed region)
 	if !strings.Contains(html, "breadcrumbs") {
 		t.Errorf("FR29: breadcrumbs must be present on the page; got: %s", html)
 	}
 
-	// Verify that the sse-connect element is outside the sse-swap target by checking structure
-	sseConnectIdx := strings.Index(html, `hx-ext="sse"`)
-	sseSwapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
+	// Verify that the hx-sse:connect element is outside the data-sse-topic target by checking structure
+	sseConnectIdx := strings.Index(html, `hx-sse:connect=`)
+	sseSwapIdx := strings.Index(html, `data-sse-topic="promotion.test-promo"`)
 	if sseConnectIdx < 0 || sseSwapIdx < 0 {
-		t.Errorf("FR29: both sse-connect and sse-swap must be present")
+		t.Errorf("FR29: both hx-sse:connect and data-sse-topic must be present")
 	}
 	if sseConnectIdx > sseSwapIdx {
-		t.Errorf("FR29: sse-connect element must come before (be outside) sse-swap target; got indices %d and %d", sseConnectIdx, sseSwapIdx)
+		t.Errorf("FR29: hx-sse:connect element must come before (be outside) data-sse-topic target; got indices %d and %d", sseConnectIdx, sseSwapIdx)
 	}
 }
 
 // TestPromotionDetails_FR29_NoTargetOnLoadError tests FR29's load-failure state:
-// when LoadErr is set, there is no sse-swap target and no connection is established.
+// when LoadErr is set, there is no data-sse-topic target and no connection is established.
 func TestPromotionDetails_FR29_NoTargetOnLoadError(t *testing.T) {
 	state := pages.PromotionDetailsViewState{
 		PromotionID: "test-promo",
@@ -117,19 +115,19 @@ func TestPromotionDetails_FR29_NoTargetOnLoadError(t *testing.T) {
 		t.Errorf("FR29: LoadErr alert must be present; got: %s", html)
 	}
 
-	// Must NOT have sse-swap target when Details is nil
-	if strings.Contains(html, `sse-swap="promotion.test-promo"`) {
-		t.Errorf("FR29: sse-swap target must NOT be present when Details is nil (load failed); got: %s", html)
+	// Must NOT have data-sse-topic target when Details is nil
+	if strings.Contains(html, `data-sse-topic="promotion.test-promo"`) {
+		t.Errorf("FR29: data-sse-topic target must NOT be present when Details is nil (load failed); got: %s", html)
 	}
 
-	// Still must have the hx-ext for consistency, but no target to swap
-	if !strings.Contains(html, `hx-ext="sse"`) {
-		t.Errorf("FR20(b): template must still have hx-ext=\"sse\" even on load failure; got: %s", html)
+	// Still must have hx-sse:connect for consistency, but no target to swap
+	if !strings.Contains(html, `hx-sse:connect=`) {
+		t.Errorf("FR20(b): template must still have hx-sse:connect even on load failure; got: %s", html)
 	}
 }
 
 // TestPromotionDetails_FR29_RetryBannerOutsideSwapTarget tests FR29:
-// when RetryErr is set, the banner is present but NOT inside the sse-swap target.
+// when RetryErr is set, the banner is present but NOT inside the data-sse-topic target.
 // The pushed fragment should NOT contain the retry error banner.
 func TestPromotionDetails_FR29_RetryBannerOutsideSwapTarget(t *testing.T) {
 	state := pages.PromotionDetailsViewState{
@@ -166,20 +164,20 @@ func TestPromotionDetails_FR29_RetryBannerOutsideSwapTarget(t *testing.T) {
 		t.Errorf("FR29: RetryErr banner must be present; got: %s", html)
 	}
 
-	// Must have sse-swap target
-	if !strings.Contains(html, `sse-swap="promotion.test-promo"`) {
-		t.Errorf("FR29: sse-swap target must be present when Details is not nil; got: %s", html)
+	// Must have data-sse-topic target
+	if !strings.Contains(html, `data-sse-topic="promotion.test-promo"`) {
+		t.Errorf("FR29: data-sse-topic target must be present when Details is not nil; got: %s", html)
 	}
 
-	// The critical part: verify banner comes BEFORE the sse-swap div
+	// The critical part: verify banner comes BEFORE the data-sse-topic div
 	// This ensures the banner is outside the pushed region
 	bannerIdx := strings.Index(html, "Retry failed:")
-	swapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
+	swapIdx := strings.Index(html, `data-sse-topic="promotion.test-promo"`)
 	if bannerIdx < 0 || swapIdx < 0 {
 		t.Errorf("FR29: both banner and swap target must be present")
 	}
 	if bannerIdx > swapIdx {
-		t.Errorf("FR29: RetryErr banner must come before (be outside) sse-swap target; got indices %d and %d", bannerIdx, swapIdx)
+		t.Errorf("FR29: RetryErr banner must come before (be outside) data-sse-topic target; got indices %d and %d", bannerIdx, swapIdx)
 	}
 }
 
@@ -216,15 +214,12 @@ func TestPromotionDetails_FR29_NoHTMXAttributesExceptPromoDetails(t *testing.T) 
 	html := buf.String()
 
 	// Count hx-* attributes (excluding form method/action which are not htmx)
-	// We expect: hx-ext, sse-connect, sse-swap
-	if !strings.Contains(html, "hx-ext") {
-		t.Errorf("expected hx-ext in template")
+	// We expect: hx-sse:connect, data-sse-topic
+	if !strings.Contains(html, "hx-sse:connect") {
+		t.Errorf("expected hx-sse:connect in template")
 	}
-	if !strings.Contains(html, "sse-connect") {
-		t.Errorf("expected sse-connect in template")
-	}
-	if !strings.Contains(html, "sse-swap") {
-		t.Errorf("expected sse-swap in template")
+	if !strings.Contains(html, "data-sse-topic") {
+		t.Errorf("expected data-sse-topic in template")
 	}
 
 	// Check that there are no other hx-* attributes like hx-get, hx-post, hx-target
@@ -237,7 +232,7 @@ func TestPromotionDetails_FR29_NoHTMXAttributesExceptPromoDetails(t *testing.T) 
 }
 
 // promotionDetailsTestState builds a PromotionDetailsViewState for the
-// tests below, which only care about the live indicator/reload/sse-swap
+// tests below, which only care about the live indicator/reload/data-sse-topic
 // wiring, not the rendered details body.
 func promotionDetailsTestState(promotionID string) pages.PromotionDetailsViewState {
 	return pages.PromotionDetailsViewState{
@@ -267,7 +262,7 @@ func renderPromotionDetails(t *testing.T, state pages.PromotionDetailsViewState)
 }
 
 // TestPromotionDetails_FR23_IndicatorPresent tests FR23: the live/not-live
-// indicator is present, starts Live, and sits outside the sse-swap target
+// indicator is present, starts Live, and sits outside the data-sse-topic target
 // (so it never disappears/reappears with pushed updates, NFR12).
 func TestPromotionDetails_FR23_IndicatorPresent(t *testing.T) {
 	html := renderPromotionDetails(t, promotionDetailsTestState("test-promo"))
@@ -277,43 +272,51 @@ func TestPromotionDetails_FR23_IndicatorPresent(t *testing.T) {
 	}
 
 	indicatorIdx := strings.Index(html, `class="live-indicator"`)
-	swapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
+	swapIdx := strings.Index(html, `data-sse-topic="promotion.test-promo"`)
 	if indicatorIdx < 0 || swapIdx < 0 {
 		t.Fatalf("FR23: both indicator and swap target must be present; got: %s", html)
 	}
 	if indicatorIdx > swapIdx {
-		t.Errorf("FR23/NFR12: indicator must come before (be outside) sse-swap target; got indices %d and %d", indicatorIdx, swapIdx)
+		t.Errorf("FR23/NFR12: indicator must come before (be outside) data-sse-topic target; got indices %d and %d", indicatorIdx, swapIdx)
 	}
 }
 
-// TestPromotionDetails_FR23_KeepaliveTargetRendered guards the actual
-// disconnect-detection fix: a hidden sse-swap target for
-// "promotion.<id>-keepalive" must be rendered so htmx's sse extension
-// registers a listener for handler.go's heartbeat keepalive event at all
-// (see liveindicator package doc comment) -- without it, a page with no
-// state change for more than 2x the heartbeat interval reads as "Not Live"
-// even though the connection is healthy.
-func TestPromotionDetails_FR23_KeepaliveTargetRendered(t *testing.T) {
+// TestPromotionDetails_FR23_NoKeepaliveTargets guards that the indicator
+// needs no hidden per-topic keepalive targets: htmx 4's hx-sse dispatches
+// htmx:sse:after:message for every named event, so no sse-swap attribute
+// may appear anywhere and the indicator must sit inside the hx-sse:connect
+// container, before the data-sse-topic target.
+func TestPromotionDetails_FR23_NoKeepaliveTargets(t *testing.T) {
 	html := renderPromotionDetails(t, promotionDetailsTestState("test-promo"))
 
-	if !strings.Contains(html, `sse-swap="promotion.test-promo-keepalive"`) {
-		t.Errorf("FR23: expected a hidden keepalive sse-swap target; got: %s", html)
+	if strings.Contains(html, "sse-swap") {
+		t.Errorf("FR23: expected no sse-swap attribute anywhere; got: %s", html)
+	}
+
+	connectIdx := strings.Index(html, `hx-sse:connect=`)
+	indicatorIdx := strings.Index(html, `class="live-indicator"`)
+	topicIdx := strings.Index(html, `data-sse-topic="promotion.test-promo"`)
+	if connectIdx < 0 || indicatorIdx < 0 || topicIdx < 0 {
+		t.Fatalf("FR23: connect container, indicator and topic target must all be present; got: %s", html)
+	}
+	if !(connectIdx < indicatorIdx && indicatorIdx < topicIdx) {
+		t.Errorf("FR23: indicator must be inside the hx-sse:connect container before the data-sse-topic target; got indices %d, %d, %d", connectIdx, indicatorIdx, topicIdx)
 	}
 }
 
 // TestPromotionDetails_FR24_ReloadAffordancePresent tests FR24: the reload
-// affordance is present, hidden by default, outside the sse-swap target,
+// affordance is present, hidden by default, outside the data-sse-topic target,
 // and points back at this promotion.
 func TestPromotionDetails_FR24_ReloadAffordancePresent(t *testing.T) {
 	html := renderPromotionDetails(t, promotionDetailsTestState("test-promo"))
 
 	reloadIdx := strings.Index(html, `data-live-reload`)
-	swapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
+	swapIdx := strings.Index(html, `data-sse-topic="promotion.test-promo"`)
 	if reloadIdx < 0 || swapIdx < 0 {
 		t.Fatalf("FR24: both reload and swap target must be present; got: %s", html)
 	}
 	if reloadIdx > swapIdx {
-		t.Errorf("FR24/NFR12: reload must come before (be outside) sse-swap target; got indices %d and %d", reloadIdx, swapIdx)
+		t.Errorf("FR24/NFR12: reload must come before (be outside) data-sse-topic target; got indices %d and %d", reloadIdx, swapIdx)
 	}
 	if !strings.Contains(html[reloadIdx:reloadIdx+120], `style="display:none"`) {
 		t.Errorf("FR24: reload container must be hidden by default; got: %s", html[reloadIdx:reloadIdx+120])

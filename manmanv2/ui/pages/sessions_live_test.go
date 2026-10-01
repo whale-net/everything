@@ -10,9 +10,9 @@ import (
 )
 
 // This file guards #1726's browser-side SSE wiring for DeploymentRow's
-// per-row sse-swap plumbing. Prior to task #2372 (M6 navigation/
+// per-row data-sse-topic plumbing. Prior to task #2372 (M6 navigation/
 // disposition, FR17) this file also guarded /sessions's own
-// DeploymentsLiveRegion wrapper (hx-ext="sse" ancestor, Live/Not-Live
+// DeploymentsLiveRegion wrapper (hx-sse:connect ancestor, Live/Not-Live
 // indicator placement, LiveUpdatesEnabled=false degradation); that
 // coverage retired along with pages/sessions.templ and
 // components.DeploymentsLiveRegion when the list page itself retired --
@@ -26,14 +26,14 @@ import (
 // endpoints.
 //
 // mutation-tested (verified red, by hand, then reverted): temporarily
-// hardcoding DeploymentRow's sse-swap attribute to
+// hardcoding DeploymentRow's data-sse-topic attribute to
 // fmt.Sprintf("deployment.%d", data.ServerGameConfigID) instead of calling
 // events.TopicForDeployment made no test fail (the literal happens to
 // match today's helper output) -- the real regression this guards against
 // is TopicForDeployment's format ever changing without this markup
 // following.
 
-// --- 4. per-row sse-swap comes from the shared events helper, never a ------
+// --- 4. per-row data-sse-topic comes from the shared events helper, never a
 //        locally formatted literal ------------------------------------------
 
 func TestDeploymentRow_SSESwapMatchesEventsHelper(t *testing.T) {
@@ -42,20 +42,20 @@ func TestDeploymentRow_SSESwapMatchesEventsHelper(t *testing.T) {
 		data := buildDeploymentRowData(sgcID, "Row", "active", latest, latest, "")
 		body := deploymentRowMarkup(t, data)
 
-		want := fmt.Sprintf(`sse-swap="%s"`, events.TopicForDeployment(sgcID))
+		want := fmt.Sprintf(`data-sse-topic="%s"`, events.TopicForDeployment(sgcID))
 		if !strings.Contains(body, want) {
 			t.Errorf("sgc %d: expected %q (from events.TopicForDeployment), got body %q", sgcID, want, body)
 		}
 	}
 }
 
-// --- 5. the #1628 poll fragment path keeps carrying sse-swap ---------------
+// --- 5. the #1628 poll fragment path keeps carrying data-sse-topic ---------
 //
 // handleDeploymentRowFragment (handlers_deployment_actions.go) renders
 // this exact DeploymentRow component as an isolated outerHTML replacement
-// for a polling row; assert that isolated render still carries sse-swap
-// so a polled row stays a valid live-update target under the page's
-// hx-ext="sse" ancestor (see DeploymentRow's doc comment).
+// for a polling row; assert that isolated render still carries
+// data-sse-topic so a polled row stays a valid live-update target under the
+// page's hx-sse:connect ancestor (see DeploymentRow's doc comment).
 
 func TestDeploymentRow_PollFragmentPathCarriesSSESwap(t *testing.T) {
 	// A transient-status row is exactly what the #1628 poll refreshes
@@ -64,7 +64,7 @@ func TestDeploymentRow_PollFragmentPathCarriesSSESwap(t *testing.T) {
 	data := buildDeploymentRowData(33, "Nu", "active", latest, nil, "")
 	body := deploymentRowMarkup(t, data)
 
-	want := fmt.Sprintf(`sse-swap="%s"`, events.TopicForDeployment(33))
+	want := fmt.Sprintf(`data-sse-topic="%s"`, events.TopicForDeployment(33))
 	if !strings.Contains(body, want) {
 		t.Errorf("expected the polled fragment's row to still carry %q, got body %q", want, body)
 	}

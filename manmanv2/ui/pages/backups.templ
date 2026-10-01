@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
@@ -903,13 +904,17 @@ func swapActionOrder(items []*manmanpb.BackupConfigActionItem, i, j int) []int64
 }
 
 // reorderActionIDsJSON renders an action id order as the JSON object
-// literal htmx's hx-vals attribute expects
-// (https://htmx.org/attributes/hx-vals/): htmx expands an array-valued
-// entry into one repeated form field per element when it builds the
-// request body, so handleBackupConfigActionsReorder's r.Form["action_ids"]
-// receives the full ordered sequence, not a single JSON blob to parse.
+// literal htmx's hx-vals attribute expects, with the ids comma-joined in a
+// single string: htmx 4 sets an array-valued entry as one field (its
+// string form), so handleBackupConfigActionsReorder splits each
+// r.Form["action_ids"] value on commas to recover the full ordered
+// sequence.
 func reorderActionIDsJSON(actionIDs []int64) string {
-	b, err := json.Marshal(map[string][]int64{"action_ids": actionIDs})
+	ids := make([]string, len(actionIDs))
+	for i, id := range actionIDs {
+		ids[i] = strconv.FormatInt(id, 10)
+	}
+	b, err := json.Marshal(map[string]string{"action_ids": strings.Join(ids, ",")})
 	if err != nil {
 		return "{}"
 	}

@@ -13,7 +13,7 @@ import (
 // plus the create/rename/re-parent forms (FR1-FR3). Server-rendered, no
 // live refresh: data reflects the last page load or navigation only, like
 // every other screen in this UI (NFR1) -- there is deliberately no
-// hx-trigger polling, no sse-connect, and no WebSocket here.
+// hx-trigger polling, no hx-sse:connect, and no WebSocket here.
 //
 // view holds the top-level nodes to render: the whole forest (every
 // top-level region, alphabetically ordered) when rootID is 0, or the single

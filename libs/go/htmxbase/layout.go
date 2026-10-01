@@ -15,8 +15,10 @@ const BaseLayoutTemplate = `<!DOCTYPE html>
     <title>{{.Title}}{{if .TitleSuffix}} - {{.TitleSuffix}}{{end}}</title>
     <link rel="icon" href="{{if .FaviconURL}}{{.FaviconURL}}{{else}}/favicon.ico{{end}}">
 
-    <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <!-- HTMX: config must precede the script. noSwap keeps 4xx/5xx bodies (http.Error text) out of swap targets;
+         history "reload" makes Back a plain navigation, since htmx's own refetch sends HX-Request and gets fragments. -->
+    <meta name="htmx-config" content='{"noSwap":[204,304,"4xx","5xx"],"history":"reload"}'>
+    <script src="https://unpkg.com/htmx.org@4.0.0/dist/htmx.min.js"></script>
 
     <!-- Alpine.js -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>

@@ -93,6 +93,33 @@ func TestRender(t *testing.T) {
 	}
 }
 
+// TestRender_HTMX4ScriptAndConfig asserts the htmx 4 core pin and that the
+// htmx-config meta (which must be read at htmx load) precedes the script.
+func TestRender_HTMX4ScriptAndConfig(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Render(&buf, LayoutData{Title: "T", Content: "<p>x</p>"}); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	output := buf.String()
+
+	const script = "https://unpkg.com/htmx.org@4.0.0/dist/htmx.min.js"
+	scriptIdx := strings.Index(output, script)
+	if scriptIdx < 0 {
+		t.Fatalf("Render() output missing %q", script)
+	}
+	metaIdx := strings.Index(output, `<meta name="htmx-config"`)
+	if metaIdx < 0 {
+		t.Fatal(`Render() output missing <meta name="htmx-config"`)
+	}
+	if metaIdx > scriptIdx {
+		t.Errorf("htmx-config meta (idx %d) must appear before the htmx script (idx %d)", metaIdx, scriptIdx)
+	}
+	metaEnd := strings.Index(output[metaIdx:], ">")
+	if !strings.Contains(output[metaIdx:metaIdx+metaEnd], `"noSwap"`) {
+		t.Errorf("htmx-config meta must contain \"noSwap\"; got %q", output[metaIdx:metaIdx+metaEnd+1])
+	}
+}
+
 func TestRenderError(t *testing.T) {
 	// Test that valid data doesn't error
 	var buf bytes.Buffer

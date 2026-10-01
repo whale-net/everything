@@ -62,7 +62,7 @@ func buildHead() string {
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
 <style>%s</style>
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`, themeBootstrapScript, darkVariantDirective, htmxui.ThemesCSS)
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js"></script>`, themeBootstrapScript, darkVariantDirective, htmxui.ThemesCSS)
 }
 
 // themeBootstrapScript applies the operator's saved theme to <html> as

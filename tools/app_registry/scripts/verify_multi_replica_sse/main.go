@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -303,13 +304,16 @@ func (s *subscriber) run(ctx context.Context) {
 		return
 	}
 
-	wantEvent := "event: " + s.topic
+	// A swap frame is an unnamed message whose payload is an <hx-partial>
+	// targeting [data-sse-topic~='<topic>']; keepalives are a different
+	// (named) event and never contain this marker.
+	swapMarker := "[data-sse-topic~='" + s.topic + "']"
 	frames := 0
 	readySent := false
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4<<20)
 	for scanner.Scan() {
-		if scanner.Text() != wantEvent {
+		if !strings.Contains(scanner.Text(), swapMarker) {
 			continue
 		}
 		frames++
@@ -318,7 +322,7 @@ func (s *subscriber) run(ctx context.Context) {
 			s.ready <- nil
 			continue
 		}
-		// Second (or later) non-keepalive frame for this topic: the push.
+		// Second (or later) swap frame for this topic: the push.
 		s.pushed <- nil
 		return
 	}

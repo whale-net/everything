@@ -68,7 +68,7 @@ func TestBuildHead_NoLocationReload(t *testing.T) {
 // (htmxui.ThemeSwitcherStorageKey) instead of silently resetting to the
 // default.
 // TestBuildHead_HTMXSSEExtensionScript guards #1726's htmx SSE extension
-// script: it must be present, pinned to the same htmx.org@1.9.10 build the
+// script: it must be present, pinned to the same htmx.org@4.0.0 build the
 // already-loaded htmx core script uses (see htmxbase.LayoutData, which
 // renders core before CustomHead), and appended after -- not interleaved
 // into -- the daisyUI <link>/htmxui.ThemesCSS <style> pair so it cannot
@@ -85,7 +85,7 @@ func TestBuildHead_NoLocationReload(t *testing.T) {
 func TestBuildHead_HTMXSSEExtensionScript(t *testing.T) {
 	head := buildHead()
 
-	wantScript := `<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`
+	wantScript := `<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js"></script>`
 	sseScriptIdx := strings.Index(head, wantScript)
 	if sseScriptIdx < 0 {
 		t.Fatalf("expected pinned htmx SSE extension script %q in head, got: %s", wantScript, head)

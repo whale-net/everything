@@ -53,7 +53,7 @@ func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component
 }
 
 // buildHead constructs the CustomHead markup: pinned Tailwind browser build
-// + daisyUI CDN <link>, then the htmx SSE extension (pinned to 1.9.10, FR20a),
+// + daisyUI CDN <link>, then the htmx SSE extension (pinned to 4.0.0, FR20a),
 // then htmxui.ThemesCSS in that order. The htmx core script is loaded by
 // htmxbase.LayoutData before this CustomHead is rendered, ensuring correct
 // extension load order. Split out from RenderTempl so templ_render_test.go can
@@ -63,6 +63,6 @@ func buildHead() string {
 	return fmt.Sprintf(`<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js"></script>
 <style type="text/tailwindcss">@import "tailwindcss";</style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js"></script>
 <style>%s</style>`, htmxui.ThemesCSS)
 }

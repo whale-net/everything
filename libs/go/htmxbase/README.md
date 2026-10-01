@@ -4,7 +4,7 @@ A shared base layout library for HTMX applications that provides a consistent HT
 
 ## Features
 
-- **HTMX included**: Version 1.9.10 loaded from unpkg CDN
+- **HTMX included**: Version 4.0.0 loaded from unpkg CDN, with `noSwap` set so 4xx/5xx responses are not swapped (htmx 4 swaps them by default) and `history: "reload"` so Back reloads the page (htmx's own history refetch sends `HX-Request`, which fragment-returning handlers answer with a bare fragment)
 - **Alpine.js included**: Latest 3.x version loaded from jsDelivr CDN
 - **Customizable**: Support for custom CSS, scripts, and head content
 - **Type-safe**: Go template-based with proper type definitions
@@ -127,7 +127,8 @@ mux.HandleFunc("/favicon.ico", htmxbase.FaviconHandler(faviconIco))
 
 ## CDN Sources
 
-- **HTMX**: https://unpkg.com/htmx.org@1.9.10
+- **HTMX**: https://unpkg.com/htmx.org@4.0.0/dist/htmx.min.js
+- **HTMX SSE extension** (apps using `libs/go/htmxsse` add it in their own `CustomHead`, after core): https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js
 - **Alpine.js**: https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js
 
 Both are loaded from reliable CDNs with integrity checks handled by the CDN providers.

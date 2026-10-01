@@ -236,7 +236,7 @@ func TestBoardDetail_DeviceIDFullLengthVerbatim(t *testing.T) {
 }
 
 // TestBoardDetail_NoAutoRefreshMarkup is NFR1's guard: no hx-trigger
-// polling interval, no sse-connect, across every state this page can
+// polling interval, no hx-sse:connect, across every state this page can
 // render.
 func TestBoardDetail_NoAutoRefreshMarkup(t *testing.T) {
 	sensors := []*leaflabapipb.SensorDetail{
@@ -259,8 +259,8 @@ func TestBoardDetail_NoAutoRefreshMarkup(t *testing.T) {
 	for name, component := range fixtures {
 		t.Run(name, func(t *testing.T) {
 			body := renderPage(t, component)
-			if strings.Contains(body, "sse-connect") {
-				t.Errorf("[%s] expected no sse-connect anywhere on the board detail page (NFR1), got %q", name, body)
+			if strings.Contains(body, "hx-sse:connect") {
+				t.Errorf("[%s] expected no hx-sse:connect anywhere on the board detail page (NFR1), got %q", name, body)
 			}
 			if strings.Contains(body, "hx-trigger") {
 				t.Errorf("[%s] expected no hx-trigger anywhere on the board detail page (NFR1: no polling interval), got %q", name, body)

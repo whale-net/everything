@@ -11,30 +11,10 @@ package liveindicator
 
 import (
 	"fmt"
-	"strings"
 )
 
 // Options configures LiveIndicator.
 type Options struct {
-	// Topics are the sse-swap event names this indicator's connection
-	// carries -- the same topic strings passed to htmxsse.Handler (e.g.
-	// "release_run.<id>" or "promotion.<id>"). LiveIndicator renders one
-	// additional, hidden sse-swap target per topic bound to
-	// "<topic>-keepalive": the event name handler.go's heartbeat loop
-	// already emits (emitKeepalive) whenever that topic's content is
-	// unchanged, but that no consumer ever subscribed to. htmx's sse
-	// extension only ever dispatches htmx:sseMessage for an event name
-	// some element on the page explicitly listens for via sse-swap -- an
-	// event under a name nothing subscribes to is delivered to the
-	// EventSource but never reaches any JS at all. Every existing
-	// consumer's liveness check relied solely on a MutationObserver over
-	// the real content region, which by design never fires for a
-	// keepalive (a keepalive's entire point is to perform no swap), so
-	// heartbeats were silently invisible and any stretch of unchanged
-	// content longer than 2x the heartbeat interval read as "Not Live"
-	// even though the connection was healthy the whole time.
-	Topics []string
-
 	// HeartbeatIntervalMs is the Hub's configured heartbeat interval in
 	// milliseconds (Hub.Config().HeartbeatInterval) -- sizes the not-live
 	// debounce/timeout windows relative to this deployment's actual
@@ -54,16 +34,16 @@ type Options struct {
 }
 
 // LiveIndicator renders the Live/Not-Live badge, the not-live Reload
-// affordance, and the hidden per-topic keepalive listeners the client
-// script needs -- plus the shared script itself (idempotent: safe to
-// render more than once per page). Callers must place this inside the
-// same hx-ext="sse" container passed to sse-connect, alongside their own
-// visible sse-swap target(s) for opts.Topics -- LiveIndicator does not
-// open the connection itself.
+// affordance, and the shared client script. The script marks the indicator
+// live on every htmx:sse:after:connection / htmx:sse:after:message event
+// from the enclosing connection -- a topic's swap and its keepalive
+// heartbeat both fire after:message -- and schedules not-live on
+// htmx:sse:error. Callers must place this inside the same
+// hx-sse:connect container, alongside their own visible data-sse-topic
+// target(s) -- LiveIndicator does not open the connection itself.
 templ LiveIndicator(opts Options) {
 	<div
 		class="live-indicator"
-		data-live-topics={ strings.Join(opts.Topics, ",") }
 		data-live-heartbeat-ms={ fmt.Sprint(opts.HeartbeatIntervalMs) }
 	>
 		<div class="flex items-center gap-2 mb-4">
@@ -72,9 +52,6 @@ templ LiveIndicator(opts Options) {
 		<div data-live-reload class="mb-4" style="display:none">
 			<a href={ templ.URL(opts.ReloadHref) } class="btn btn-sm btn-warning">Reload</a>
 		</div>
-		for _, topic := range opts.Topics {
-			<div sse-swap={ topic + "-keepalive" } style="display:none" aria-hidden="true"></div>
-		}
 	</div>
 	@script()
 }
@@ -141,31 +118,24 @@ templ script() {
     indicator.__lastEventTime = Date.now();
   });
 
-  // sseOpen/sseError fire on the [sse-connect] element itself (htmx-ext-sse's
-  // ensureEventSource), so scope to that container's own indicators.
-  document.addEventListener('htmx:sseOpen', (evt) => {
-    if (!evt.target || !evt.target.querySelectorAll) return;
-    evt.target.querySelectorAll('.live-indicator').forEach(markLive);
-  });
+  // hx-sse events fire on the [hx-sse:connect] element itself and bubble, so
+  // scope to that container's own indicators.
+  function indicatorsFor(evt) {
+    if (!evt.target || !evt.target.querySelectorAll) return [];
+    return evt.target.querySelectorAll('.live-indicator');
+  }
 
-  document.addEventListener('htmx:sseError', (evt) => {
-    if (!evt.target || !evt.target.querySelectorAll) return;
-    evt.target.querySelectorAll('.live-indicator').forEach(scheduleNotLive);
+  // after:connection fires once headers arrive (first connect and every
+  // reconnect); after:message fires for each swap and each named event
+  // (the keepalive heartbeat) once it has been processed.
+  document.addEventListener('htmx:sse:after:connection', (evt) => {
+    indicatorsFor(evt).forEach(markLive);
   });
-
-  // htmx-ext-sse dispatches htmx:sseMessage (bubbling to document) for any
-  // event name some element subscribed to via sse-swap -- both a topic's
-  // real swap and, thanks to the hidden targets LiveIndicator renders, its
-  // "<topic>-keepalive" heartbeat. evt.detail is the raw EventSource
-  // MessageEvent; its .type is the SSE event name.
-  document.addEventListener('htmx:sseMessage', (evt) => {
-    const type = evt.detail && evt.detail.type;
-    if (!type) return;
-    document.querySelectorAll('.live-indicator').forEach((indicator) => {
-      const topics = (indicator.getAttribute('data-live-topics') || '').split(',').filter(Boolean);
-      const matches = topics.some((t) => type === t || type === t + '-keepalive');
-      if (matches) markLive(indicator);
-    });
+  document.addEventListener('htmx:sse:after:message', (evt) => {
+    indicatorsFor(evt).forEach(markLive);
+  });
+  document.addEventListener('htmx:sse:error', (evt) => {
+    indicatorsFor(evt).forEach(scheduleNotLive);
   });
 
   // Fallback for a connection that stops heartbeating altogether (e.g. the

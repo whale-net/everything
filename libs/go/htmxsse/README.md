@@ -94,16 +94,27 @@ mux.HandleFunc("/events", htmxsse.Handler(hub, topics, fragment))
 
 ### HTMX Integration
 
-```html
-<div hx-ext="sse" sse-connect="/events" sse-swap="updates,promotion-updates">
-    <!-- Content here will be updated by SSE events -->
-</div>
+Requires htmx 4's `hx-sse` extension, loaded after the htmx core script
+(`https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js`).
 
-<script>
-// On reconnect, the browser automatically sends Last-Event-ID header
-// The server uses this to suppress duplicate swaps for unchanged state
-</script>
+```html
+<div hx-sse:connect="/events">
+    <div data-sse-topic="updates">...</div>
+    <div data-sse-topic="promotion-updates">...</div>
+</div>
 ```
+
+`data-sse-topic` is a space-separated topic list (`htmxsse.TopicAttr`). A
+swap for a topic replaces the innerHTML of every element whose list
+contains it. htmx 4 swaps only *unnamed* SSE messages and surfaces named
+events as DOM events, so `Handler` writes each swap as an unnamed message
+wrapping the fragment in an `<hx-partial hx-target="[data-sse-topic~='TOPIC']">`;
+keepalives stay named (`event: <topic>-keepalive`). Topics must not contain
+whitespace, quotes, backslash, `<`, `>` or `&` (`Handler` panics at
+construction otherwise).
+
+On reconnect the extension sends `Last-Event-ID`; the server uses it to
+suppress duplicate swaps for unchanged state.
 
 ### Detecting a Live Connection (Not-Live Indicators)
 
@@ -116,30 +127,28 @@ reasoning "if the content hasn't visibly changed in a while, the
 connection must be dead." It isn't: `Handler`'s heartbeat loop emits a
 `<topic>-keepalive` event (no swap, by design -- NFR11) whenever a topic's
 content is unchanged, specifically so the client has *something* to see on
-every heartbeat tick without forcing a DOM update. But htmx's `sse`
-extension only ever dispatches `htmx:sseMessage` for an event name some
-element on the page subscribes to via `sse-swap` -- and nothing subscribed
-to `<topic>-keepalive`, so every one of those hand-rolled watchdogs never
-saw it. The result: any page whose content stayed unchanged for longer
+every heartbeat tick without forcing a DOM update. The result of watching
+the DOM instead: any page whose content stayed unchanged for longer
 than 2x its heartbeat interval reported "Not Live" even though the
 connection was healthy and heartbeating the entire time -- indistinguishable,
 from the user's point of view, from the page "periodically disconnecting."
 
-`liveindicator.LiveIndicator` fixes this by rendering one hidden, no-op
-`sse-swap="<topic>-keepalive"` target per topic (so htmx actually registers
-the listener and fires `htmx:sseMessage` for it) and listening for that
-event instead of watching the DOM. Usage:
+`liveindicator.LiveIndicator` listens for the hx-sse extension's
+`htmx:sse:after:connection` / `htmx:sse:after:message` events (fired for
+every swap *and* every keepalive) and `htmx:sse:error`, scoped to the
+`hx-sse:connect` container it sits in. Usage:
 
 ```go
 @liveindicator.LiveIndicator(liveindicator.Options{
-    Topics:              []string{"release_run." + releaseRunID},
     HeartbeatIntervalMs:  int(hub.Config().HeartbeatInterval.Milliseconds()),
     ReloadHref:           "/releases/" + releaseRunID,
 })
 ```
 
-Place it inside the same `hx-ext="sse"` container passed to `sse-connect`,
-alongside your own visible `sse-swap` target(s) for the same topics.
+Place it inside the same `hx-sse:connect` container, alongside your own
+visible `data-sse-topic` target(s). The extension closes the stream while the
+tab is hidden and reconnects on return, so a hidden tab may read "Not Live"
+until it is shown again.
 
 ## Configuration
 
@@ -353,7 +362,7 @@ The client's last-seen baseline is carried in the `Last-Event-ID` request header
 
 **The multi-topic rule**: Suppression is per-topic. The carried baseline is a set of all topics (example: `topic-a:hash1|topic-b:hash2`). If the handler cannot parse the header, or a topic is missing from it, that topic **swaps** (fails safe toward fresh data).
 
-**Critical for adopters**: `sse-connect` (the handler URL) **must sit outside the swapped region**. If the handler endpoint itself is inside a div that gets swapped, a reconnect causes the event listener to be re-attached before the new connection receives `Last-Event-ID`.
+**Critical for adopters**: `hx-sse:connect` (the handler URL) **must sit outside the swapped region** -- a `data-sse-topic` element may itself be the connect element (its *children* are swapped), but never inside another swapped region. If the connect element is replaced, the connection is re-opened before it can carry `Last-Event-ID`.
 
 #### **FR5: Per-Frame Baseline Set**
 

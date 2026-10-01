@@ -153,14 +153,14 @@ templ startedByLine(sess SessionView) {
 	</p>
 }
 
-// sessionTopicsAttr joins topics into htmx-ext-sse's comma-separated
-// sse-swap value.
+// sessionTopicsAttr joins topics into the space-separated data-sse-topic
+// value htmxsse.Handler's swaps are addressed to.
 func sessionTopicsAttr(topics []string) string {
-	return strings.Join(topics, ",")
+	return strings.Join(topics, " ")
 }
 
 // SessionDetail is the session detail page (FR2, NFR2, NFR3): initial
-// render from data.Session/data.Events, then live via hx-ext="sse" bound to
+// render from data.Session/data.Events, then live via hx-sse:connect bound to
 // /sessions/{id}/events (../handlers_session_live.go). The composer/stop
 // slot (FR1, issue #2246) is filled with OwnerControls only inside the
 // data.IsOwner branch -- a non-owner's response contains this branch, and
@@ -170,12 +170,11 @@ func sessionTopicsAttr(topics []string) string {
 // reflecting this initial render.
 //
 // The usage panel (FR4, issue #2248) is its own SSE-connected region,
-// separate from #transcript's, deliberately: htmx's SSE extension swaps an
-// element with the literal data payload of the named event it is listening
-// for, so two differently-rendered regions cannot share one topic's
-// delivery without an out-of-band swap this codebase does not otherwise use
-// (see ../handlers_session_usage_live.go's doc comment) -- a second,
-// narrower-topic SSE connection is the simpler, more explicit alternative.
+// separate from #transcript's, deliberately: htmxsse.Handler addresses each
+// topic's fragment to every data-sse-topic element carrying that topic, so
+// two differently-rendered regions cannot share one topic's delivery -- a
+// second, narrower-topic SSE connection is the simpler, more explicit
+// alternative (see ../handlers_session_usage_live.go's doc comment).
 templ SessionDetail(data SessionDetailData) {
 	@Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-2">Session { data.Session.SessionID }</h1>
@@ -183,17 +182,15 @@ templ SessionDetail(data SessionDetailData) {
 		<div
 			id="usage-slot"
 			class="mb-4"
-			hx-ext="sse"
-			sse-connect={ fmt.Sprintf("/sessions/%s/usage-events", data.Session.SessionID) }
-			sse-swap={ sessionTopicsAttr(data.UsageTopics) }
+			hx-sse:connect={ fmt.Sprintf("/sessions/%s/usage-events", data.Session.SessionID) }
+			data-sse-topic={ sessionTopicsAttr(data.UsageTopics) }
 		>
 			@SessionUsage(data.Session, data.Usage)
 		</div>
 		<div
 			id="transcript"
-			hx-ext="sse"
-			sse-connect={ fmt.Sprintf("/sessions/%s/events", data.Session.SessionID) }
-			sse-swap={ sessionTopicsAttr(data.Topics) }
+			hx-sse:connect={ fmt.Sprintf("/sessions/%s/events", data.Session.SessionID) }
+			data-sse-topic={ sessionTopicsAttr(data.Topics) }
 		>
 			@SessionLive(data.Session, data.Events)
 		</div>

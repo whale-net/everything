@@ -30,11 +30,11 @@ func TestReleaseStatus_FR8_ConnectAttributes(t *testing.T) {
 	}
 	body := renderComponent(t, ReleaseStatus(adminUser(), s))
 
-	if !strings.Contains(body, `hx-ext="sse"`) {
-		t.Errorf("FR8: expected hx-ext=\"sse\"; got %q", body)
+	if strings.Contains(body, `hx-ext=`) {
+		t.Errorf("FR8: expected no hx-ext attribute; got %q", body)
 	}
-	if !strings.Contains(body, `sse-connect="/releases/run-42/status/sse"`) {
-		t.Errorf("FR8: expected sse-connect=\"/releases/run-42/status/sse\"; got %q", body)
+	if !strings.Contains(body, `hx-sse:connect="/releases/run-42/status/sse"`) {
+		t.Errorf("FR8: expected hx-sse:connect=\"/releases/run-42/status/sse\"; got %q", body)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestReleaseStatus_FR11_ExactlyOneSwapTargetContainingSummaryAndTargets(t *t
 	}
 	body := renderComponent(t, ReleaseStatus(adminUser(), s))
 
-	swapAttr := `sse-swap="release_run.run-42"`
+	swapAttr := `data-sse-topic="release_run.run-42"`
 	if got := strings.Count(body, swapAttr); got != 1 {
 		t.Fatalf("FR11: expected exactly one element with %s, got %d; body = %q", swapAttr, got, body)
 	}
@@ -67,10 +67,10 @@ func TestReleaseStatus_FR11_ExactlyOneSwapTargetContainingSummaryAndTargets(t *t
 	summaryIdx := strings.Index(body, "1 queued")
 	targetsIdx := strings.Index(body, "Targets (1)")
 	if summaryIdx < swapIdx {
-		t.Errorf("FR13: aggregate summary must be inside the sse-swap target; summaryIdx=%d swapIdx=%d", summaryIdx, swapIdx)
+		t.Errorf("FR13: aggregate summary must be inside the data-sse-topic target; summaryIdx=%d swapIdx=%d", summaryIdx, swapIdx)
 	}
 	if targetsIdx < swapIdx {
-		t.Errorf("FR11: Targets table must be inside the sse-swap target; targetsIdx=%d swapIdx=%d", targetsIdx, swapIdx)
+		t.Errorf("FR11: Targets table must be inside the data-sse-topic target; targetsIdx=%d swapIdx=%d", targetsIdx, swapIdx)
 	}
 }
 
@@ -92,9 +92,9 @@ func TestReleaseStatus_FR11_ExcludedElementsOutsideSwapTarget(t *testing.T) {
 	}
 	body := renderComponent(t, ReleaseStatus(adminUser(), s))
 
-	swapIdx := strings.Index(body, `sse-swap="release_run.run-42"`)
+	swapIdx := strings.Index(body, `data-sse-topic="release_run.run-42"`)
 	if swapIdx < 0 {
-		t.Fatalf("expected sse-swap target to be present; body = %q", body)
+		t.Fatalf("expected data-sse-topic target to be present; body = %q", body)
 	}
 
 	// The Run info card and Resolved-plan card, the live indicator, the
@@ -122,7 +122,7 @@ func TestReleaseStatus_FR11_ExcludedElementsOutsideSwapTarget(t *testing.T) {
 			continue
 		}
 		if idx > swapIdx {
-			t.Errorf("FR11: %s must be outside (before) the sse-swap target; idx=%d swapIdx=%d", c.name, idx, swapIdx)
+			t.Errorf("FR11: %s must be outside (before) the data-sse-topic target; idx=%d swapIdx=%d", c.name, idx, swapIdx)
 		}
 	}
 

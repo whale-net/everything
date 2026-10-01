@@ -436,8 +436,8 @@ func TestHandleActivity_SSEEnabled_CorrectDataAndLiveIndicatorPresent(t *testing
 	// The not-live indicator infrastructure (#2268's components.LiveRegion),
 	// wired at Activity's own SSE path and reload target (#2277) -- present
 	// on first render regardless of whether the stream ever connects.
-	if !strings.Contains(body, `sse-connect="/api/live/activity"`) {
-		t.Errorf("expected LiveRegion wired to sse-connect=\"/api/live/activity\", got body: %s", body)
+	if !strings.Contains(body, `hx-sse:connect="/api/live/activity"`) {
+		t.Errorf("expected LiveRegion wired to hx-sse:connect=\"/api/live/activity\", got body: %s", body)
 	}
 	// The bare href="/activity" substring alone is ambiguous (the page's own
 	// breadcrumb link also renders it via the same templ.URL(...) call), so
@@ -475,7 +475,7 @@ func TestHandleActivity_NoSSEHub_CorrectDataNoLiveMarkup(t *testing.T) {
 	if !strings.Contains(body, "2h0m0s") {
 		t.Errorf("expected real Live table data even with no SSE hub, got body: %s", body)
 	}
-	if strings.Contains(body, "sse-connect") {
-		t.Errorf("expected no sse-connect markup when app.sseHub is nil (nothing to stream from), got body: %s", body)
+	if strings.Contains(body, "hx-sse:connect") {
+		t.Errorf("expected no hx-sse:connect markup when app.sseHub is nil (nothing to stream from), got body: %s", body)
 	}
 }

@@ -57,9 +57,9 @@ type DeploymentRowData struct {
 //     and intentional; do not "fix" by trying to have the SSE fragment
 //     also carry hx-* attributes.
 //   - Conversely a polled whole-row replacement (outerHTML) *does* replace
-//     the <tr>, including its sse-swap attribute -- DeploymentRow must keep
-//     emitting sse-swap unconditionally (below) so a polled row stays a
-//     valid SSE swap target under the page's hx-ext="sse" ancestor.
+//     the <tr>, including its data-sse-topic attribute -- DeploymentRow must keep
+//     emitting data-sse-topic unconditionally (below) so a polled row stays a
+//     valid SSE swap target under the page's hx-sse:connect ancestor.
 func deploymentRowPollAttrs(data DeploymentRowData) templ.Attributes {
 	if !components.IsTransientStatus(data.LatestSession.GetStatus()) {
 		return templ.Attributes{}
@@ -78,7 +78,7 @@ func deploymentRowPollAttrs(data DeploymentRowData) templ.Attributes {
 // lives in DeploymentRowInner so both whole-row swaps (this component) and
 // future inner-swap responses can reuse it.
 //
-// sse-swap is set unconditionally to events.TopicForDeployment (#1726,
+// data-sse-topic is set unconditionally to events.TopicForDeployment (#1726,
 // FR2) -- via the shared manmanv2/events helper, never a locally formatted
 // literal, so the producer (handlers_sessions_live.go), this consumer
 // attribute, and the DOM id can't drift independently. Emitting it here
@@ -92,7 +92,7 @@ templ DeploymentRow(data DeploymentRowData) {
 	<tr
 		id={ fmt.Sprintf("deployment-row-%d", data.ServerGameConfigID) }
 		class="hover"
-		sse-swap={ events.TopicForDeployment(data.ServerGameConfigID) }
+		data-sse-topic={ events.TopicForDeployment(data.ServerGameConfigID) }
 		{ deploymentRowPollAttrs(data)... }
 	>
 		@DeploymentRowInner(data)
