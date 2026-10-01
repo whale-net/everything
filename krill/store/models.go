@@ -330,6 +330,21 @@ type MilestoneDeferral struct {
 	CreatedByOnBehalfOf Subject `json:"created_by_on_behalf_of"`
 }
 
+// MilestoneShipsAlongside is one row of `milestone_ships_alongside`
+// (migration 032) -- one item of work that ships with a milestone but is
+// not a capability. Plain append-only row, not SCD2.
+type MilestoneShipsAlongside struct {
+	ID          uuid.UUID `json:"id"`
+	ScopeID     uuid.UUID `json:"scope_id"`
+	MilestoneID uuid.UUID `json:"milestone_id"`
+	Body        string    `json:"body"`
+	Position    int       `json:"position"`
+	CreatedAt   time.Time `json:"created_at"`
+
+	CreatedByActing     Subject `json:"created_by_acting"`
+	CreatedByOnBehalfOf Subject `json:"created_by_on_behalf_of"`
+}
+
 // EntityMilestone is one row of `entity_milestone` (migration 004; the
 // Relation discriminator added by migration 010, issue #2683, LB6) -- the
 // delivery-axis association LB6 specifies, keyed `(entity_id,
