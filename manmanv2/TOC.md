@@ -7,7 +7,7 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 - [README.md](README.md) — Local development setup, quick start, and workflow
 - [ABOUT.md](ABOUT.md) — What ManManV2 is and why it exists
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Split-plane design, component relationships, data flow
-- [PRODUCT.md](PRODUCT.md) — Vision, personas, capability map, load-bearing decisions, and milestone roadmap
+- [PRODUCT.md](PRODUCT.md) — Vision, personas, capability map, load-bearing decisions, and milestone roadmap. Rendered by `krill/render` from krill prod (Product `manmanv2`); do not hand-edit — see [krill/render/README.md](../krill/render/README.md)
 - [AUTH.md](AUTH.md) — UI login/sessions, gRPC auth, role-based UI gating, and what's actually enforced vs. cosmetic
 
 ## Components
