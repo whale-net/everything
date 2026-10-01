@@ -259,7 +259,7 @@ func (s milestoneStore) addAssociation(ctx context.Context, scopeID, entityID, m
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 	`, scopeID, entityID, milestoneID, string(relation)); err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
 	}
@@ -273,7 +273,7 @@ func (s milestoneStore) addAssociation(ctx context.Context, scopeID, entityID, m
 func (s milestoneStore) ListAssociationsByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]EntityMilestone, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, scope_id, entity_id, milestone_id, relation, created_at
-		FROM entity_milestone
+		FROM entity_milestone_active
 		WHERE milestone_id = $1
 		ORDER BY created_at
 	`, milestoneID)

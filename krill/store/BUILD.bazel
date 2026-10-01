@@ -30,6 +30,7 @@ go_library(
     name = "store",
     srcs = [
         "abandon.go",
+        "active_edge.go",
         "amend.go",
         "void.go",
         "decision.go",
@@ -1818,4 +1819,13 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+# Guard: no store source may read raw entity_milestone (withdrawn edges
+# would resurface); readers must use the entity_milestone_active view.
+go_test(
+    name = "active_edge_guard_test",
+    srcs = ["active_edge_guard_test.go"],
+    data = glob(["*.go"], exclude = ["*_test.go"]),
+    deps = ["@com_github_stretchr_testify//require"],
 )

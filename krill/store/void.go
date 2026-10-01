@@ -249,7 +249,7 @@ func deliveryRefusal(ctx context.Context, q txQuerier, entityID, scopeID uuid.UU
 	var referenced bool
 	if err := q.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM entity_milestone WHERE entity_id = $1 AND scope_id = $2
+			SELECT 1 FROM entity_milestone_active WHERE entity_id = $1 AND scope_id = $2
 			UNION ALL
 			SELECT 1 FROM delivery_shipment WHERE entity_id = $1 AND scope_id = $2
 		)

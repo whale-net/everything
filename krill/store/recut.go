@@ -251,7 +251,7 @@ func (s recutStore) ListBacklog(ctx context.Context, scopeID, productID uuid.UUI
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT entity_id FROM entity_milestone WHERE milestone_id = $1 AND relation = $2
+		SELECT entity_id FROM entity_milestone_active WHERE milestone_id = $1 AND relation = $2
 	`, backlogID, string(MilestoneRelationDelivers))
 	if err != nil {
 		return nil, fmt.Errorf("list backlog entity_milestone: %w", err)
@@ -354,7 +354,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 		var delivers bool
 		if err := tx.QueryRow(ctx, `
 			SELECT EXISTS (
-				SELECT 1 FROM entity_milestone
+				SELECT 1 FROM entity_milestone_active
 				WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
 			)
 		`, entityID, fromContainerID, string(MilestoneRelationDelivers)).Scan(&delivers); err != nil {
@@ -384,7 +384,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 			var inParentDelivers bool
 			if err := tx.QueryRow(ctx, `
 				SELECT EXISTS (
-					SELECT 1 FROM entity_milestone
+					SELECT 1 FROM entity_milestone_active
 					WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
 				)
 			`, entityID, *toParent, string(MilestoneRelationDelivers)).Scan(&inParentDelivers); err != nil {
@@ -410,7 +410,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 		if competesWithMilepebbleParent(fromKind, fromParent, toKind, toContainerID) {
 			var sibling uuid.UUID
 			err := tx.QueryRow(ctx, `
-				SELECT em.milestone_id FROM entity_milestone em
+				SELECT em.milestone_id FROM entity_milestone_active em
 				WHERE em.entity_id = $1 AND em.relation = $2
 				  AND em.milestone_id <> $3
 				  AND em.milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $4 AND valid_to IS NULL)
@@ -432,7 +432,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 	// safe for every entityID.
 	for _, entityID := range entityIDs {
 		if _, err := tx.Exec(ctx, `
-			DELETE FROM entity_milestone WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
+			DELETE FROM entity_milestone WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3 AND withdrawn_at IS NULL
 		`, entityID, fromContainerID, string(MilestoneRelationDelivers)); err != nil {
 			return fmt.Errorf("delete from-association: %w", err)
 		}
@@ -445,6 +445,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 			if _, err := tx.Exec(ctx, `
 				DELETE FROM entity_milestone
 				WHERE entity_id = $1 AND relation = $2
+				  AND withdrawn_at IS NULL
 				  AND milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $3 AND valid_to IS NULL)
 			`, entityID, string(MilestoneRelationDelivers), fromContainerID); err != nil {
 				return fmt.Errorf("drop milepebble associations: %w", err)
@@ -466,8 +467,9 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 			if _, err := tx.Exec(ctx, `
 				DELETE FROM entity_milestone
 				WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
+				  AND withdrawn_at IS NULL
 				  AND NOT EXISTS (
-					  SELECT 1 FROM entity_milestone
+					  SELECT 1 FROM entity_milestone_active
 					  WHERE entity_id = $1 AND relation = $3
 					    AND milestone_id IN (SELECT id FROM milestone_ref WHERE parent_milestone_id = $2 AND valid_to IS NULL)
 				  )
@@ -479,7 +481,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+			ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 		`, scopeID, entityID, toContainerID, string(MilestoneRelationDelivers)); err != nil {
 			return fmt.Errorf("insert to-association: %w", err)
 		}
@@ -488,7 +490,7 @@ func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 				VALUES ($1, $2, $3, $4)
-				ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+				ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 			`, scopeID, entityID, *toParent, string(MilestoneRelationDelivers)); err != nil {
 				return fmt.Errorf("insert parent milestone association: %w", err)
 			}

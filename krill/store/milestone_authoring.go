@@ -285,7 +285,7 @@ func (s milestoneAuthoringStore) addRelation(ctx context.Context, scopeID, miles
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 	`, scopeID, entityID, milestoneID, string(relation)); err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
 	}
@@ -344,7 +344,7 @@ func addDeliversTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUI
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+			ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 		`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers)); err != nil {
 			return fmt.Errorf("insert entity_milestone: %w", err)
 		}
@@ -365,7 +365,7 @@ func refuseCompetingMilestoneDelivers(ctx context.Context, tx pgx.Tx, scopeID, p
 	var competing uuid.UUID
 	err := tx.QueryRow(ctx, `
 		SELECT mr.id
-		FROM entity_milestone em
+		FROM entity_milestone_active em
 		JOIN milestone_ref mr ON mr.id = em.milestone_id AND mr.valid_to IS NULL
 		WHERE em.entity_id = $1 AND em.relation = $2
 		  AND mr.kind = $3 AND mr.id <> $4
@@ -500,7 +500,7 @@ func (s milestoneAuthoringStore) GetMilestone(ctx context.Context, id uuid.UUID)
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, scope_id, entity_id, milestone_id, relation, created_at
-		FROM entity_milestone
+		FROM entity_milestone_active
 		WHERE milestone_id = $1
 		ORDER BY created_at
 	`, id)
@@ -645,7 +645,7 @@ func (s milestoneAuthoringStore) AddMilepebbleDelivers(ctx context.Context, scop
 	var inParentDelivers bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM entity_milestone
+			SELECT 1 FROM entity_milestone_active
 			WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
 		)
 	`, entityID, parentMilestoneID, string(MilestoneRelationDelivers)).Scan(&inParentDelivers); err != nil {
@@ -658,7 +658,7 @@ func (s milestoneAuthoringStore) AddMilepebbleDelivers(ctx context.Context, scop
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 	`, scopeID, entityID, milepebbleID, string(MilestoneRelationDelivers)); err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
 	}
@@ -713,7 +713,7 @@ func addDiscoveredScopeAssociation(ctx context.Context, tx pgx.Tx, scopeID, enti
 	_, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 	`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers))
 	if err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
