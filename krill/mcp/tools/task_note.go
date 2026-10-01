@@ -140,3 +140,41 @@ func RegisterTransitionNoteLifecycle(reg *server.Registry, sessions store.Sessio
 		return nil, handlers.IDResponse{ID: event.ID.String()}, nil
 	})
 }
+
+// amendNoteInput is amend_note's argument schema.
+type amendNoteInput struct {
+	krillSessionInput
+	NoteID string `json:"note_id" jsonschema:"The note to amend, as a UUID string. Must be the head of its amendment chain."`
+	Body   string `json:"body" jsonschema:"The replacement note text."`
+}
+
+// RegisterAmendNote registers amend_note: appends a new note row superseding
+// note_id (kind, target and lifecycle status carried over); the old row is
+// retained and reads as superseded. Not SCD2 -- notes stay append-only.
+func RegisterAmendNote(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "amend_note",
+		Description: "Amend a note's text: appends a new note row that supersedes the old one, which is retained and shown as superseded in list_entity_notes. The new note keeps the old one's kind, target and lifecycle status. Returns the new note's id.",
+	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendNoteInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+		noteID, err := uuid.Parse(in.NoteID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("note_id: invalid or missing UUID")
+		}
+		note, err := tasks.AmendNote(ctx, store.AmendNoteParams{
+			ScopeID:    sess.ScopeID,
+			NoteID:     noteID,
+			Body:       in.Body,
+			Acting:     sess.Acting,
+			OnBehalfOf: sess.OnBehalfOf,
+		})
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: note.ID.String()}, nil
+	})
+}

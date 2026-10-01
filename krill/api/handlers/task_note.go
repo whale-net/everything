@@ -101,6 +101,7 @@ func writeNoteStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNotFound),
 		errors.Is(err, store.ErrInvalidNoteTarget),
 		errors.Is(err, store.ErrEmptyNoteBody),
+		errors.Is(err, store.ErrNoteAlreadySuperseded),
 		errors.Is(err, store.ErrUnknownNoteKind),
 		errors.Is(err, store.ErrUnknownNoteEntityKind):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -121,6 +122,30 @@ type NoteWire struct {
 	Kind       string  `json:"kind"`
 	Body       string  `json:"body"`
 	Status     string  `json:"status"`
+
+	// SupersedesNoteID is set on an amended note's new row; SupersededByNoteID
+	// on the old row it replaced, which is retained (amend_note).
+	SupersedesNoteID   *string `json:"supersedes_note_id,omitempty"`
+	SupersededByNoteID *string `json:"superseded_by_note_id,omitempty"`
+}
+
+// toNoteResponses maps notes and marks each one a later row in the same list
+// supersedes with SupersededByNoteID.
+func toNoteResponses(notes []store.Note) []NoteWire {
+	out := make([]NoteWire, len(notes))
+	successor := map[uuid.UUID]string{}
+	for _, n := range notes {
+		if n.SupersedesNoteID != nil {
+			successor[*n.SupersedesNoteID] = n.ID.String()
+		}
+	}
+	for i, n := range notes {
+		out[i] = toNoteResponse(n)
+		if id, ok := successor[n.ID]; ok {
+			out[i].SupersededByNoteID = &id
+		}
+	}
+	return out
 }
 
 func toNoteResponse(n store.Note) NoteWire {
@@ -129,6 +154,10 @@ func toNoteResponse(n store.Note) NoteWire {
 		Kind:   string(n.Kind),
 		Body:   n.Body,
 		Status: string(n.CurrentStatus),
+	}
+	if n.SupersedesNoteID != nil {
+		id := n.SupersedesNoteID.String()
+		resp.SupersedesNoteID = &id
 	}
 	if n.TaskID != nil {
 		id := n.TaskID.String()
@@ -181,11 +210,6 @@ func ListTaskNotesHandler(tasks store.TaskStore) http.HandlerFunc {
 			return
 		}
 
-		resp := make([]NoteWire, len(notes))
-		for i, n := range notes {
-			resp[i] = toNoteResponse(n)
-		}
-
-		writeJSON(w, http.StatusOK, listTaskNotesResponse{Notes: resp})
+		writeJSON(w, http.StatusOK, listTaskNotesResponse{Notes: toNoteResponses(notes)})
 	}
 }

@@ -335,6 +335,13 @@ func (f *fakeAmendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name 
 	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
 }
 
+func (f *fakeAmendStore) AmendMilepebble(ctx context.Context, id uuid.UUID, name string, outcome *string) (store.MilestoneRef, error) {
+	if err := f.record(amendCall{kind: "milepebble", id: id, name: name, outcome: outcome}); err != nil {
+		return store.MilestoneRef{}, err
+	}
+	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
+}
+
 // CurrentPlacement answers the guard's read with the row the fake is
 // standing on. placementErr lets a test drive the unknown-id path the real
 // store takes for an id with no current row.

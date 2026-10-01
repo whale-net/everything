@@ -171,3 +171,7 @@ func TestAssemble_UnknownTaskID_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, store.ErrNotFound), "an unknown task id must fail as store.ErrNotFound, not a generic/opaque error")
 }
+
+func (f *fakeTaskStore) AmendNote(ctx context.Context, params store.AmendNoteParams) (store.Note, error) {
+	return store.Note{}, nil
+}

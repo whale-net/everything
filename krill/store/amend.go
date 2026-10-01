@@ -84,6 +84,12 @@ type AmendStore interface {
 	// delivery axis is left exactly as it was.
 	AmendMilestone(ctx context.Context, id uuid.UUID, name string, outcome *string) (MilestoneRef, error)
 
+	// AmendMilepebble is AmendMilestone restricted to kind='milepebble': it
+	// replaces name and outcome as a new revision under the same id, leaving
+	// the FR budget, status history and delivery axis untouched. A milestone
+	// id is ErrNotFound here.
+	AmendMilepebble(ctx context.Context, id uuid.UUID, name string, outcome *string) (MilestoneRef, error)
+
 	// CurrentPlacement reads the placement columns of the entity's current
 	// row -- the parent id that kind has, and its kind -- so an amend
 	// surface can tell a caller echoing its own placement from one trying
@@ -272,6 +278,17 @@ func (s amendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name strin
 		})
 }
 
+func (s amendStore) AmendMilepebble(ctx context.Context, id uuid.UUID, name string, outcome *string) (MilestoneRef, error) {
+	placement, err := s.CurrentPlacement(ctx, "milepebble", id)
+	if err != nil {
+		return MilestoneRef{}, err
+	}
+	if placement.Kind == nil || *placement.Kind != string(MilestoneKindMilepebble) {
+		return MilestoneRef{}, fmt.Errorf("%w: milepebble id %s", ErrNotFound, id)
+	}
+	return s.AmendMilestone(ctx, id, name, outcome)
+}
+
 // AmendDeferral supersedes one deferral's text under its unchanged id
 // (migration 024, which made `milestone_deferral` SCD2 so this path could
 // exist at all). FR1's destination rule is enforced up front, the same
@@ -366,6 +383,7 @@ var parentColumn = map[string]string{
 	"persona":               "product_id",
 	"non-goal":              "product_id",
 	"milestone":             "product_id",
+	"milepebble":            "product_id",
 }
 
 // placementAdvice names the operation to use instead of the refused
@@ -382,11 +400,11 @@ func placementAdvice(entityKind, field string) string {
 	case entityKind == "requirement" && field == "kind":
 		return "a requirement's FR/NFR kind is fixed at creation -- create the requirement with the kind you want, then void this one"
 	case parentColumn[entityKind] == field:
-		if entityKind == "milestone" {
+		if entityKind == "milestone" || entityKind == "milepebble" {
 			return "a milestone's parent is fixed at create, and a milepebble's parent is set by the cut that made it -- create the milestone under the parent you want, then abandon_milestone this one"
 		}
 		return fmt.Sprintf("a %s has no reparent verb -- create the %s under the parent you want, then void this one", entityKind, entityKind)
-	case entityKind == "milestone" && field == "parent_milestone_id":
+	case (entityKind == "milestone" || entityKind == "milepebble") && field == "parent_milestone_id":
 		return "only a milepebble is parented to a milestone, and that parent is set by the cut that created it -- create the milepebble under the milestone you want, then abandon_milestone this one"
 	default:
 		return fmt.Sprintf("%s is not a placement of a %s, so there is nothing here to reparent", field, entityKind)
@@ -446,6 +464,7 @@ var placementSources = map[string]struct {
 	"persona":               {table: "persona", productID: "product_id"},
 	"non-goal":              {table: "non_goal", productID: "product_id", kind: "kind"},
 	"load-bearing decision": {table: "load_bearing_decision", featureSetID: "feature_set_id"},
+	"milepebble":            {table: "milestone_ref", productID: "product_id", parentMilestoneID: "parent_milestone_id", kind: "kind"},
 	"milestone":             {table: "milestone_ref", productID: "product_id", parentMilestoneID: "parent_milestone_id", kind: "kind"},
 }
 

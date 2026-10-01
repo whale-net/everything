@@ -332,6 +332,32 @@ func RegisterAmendMilestone(reg *server.Registry, sessions store.SessionStore, a
 	})
 }
 
+// RegisterAmendMilepebble registers amend_milepebble: amend_milestone
+// restricted to kind='milepebble'. FR budget, status history and delivery
+// axis are untouched.
+func RegisterAmendMilepebble(reg *server.Registry, sessions store.SessionStore, amend store.AmendStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name: "amend_milepebble",
+		Description: "Amend a milepebble's authoring content: replace its name and outcome as a new SCD2 revision under the same id. " +
+			"Never reparents or re-kinds; the FR budget is carried forward, and the whole delivery axis " +
+			"(status history, Delivers, must-not-foreclose, deferrals) is left untouched. A milestone id is rejected.",
+	}, amendPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in amendMilestoneInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+		id, err := parseAmendInput(ctx, sessions, in.KrillSessionID, in.ID, in.Name)
+		if err != nil {
+			return nil, zero, err
+		}
+		if err := refusePlacement(ctx, amend, in.AmendPlacementChange, "milepebble", id); err != nil {
+			return nil, zero, err
+		}
+		amended, err := amend.AmendMilepebble(ctx, id, in.Name, in.Outcome)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: amended.ID.String()}, nil
+	})
+}
+
 // RegisterAmendDeferral registers amend_deferral: supersedes one milestone
 // deferral's text under its unchanged id, keeping its milestone, position
 // and original authorship.
@@ -409,6 +435,7 @@ func RegisterAmendAll(reg *server.Registry, sessions store.SessionStore, amend s
 	RegisterAmendNonGoal(reg, sessions, amend)
 	RegisterAmendLoadBearingDecision(reg, sessions, amend)
 	RegisterAmendMilestone(reg, sessions, amend)
+	RegisterAmendMilepebble(reg, sessions, amend)
 	RegisterAmendDeferral(reg, sessions, amend)
 	RegisterReparentFeature(reg, sessions, reparent)
 }

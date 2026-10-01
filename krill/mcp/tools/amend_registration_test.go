@@ -112,6 +112,11 @@ func (f recordingAmendStore) AmendMilestone(_ context.Context, id uuid.UUID, nam
 	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
 }
 
+func (f recordingAmendStore) AmendMilepebble(_ context.Context, id uuid.UUID, name string, outcome *string) (store.MilestoneRef, error) {
+	*f.calls = append(*f.calls, amendCall{"milepebble", id, name, nil})
+	return store.MilestoneRef{ID: id, Name: name, Outcome: outcome}, nil
+}
+
 // CurrentPlacement answers the guard's read. The zero placement is the
 // honest answer for a store that has no row to report, and it is what lets
 // the test that sends no placement field through reach the write at all.
@@ -214,6 +219,7 @@ var amendToolNames = map[string]struct {
 	"amend_non_goal":              {"non_goal", map[string]any{"body": "amended body"}},
 	"amend_load_bearing_decision": {"load_bearing_decision", map[string]any{"body": "amended body"}},
 	"amend_milestone":             {"milestone", map[string]any{"outcome": "an amended outcome"}},
+	"amend_milepebble":            {"milepebble", map[string]any{"outcome": "an amended outcome"}},
 }
 
 // reparentFeatureToolName is registered by the same fan-out as the amends:

@@ -327,3 +327,7 @@ func (f *fakeTaskStore) ListTasksByMilestone(ctx context.Context, milestoneID uu
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)
+
+func (f *fakeTaskStore) AmendNote(ctx context.Context, params store.AmendNoteParams) (store.Note, error) {
+	return store.Note{}, nil
+}
