@@ -73,6 +73,28 @@ func ParseOptionalUUID(field, v string) (*uuid.UUID, error) {
 	return &id, nil
 }
 
+// addShipsAlongsideRequest is AddShipsAlongsideHandler's request body.
+type addShipsAlongsideRequest struct {
+	Body string `json:"body"`
+}
+
+// ShipsAlongsideDTO is one Ships alongside item on the wire.
+type ShipsAlongsideDTO struct {
+	ID       string `json:"id"`
+	Body     string `json:"body"`
+	Position int    `json:"position"`
+}
+
+// NewShipsAlongsideDTOs converts store rows to wire DTOs (never nil, so
+// the JSON field is always an array).
+func NewShipsAlongsideDTOs(rows []store.MilestoneShipsAlongside) []ShipsAlongsideDTO {
+	out := make([]ShipsAlongsideDTO, len(rows))
+	for i, r := range rows {
+		out[i] = ShipsAlongsideDTO{ID: r.ID.String(), Body: r.Body, Position: r.Position}
+	}
+	return out
+}
+
 // MilestoneResponse is GetMilestoneHandler's response body -- the
 // milestone's authoring fields plus its Delivers/Must-not-foreclose
 // entity id lists and its deferrals.
@@ -85,6 +107,7 @@ type MilestoneResponse struct {
 	Delivers         []string                `json:"delivers"`
 	MustNotForeclose []string                `json:"must_not_foreclose"`
 	Deferrals        []slice.DeferralDTO      `json:"deferrals"`
+	ShipsAlongside   []ShipsAlongsideDTO     `json:"ships_alongside"`
 }
 
 // NewMilestoneResponse builds a MilestoneResponse from a
@@ -112,6 +135,7 @@ func NewMilestoneResponse(ref store.MilestoneRef, delivers, mustNotForeclose []s
 		Delivers:         deliversIDs,
 		MustNotForeclose: mustNotForecloseIDs,
 		Deferrals:        deferralWires,
+		ShipsAlongside:   []ShipsAlongsideDTO{},
 	}
 }
 
@@ -331,6 +355,41 @@ func AddDeferralHandler(milestones store.MilestoneAuthoringStore) http.HandlerFu
 		}
 
 		writeJSON(w, http.StatusCreated, IDResponse{ID: deferral.ID.String()})
+	}
+}
+
+// AddShipsAlongsideHandler returns the Ships alongside record endpoint:
+// POST /milestones/{id}/ships-alongside. Must be mounted behind RequireSession.
+func AddShipsAlongsideHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+		var req addShipsAlongsideRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+		if err := RequireNonEmpty("body", req.Body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		row, err := milestones.AddShipsAlongside(r.Context(), sess.ScopeID, id, req.Body, sess.Acting, sess.OnBehalfOf)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, IDResponse{ID: row.ID.String()})
 	}
 }
 
@@ -692,6 +751,13 @@ func GetMilestoneHandler(milestones store.MilestoneAuthoringStore) http.HandlerF
 			return
 		}
 
-		writeJSON(w, http.StatusOK, NewMilestoneResponse(ref, delivers, mustNotForeclose, deferrals))
+		resp := NewMilestoneResponse(ref, delivers, mustNotForeclose, deferrals)
+		ships, err := milestones.ListShipsAlongside(r.Context(), id)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		resp.ShipsAlongside = NewShipsAlongsideDTOs(ships)
+		writeJSON(w, http.StatusOK, resp)
 	}
 }

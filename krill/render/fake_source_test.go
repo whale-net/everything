@@ -30,6 +30,8 @@ type fakeSource struct {
 	// Deferrals maps a MilestoneRef.ID to the milestone_deferral rows
 	// ListMilestoneDeferrals should return for it.
 	Deferrals map[uuid.UUID][]store.MilestoneDeferral
+	// ShipsAlongside maps a MilestoneRef.ID to its Ships alongside rows.
+	ShipsAlongside map[uuid.UUID][]store.MilestoneShipsAlongside
 	// Statuses is what ListMilestoneStatuses returns wholesale. Leave nil
 	// to model a Source that reports no status history at all.
 	Statuses map[uuid.UUID]store.MilestoneStatus
@@ -65,6 +67,10 @@ func (f *fakeSource) ListMilestoneAssociations(ctx context.Context, milestoneID 
 
 func (f *fakeSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error) {
 	return f.Deferrals[milestoneID], nil
+}
+
+func (f *fakeSource) ListMilestoneShipsAlongside(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneShipsAlongside, error) {
+	return f.ShipsAlongside[milestoneID], nil
 }
 
 func (f *fakeSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error) {

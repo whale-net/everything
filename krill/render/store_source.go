@@ -53,6 +53,10 @@ func (s *StoreSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uu
 	return s.store.MilestoneAuthoring().ListDeferrals(ctx, milestoneID)
 }
 
+func (s *StoreSource) ListMilestoneShipsAlongside(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneShipsAlongside, error) {
+	return s.store.MilestoneAuthoring().ListShipsAlongside(ctx, milestoneID)
+}
+
 // ListMilestoneStatuses is a read of `milestone_status_event` (migration
 // 012) and nothing else -- it adds no write path to what a Source holder
 // can reach. See this type's doc comment on why that matters.

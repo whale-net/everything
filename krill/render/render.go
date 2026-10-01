@@ -82,6 +82,10 @@ type Source interface {
 	// `Deliberately deferred:` line is reconstructed from.
 	ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error)
 
+	// ListMilestoneShipsAlongside returns milestoneID's Ships alongside
+	// rows (migration 032) -- non-capability work shipping with it.
+	ListMilestoneShipsAlongside(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneShipsAlongside, error)
+
 	// ListMilestoneStatuses returns each id's *current* delivery status --
 	// the latest `milestone_status_event` row per id, batched, because a
 	// whole-product roadmap renders every milestone in one pass and a
@@ -594,6 +598,7 @@ type milestoneEntry struct {
 	Delivers         []string
 	MustNotForeclose []string
 	Deferrals        []store.MilestoneDeferral
+	ShipsAlongside   []store.MilestoneShipsAlongside
 }
 
 // milestoneNumRe extracts the numeric suffix of a bare "M<n>" identifier.
@@ -667,6 +672,11 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			return nil, fmt.Errorf("list deferrals for milestone %s: %w", ref.Name, err)
 		}
 
+		ships, err := src.ListMilestoneShipsAlongside(ctx, ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list ships alongside for milestone %s: %w", ref.Name, err)
+		}
+
 		num := 0
 		if m := milestoneNumRe.FindStringSubmatch(ref.Name); m != nil {
 			num, _ = strconv.Atoi(m[1])
@@ -680,6 +690,7 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			Delivers:         prefixEach("C", delivers),
 			MustNotForeclose: prefixEach("LB", mustNot),
 			Deferrals:        deferrals,
+			ShipsAlongside:   ships,
 		})
 	}
 
@@ -757,6 +768,15 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 				items[i] = fmt.Sprintf("%s (→ %s)", body, d.Destination)
 			}
 			b.WriteString("- Deliberately deferred: ")
+			b.WriteString(strings.Join(items, "; "))
+			b.WriteString("\n")
+		}
+		if len(m.ShipsAlongside) > 0 {
+			items := make([]string, len(m.ShipsAlongside))
+			for i, s := range m.ShipsAlongside {
+				items[i] = s.Body
+			}
+			b.WriteString("- Ships alongside: ")
 			b.WriteString(strings.Join(items, "; "))
 			b.WriteString("\n")
 		}
