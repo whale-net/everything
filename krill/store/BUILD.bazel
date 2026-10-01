@@ -30,6 +30,7 @@ go_library(
     name = "store",
     srcs = [
         "abandon.go",
+        "active_edge.go",
         "amend.go",
         "void.go",
         "decision.go",

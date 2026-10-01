@@ -285,7 +285,7 @@ func (s milestoneAuthoringStore) addRelation(ctx context.Context, scopeID, miles
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 	`, scopeID, entityID, milestoneID, string(relation)); err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
 	}
@@ -344,7 +344,7 @@ func addDeliversTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUI
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+			ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 		`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers)); err != nil {
 			return fmt.Errorf("insert entity_milestone: %w", err)
 		}
@@ -658,7 +658,7 @@ func (s milestoneAuthoringStore) AddMilepebbleDelivers(ctx context.Context, scop
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 	`, scopeID, entityID, milepebbleID, string(MilestoneRelationDelivers)); err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
 	}
@@ -713,7 +713,7 @@ func addDiscoveredScopeAssociation(ctx context.Context, tx pgx.Tx, scopeID, enti
 	_, err := tx.Exec(ctx, `
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+		ON CONFLICT (entity_id, milestone_id, relation) WHERE withdrawn_at IS NULL DO NOTHING
 	`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers))
 	if err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
