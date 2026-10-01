@@ -9,10 +9,11 @@ wording. This is M2's — and this codebase's — first MCP **write** path:
 until this task, every tool `krill/mcp` registered anywhere was
 `RegisterRead`-only.
 
-**A second mount, not a second tool on the first one.** The six tools —
+**A second mount, not a second tool on the first one.** The tools —
 `open_design_session`, `append_revision_event`, `propose_entities` (write);
-`get_design_session`, `get_design_session_slice`, `list_open_questions`
-(read) — are registered on their own `*mcp.Server`, mounted at
+`get_design_session`, `get_design_session_slice`, `list_open_questions`,
+`list_product_design_sessions` (read) — are registered on their
+own `*mcp.Server`, mounted at
 `krill/mcp/server`'s `designMountPath` (`/mcp/design`), never at
 `specMountPath`. `mcp/main.go` builds two independent `*mcp.Server`/
 `Registry` pairs (`specSrv`/`specReg` and `designSrv`/`designReg`) precisely
@@ -72,10 +73,11 @@ now builds a `*store.Store` and a `store.SessionStore` alongside the
 `tools.RegisterDesignAll`.
 
 **Thin wrappers, LB7 applied literally, same as slice.go.** No tool file
-in `krill/mcp/tools` defines its own bespoke response shape. Five of the
-six tools return one of `krill/api/handlers`' own exported wire types —
+in `krill/mcp/tools` defines its own bespoke response shape. Every tool
+but one returns one of `krill/api/handlers`' own exported wire types —
 `IDResponse`, `DesignSessionResponse`, `RevisionEventCreatedResponse`,
-`ProposeEntitiesResponse`, `ListOpenQuestionsResponse` — built by the exact
+`ProposeEntitiesResponse`, `ListOpenQuestionsResponse`,
+`ProductDesignSessionsSummaryWire` — built by the exact
 same `handlers.NewXxx` constructor (or struct literal) the corresponding
 HTTP handler calls, never a second, MCP-local projection of the same data.
 `get_design_session_slice` goes one step further, exactly like the four

@@ -36,6 +36,16 @@ type DesignSessionStore interface {
 
 	// ListByProduct returns every design_session row for productID.
 	ListByProduct(ctx context.Context, productID uuid.UUID) ([]DesignSession, error)
+
+	// SummarizeByProduct returns productID's whole design-session
+	// aggregate in one read: every session newest-first with its derived
+	// Stage and open blocking/non-blocking question counts, plus the
+	// product-wide open-blocking total and the number of sessions holding
+	// one. It is the N+1-free replacement for a caller looping
+	// ListByProduct + ListLatestSignoffBySessionIDs + one
+	// ListOpenQuestions per session. See design_session_summary.go for the
+	// Stage vocabulary and the derivation both it and this method share.
+	SummarizeByProduct(ctx context.Context, productID uuid.UUID) (ProductDesignSessionsSummary, error)
 }
 
 // designSessionStore is the pgx-backed DesignSessionStore implementation.

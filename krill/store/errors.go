@@ -15,6 +15,11 @@ import (
 // when the given parent id has no current row.
 var ErrNotFound = errors.New("krill/store: not found")
 
+// ErrNotImplemented is the placeholder a store method returns between its
+// Scaffold and Implementation phases -- the method is on the interface and
+// every caller is wired against it, but its query does not exist yet.
+var ErrNotImplemented = errors.New("krill/store: not implemented")
+
 // txQuerier is the subset of pgx.Tx / *pgxpool.Pool every Create* method
 // needs for its parent-existence check -- satisfied by both, so the check
 // and the INSERT that follows it can run inside one transaction.

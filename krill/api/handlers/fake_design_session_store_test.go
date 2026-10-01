@@ -27,6 +27,14 @@ import (
 type fakeDesignSessionStore struct {
 	openErr error
 
+	// summarizeErr, if set, is what SummarizeByProduct returns -- used to
+	// drive ListProductDesignSessionsHandler's 404 (store.ErrNotFound)
+	// and 500 branches without a database.
+	summarizeErr error
+
+	// summaries seeds SummarizeByProduct's per-product results.
+	summaries map[uuid.UUID]store.ProductDesignSessionsSummary
+
 	// gotScopeID/gotProductID/gotOpeningSubmission/gotOpenedBy record the
 	// last Open call's arguments.
 	gotScopeID                uuid.UUID
@@ -39,7 +47,10 @@ type fakeDesignSessionStore struct {
 }
 
 func newFakeDesignSessionStore() *fakeDesignSessionStore {
-	return &fakeDesignSessionStore{sessions: make(map[uuid.UUID]store.DesignSession)}
+	return &fakeDesignSessionStore{
+		sessions:  make(map[uuid.UUID]store.DesignSession),
+		summaries: make(map[uuid.UUID]store.ProductDesignSessionsSummary),
+	}
 }
 
 func (f *fakeDesignSessionStore) Open(ctx context.Context, scopeID, productID uuid.UUID, openingSubmission string, openedByKrillSessionID store.SessionID) (store.DesignSession, error) {
@@ -74,6 +85,18 @@ func (f *fakeDesignSessionStore) GetByID(ctx context.Context, id uuid.UUID) (sto
 
 func (f *fakeDesignSessionStore) ListByProduct(ctx context.Context, productID uuid.UUID) ([]store.DesignSession, error) {
 	return nil, nil
+}
+
+// SummarizeByProduct returns the seeded aggregate for productID, or
+// summarizeErr when a test sets one (so a handler test can drive the 404
+// and 500 branches without a database).
+func (f *fakeDesignSessionStore) SummarizeByProduct(ctx context.Context, productID uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	if f.summarizeErr != nil {
+		return store.ProductDesignSessionsSummary{}, f.summarizeErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.summaries[productID], nil
 }
 
 // put seeds ds directly into the fake, bypassing Open -- used by

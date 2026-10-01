@@ -36,6 +36,7 @@ go_library(
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",
+        "design_session_summary.go",
         "errors.go",
         "lb_protects.go",
         "feature.go",
@@ -1039,6 +1040,24 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+# Pure unit tests for design_session_summary.go's Stage vocabulary and
+# deriveStage (FR d0a63ffb): each constant's exact wire string pinned, the
+# seven values proven distinct, and the whole derivation as one table --
+# every event type, the terminal approved rule against a later event of
+# every other type, a non-approval signoff losing to a later event, the
+# no-events session, and the default arm that migration 008's event_type
+# CHECK makes unreachable through SQL. Deliberately `package store` (not
+# `package store_test`) because deriveStage is unexported -- same reason
+# task_escalation_integration_test.go is same-package. No database needed;
+# the query those Stages are derived from is covered against real Postgres
+# by :design_session_integration_test.
+go_test(
+    name = "design_session_summary_test",
+    srcs = ["design_session_summary_test.go"],
+    embed = [":store"],
+    deps = ["@com_github_stretchr_testify//assert"],
 )
 
 # Real Postgres integration test for TaskStore.CreateTask (task.go,

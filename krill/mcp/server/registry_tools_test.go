@@ -84,8 +84,9 @@ func TestRegistry_SpecSurface_RegistersExactlyTheFourReadTools_NoWriteTool(t *te
 	}
 }
 
-// expectedDesignSurfaceToolNames is exactly the six FR1-FR10 tools
-// tools.RegisterDesignAll wires -- see krill/mcp/tools/design.go.
+// expectedDesignSurfaceToolNames is exactly the tools
+// tools.RegisterDesignAll wires -- see krill/mcp/tools/design.go and
+// design_summary.go.
 var expectedDesignSurfaceToolNames = []string{
 	"open_design_session",
 	"append_revision_event",
@@ -93,9 +94,10 @@ var expectedDesignSurfaceToolNames = []string{
 	"get_design_session",
 	"get_design_session_slice",
 	"list_open_questions",
+	"list_product_design_sessions",
 }
 
-// TestRegistry_DesignSurface_RegistersExactlySixTools_NoneOnSpecSurface
+// TestRegistry_DesignSurface_RegistersExactlyTheDesignTools_NoneOnSpecSurface
 // mirrors ../main.go's full tool registration for BOTH mounts (issue
 // #2547): tools.RegisterAll against one *mcp.Server/Registry (the
 // specMountPath one) and tools.RegisterDesignAll against a SEPARATE
@@ -108,15 +110,15 @@ var expectedDesignSurfaceToolNames = []string{
 // one registry's tools by name over its own real in-memory MCP
 // client/server connection, and asserts:
 //
-//   - the design registry's tool set is EXACTLY the six FR1-FR10 names,
-//   - none of those six names appears on the spec registry (proving the
+//   - the design registry's tool set is EXACTLY the names RegisterDesignAll wires,
+//   - none of those names appears on the spec registry (proving the
 //     write tools this task adds can never end up reachable from
 //     /mcp/spec, the same property registry_tools_test.go's original test
 //     proves for the read side), and
 //   - none of the four FR5-FR8 spec names appears on the design registry
 //     (the two surfaces are disjoint, not merely non-overlapping by
 //     accident).
-func TestRegistry_DesignSurface_RegistersExactlySixTools_NoneOnSpecSurface(t *testing.T) {
+func TestRegistry_DesignSurface_RegistersExactlyTheDesignTools_NoneOnSpecSurface(t *testing.T) {
 	ctx := context.Background()
 	entities := store.New(nil)
 	querier := slice.NewQuerier(entities)
@@ -152,7 +154,7 @@ func TestRegistry_DesignSurface_RegistersExactlySixTools_NoneOnSpecSurface(t *te
 	specNames := listTools(t, specSrv)
 	designNames := listTools(t, designSrv)
 
-	require.Len(t, designNames, len(expectedDesignSurfaceToolNames), "the design surface must register exactly the six FR1-FR10 tools -- nothing more, nothing fewer")
+	require.Len(t, designNames, len(expectedDesignSurfaceToolNames), "the design surface must register exactly the tools RegisterDesignAll wires -- nothing more, nothing fewer")
 	for _, name := range expectedDesignSurfaceToolNames {
 		assert.True(t, designNames[name], "%s must be registered on the design surface", name)
 		assert.False(t, specNames[name], "%s (a design-session tool) must never be registered on the spec surface", name)

@@ -486,4 +486,5 @@ func RegisterDesignAll(reg *server.Registry, entities *store.Store, sessions sto
 	RegisterGetDesignSession(reg, entities.DesignSessions(), entities.RevisionEvents())
 	RegisterGetDesignSessionSlice(reg, entities.DesignSessions(), entities.RevisionEvents(), querier)
 	RegisterListOpenQuestions(reg, entities.DesignSessions(), entities.RevisionEvents())
+	RegisterListProductDesignSessions(reg, entities.DesignSessions())
 }
