@@ -97,7 +97,7 @@ func (s deliveryShipmentStore) MarkShipped(ctx context.Context, scopeID, milesto
 	var delivers bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM entity_milestone
+			SELECT 1 FROM entity_milestone_active
 			WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
 		)
 	`, entityID, milestoneID, string(MilestoneRelationDelivers)).Scan(&delivers); err != nil {
@@ -172,7 +172,7 @@ func (s deliveryShipmentStore) DeliveryBreakdown(ctx context.Context, milestoneI
 
 func deliveryBreakdown(ctx context.Context, q deliveryQueryer, milestoneID uuid.UUID) (shipped []uuid.UUID, unshipped []uuid.UUID, err error) {
 	rows, err := q.Query(ctx, `
-		SELECT entity_id FROM entity_milestone
+		SELECT entity_id FROM entity_milestone_active
 		WHERE milestone_id = $1 AND relation = $2
 	`, milestoneID, string(MilestoneRelationDelivers))
 	if err != nil {
