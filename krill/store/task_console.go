@@ -57,13 +57,25 @@ type ClaimedTaskRow struct {
 	CurrentLane    Lane
 	LeaseExpiresAt time.Time
 	AttemptCount   int
+
+	// ClaimID is the current open claim's own id (task.current_claim_id)
+	// -- the id an optimistic release carries back to be checked against
+	// what the caller observed. Read from task.current_claim_id, never
+	// derived.
+	ClaimID uuid.UUID
 }
 
-// ListClaimedTasksParams is ListClaimedTasks' input: scopeID (NFR1) plus
-// this query's own PageParams (NFR6).
+// ListClaimedTasksParams is ListClaimedTasks' input: scopeID (NFR1), the
+// optional ConsoleFilter narrowing, and this query's own PageParams (NFR6).
 type ListClaimedTasksParams struct {
 	ScopeID uuid.UUID
-	Page    PageParams
+	ConsoleFilter
+	Page PageParams
+}
+
+// Filters is the FilterSet ListClaimedTasks' continuation token binds.
+func (p ListClaimedTasksParams) Filters() FilterSet {
+	return p.ConsoleFilter.Filters()
 }
 
 // ListClaimedTasks returns scopeID's currently-claimed tasks (FR4),
@@ -84,9 +96,16 @@ type ListClaimedTasksParams struct {
 func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasksParams) (Page[ClaimedTaskRow], error) {
 	pageSize := ResolvePageSize(params.Page.PageSize)
 
+	// A narrowing that crosses a scope or a product boundary is refused
+	// before the query runs, so the page can never answer with rows the
+	// caller has no claim to.
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return Page[ClaimedTaskRow]{}, err
+	}
+
 	var cursor *Cursor
 	if params.Page.ContinuationToken != "" {
-		c, err := DecodeContinuationToken(params.ScopeID, params.Page.ContinuationToken)
+		c, err := DecodeFilteredContinuationToken(params.ScopeID, params.Filters(), params.Page.ContinuationToken)
 		if err != nil {
 			return Page[ClaimedTaskRow]{}, err
 		}
@@ -99,12 +118,15 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 			tc.session_id, tc.claimed_at,
 			tc.created_by_acting_iss, tc.created_by_acting_sub, tc.created_by_acting_kind,
 			tc.created_by_on_behalf_of_iss, tc.created_by_on_behalf_of_sub, tc.created_by_on_behalf_of_kind,
-			task.current_lane, task.lease_expires_at, task.attempt_count
+			task.current_lane, task.lease_expires_at, task.attempt_count, task.current_claim_id
 		FROM task
 		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
 		JOIN task_claim tc ON tc.id = task.current_claim_id
 		WHERE task.scope_id = $1 AND task.current_claim_id IS NOT NULL
 	`
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	query += filterSQL
+	args = append(args, filterArgs...)
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {
@@ -136,7 +158,7 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 			&sessionID, &row.ClaimedAt,
 			&row.ClaimantActing.Iss, &row.ClaimantActing.Sub, &actingKind,
 			&row.ClaimantOnBehalfOf.Iss, &row.ClaimantOnBehalfOf.Sub, &onBehalfOfKind,
-			&currentLane, &row.LeaseExpiresAt, &row.AttemptCount,
+			&currentLane, &row.LeaseExpiresAt, &row.AttemptCount, &row.ClaimID,
 		); err != nil {
 			return Page[ClaimedTaskRow]{}, fmt.Errorf("scan claimed task row: %w", err)
 		}
@@ -155,7 +177,7 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 	if len(items) > pageSize {
 		page.Items = items[:pageSize]
 		last := page.Items[pageSize-1]
-		page.NextToken = EncodeContinuationToken(params.ScopeID, Cursor{
+		page.NextToken = EncodeFilteredContinuationToken(params.ScopeID, params.Filters(), Cursor{
 			SortKey: last.LeaseExpiresAt.Format(time.RFC3339Nano),
 			ID:      last.TaskID,
 		})
@@ -193,11 +215,18 @@ type CancelledTaskRow struct {
 	CancelledAt           time.Time
 }
 
-// ListCancelledTasksParams is ListCancelledTasks' input: scopeID (NFR1)
-// plus this query's own PageParams (NFR6).
+// ListCancelledTasksParams is ListCancelledTasks' input: scopeID (NFR1),
+// the optional ConsoleFilter narrowing, and this query's own PageParams
+// (NFR6).
 type ListCancelledTasksParams struct {
 	ScopeID uuid.UUID
-	Page    PageParams
+	ConsoleFilter
+	Page PageParams
+}
+
+// Filters is the FilterSet ListCancelledTasks' continuation token binds.
+func (p ListCancelledTasksParams) Filters() FilterSet {
+	return p.ConsoleFilter.Filters()
 }
 
 // ListCancelledTasks returns every cancelled task in params.ScopeID
@@ -213,9 +242,13 @@ type ListCancelledTasksParams struct {
 func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledTasksParams) (Page[CancelledTaskRow], error) {
 	pageSize := ResolvePageSize(params.Page.PageSize)
 
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return Page[CancelledTaskRow]{}, err
+	}
+
 	var cursor *Cursor
 	if params.Page.ContinuationToken != "" {
-		c, err := DecodeContinuationToken(params.ScopeID, params.Page.ContinuationToken)
+		c, err := DecodeFilteredContinuationToken(params.ScopeID, params.Filters(), params.Page.ContinuationToken)
 		if err != nil {
 			return Page[CancelledTaskRow]{}, err
 		}
@@ -233,6 +266,9 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 		JOIN task_intervention_event ev ON ev.task_id = task.id AND ev.action = 'cancel'
 		WHERE task.scope_id = $1 AND task.cancelled_at IS NOT NULL
 	`
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	query += filterSQL
+	args = append(args, filterArgs...)
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {
@@ -278,7 +314,7 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 	if len(items) > pageSize {
 		page.Items = items[:pageSize]
 		last := page.Items[pageSize-1]
-		page.NextToken = EncodeContinuationToken(params.ScopeID, Cursor{
+		page.NextToken = EncodeFilteredContinuationToken(params.ScopeID, params.Filters(), Cursor{
 			SortKey: last.CancelledAt.Format(time.RFC3339Nano),
 			ID:      last.TaskID,
 		})
@@ -332,6 +368,12 @@ type EscalatedTaskRow struct {
 	Title       string
 	DeliveryRef EscalatedTaskDeliveryRef
 
+	// EscalationID is the current escalation's own id
+	// (task.current_escalation_id) -- the id an optimistic requeue or
+	// cancel carries back to be checked against what the caller
+	// observed. Read from task.current_escalation_id, never derived.
+	EscalationID uuid.UUID
+
 	Reason       EscalationReason
 	CounterValue *int
 	CapValue     *int
@@ -348,11 +390,30 @@ type EscalatedTaskRow struct {
 	NoteCount           int
 }
 
-// ListEscalatedTasksParams is ListEscalatedTasks' input: scopeID (NFR1)
-// plus this query's own PageParams (NFR6).
+// ListEscalatedTasksParams is ListEscalatedTasks' input: scopeID (NFR1),
+// the optional ConsoleFilter narrowing, an optional reason filter over
+// EscalationReason's fixed enumeration, and this query's own PageParams
+// (NFR6).
 type ListEscalatedTasksParams struct {
 	ScopeID uuid.UUID
-	Page    PageParams
+	ConsoleFilter
+
+	// Reason keeps only escalations raised for this reason -- nil keeps
+	// every reason, which is what the read returned before the filter
+	// existed.
+	Reason *EscalationReason
+
+	Page PageParams
+}
+
+// Filters is the FilterSet ListEscalatedTasks' continuation token binds:
+// the ConsoleFilter's, plus the reason when one is set.
+func (p ListEscalatedTasksParams) Filters() FilterSet {
+	filters := p.ConsoleFilter.Filters()
+	if p.Reason != nil {
+		filters = filters.With(filterKeyEscalationReason, string(*p.Reason))
+	}
+	return filters
 }
 
 // ListEscalatedTasks returns every task in params.ScopeID with an active
@@ -379,9 +440,16 @@ type ListEscalatedTasksParams struct {
 func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (Page[EscalatedTaskRow], error) {
 	pageSize := ResolvePageSize(params.Page.PageSize)
 
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return Page[EscalatedTaskRow]{}, err
+	}
+	if params.Reason != nil && !validEscalationReasons[*params.Reason] {
+		return Page[EscalatedTaskRow]{}, fmt.Errorf("%w: %q", ErrUnknownEscalationReason, *params.Reason)
+	}
+
 	var cursor *Cursor
 	if params.Page.ContinuationToken != "" {
-		c, err := DecodeContinuationToken(params.ScopeID, params.Page.ContinuationToken)
+		c, err := DecodeFilteredContinuationToken(params.ScopeID, params.Filters(), params.Page.ContinuationToken)
 		if err != nil {
 			return Page[EscalatedTaskRow]{}, err
 		}
@@ -391,6 +459,7 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 	args := []any{params.ScopeID}
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
+			task.current_escalation_id,
 			ev.reason, ev.counter_value, ev.cap_value, ev.created_at,
 			ev.created_by_acting_iss, ev.created_by_acting_sub, ev.created_by_acting_kind,
 			ev.created_by_on_behalf_of_iss, ev.created_by_on_behalf_of_sub, ev.created_by_on_behalf_of_kind,
@@ -401,6 +470,13 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 		JOIN task_escalation_event ev ON ev.id = task.current_escalation_id
 		WHERE task.scope_id = $1 AND task.current_escalation_id IS NOT NULL
 	`
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	query += filterSQL
+	args = append(args, filterArgs...)
+	if params.Reason != nil {
+		query += fmt.Sprintf("\n\t\t\tAND ev.reason = $%d", len(args)+1)
+		args = append(args, string(*params.Reason))
+	}
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {
@@ -429,6 +505,7 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 		var currentLane string
 		if err := rows.Scan(
 			&row.TaskID, &row.Title, &row.DeliveryRef.ID, &deliveryKind, &row.DeliveryRef.Title,
+			&row.EscalationID,
 			&reason, &row.CounterValue, &row.CapValue, &row.EscalatedAt,
 			&row.EscalatedByActing.Iss, &row.EscalatedByActing.Sub, &actingKind,
 			&row.EscalatedByOnBehalfOf.Iss, &row.EscalatedByOnBehalfOf.Sub, &onBehalfOfKind,
@@ -461,7 +538,7 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 	if len(items) > pageSize {
 		page.Items = items[:pageSize]
 		last := page.Items[pageSize-1]
-		page.NextToken = EncodeContinuationToken(params.ScopeID, Cursor{
+		page.NextToken = EncodeFilteredContinuationToken(params.ScopeID, params.Filters(), Cursor{
 			SortKey: last.EscalatedAt.Format(time.RFC3339Nano),
 			ID:      last.TaskID,
 		})

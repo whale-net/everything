@@ -460,3 +460,208 @@ func TestListEscalatedTasksHandler_NoInlineHistory_RegressionGuard(t *testing.T)
 		}
 	}
 }
+
+// TestListClaimedTasksHandler_CarriesClaimID is FR a6cd917f's row-identity
+// half on the HTTP surface: a claimed row carries claim_id under exactly
+// that name, the id a release carrying an expected claim is checked
+// against. The MCP surface renders rows through this same
+// ToClaimedTaskWire conversion (list_claimed_tasks reuses
+// handlers.ClaimedTaskWire), so one wire field is the whole difference
+// between the two surfaces carrying the id and neither doing so -- the
+// same argument
+// TestListClaimedTasksHandler_RowContent's own claimed-since assertion
+// makes.
+func TestListClaimedTasksHandler_CarriesClaimID(t *testing.T) {
+	claimID := uuid.New()
+	tasks := &fakeTaskStore{
+		listClaimedTasksResult: store.Page[store.ClaimedTaskRow]{
+			Items: []store.ClaimedTaskRow{{TaskID: uuid.New(), Title: "claimed", ClaimID: claimID}},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/claimed?scope_id="+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+	handlers.ListClaimedTasksHandler(tasks)(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	row := firstTaskRow(t, rec)
+	assert.Equal(t, claimID.String(), row["claim_id"])
+	assert.NotContains(t, row, "escalation_id", "a claimed row carries no escalation id")
+}
+
+// TestListEscalatedTasksHandler_CarriesEscalationID is the escalated half
+// of the same proof: an escalated row carries escalation_id under exactly
+// that name, and no claim_id of its own.
+func TestListEscalatedTasksHandler_CarriesEscalationID(t *testing.T) {
+	escalationID := uuid.New()
+	tasks := &fakeTaskStore{
+		listEscalatedResult: store.Page[store.EscalatedTaskRow]{
+			Items: []store.EscalatedTaskRow{{TaskID: uuid.New(), Title: "stuck", EscalationID: escalationID}},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/escalated?scope_id="+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+	handlers.ListEscalatedTasksHandler(tasks)(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	row := firstTaskRow(t, rec)
+	assert.Equal(t, escalationID.String(), row["escalation_id"])
+	assert.NotContains(t, row, "claim_id", "an escalated row carries no claim id")
+}
+
+// firstTaskRow decodes a console list response and returns its one row as
+// a JSON object -- the shape the claim_id/escalation_id assertions above
+// read field names off.
+func firstTaskRow(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &decoded))
+	tasksArr, ok := decoded["tasks"].([]any)
+	require.True(t, ok, "response must carry a tasks array: %s", rec.Body.String())
+	require.Len(t, tasksArr, 1)
+	row, ok := tasksArr[0].(map[string]any)
+	require.True(t, ok)
+	return row
+}
+
+// TestConsoleHandlers_ProductMilestoneFilterPassThrough proves all four
+// console queue reads take the optional product_id/milestone_id narrowing
+// and hand it to the store as a ConsoleFilter, with an absent parameter
+// leaving the read unnarrowed.
+func TestConsoleHandlers_ProductMilestoneFilterPassThrough(t *testing.T) {
+	scopeID, productID, milestoneID := uuid.New(), uuid.New(), uuid.New()
+	query := "&product_id=" + productID.String() + "&milestone_id=" + milestoneID.String()
+
+	t.Run("claimed", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		rec := httptest.NewRecorder()
+		handlers.ListClaimedTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/claimed?scope_id="+scopeID.String()+query, nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Equal(t, store.ConsoleFilter{ProductID: &productID, MilestoneID: &milestoneID}, tasks.gotListClaimedTasksParams.ConsoleFilter)
+	})
+
+	t.Run("cancelled", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		rec := httptest.NewRecorder()
+		handlers.ListCancelledTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/cancelled?scope_id="+scopeID.String()+query, nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Equal(t, store.ConsoleFilter{ProductID: &productID, MilestoneID: &milestoneID}, tasks.gotListCancelled.ConsoleFilter)
+	})
+
+	t.Run("escalated", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		rec := httptest.NewRecorder()
+		handlers.ListEscalatedTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/escalated?scope_id="+scopeID.String()+query, nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Equal(t, store.ConsoleFilter{ProductID: &productID, MilestoneID: &milestoneID}, tasks.gotListEscalated.ConsoleFilter)
+	})
+
+	t.Run("open_notes", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		rec := httptest.NewRecorder()
+		handlers.ListOpenNotesHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/notes?scope_id="+scopeID.String()+query, nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Equal(t, store.ConsoleFilter{ProductID: &productID, MilestoneID: &milestoneID}, tasks.gotListOpenNotesParams.ConsoleFilter)
+	})
+}
+
+// TestConsoleHandlers_NoFilterParams_LeavesReadUnnarrowed proves an absent
+// product_id/milestone_id leaves the read exactly as wide as it was, so
+// today's scope-wide callers are unaffected by the filters.
+func TestConsoleHandlers_NoFilterParams_LeavesReadUnnarrowed(t *testing.T) {
+	tasks := &fakeTaskStore{}
+	rec := httptest.NewRecorder()
+	handlers.ListClaimedTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/claimed?scope_id="+uuid.New().String(), nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.True(t, tasks.gotListClaimedTasksParams.ConsoleFilter.IsZero())
+}
+
+// TestListEscalatedTasksHandler_ReasonParamPassThrough proves the
+// escalation-reason filter reaches the store, and that an absent reason
+// leaves the read unnarrowed.
+func TestListEscalatedTasksHandler_ReasonParamPassThrough(t *testing.T) {
+	t.Run("present", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		rec := httptest.NewRecorder()
+		handlers.ListEscalatedTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/escalated?scope_id="+uuid.New().String()+"&reason=attempt-cap", nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.NotNil(t, tasks.gotListEscalated.Reason)
+		assert.Equal(t, store.EscalationReasonAttemptCap, *tasks.gotListEscalated.Reason)
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		rec := httptest.NewRecorder()
+		handlers.ListEscalatedTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/escalated?scope_id="+uuid.New().String(), nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Nil(t, tasks.gotListEscalated.Reason, "an absent reason must keep every reason, exactly as before the filter existed")
+	})
+}
+
+// TestConsoleHandlers_FilterErrorMapping proves writeConsoleQueryError
+// maps each new refusal to its own status: a narrowing outside the caller's
+// scope is a 404 (the store's own parent-guard shape), a wrong-filter
+// continuation token and an unknown escalation reason are 400s, and
+// neither ever becomes a 500.
+func TestConsoleHandlers_FilterErrorMapping(t *testing.T) {
+	scopeID := uuid.New().String()
+	for name, tc := range map[string]struct {
+		storeErr error
+		want     int
+	}{
+		"filter_outside_scope": {storeErr: store.ErrNotFound, want: http.StatusNotFound},
+		"wrong_filter_token":   {storeErr: store.ErrTokenFilterMismatch, want: http.StatusBadRequest},
+		"unknown_reason":       {storeErr: store.ErrUnknownEscalationReason, want: http.StatusBadRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			claimed := &fakeTaskStore{listClaimedTasksErr: tc.storeErr}
+			rec := httptest.NewRecorder()
+			handlers.ListClaimedTasksHandler(claimed)(rec, httptest.NewRequest(http.MethodGet, "/console/claimed?scope_id="+scopeID, nil))
+			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
+
+			escalated := &fakeTaskStore{listEscalatedErr: tc.storeErr}
+			rec = httptest.NewRecorder()
+			handlers.ListEscalatedTasksHandler(escalated)(rec, httptest.NewRequest(http.MethodGet, "/console/escalated?scope_id="+scopeID, nil))
+			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
+
+			notes := &fakeTaskStore{listOpenNotesErr: tc.storeErr}
+			rec = httptest.NewRecorder()
+			handlers.ListOpenNotesHandler(notes)(rec, httptest.NewRequest(http.MethodGet, "/console/notes?scope_id="+scopeID, nil))
+			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
+		})
+	}
+}
+
+// TestConsoleHandlers_MalformedFilterParam_Returns400 proves a
+// product_id/milestone_id that is present but not a UUID is a caller error,
+// never a 500 and never a silently unnarrowed read.
+func TestConsoleHandlers_MalformedFilterParam_Returns400(t *testing.T) {
+	for _, query := range []string{"&product_id=not-a-uuid", "&milestone_id=not-a-uuid"} {
+		tasks := &fakeTaskStore{}
+		rec := httptest.NewRecorder()
+		handlers.ListClaimedTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/claimed?scope_id="+uuid.New().String()+query, nil))
+		assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+// TestConsoleHandlers_FilterAndReason_ReachStoreTogether is the API
+// surface's half of the two-filter intersection: a request naming a
+// product, a container and a reason hands all three to the store as one
+// ConsoleFilter plus one Reason, so the HTTP surface cannot drop the
+// reason (or either half of the filter) on the way through. The store
+// proves what that combination means; this proves it arrives.
+func TestConsoleHandlers_FilterAndReason_ReachStoreTogether(t *testing.T) {
+	scopeID, productID, milestoneID := uuid.New(), uuid.New(), uuid.New()
+
+	tasks := &fakeTaskStore{}
+	rec := httptest.NewRecorder()
+	query := "&product_id=" + productID.String() + "&milestone_id=" + milestoneID.String() + "&reason=manual"
+	handlers.ListEscalatedTasksHandler(tasks)(rec, httptest.NewRequest(http.MethodGet, "/console/escalated?scope_id="+scopeID.String()+query, nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	assert.Equal(t, store.ConsoleFilter{ProductID: &productID, MilestoneID: &milestoneID}, tasks.gotListEscalated.ConsoleFilter)
+	require.NotNil(t, tasks.gotListEscalated.Reason)
+	assert.Equal(t, store.EscalationReasonManual, *tasks.gotListEscalated.Reason)
+	assert.Equal(t, scopeID, tasks.gotListEscalated.ScopeID, "the filters narrow the scope they are given, never replace it")
+}

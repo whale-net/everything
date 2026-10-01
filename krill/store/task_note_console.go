@@ -60,11 +60,20 @@ type OpenNoteRow struct {
 	EntityContext *OpenNoteEntityContext
 }
 
-// ListOpenNotesParams is ListOpenNotes' input: scopeID (NFR1) plus this
-// query's own PageParams (NFR6).
+// ListOpenNotesParams is ListOpenNotes' input: scopeID (NFR1), the
+// optional ConsoleFilter narrowing, and this query's own PageParams
+// (NFR6). A milestone filter keeps only task-targeted notes, since a
+// note on a spec-axis entity has no delivery container; a product filter
+// also keeps entity-targeted notes whose entity belongs to that product.
 type ListOpenNotesParams struct {
 	ScopeID uuid.UUID
-	Page    PageParams
+	ConsoleFilter
+	Page PageParams
+}
+
+// Filters is the FilterSet ListOpenNotes' continuation token binds.
+func (p ListOpenNotesParams) Filters() FilterSet {
+	return p.ConsoleFilter.Filters()
 }
 
 // ListOpenNotes returns every note in params.ScopeID whose current_status
@@ -81,10 +90,14 @@ type ListOpenNotesParams struct {
 func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams) (Page[OpenNoteRow], error) {
 	pageSize := ResolvePageSize(params.Page.PageSize)
 
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return Page[OpenNoteRow]{}, err
+	}
+
 	var cursorTime *time.Time
 	var cursorID *uuid.UUID
 	if params.Page.ContinuationToken != "" {
-		cursor, err := DecodeContinuationToken(params.ScopeID, params.Page.ContinuationToken)
+		cursor, err := DecodeFilteredContinuationToken(params.ScopeID, params.Filters(), params.Page.ContinuationToken)
 		if err != nil {
 			return Page[OpenNoteRow]{}, err
 		}
@@ -100,6 +113,13 @@ func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams
 	// Fetch one extra row beyond pageSize -- its presence (trimmed off
 	// below) is exactly how NextToken is populated only when more rows
 	// genuinely remain, never as a guess.
+	//
+	// A task-targeted note narrows on the task's own delivery container; an
+	// entity-targeted note has no container at all, so a milestone filter
+	// excludes it outright while a product filter keeps it only when the
+	// entity it names resolves to that product. That resolution is the
+	// COALESCE below, walking whichever of the five NoteEntityKind tables
+	// the note names up to the product that owns it.
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			tn.id, tn.kind, tn.body, tn.created_at,
@@ -114,11 +134,23 @@ func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams
 		LEFT JOIN feature f ON tn.entity_kind = 'feature' AND tn.entity_id = f.id AND f.valid_to IS NULL
 		LEFT JOIN requirement r ON tn.entity_kind = 'requirement' AND tn.entity_id = r.id AND r.valid_to IS NULL
 		LEFT JOIN load_bearing_decision lbd ON tn.entity_kind = 'load_bearing_decision' AND tn.entity_id = lbd.id AND lbd.valid_to IS NULL
+		LEFT JOIN feature_set f_fs ON f.feature_set_id = f_fs.id AND f_fs.valid_to IS NULL
+		LEFT JOIN feature r_f ON r.feature_id = r_f.id AND r_f.valid_to IS NULL
+		LEFT JOIN feature_set r_fs ON r_f.feature_set_id = r_fs.id AND r_fs.valid_to IS NULL
+		LEFT JOIN feature_set lbd_fs ON lbd.feature_set_id = lbd_fs.id AND lbd_fs.valid_to IS NULL
 		WHERE tn.scope_id = $1 AND tn.current_status = $2
 			AND ($3::timestamptz IS NULL OR (tn.created_at, tn.id) > ($3::timestamptz, $4::uuid))
+			AND (
+				(tn.task_id IS NOT NULL
+					AND ($6::uuid IS NULL OR mr.product_id = $6)
+					AND ($7::uuid IS NULL OR mr.id = $7 OR mr.parent_milestone_id = $7))
+				OR
+				(tn.task_id IS NULL AND $7::uuid IS NULL
+					AND ($6::uuid IS NULL OR COALESCE(p.id, fs.product_id, f_fs.product_id, r_fs.product_id, lbd_fs.product_id) = $6))
+			)
 		ORDER BY tn.created_at ASC, tn.id ASC
 		LIMIT $5
-	`, params.ScopeID, string(NoteLifecycleStatusNoted), cursorTime, cursorID, pageSize+1)
+	`, params.ScopeID, string(NoteLifecycleStatusNoted), cursorTime, cursorID, pageSize+1, params.ProductID, params.MilestoneID)
 	if err != nil {
 		return Page[OpenNoteRow]{}, fmt.Errorf("list open task_note: %w", err)
 	}
@@ -170,7 +202,7 @@ func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams
 	var nextToken string
 	if len(items) > pageSize {
 		last := items[pageSize-1]
-		nextToken = EncodeContinuationToken(params.ScopeID, Cursor{
+		nextToken = EncodeFilteredContinuationToken(params.ScopeID, params.Filters(), Cursor{
 			SortKey: last.CreatedAt.Format(time.RFC3339Nano),
 			ID:      last.NoteID,
 		})

@@ -28,6 +28,12 @@ const (
 	scopeIDQueryParam   = "scope_id"
 	pageSizeQueryParam  = "page_size"
 	pageTokenQueryParam = "page_token"
+
+	// The optional narrowing every console queue read takes. An absent
+	// parameter leaves the read exactly as wide as it was.
+	productIDQueryParam   = "product_id"
+	milestoneIDQueryParam = "milestone_id"
+	reasonQueryParam      = "reason"
 )
 
 // ClaimedTaskDeliveryRefWire is the wire shape of one
@@ -60,6 +66,9 @@ type ClaimedTaskWire struct {
 	CurrentLane    string                     `json:"current_lane"`
 	LeaseExpiresAt time.Time                  `json:"lease_expires_at"`
 	AttemptCount   int                        `json:"attempt_count"`
+	// ClaimID is the current open claim's own id -- the id a release
+	// carrying an expected claim is checked against.
+	ClaimID string `json:"claim_id"`
 }
 
 // ToClaimedTaskWire converts one store.ClaimedTaskRow to its wire shape.
@@ -81,6 +90,7 @@ func ToClaimedTaskWire(row store.ClaimedTaskRow) ClaimedTaskWire {
 		CurrentLane:    string(row.CurrentLane),
 		LeaseExpiresAt: row.LeaseExpiresAt,
 		AttemptCount:   row.AttemptCount,
+		ClaimID:        row.ClaimID.String(),
 	}
 }
 
@@ -93,12 +103,18 @@ type listClaimedTasksResponse struct {
 }
 
 // ListClaimedTasksHandler returns the console claimed-task view (FR4):
-// GET /console/claimed?scope_id=...&page_size=...&page_token=....
+// GET /console/claimed?scope_id=...&product_id=...&milestone_id=...&page_size=...&page_token=....
 func ListClaimedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scopeID, err := uuid.Parse(r.URL.Query().Get(scopeIDQueryParam))
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			return
+		}
+
+		filter, err := parseConsoleFilter(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -109,7 +125,8 @@ func ListClaimedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 		}
 
 		page, err := tasks.ListClaimedTasks(r.Context(), store.ListClaimedTasksParams{
-			ScopeID: scopeID,
+			ScopeID:       scopeID,
+			ConsoleFilter: filter,
 			Page: store.PageParams{
 				PageSize:          pageSize,
 				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
@@ -144,6 +161,36 @@ func parsePageSizeParam(r *http.Request) (int, error) {
 		return 0, fmt.Errorf("page_size: must be a non-negative integer")
 	}
 	return size, nil
+}
+
+// parseOptionalUUIDQueryParam parses one optional narrowing parameter,
+// returning nil when it is absent (the read stays exactly as wide as it
+// was) and an error the caller turns into a 400 when it is present but
+// not a UUID.
+func parseOptionalUUIDQueryParam(r *http.Request, name string) (*uuid.UUID, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid or missing UUID", name)
+	}
+	return &id, nil
+}
+
+// parseConsoleFilter reads product_id and milestone_id off the request --
+// the narrowing every console queue read shares (store.ConsoleFilter).
+func parseConsoleFilter(r *http.Request) (store.ConsoleFilter, error) {
+	productID, err := parseOptionalUUIDQueryParam(r, productIDQueryParam)
+	if err != nil {
+		return store.ConsoleFilter{}, err
+	}
+	milestoneID, err := parseOptionalUUIDQueryParam(r, milestoneIDQueryParam)
+	if err != nil {
+		return store.ConsoleFilter{}, err
+	}
+	return store.ConsoleFilter{ProductID: productID, MilestoneID: milestoneID}, nil
 }
 
 // CancelledTaskDeliveryRefWire is the wire shape of one
@@ -193,7 +240,7 @@ type listCancelledTasksResponse struct {
 }
 
 // ListCancelledTasksHandler returns the console cancelled-task view
-// (FR10): GET /console/cancelled?scope_id=...&page_size=...&page_token=....
+// (FR10): GET /console/cancelled?scope_id=...&product_id=...&milestone_id=...&page_size=...&page_token=....
 // Ungated like ListClaimedTasksHandler above -- the query has no single
 // path entity to resolve scope_id from, so scope_id is a required query
 // parameter here too.
@@ -205,6 +252,12 @@ func ListCancelledTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 			return
 		}
 
+		filter, err := parseConsoleFilter(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
 		pageSize, err := parsePageSizeParam(r)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -212,7 +265,8 @@ func ListCancelledTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 		}
 
 		page, err := tasks.ListCancelledTasks(r.Context(), store.ListCancelledTasksParams{
-			ScopeID: scopeID,
+			ScopeID:       scopeID,
+			ConsoleFilter: filter,
 			Page: store.PageParams{
 				PageSize:          pageSize,
 				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
@@ -303,13 +357,19 @@ type listOpenNotesResponse struct {
 }
 
 // ListOpenNotesHandler returns the console open-notes view (FR12): GET
-// /console/notes?scope_id=...&page_size=...&page_token=.... Ungated like
-// ListClaimedTasksHandler -- see this file's own doc comment.
+// /console/notes?scope_id=...&product_id=...&milestone_id=...&page_size=...&page_token=....
+// Ungated like ListClaimedTasksHandler -- see this file's own doc comment.
 func ListOpenNotesHandler(tasks store.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scopeID, err := uuid.Parse(r.URL.Query().Get(scopeIDQueryParam))
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			return
+		}
+
+		filter, err := parseConsoleFilter(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -320,7 +380,8 @@ func ListOpenNotesHandler(tasks store.TaskStore) http.HandlerFunc {
 		}
 
 		page, err := tasks.ListOpenNotes(r.Context(), store.ListOpenNotesParams{
-			ScopeID: scopeID,
+			ScopeID:       scopeID,
+			ConsoleFilter: filter,
 			Page: store.PageParams{
 				PageSize:          pageSize,
 				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
@@ -364,6 +425,11 @@ type EscalatedTaskWire struct {
 	Title       string                       `json:"title"`
 	DeliveryRef EscalatedTaskDeliveryRefWire `json:"delivery_ref"`
 
+	// EscalationID is the current escalation's own id -- the id a
+	// requeue or cancel carrying an expected escalation is checked
+	// against.
+	EscalationID string `json:"escalation_id"`
+
 	Reason       string `json:"reason"`
 	CounterValue *int   `json:"counter_value,omitempty"`
 	CapValue     *int   `json:"cap_value,omitempty"`
@@ -399,6 +465,7 @@ func ToEscalatedTaskWire(row store.EscalatedTaskRow) EscalatedTaskWire {
 			Kind:  string(row.DeliveryRef.Kind),
 			Title: row.DeliveryRef.Title,
 		},
+		EscalationID:          row.EscalationID.String(),
 		Reason:                string(row.Reason),
 		CounterValue:          row.CounterValue,
 		CapValue:              row.CapValue,
@@ -422,7 +489,7 @@ type listEscalatedTasksResponse struct {
 }
 
 // ListEscalatedTasksHandler returns the console escalated-task view (FR5):
-// GET /console/escalated?scope_id=...&page_size=...&page_token=....
+// GET /console/escalated?scope_id=...&product_id=...&milestone_id=...&reason=...&page_size=...&page_token=....
 // Ungated like ListClaimedTasksHandler above -- the query has no single
 // path entity to resolve scope_id from, so scope_id is a required query
 // parameter here too.
@@ -434,6 +501,18 @@ func ListEscalatedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 			return
 		}
 
+		filter, err := parseConsoleFilter(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		var reason *store.EscalationReason
+		if raw := r.URL.Query().Get(reasonQueryParam); raw != "" {
+			parsed := store.EscalationReason(raw)
+			reason = &parsed
+		}
+
 		pageSize, err := parsePageSizeParam(r)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -441,7 +520,9 @@ func ListEscalatedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 		}
 
 		page, err := tasks.ListEscalatedTasks(r.Context(), store.ListEscalatedTasksParams{
-			ScopeID: scopeID,
+			ScopeID:       scopeID,
+			ConsoleFilter: filter,
+			Reason:        reason,
 			Page: store.PageParams{
 				PageSize:          pageSize,
 				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
@@ -468,13 +549,20 @@ func ListEscalatedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 // package's one JSON error shape -- store.ErrTokenScopeMismatch,
 // store.ErrTokenFilterMismatch and store.ErrInvalidContinuationToken
 // (paging.go) are caller errors (a stale, cross-scope, wrong-filter, or
-// forged token), never a genuine store failure.
+// forged token), never a genuine store failure. store.ErrNotFound is a
+// narrowing naming a product or container outside the caller's scope or
+// outside the product it was paired with (the store's own parent-guard
+// refusal, store.task_console_filter.go), and
+// store.ErrUnknownEscalationReason a reason outside the enumeration.
 func writeConsoleQueryError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrTokenScopeMismatch),
 		errors.Is(err, store.ErrTokenFilterMismatch),
-		errors.Is(err, store.ErrInvalidContinuationToken):
+		errors.Is(err, store.ErrInvalidContinuationToken),
+		errors.Is(err, store.ErrUnknownEscalationReason):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, store.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "internal error")
 	}
