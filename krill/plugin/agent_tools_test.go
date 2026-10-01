@@ -252,6 +252,35 @@ func TestWorkAgentsReachTaskLifecycleTools(t *testing.T) {
 	}
 }
 
+// TestClaimInstructionsStayInPlace guards that every path that does a task's
+// work mints a session and claims before acting. A lane only moves through
+// claim_task/complete_task, so dropping either instruction leaves tasks
+// worked but unclaimed.
+func TestClaimInstructionsStayInPlace(t *testing.T) {
+	t.Parallel()
+
+	root := pluginRoot(t)
+	cases := []struct {
+		file string
+		want []string
+	}{
+		{"work/skills/implement/SKILL.md", []string{"init_session"}},
+		{"work/skills/work-task/SKILL.md", []string{"init_session", "claim_task", "complete_task"}},
+		{"work/agents/worker.md", []string{"init_session", "claim_task", "complete_task"}},
+		{"work/agents/validator.md", []string{"init_session", "claim_task", "complete_task"}},
+		{"work/agents/quick-task.md", []string{"work-task"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.file, func(t *testing.T) {
+			b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(tc.file)))
+			require.NoError(t, err)
+			for _, w := range tc.want {
+				assert.Contains(t, string(b), w, "%s must mention %s", tc.file, w)
+			}
+		})
+	}
+}
+
 func sortedKeys(m map[string]bool) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

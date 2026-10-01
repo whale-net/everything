@@ -25,6 +25,8 @@ dispatch.**
 
 `<krill-session-id>`, `<task-id>`, and `<worktree-path>` (a git worktree
 already checked out on this task's own branch) are provided by the caller.
+If no session id was provided, or a call rejects it as unknown or expired,
+call `init_session {}` yourself and use that id.
 Run every command below — including `git` and `bazel` — with
 `<worktree-path>` as your working directory; another worker may be running
 concurrently against a different task's worktree.
@@ -33,14 +35,15 @@ concurrently against a different task's worktree.
    `work.Payload` (title, body, `current_lane`, `lane_sequence`,
    `dependencies`, `current_claim.claim_id` — save this `claim_id`, every
    later call needs it — `notes[]`, `state`). No separate fetch of a task
-   body needed; this call gives you everything.
+   body needed; this call gives you everything. Edit and commit nothing
+   until this succeeds; if it's refused, report the exact error and stop.
 2. Read `task.body` fully for target files, BUILD targets, interfaces, and
    phase criteria. `task.current_lane` tells you which phase you're
    executing — don't assume it matches what you expected to be dispatched
    for.
-3. If the phase is going to run long, call `heartbeat_task
-   {krill_session_id, task_id, claim_id}` periodically — a stale lease gets
-   reclaimed out from under you.
+3. Call `heartbeat_task {krill_session_id, task_id, claim_id}` at least
+   every 10 minutes (the lease is 15) — a stale lease gets reclaimed out
+   from under you. Always end with `complete_task` or `abandon_task`.
 4. **Execute phase work:**
    - **Scaffold:** skeleton targets/interfaces/protos/migrations, `bazel
      build` sanity check, commit `scaffold: ...\n\nkrill task: <task_id>`,

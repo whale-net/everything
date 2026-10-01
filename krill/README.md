@@ -456,7 +456,7 @@ work/execution axis: `.mcp.json` / `mcp_config.json` register the same
 (the `/mcp/work` mount: task lifecycle, `record_note`, and the ungated
 milestone/product discovery reads), plus the work-axis personas
 (`planner`/`worker`/`validator`/`system-validator`/`mergepush`/`quick-task`)
-and skills (`plan`/`implement`/`validate`/`loop-plan-implement-validate`).
+and skills (`plan`/`implement`/`work-task`/`validate`/`loop-plan-implement-validate`).
 Swimlane execution is entirely krill-native: tasks live under a krill
 Milestone, and a missing Milestone is a hard stop ("cut the milestone
 first"), never a GitHub issue/Project substitute. The only GitHub use is
