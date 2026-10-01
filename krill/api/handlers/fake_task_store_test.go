@@ -105,6 +105,11 @@ type fakeTaskStore struct {
 	gotListNotesForEntityKind    store.NoteEntityKind
 	gotListNotesForEntityID      uuid.UUID
 
+	// The product-wide paged task read (FR cfcd1104).
+	listProductTasksErr       error
+	listProductTasksResult    store.Page[store.ProductTaskRow]
+	gotListProductTasksParams store.ListProductTasksParams
+
 	listClaimedTasksErr       error
 	listClaimedTasksResult    store.Page[store.ClaimedTaskRow]
 	gotListClaimedTasksParams store.ListClaimedTasksParams
@@ -327,6 +332,14 @@ func (f *fakeTaskStore) ListTasksByMilestone(ctx context.Context, milestoneID uu
 		return nil, f.listTasksByMilestoneErr
 	}
 	return append([]store.TaskSummary{}, f.tasksByMilestone[milestoneID]...), nil
+}
+
+func (f *fakeTaskStore) ListProductTasks(ctx context.Context, params store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
+	f.gotListProductTasksParams = params
+	if f.listProductTasksErr != nil {
+		return store.Page[store.ProductTaskRow]{}, f.listProductTasksErr
+	}
+	return f.listProductTasksResult, nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

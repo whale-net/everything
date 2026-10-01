@@ -81,6 +81,7 @@ go_library(
         "task_note_console.go",
         "task_note_lifecycle.go",
         "task_observed_state.go",
+        "task_product_list.go",
         "task_reclaim.go",
         "task_release.go",
         "task_requeue.go",
@@ -1023,6 +1024,20 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+# Pure unit tests for the product-wide paged task read's own pure-Go pieces
+# (task_product_list.go, FR cfcd1104): the "incomplete" container predicate
+# and the SQL NOT IN list the query renders from the same set, asserted
+# equal over every MilestoneStatus so the two spellings cannot drift.
+# No database needed; the query's real behaviour is
+# :task_integration_test. `package store`, since
+# incompleteContainerFilterSQL is unexported.
+go_test(
+    name = "task_product_list_test",
+    srcs = ["task_product_list_test.go"],
+    embed = [":store"],
+    deps = ["@com_github_stretchr_testify//assert"],
 )
 
 # Pure unit tests for the amend placement guard (amend.go, FR b62ed47a):

@@ -39,6 +39,7 @@ go_library(
         "task_lease.go",
         "task_list.go",
         "task_note.go",
+        "task_product_list.go",
         "task_payload.go",
         "task_release.go",
         "task_requeue.go",
@@ -721,6 +722,31 @@ go_test(
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test for list_product_tasks (task_product_list.go, FR
+# cfcd1104): the product-wide paged task read's MCP surface -- its argument
+# validation, its param plumbing into store.ListProductTasksParams, and the
+# LB7 byte-parity proof that it returns its HTTP twin's exact document for
+# the same store page. In-memory store fakes over a real in-memory MCP
+# client/server connection, like :work_mount_registration_test, so it needs
+# no Docker and is part of `bazel test //...`. The real query is covered by
+# //krill/store:task_integration_test.
+go_test(
+    name = "task_product_list_test",
+    srcs = ["task_product_list_test.go"],
+    deps = [
+        ":tools",
+        "//krill/api/handlers",
+        "//krill/mcp/server",
+        "//krill/store",
+        "//libs/go/auth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

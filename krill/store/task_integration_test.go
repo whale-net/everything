@@ -458,3 +458,616 @@ func TestTaskStore_ListTasksByMilestone(t *testing.T) {
 		assert.Nil(t, got[2].CancelledAt)
 	})
 }
+
+// ============================================================================
+// ListProductTasks (task_product_list.go, FR cfcd1104)
+// ============================================================================
+
+// productTaskFixture is the delivery world ListProductTasks' tests below
+// share: one product holding an uncut milestone and a cut milestone (with
+// its milepebble), plus a second product in the same scope so the
+// cross-product refusal can be exercised without inventing a new scope.
+//
+// Milestones are created in fixture order, so positions ascend with it --
+// the read orders position DESCENDING, so the cut milestone's rows come
+// before the uncut milestone's even though the uncut one is older.
+type productTaskFixture struct {
+	productID      uuid.UUID
+	otherProductID uuid.UUID
+
+	uncutID  uuid.UUID
+	cutID    uuid.UUID
+	pebbleID uuid.UUID
+
+	otherMilestoneID uuid.UUID
+}
+
+func newProductTaskFixture(t *testing.T, ctx context.Context, s *store.Store, scopeID uuid.UUID, self store.Subject) productTaskFixture {
+	t.Helper()
+
+	product, err := s.Products().Create(ctx, scopeID, "Console Product", "vision")
+	require.NoError(t, err)
+	other, err := s.Products().Create(ctx, scopeID, "Other Product", "another vision")
+	require.NoError(t, err)
+
+	uncut, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "uncut", nil, self, self)
+	require.NoError(t, err)
+	cut, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M2", "cut", nil, self, self)
+	require.NoError(t, err)
+	pebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, cut.ID, "MP1", "a slice", nil, self, self)
+	require.NoError(t, err)
+	otherMilestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, other.ID, "M1", "theirs", nil, self, self)
+	require.NoError(t, err)
+
+	return productTaskFixture{
+		productID:        product.ID,
+		otherProductID:   other.ID,
+		uncutID:          uncut.ID,
+		cutID:            cut.ID,
+		pebbleID:         pebble.ID,
+		otherMilestoneID: otherMilestone.ID,
+	}
+}
+
+// createProductTask is this file's own task-creation helper. It is
+// deliberately NOT task_dependency_integration_test.go's createTestTask:
+// each bazel target compiles one test file against its own srcs, so a
+// helper defined in that file is simply absent from this target's
+// compilation unit -- and defining createTestTask here too would collide
+// the moment the package is built whole.
+func createProductTask(t *testing.T, ctx context.Context, s *store.Store, scopeID, milestoneID uuid.UUID, title string, self store.Subject) store.Task {
+	t.Helper()
+	return createLaneTask(t, ctx, s, scopeID, milestoneID, title, store.LaneScaffold, self)
+}
+
+// createLaneTask creates a task starting in a caller-chosen lane, so the
+// lane filter has more than one lane to choose between.
+func createLaneTask(t *testing.T, ctx context.Context, s *store.Store, scopeID, milestoneID uuid.UUID, title string, lane store.Lane, self store.Subject) store.Task {
+	t.Helper()
+	task, err := s.Tasks().CreateTask(ctx, store.CreateTaskParams{
+		ScopeID:      scopeID,
+		MilestoneID:  milestoneID,
+		Title:        title,
+		LaneSequence: []store.Lane{store.LaneScaffold, store.LaneImplementation, store.LaneTesting, store.LaneValidation, store.LaneDone},
+		StartingLane: lane,
+		Acting:       self,
+		OnBehalfOf:   self,
+	})
+	require.NoError(t, err)
+	return task
+}
+
+// setContainerStatus records one real status transition for a delivery
+// container -- the only way a container's current status is ever set, and
+// exactly the append-only history ListProductTasks derives from.
+func setContainerStatus(t *testing.T, ctx context.Context, s *store.Store, scopeID, containerID uuid.UUID, status store.MilestoneStatus, self store.Subject) {
+	t.Helper()
+	_, err := s.MilestoneStatus().RecordTransition(ctx, scopeID, containerID, status, nil, self, self)
+	require.NoError(t, err)
+}
+
+// claimInFreshSession claims a task from a brand-new session, the cheapest
+// real path to an open claim with a lease.
+func claimInFreshSession(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, scopeID, taskID uuid.UUID, self store.Subject) store.Claim {
+	t.Helper()
+	sessionID, err := store.NewSessionStore(db.Pool).InitSession(ctx, scopeID, self, self, nil)
+	require.NoError(t, err)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: taskID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	return claim
+}
+
+// cancelTask / escalateTask are this file's own local counterparts to
+// task_console_integration_test.go's cancelTestTask/escalateTestTask --
+// which live in a different bazel target's compilation unit and so are not
+// importable here.
+func cancelTask(t *testing.T, ctx context.Context, s *store.Store, scopeID, taskID uuid.UUID, self store.Subject) {
+	t.Helper()
+	_, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: taskID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+}
+
+func escalateTask(t *testing.T, ctx context.Context, s *store.Store, scopeID, taskID uuid.UUID, self store.Subject) {
+	t.Helper()
+	_, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: taskID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+}
+
+func listIncomplete(t *testing.T, ctx context.Context, s *store.Store, scopeID, productID uuid.UUID) store.Page[store.ProductTaskRow] {
+	t.Helper()
+	page, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+	})
+	require.NoError(t, err)
+	return page
+}
+
+func rowTaskIDs(page store.Page[store.ProductTaskRow]) []uuid.UUID {
+	ids := make([]uuid.UUID, len(page.Items))
+	for i, row := range page.Items {
+		ids[i] = row.TaskID
+	}
+	return ids
+}
+
+func findRow(t *testing.T, page store.Page[store.ProductTaskRow], taskID uuid.UUID) store.ProductTaskRow {
+	t.Helper()
+	for _, row := range page.Items {
+		if row.TaskID == taskID {
+			return row
+		}
+	}
+	t.Fatalf("task %s is absent from the page", taskID)
+	return store.ProductTaskRow{}
+}
+
+// TestTaskStore_ListProductTasks_IncompleteScope_SpansContainersAndNamesThem
+// is FR2's first shape: the product-wide default returns one page across
+// every incomplete container of the product, newest-positioned milestone
+// first, each row naming its milestone -- and its milepebble when the task
+// was scoped to one.
+func TestTaskStore_ListProductTasks_IncompleteScope_SpansContainersAndNamesThem(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	uncutTask := createProductTask(t, ctx, s, scopeID, fx.uncutID, "on the uncut milestone", self)
+	pebbleTask := createProductTask(t, ctx, s, scopeID, fx.pebbleID, "on the milepebble", self)
+	// Another product's task, which this product's read must never see.
+	createProductTask(t, ctx, s, scopeID, fx.otherMilestoneID, "on the other product", self)
+
+	page := listIncomplete(t, ctx, s, scopeID, fx.productID)
+	require.Len(t, page.Items, 2)
+	assert.Equal(t, []uuid.UUID{pebbleTask.ID, uncutTask.ID}, rowTaskIDs(page),
+		"position DESCENDING puts the newer milestone's rows first, and another product's task is absent")
+
+	pebbleRow := page.Items[0]
+	assert.Equal(t, "on the milepebble", pebbleRow.Title)
+	assert.Equal(t, fx.cutID, pebbleRow.Milestone.ID)
+	assert.Equal(t, "M2", pebbleRow.Milestone.Name)
+	assert.Equal(t, store.MilestoneStatusNotStarted, pebbleRow.Milestone.Status,
+		"a container with no status event is 'not started' by derivation, never a seeded row")
+	require.NotNil(t, pebbleRow.Milepebble)
+	assert.Equal(t, fx.pebbleID, pebbleRow.Milepebble.ID)
+	assert.Equal(t, "MP1", pebbleRow.Milepebble.Name)
+
+	uncutRow := page.Items[1]
+	assert.Equal(t, fx.uncutID, uncutRow.Milestone.ID)
+	assert.Nil(t, uncutRow.Milepebble, "an uncut milestone's task names no milepebble")
+}
+
+// TestTaskStore_ListProductTasks_RowCarriesLaneStateAttemptsAndClaim is the
+// row-content half of FR2: lane, derived state with its escalation reason,
+// attempt count against the package cap, and the lease expiry plus the id
+// of the claim that expiry belongs to -- both absent when nothing holds
+// the task.
+func TestTaskStore_ListProductTasks_RowCarriesLaneStateAttemptsAndClaim(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	testing_ := createLaneTask(t, ctx, s, scopeID, fx.uncutID, "in testing", store.LaneTesting, self)
+	claimed := createProductTask(t, ctx, s, scopeID, fx.uncutID, "claimed", self)
+	claim := claimInFreshSession(t, ctx, s, db, scopeID, claimed.ID, self)
+	escalated := createProductTask(t, ctx, s, scopeID, fx.uncutID, "escalated", self)
+	escalateTask(t, ctx, s, scopeID, escalated.ID, self)
+	cancelled := createProductTask(t, ctx, s, scopeID, fx.uncutID, "cancelled", self)
+	cancelTask(t, ctx, s, scopeID, cancelled.ID, self)
+
+	page := listIncomplete(t, ctx, s, scopeID, fx.productID)
+	require.Len(t, page.Items, 4)
+
+	inTesting := findRow(t, page, testing_.ID)
+	assert.Equal(t, store.LaneTesting, inTesting.CurrentLane)
+	assert.Equal(t, store.TaskStateActive, inTesting.State)
+	assert.Nil(t, inTesting.EscalationReason)
+	assert.Equal(t, store.DefaultAttemptCap, inTesting.AttemptCap)
+	assert.Nil(t, inTesting.ClaimID, "no open claim means no claim id")
+	assert.Nil(t, inTesting.LeaseExpiresAt, "and no lease expiry")
+	assert.Nil(t, inTesting.CancelledAt)
+
+	claimedRow := findRow(t, page, claimed.ID)
+	require.NotNil(t, claimedRow.ClaimID)
+	assert.Equal(t, claim.ID, *claimedRow.ClaimID, "the row names the claim its lease expiry belongs to")
+	require.NotNil(t, claimedRow.LeaseExpiresAt)
+	assert.Equal(t, 0, claimedRow.AttemptCount,
+		"attempt_count counts lapses, not claims -- a live claim has not spent one yet")
+
+	escalatedRow := findRow(t, page, escalated.ID)
+	assert.Equal(t, store.TaskStateEscalated, escalatedRow.State)
+	require.NotNil(t, escalatedRow.EscalationReason)
+	assert.Equal(t, store.EscalationReasonManual, *escalatedRow.EscalationReason,
+		"an escalated row names why it escalated")
+
+	cancelledRow := findRow(t, page, cancelled.ID)
+	require.NotNil(t, cancelledRow.CancelledAt, "a cancelled task still appears in the ordinary read, flagged by its own timestamp")
+	assert.Equal(t, store.TaskStateActive, cancelledRow.State, "cancelled is not the same axis as escalated")
+}
+
+// TestTaskStore_ListProductTasks_IncompletePredicate covers FR2's per-
+// container "incomplete" rule: judged on each container's own derived
+// status, shipped and abandoned drop out, partially complete stays in, and
+// a shipped milestone whose milepebble is still in design keeps that
+// milepebble's tasks while its own direct tasks leave.
+func TestTaskStore_ListProductTasks_IncompletePredicate(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// A milestone whose direct task is created BEFORE the cut (CreateTask
+	// refuses a milestone once it is cut), then shipped, with a milepebble
+	// left in design underneath it.
+	shipped, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M3", "ships", nil, self, self)
+	require.NoError(t, err)
+	shippedDirect := createProductTask(t, ctx, s, scopeID, shipped.ID, "shipped milestone direct task", self)
+	shippedPebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, shipped.ID, "MP3", "still designing", nil, self, self)
+	require.NoError(t, err)
+	setContainerStatus(t, ctx, s, scopeID, shipped.ID, store.MilestoneStatusShipped, self)
+	setContainerStatus(t, ctx, s, scopeID, shippedPebble.ID, store.MilestoneStatusInDesign, self)
+	inDesignTask := createProductTask(t, ctx, s, scopeID, shippedPebble.ID, "in-design milepebble task", self)
+
+	abandoned, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M4", "dropped", nil, self, self)
+	require.NoError(t, err)
+	setContainerStatus(t, ctx, s, scopeID, abandoned.ID, store.MilestoneStatusAbandoned, self)
+	abandonedTask := createProductTask(t, ctx, s, scopeID, abandoned.ID, "abandoned task", self)
+
+	partial, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M5", "half done", nil, self, self)
+	require.NoError(t, err)
+	setContainerStatus(t, ctx, s, scopeID, partial.ID, store.MilestoneStatusPartiallyComplete, self)
+	partialTask := createProductTask(t, ctx, s, scopeID, partial.ID, "partially complete task", self)
+
+	page := listIncomplete(t, ctx, s, scopeID, fx.productID)
+	ids := rowTaskIDs(page)
+
+	assert.Contains(t, ids, inDesignTask.ID,
+		"a shipped milestone's milepebble is judged on its OWN status, so its tasks stay in scope")
+	assert.NotContains(t, ids, shippedDirect.ID,
+		"the shipped milestone's own direct tasks leave scope with the milestone")
+	assert.NotContains(t, ids, abandonedTask.ID, "an abandoned container is not incomplete")
+	assert.Contains(t, ids, partialTask.ID, "partially complete counts as incomplete")
+
+	row := findRow(t, page, inDesignTask.ID)
+	assert.Equal(t, store.MilestoneStatusShipped, row.Milestone.Status,
+		"the row still reports the milestone's own status even though the milestone itself is out of scope")
+	require.NotNil(t, row.Milepebble)
+	assert.Equal(t, store.MilestoneStatusInDesign, row.Milepebble.Status)
+}
+
+// TestTaskStore_ListProductTasks_MilestoneScope_IncludesMilepebbleTasks is
+// FR2's single-milestone scope: whatever the milestone's own status, and
+// including every milepebble's tasks beneath it, each row naming the
+// milepebble it came from.
+func TestTaskStore_ListProductTasks_MilestoneScope_IncludesMilepebbleTasks(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// A shipped milestone still answers a milestone-scoped read: "whatever
+	// its status" is the point of the single-container scopes.
+	shipped, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M6", "ships", nil, self, self)
+	require.NoError(t, err)
+	direct := createProductTask(t, ctx, s, scopeID, shipped.ID, "direct", self)
+	pebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, shipped.ID, "MP6", "a slice", nil, self, self)
+	require.NoError(t, err)
+	pebbled := createProductTask(t, ctx, s, scopeID, pebble.ID, "pebbled", self)
+	secondPebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, shipped.ID, "MP7", "another slice", nil, self, self)
+	require.NoError(t, err)
+	otherPebbled := createProductTask(t, ctx, s, scopeID, secondPebble.ID, "other pebbled", self)
+	setContainerStatus(t, ctx, s, scopeID, shipped.ID, store.MilestoneStatusShipped, self)
+
+	// A task on a different milestone of the same product must not leak in.
+	outside := createProductTask(t, ctx, s, scopeID, fx.uncutID, "elsewhere", self)
+
+	page, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: shipped.ID},
+	})
+	require.NoError(t, err)
+	ids := rowTaskIDs(page)
+	assert.ElementsMatch(t, []uuid.UUID{direct.ID, pebbled.ID, otherPebbled.ID}, ids,
+		"a milestone scope returns its own direct tasks plus every milepebble's, and nothing else")
+
+	assert.Nil(t, findRow(t, page, direct.ID).Milepebble)
+	assert.Equal(t, pebble.ID, findRow(t, page, pebbled.ID).Milepebble.ID)
+	assert.Equal(t, secondPebble.ID, findRow(t, page, otherPebbled.ID).Milepebble.ID)
+	assert.NotContains(t, ids, outside.ID)
+
+	assert.Equal(t, store.MilestoneStatusShipped, findRow(t, page, direct.ID).Milestone.Status,
+		"a shipped milestone's tasks are still returned by a milestone-scoped read")
+}
+
+// TestTaskStore_ListProductTasks_MilepebbleScope_IsJustThatMilepebble is
+// FR2's single-milepebble scope: one container's tasks, whatever that
+// container's status.
+func TestTaskStore_ListProductTasks_MilepebbleScope_IsJustThatMilepebble(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	sibling, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, fx.cutID, "MP2", "a sibling slice", nil, self, self)
+	require.NoError(t, err)
+	mine := createProductTask(t, ctx, s, scopeID, fx.pebbleID, "mine", self)
+	theirs := createProductTask(t, ctx, s, scopeID, sibling.ID, "theirs", self)
+	setContainerStatus(t, ctx, s, scopeID, fx.pebbleID, store.MilestoneStatusShipped, self)
+
+	page, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeMilepebble, ContainerID: fx.pebbleID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{mine.ID}, rowTaskIDs(page))
+	assert.NotContains(t, rowTaskIDs(page), theirs.ID, "a sibling milepebble is not this scope")
+}
+
+// TestTaskStore_ListProductTasks_BacklogBucketNeverAMilestone is FR2's
+// backlog rule. CreateTask refuses to scope a task to the bucket, so the
+// row is inserted directly -- proving the read's own exclusion rather than
+// relying on that write-path refusal alone.
+func TestTaskStore_ListProductTasks_BacklogBucketNeverAMilestone(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	backlog, err := s.Recut().GetOrCreateBacklog(ctx, scopeID, fx.productID, self, self)
+	require.NoError(t, err)
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task (
+			scope_id, milestone_id, title, lane_sequence, current_lane,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, 'stranded in the backlog', ARRAY['Scaffold'], 'Scaffold',
+			$3, $3, $4, $3, $3, $4)
+		RETURNING id
+	`, scopeID, backlog.ID, self.Iss, string(self.Kind)).Scan(new(uuid.UUID)))
+
+	ours := createProductTask(t, ctx, s, scopeID, fx.uncutID, "real work", self)
+	page := listIncomplete(t, ctx, s, scopeID, fx.productID)
+	assert.Equal(t, []uuid.UUID{ours.ID}, rowTaskIDs(page),
+		"the backlog bucket is never a milestone in the product-wide result")
+}
+
+// TestTaskStore_ListProductTasks_OnlyStuck is FR2's only-stuck predicate:
+// exactly expired-lease, at-the-cap, escalated, or cancelled -- and
+// nothing else.
+func TestTaskStore_ListProductTasks_OnlyStuck(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	ordinary := createProductTask(t, ctx, s, scopeID, fx.uncutID, "ordinary", self)
+
+	liveClaim := createProductTask(t, ctx, s, scopeID, fx.uncutID, "claimed, lease still live", self)
+	claimInFreshSession(t, ctx, s, db, scopeID, liveClaim.ID, self)
+
+	expired := createProductTask(t, ctx, s, scopeID, fx.uncutID, "lease expired", self)
+	claimInFreshSession(t, ctx, s, db, scopeID, expired.ID, self)
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`UPDATE task SET lease_expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1 RETURNING id`,
+		expired.ID).Scan(new(uuid.UUID)))
+
+	// Seeded straight to the cap rather than driven there: every real path
+	// to DefaultAttemptCap also escalates, so only a direct write isolates
+	// this one arm of the predicate.
+	atCap := createProductTask(t, ctx, s, scopeID, fx.uncutID, "at the attempt cap", self)
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`UPDATE task SET attempt_count = $1 WHERE id = $2 RETURNING id`,
+		store.DefaultAttemptCap, atCap.ID).Scan(new(uuid.UUID)))
+
+	escalated := createProductTask(t, ctx, s, scopeID, fx.uncutID, "escalated", self)
+	escalateTask(t, ctx, s, scopeID, escalated.ID, self)
+
+	cancelled := createProductTask(t, ctx, s, scopeID, fx.uncutID, "cancelled", self)
+	cancelTask(t, ctx, s, scopeID, cancelled.ID, self)
+
+	page, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		OnlyStuck: true,
+	})
+	require.NoError(t, err)
+	ids := rowTaskIDs(page)
+	assert.ElementsMatch(t, []uuid.UUID{expired.ID, atCap.ID, escalated.ID, cancelled.ID}, ids,
+		"only-stuck keeps exactly expired-lease, at-the-cap, escalated, or cancelled")
+	assert.NotContains(t, ids, ordinary.ID)
+	assert.NotContains(t, ids, liveClaim.ID, "a live lease is not stuck")
+}
+
+// TestTaskStore_ListProductTasks_LaneFilter is FR2's optional lane filter:
+// an absent lane means every lane, never no lanes.
+func TestTaskStore_ListProductTasks_LaneFilter(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	scaffold := createLaneTask(t, ctx, s, scopeID, fx.uncutID, "scaffold work", store.LaneScaffold, self)
+	testing_ := createLaneTask(t, ctx, s, scopeID, fx.uncutID, "testing work", store.LaneTesting, self)
+
+	implementation := store.LaneImplementation
+	page, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		Lane:      &implementation,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, page.Items, "nothing in that lane is an empty page, not a broken filter")
+
+	testingLane := store.LaneTesting
+	page, err = s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		Lane:      &testingLane,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{testing_.ID}, rowTaskIDs(page))
+	assert.NotContains(t, rowTaskIDs(page), scaffold.ID)
+
+	unfiltered := listIncomplete(t, ctx, s, scopeID, fx.productID)
+	assert.Len(t, unfiltered.Items, 2, "an absent lane filter means every lane")
+}
+
+// TestTaskStore_ListProductTasks_PageWalkIsStableUnderCompositeOrder is
+// NFR6's paging half: the composite order (milestone position descending,
+// then milestone id, then task creation time, then task id) holds across
+// pages of one, with no gap and no duplicate, and the final page carries
+// no token.
+func TestTaskStore_ListProductTasks_PageWalkIsStableUnderCompositeOrder(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// Two tasks on the cut milestone's milepebble and two on the older,
+	// lower-positioned uncut milestone -- so the walk has to cross a
+	// milestone boundary mid-page-sequence to prove the composite order.
+	newer := createProductTask(t, ctx, s, scopeID, fx.pebbleID, "newer-1", self)
+	_ = createProductTask(t, ctx, s, scopeID, fx.pebbleID, "newer-2", self)
+	older := createProductTask(t, ctx, s, scopeID, fx.uncutID, "older-1", self)
+	_ = createProductTask(t, ctx, s, scopeID, fx.uncutID, "older-2", self)
+
+	unpaged := listIncomplete(t, ctx, s, scopeID, fx.productID)
+	require.Len(t, unpaged.Items, 4)
+	expected := rowTaskIDs(unpaged)
+	assert.Equal(t, newer.ID, expected[0], "the higher-positioned milestone's tasks come first")
+
+	var walked []uuid.UUID
+	seen := map[uuid.UUID]bool{}
+	token := ""
+	for i := 0; i < 10; i++ {
+		res, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+			ScopeID:   scopeID,
+			ProductID: fx.productID,
+			Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+			Page:      store.PageParams{PageSize: 1, ContinuationToken: token},
+		})
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(res.Items), 1)
+		for _, row := range res.Items {
+			assert.False(t, seen[row.TaskID], "task %s appeared on two pages", row.TaskID)
+			seen[row.TaskID] = true
+			walked = append(walked, row.TaskID)
+		}
+		if res.NextToken == "" {
+			break
+		}
+		token = res.NextToken
+	}
+	assert.Equal(t, expected, walked, "a one-row-at-a-time walk reproduces the unpaged order exactly")
+	assert.Len(t, walked, 4)
+	assert.Contains(t, walked, older.ID, "the walk reached the older milestone too")
+}
+
+// TestTaskStore_ListProductTasks_ContinuationTokenBindsFilters is FR3: a
+// token issued under one filter set is refused under another, rather than
+// answered as a wrong-filter page or an empty one.
+func TestTaskStore_ListProductTasks_ContinuationTokenBindsFilters(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "pebbled", self)
+	createLaneTask(t, ctx, s, scopeID, fx.uncutID, "scaffold work", store.LaneScaffold, self)
+
+	first, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		Page:      store.PageParams{PageSize: 1},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.NextToken)
+
+	testingLane := store.LaneTesting
+	_, err = s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		Lane:      &testingLane,
+		Page:      store.PageParams{PageSize: 1, ContinuationToken: first.NextToken},
+	})
+	require.ErrorIs(t, err, store.ErrTokenFilterMismatch)
+
+	_, err = s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		OnlyStuck: true,
+		Page:      store.PageParams{PageSize: 1, ContinuationToken: first.NextToken},
+	})
+	require.ErrorIs(t, err, store.ErrTokenFilterMismatch)
+
+	// The same filter set resumes cleanly.
+	resumed, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		Page:      store.PageParams{PageSize: 1, ContinuationToken: first.NextToken},
+	})
+	require.NoError(t, err)
+	assert.Len(t, resumed.Items, 1)
+	assert.NotEqual(t, first.Items[0].TaskID, resumed.Items[0].TaskID)
+}
+
+// TestTaskStore_ListProductTasks_ContainerOutsideProduct is FR2's distinct
+// refusal (LB1): a container belonging to another product -- or to no
+// product at all -- is refused outright, never answered as an empty page
+// and never answered with the other product's tasks.
+func TestTaskStore_ListProductTasks_ContainerOutsideProduct(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// The other product's task is created before its milepebble is cut, since
+	// CreateTask refuses a milestone once it is cut.
+	createProductTask(t, ctx, s, scopeID, fx.otherMilestoneID, "theirs", self)
+	otherPebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, fx.otherMilestoneID, "MP-theirs", "theirs", nil, self, self)
+	require.NoError(t, err)
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "ours", self)
+
+	for _, scope := range []store.ProductTaskScope{
+		{Kind: store.ProductTaskScopeMilestone, ContainerID: fx.otherMilestoneID},
+		{Kind: store.ProductTaskScopeMilepebble, ContainerID: otherPebble.ID},
+		{Kind: store.ProductTaskScopeMilestone, ContainerID: uuid.New()},
+	} {
+		page, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+			ScopeID:   scopeID,
+			ProductID: fx.productID,
+			Scope:     scope,
+		})
+		require.ErrorIs(t, err, store.ErrMilestoneOutsideProduct, "scope %+v", scope)
+		assert.Empty(t, page.Items, "a refused scope yields no rows at all")
+	}
+}

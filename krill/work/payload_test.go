@@ -134,6 +134,10 @@ func (f *fakeTaskStore) ListTasksByMilestone(ctx context.Context, milestoneID uu
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) ListProductTasks(ctx context.Context, params store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
+	panic("not used by this test")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that
