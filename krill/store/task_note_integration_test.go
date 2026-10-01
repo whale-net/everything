@@ -526,3 +526,19 @@ func TestTaskNoteStore_ListNotesForEntity_OrderingStatusAndKind(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, mismatched, "a feature_set's notes must never list under the product kind")
 }
+
+// The cheap-expensive-later kind persists (the DB CHECK admits it, 036).
+func TestTaskNoteStore_RecordNote_CheapExpensiveLaterKind_Persisted(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+	taskID, _ := seedTaskNoteWorld(t, ctx, s, scopeID, self)
+
+	note, err := s.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID: scopeID, TaskID: &taskID,
+		Kind: store.NoteKindCheapExpensiveLater, Body: "cheap now", Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.NoteKindCheapExpensiveLater, note.Kind)
+}

@@ -39,6 +39,14 @@ type fakeSource struct {
 	StatusCalls [][]uuid.UUID
 	// Notes is what ListProductNotes returns.
 	Notes []store.Note
+	// FeatureNotes is what ListFeatureNotes returns per Feature id.
+	FeatureNotes map[uuid.UUID][]store.Note
+}
+
+var _ render.FeatureNoteSource = (*fakeSource)(nil)
+
+func (f *fakeSource) ListFeatureNotes(ctx context.Context, scopeID, featureID uuid.UUID) ([]store.Note, error) {
+	return f.FeatureNotes[featureID], nil
 }
 
 var _ render.Source = (*fakeSource)(nil)
