@@ -263,6 +263,7 @@ go_test(
     name = "discovery_registration_test",
     srcs = [
         "discovery_registration_test.go",
+        "bounded_list_reads_test.go",
         "entity_note_registration_test.go",
         "persona_nongoal_registration_test.go",
     ],
@@ -270,6 +271,7 @@ go_test(
         ":tools",
         "//krill/api/handlers",
         "//krill/mcp/server",
+        "//krill/slice",
         "//krill/store",
         "//libs/go/auth",
         "@com_github_google_uuid//:uuid",
