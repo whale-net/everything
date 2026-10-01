@@ -238,7 +238,7 @@ func TestMilepebbleStore_AddDiscoveredScope_Requirement(t *testing.T) {
 	budget := 4
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "ship the outcome", &budget, self, self)
 	require.NoError(t, err)
-	deferral, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "cut for later", "M4", self, self)
+	deferral, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "cut for later", "M4", nil, self, self)
 	require.NoError(t, err)
 
 	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)

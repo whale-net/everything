@@ -56,6 +56,21 @@ type addMustNotForecloseRequest struct {
 type addDeferralRequest struct {
 	Body        string `json:"body"`
 	Destination string `json:"destination"`
+
+	// CapabilityID optionally cites a Feature by id.
+	CapabilityID string `json:"capability_id,omitempty"`
+}
+
+// ParseOptionalUUID parses an optional UUID field: empty yields nil.
+func ParseOptionalUUID(field, v string) (*uuid.UUID, error) {
+	if v == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid UUID", field)
+	}
+	return &id, nil
 }
 
 // MilestoneResponse is GetMilestoneHandler's response body -- the
@@ -304,7 +319,12 @@ func AddDeferralHandler(milestones store.MilestoneAuthoringStore) http.HandlerFu
 			return
 		}
 
-		deferral, err := milestones.AddDeferral(r.Context(), sess.ScopeID, id, req.Body, req.Destination, sess.Acting, sess.OnBehalfOf)
+		capabilityID, err := ParseOptionalUUID("capability_id", req.CapabilityID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		deferral, err := milestones.AddDeferral(r.Context(), sess.ScopeID, id, req.Body, req.Destination, capabilityID, sess.Acting, sess.OnBehalfOf)
 		if err != nil {
 			writeStoreError(w, err)
 			return

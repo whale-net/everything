@@ -199,6 +199,7 @@ type addDeferralInput struct {
 	MilestoneID string `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
 	Body        string `json:"body" jsonschema:"What was deferred."`
 	Destination string `json:"destination" jsonschema:"Where the deferred item went, e.g. a future milestone or issue -- required for every deferral."`
+	CapabilityID string `json:"capability_id,omitempty" jsonschema:"Optional Feature (capability) id this deferral concerns; its current Cn is resolved at read time."`
 }
 
 // RegisterAddDeferral registers add_deferral (FR1): records a deferral
@@ -223,7 +224,11 @@ func RegisterAddDeferral(reg *server.Registry, sessions store.SessionStore, mile
 			return nil, zero, fmt.Errorf("destination: required")
 		}
 
-		deferral, err := milestones.AddDeferral(ctx, sess.ScopeID, milestoneID, in.Body, in.Destination, sess.Acting, sess.OnBehalfOf)
+		capabilityID, err := handlers.ParseOptionalUUID("capability_id", in.CapabilityID)
+		if err != nil {
+			return nil, zero, err
+		}
+		deferral, err := milestones.AddDeferral(ctx, sess.ScopeID, milestoneID, in.Body, in.Destination, capabilityID, sess.Acting, sess.OnBehalfOf)
 		if err != nil {
 			return nil, zero, err
 		}

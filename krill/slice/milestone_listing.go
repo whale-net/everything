@@ -321,6 +321,9 @@ type DeferralDTO struct {
 
 	// CapabilityID is the cited Feature id, omitted when the deferral cites none.
 	CapabilityID string `json:"capability_id,omitempty"`
+
+	// CapabilityCn is the cited capability's current Cn, resolved at read time.
+	CapabilityCn string `json:"capability_cn,omitempty"`
 }
 
 // NewDeferralDTOs converts store rows to DeferralDTOs, never nil so the
@@ -331,6 +334,9 @@ func NewDeferralDTOs(deferrals []store.MilestoneDeferral) []DeferralDTO {
 		out[i] = DeferralDTO{ID: d.ID.String(), Body: d.Body, Destination: d.Destination}
 		if d.CapabilityID != nil {
 			out[i].CapabilityID = d.CapabilityID.String()
+		}
+		if d.CapabilityDisplayNumber != nil {
+			out[i].CapabilityCn = fmt.Sprintf("C%d", *d.CapabilityDisplayNumber)
 		}
 	}
 	return out

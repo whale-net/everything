@@ -105,7 +105,7 @@ func TestDeliveryAxis_EndToEndLifecycle_EveryStepReassertsCapturedIDs(t *testing
 		{"a live per-milestone Delivers filter over MCP", "M4 (root plan issue #2681's own out-of-scope note)"},
 		{"an un-abandon verb", "Later (krill/product/02-capability-map.md)"},
 	} {
-		def, err := env.store.MilestoneAuthoring().AddDeferral(ctx, env.scopeID, milestone.ID, dest.body, dest.destination, agent, human)
+		def, err := env.store.MilestoneAuthoring().AddDeferral(ctx, env.scopeID, milestone.ID, dest.body, dest.destination, nil, agent, human)
 		require.NoError(t, err)
 		deferrals[i] = def
 	}

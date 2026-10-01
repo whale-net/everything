@@ -289,13 +289,13 @@ func TestRender_AmendedDeferralRendersOnce(t *testing.T) {
 	milestone, err := entities.Milestones().GetOrCreateRef(ctx, scopeID, seeded.ProductID, "M1")
 	require.NoError(t, err)
 
-	stale, err := entities.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 ships in a later milestone", "M2", subject, subject)
+	stale, err := entities.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 ships in a later milestone", "M2", nil, subject, subject)
 	require.NoError(t, err)
 
 	// The stale text a renumbering leaves behind: it cites a capability
 	// number that no longer means what it meant, which is the case this
 	// whole verb exists to correct.
-	_, err = entities.Amend().AmendDeferral(ctx, stale.ID, "C5 ships in a later milestone", "M2")
+	_, err = entities.Amend().AmendDeferral(ctx, stale.ID, "C5 ships in a later milestone", "M2", nil)
 	require.NoError(t, err)
 
 	files, err := render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID, render.WithDetail())
@@ -311,7 +311,7 @@ func TestRender_AmendedDeferralRendersOnce(t *testing.T) {
 	// Two successive amends: the read path must still narrow to one row, so
 	// this pins "one line" as a property of the filter rather than of there
 	// happening to be only one closed row.
-	_, err = entities.Amend().AmendDeferral(ctx, stale.ID, "C5 ships in M2, which now also carries C6", "M2")
+	_, err = entities.Amend().AmendDeferral(ctx, stale.ID, "C5 ships in M2, which now also carries C6", "M2", nil)
 	require.NoError(t, err)
 
 	files, err = render.Render(ctx, render.NewStoreSource(entities), seeded.ScopeID, seeded.ProductID, render.WithDetail())

@@ -77,6 +77,7 @@ type amendDeferralInput struct {
 	ID          string `json:"id" jsonschema:"The surrogate id (LB2) of the deferral to amend, as a UUID string. Unchanged by the amend."`
 	Body        string `json:"body" jsonschema:"The deferral's replacement text. Required."`
 	Destination string `json:"destination" jsonschema:"Where the deferred item went (FR1). Required."`
+	CapabilityID string `json:"capability_id,omitempty" jsonschema:"Optional Feature (capability) id to cite; omitted leaves the current citation unchanged."`
 }
 
 // parseAmendID resolves the session gate and the entity id exactly as the
@@ -375,7 +376,11 @@ func RegisterAmendDeferral(reg *server.Registry, sessions store.SessionStore, am
 		if err := handlers.RequireNonEmpty("body", in.Body); err != nil {
 			return nil, zero, err
 		}
-		amended, err := amend.AmendDeferral(ctx, id, in.Body, in.Destination)
+		capabilityID, err := handlers.ParseOptionalUUID("capability_id", in.CapabilityID)
+		if err != nil {
+			return nil, zero, err
+		}
+		amended, err := amend.AmendDeferral(ctx, id, in.Body, in.Destination, capabilityID)
 		if err != nil {
 			return nil, zero, err
 		}
