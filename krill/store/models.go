@@ -361,6 +361,18 @@ type EntityMilestone struct {
 	CreatedAt   time.Time
 }
 
+// LBProtectsFeature is one active row of `lb_protects_feature` (migration
+// 033): a load-bearing decision protecting a Feature. An association, not a
+// parent -- the decision stays single-parent under its FeatureSet. Withdrawn
+// rows are retained in the table but never surface here.
+type LBProtectsFeature struct {
+	ID         uuid.UUID
+	ScopeID    uuid.UUID
+	DecisionID uuid.UUID
+	FeatureID  uuid.UUID
+	CreatedAt  time.Time
+}
+
 // MilestoneStatus discriminates `milestone_status_event.status` (migration
 // 012, issue #2685, FR8, FR9) -- CHECK-constrained to exactly these eight
 // values, shared verbatim by a MilestoneKindMilestone and a
