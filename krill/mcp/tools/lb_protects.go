@@ -23,6 +23,12 @@ type lbProtectsInput struct {
 	FeatureID  string `json:"feature_id" jsonschema:"The Feature (capability) the decision protects, as a UUID string."`
 }
 
+// addLBProtectsInput adds the optional rationale to the shared edge identity.
+type addLBProtectsInput struct {
+	lbProtectsInput
+	Rationale string `json:"rationale,omitempty" jsonschema:"Optional free text: why the decision protects this Feature (rendered in the roadmap's Later coverage). Ignored when the edge is already active."`
+}
+
 func parseLBProtectsIDs(in lbProtectsInput) (decisionID, featureID uuid.UUID, err error) {
 	if decisionID, err = uuid.Parse(in.DecisionID); err != nil {
 		return uuid.Nil, uuid.Nil, fmt.Errorf("decision_id: invalid or missing UUID")
@@ -38,18 +44,18 @@ func parseLBProtectsIDs(in lbProtectsInput) (decisionID, featureID uuid.UUID, er
 func RegisterAddLBProtects(reg *server.Registry, sessions store.SessionStore, edges store.LBProtectsStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "add_lb_protects",
-		Description: "Record that a load-bearing decision protects a Feature (capability). An association only; the decision keeps its single FeatureSet parent. Idempotent for an active edge; a previously withdrawn pair may be added again.",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in lbProtectsInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		Description: "Record that a load-bearing decision protects a Feature (capability). An association only; the decision keeps its single FeatureSet parent. Optional rationale records why. Idempotent for an active edge (a different rationale is ignored; withdraw and re-add to change it); a previously withdrawn pair may be added again.",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addLBProtectsInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
 		if err != nil {
 			return nil, zero, err
 		}
-		decisionID, featureID, err := parseLBProtectsIDs(in)
+		decisionID, featureID, err := parseLBProtectsIDs(in.lbProtectsInput)
 		if err != nil {
 			return nil, zero, err
 		}
-		edge, err := edges.Add(ctx, sess.ScopeID, decisionID, featureID)
+		edge, err := edges.Add(ctx, sess.ScopeID, decisionID, featureID, in.Rationale)
 		if err != nil {
 			return nil, zero, err
 		}

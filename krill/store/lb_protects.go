@@ -16,8 +16,11 @@ import (
 type LBProtectsStore interface {
 	// Add records decisionID as protecting featureID. Both must be current
 	// rows in scopeID and belong to the same Product (ErrNotFound
-	// otherwise). Idempotent: an already-active edge is returned unchanged.
-	Add(ctx context.Context, scopeID, decisionID, featureID uuid.UUID) (LBProtectsFeature, error)
+	// otherwise). rationale is optional free text ("" stores NULL).
+	// Idempotent: an already-active edge is returned unchanged, so a
+	// different rationale on a re-add is ignored; withdraw and re-add to
+	// change it.
+	Add(ctx context.Context, scopeID, decisionID, featureID uuid.UUID, rationale string) (LBProtectsFeature, error)
 
 	// Withdraw retires the active edge for (decisionID, featureID), keeping
 	// its row. Returns ErrNotFound if no active edge exists.
@@ -35,9 +38,9 @@ var _ LBProtectsStore = lbProtectsStore{}
 // LBProtects returns the LBProtectsStore implementation.
 func (s *Store) LBProtects() LBProtectsStore { return lbProtectsStore{pool: s.pool} }
 
-const lbProtectsActiveColumns = `id, scope_id, decision_id, feature_id, created_at`
+const lbProtectsActiveColumns = `id, scope_id, decision_id, feature_id, created_at, COALESCE(rationale, '')`
 
-func (s lbProtectsStore) Add(ctx context.Context, scopeID, decisionID, featureID uuid.UUID) (LBProtectsFeature, error) {
+func (s lbProtectsStore) Add(ctx context.Context, scopeID, decisionID, featureID uuid.UUID, rationale string) (LBProtectsFeature, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return LBProtectsFeature{}, fmt.Errorf("begin tx: %w", err)
@@ -66,17 +69,17 @@ func (s lbProtectsStore) Add(ctx context.Context, scopeID, decisionID, featureID
 	}
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO lb_protects_feature (scope_id, decision_id, feature_id)
-		VALUES ($1, $2, $3)
+		INSERT INTO lb_protects_feature (scope_id, decision_id, feature_id, rationale)
+		VALUES ($1, $2, $3, NULLIF($4, ''))
 		ON CONFLICT (decision_id, feature_id) WHERE withdrawn_at IS NULL DO NOTHING
-	`, scopeID, decisionID, featureID); err != nil {
+	`, scopeID, decisionID, featureID, rationale); err != nil {
 		return LBProtectsFeature{}, fmt.Errorf("insert lb_protects_feature: %w", err)
 	}
 	var e LBProtectsFeature
 	if err := tx.QueryRow(ctx, `
 		SELECT `+lbProtectsActiveColumns+` FROM lb_protects_feature_active
 		WHERE decision_id = $1 AND feature_id = $2
-	`, decisionID, featureID).Scan(&e.ID, &e.ScopeID, &e.DecisionID, &e.FeatureID, &e.CreatedAt); err != nil {
+	`, decisionID, featureID).Scan(&e.ID, &e.ScopeID, &e.DecisionID, &e.FeatureID, &e.CreatedAt, &e.Rationale); err != nil {
 		return LBProtectsFeature{}, fmt.Errorf("read lb_protects_feature: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -119,7 +122,7 @@ func (s lbProtectsStore) ListActiveByFeatures(ctx context.Context, featureIDs []
 	var out []LBProtectsFeature
 	for rows.Next() {
 		var e LBProtectsFeature
-		if err := rows.Scan(&e.ID, &e.ScopeID, &e.DecisionID, &e.FeatureID, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.ScopeID, &e.DecisionID, &e.FeatureID, &e.CreatedAt, &e.Rationale); err != nil {
 			return nil, fmt.Errorf("scan lb_protects_feature: %w", err)
 		}
 		out = append(out, e)

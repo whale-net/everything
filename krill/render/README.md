@@ -277,11 +277,12 @@ Closing them means new schema, which is a milestone — see the follow-up.
    message ts, not by a producer route") and why LB3 is ("votes are
    recorded by the voter's Slack user ID, never FCM's"). This is the general
    shape of the gap: `entity_milestone` records *which* entity, never *why*.
-7. **`03-roadmap.md` — the entire "Later coverage" section.** All four
-   bullets, each mapping a `Later` capability to the load-bearing decisions
-   that protect it. Nothing in krill's model expresses "capability X is
-   protected by decision Y" outside a milestone's own
-   `Must not foreclose` list.
+7. **`03-roadmap.md` — the per-bullet "why" in "Later coverage".** The
+   section itself renders from recorded `lb_protects_feature` edges. An edge
+   carries an optional `rationale` (set via `add_lb_protects`), rendered as
+   `- C9 — <name>: LB3 — <rationale>`; with several protectors each is
+   `LB1 (<r1>), LB3 (<r3>)`. The gap remains only where no rationale has
+   been recorded on the edge.
 
 ### (c) Correctly dropped — krill's model supersedes it
 
