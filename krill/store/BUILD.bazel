@@ -54,6 +54,7 @@ go_library(
         "position.go",
         "product.go",
         "recut.go",
+        "withdraw.go",
         "reparent.go",
         "requirement.go",
         "resolve.go",
@@ -809,6 +810,7 @@ go_test(
         "delivery_parent_integration_test.go",
         "milestone_authoring_integration_test.go",
         "recut_integration_test.go",
+        "withdraw_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [

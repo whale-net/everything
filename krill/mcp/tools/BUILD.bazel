@@ -41,6 +41,7 @@ go_library(
         "task_release.go",
         "task_requeue.go",
         "void.go",
+        "withdraw.go",
         "work_mount.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
