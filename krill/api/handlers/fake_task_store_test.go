@@ -115,6 +115,34 @@ type fakeTaskStore struct {
 	summarizeProductTaskProgressResult    store.ProductTaskProgress
 	gotSummarizeProductTaskProgressParams store.ProductTaskProgressParams
 
+	// The count reads (FR c4ab6c68): a scripted result or error per count,
+	// and the params the handler handed it, so a test can assert a count
+	// endpoint passes the same filters its list endpoint does -- and that a
+	// store-side failure reaches the client instead of a rendered 0.
+	countClaimedTasksErr       error
+	countClaimedTasksResult    int
+	gotCountClaimedTasksParams store.ListClaimedTasksParams
+
+	countCancelledTasksErr       error
+	countCancelledTasksResult    int
+	gotCountCancelledTasksParams store.ListCancelledTasksParams
+
+	countEscalatedTasksErr       error
+	countEscalatedTasksResult    int
+	gotCountEscalatedTasksParams store.ListEscalatedTasksParams
+
+	countOpenNotesErr       error
+	countOpenNotesResult    int
+	gotCountOpenNotesParams store.ListOpenNotesParams
+
+	countProductTasksErr       error
+	countProductTasksResult    int
+	gotCountProductTasksParams store.ListProductTasksParams
+
+	countConsoleOverviewErr       error
+	countConsoleOverviewResult    store.ConsoleOverviewCounts
+	gotCountConsoleOverviewParams store.ConsoleOverviewParams
+
 	listClaimedTasksErr       error
 	listClaimedTasksResult    store.Page[store.ClaimedTaskRow]
 	gotListClaimedTasksParams store.ListClaimedTasksParams
@@ -360,4 +388,40 @@ var _ store.TaskStore = (*fakeTaskStore)(nil)
 func (f *fakeTaskStore) AmendNote(ctx context.Context, params store.AmendNoteParams) (store.Note, error) {
 	f.amendNoteParams = params
 	return f.amendNoteResult, nil
+}
+
+// The count reads (FR c4ab6c68) each record the params they were handed
+// and return a scripted result or error, so a handler test can assert that
+// a count endpoint passed the very same filters its list endpoint passes
+// -- and that a store-side failure reaches the client as a 500 rather than
+// as a rendered 0.
+
+func (f *fakeTaskStore) CountClaimedTasks(ctx context.Context, params store.ListClaimedTasksParams) (int, error) {
+	f.gotCountClaimedTasksParams = params
+	return f.countClaimedTasksResult, f.countClaimedTasksErr
+}
+
+func (f *fakeTaskStore) CountCancelledTasks(ctx context.Context, params store.ListCancelledTasksParams) (int, error) {
+	f.gotCountCancelledTasksParams = params
+	return f.countCancelledTasksResult, f.countCancelledTasksErr
+}
+
+func (f *fakeTaskStore) CountEscalatedTasks(ctx context.Context, params store.ListEscalatedTasksParams) (int, error) {
+	f.gotCountEscalatedTasksParams = params
+	return f.countEscalatedTasksResult, f.countEscalatedTasksErr
+}
+
+func (f *fakeTaskStore) CountOpenNotes(ctx context.Context, params store.ListOpenNotesParams) (int, error) {
+	f.gotCountOpenNotesParams = params
+	return f.countOpenNotesResult, f.countOpenNotesErr
+}
+
+func (f *fakeTaskStore) CountProductTasks(ctx context.Context, params store.ListProductTasksParams) (int, error) {
+	f.gotCountProductTasksParams = params
+	return f.countProductTasksResult, f.countProductTasksErr
+}
+
+func (f *fakeTaskStore) CountConsoleOverview(ctx context.Context, params store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	f.gotCountConsoleOverviewParams = params
+	return f.countConsoleOverviewResult, f.countConsoleOverviewErr
 }

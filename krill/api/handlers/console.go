@@ -106,32 +106,13 @@ type listClaimedTasksResponse struct {
 // GET /console/claimed?scope_id=...&product_id=...&milestone_id=...&page_size=...&page_token=....
 func ListClaimedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scopeID, err := uuid.Parse(r.URL.Query().Get(scopeIDQueryParam))
+		params, err := parseClaimedTasksParams(r)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			writeParamParseError(w, err)
 			return
 		}
 
-		filter, err := parseConsoleFilter(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		pageSize, err := parsePageSizeParam(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		page, err := tasks.ListClaimedTasks(r.Context(), store.ListClaimedTasksParams{
-			ScopeID:       scopeID,
-			ConsoleFilter: filter,
-			Page: store.PageParams{
-				PageSize:          pageSize,
-				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
-			},
-		})
+		page, err := tasks.ListClaimedTasks(r.Context(), params)
 		if err != nil {
 			writeConsoleQueryError(w, err)
 			return
@@ -246,32 +227,13 @@ type listCancelledTasksResponse struct {
 // parameter here too.
 func ListCancelledTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scopeID, err := uuid.Parse(r.URL.Query().Get(scopeIDQueryParam))
+		params, err := parseCancelledTasksParams(r)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			writeParamParseError(w, err)
 			return
 		}
 
-		filter, err := parseConsoleFilter(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		pageSize, err := parsePageSizeParam(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		page, err := tasks.ListCancelledTasks(r.Context(), store.ListCancelledTasksParams{
-			ScopeID:       scopeID,
-			ConsoleFilter: filter,
-			Page: store.PageParams{
-				PageSize:          pageSize,
-				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
-			},
-		})
+		page, err := tasks.ListCancelledTasks(r.Context(), params)
 		if err != nil {
 			writeConsoleQueryError(w, err)
 			return
@@ -361,32 +323,13 @@ type listOpenNotesResponse struct {
 // Ungated like ListClaimedTasksHandler -- see this file's own doc comment.
 func ListOpenNotesHandler(tasks store.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scopeID, err := uuid.Parse(r.URL.Query().Get(scopeIDQueryParam))
+		params, err := parseOpenNotesParams(r)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			writeParamParseError(w, err)
 			return
 		}
 
-		filter, err := parseConsoleFilter(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		pageSize, err := parsePageSizeParam(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		page, err := tasks.ListOpenNotes(r.Context(), store.ListOpenNotesParams{
-			ScopeID:       scopeID,
-			ConsoleFilter: filter,
-			Page: store.PageParams{
-				PageSize:          pageSize,
-				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
-			},
-		})
+		page, err := tasks.ListOpenNotes(r.Context(), params)
 		if err != nil {
 			writeConsoleQueryError(w, err)
 			return
@@ -495,39 +438,13 @@ type listEscalatedTasksResponse struct {
 // parameter here too.
 func ListEscalatedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scopeID, err := uuid.Parse(r.URL.Query().Get(scopeIDQueryParam))
+		params, err := parseEscalatedTasksParams(r)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			writeParamParseError(w, err)
 			return
 		}
 
-		filter, err := parseConsoleFilter(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		var reason *store.EscalationReason
-		if raw := r.URL.Query().Get(reasonQueryParam); raw != "" {
-			parsed := store.EscalationReason(raw)
-			reason = &parsed
-		}
-
-		pageSize, err := parsePageSizeParam(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		page, err := tasks.ListEscalatedTasks(r.Context(), store.ListEscalatedTasksParams{
-			ScopeID:       scopeID,
-			ConsoleFilter: filter,
-			Reason:        reason,
-			Page: store.PageParams{
-				PageSize:          pageSize,
-				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
-			},
-		})
+		page, err := tasks.ListEscalatedTasks(r.Context(), params)
 		if err != nil {
 			writeConsoleQueryError(w, err)
 			return

@@ -132,61 +132,13 @@ func NewListProductTasksResponse(page store.Page[store.ProductTaskRow]) ListProd
 // belonging to another product is a 404, never another product's tasks.
 func ListProductTasksHandler(tasks store.TaskStore, products store.ProductStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		productID, err := uuid.Parse(r.PathValue("id"))
+		params, err := parseListProductTasksParams(r, products)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			writeProductTasksParamError(w, err)
 			return
 		}
 
-		scope, err := parseProductTaskScope(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		lane, err := parseTaskLaneFilter(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		onlyStuck, err := parseBoolParam(r, onlyStuckQueryParam)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		pageSize, err := parsePageSizeParam(r)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		// `task` and `milestone_ref` rows are both scope-qualified, so
-		// this read needs productID's own scope_id even though the caller
-		// supplied no session -- resolved from the product row itself, the
-		// same LB2 parentage GetProductDeliveryHandler relies on.
-		product, err := products.GetCurrentByID(r.Context(), productID)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				writeJSONError(w, http.StatusNotFound, "product not found")
-				return
-			}
-			writeJSONError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		page, err := tasks.ListProductTasks(r.Context(), store.ListProductTasksParams{
-			ScopeID:   product.ScopeID,
-			ProductID: productID,
-			Scope:     scope,
-			Lane:      lane,
-			OnlyStuck: onlyStuck,
-			Page: store.PageParams{
-				PageSize:          pageSize,
-				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
-			},
-		})
+		page, err := tasks.ListProductTasks(r.Context(), params)
 		if err != nil {
 			// A container outside the product is a 404 naming the product
 			// not found, never another product's tasks and never an empty
@@ -201,6 +153,124 @@ func ListProductTasksHandler(tasks store.TaskStore, products store.ProductStore)
 
 		writeJSON(w, http.StatusOK, NewListProductTasksResponse(page))
 	}
+}
+
+// CountProductTasksHandler returns the "Y" in "Showing X of Y tasks": GET
+// /products/{id}/tasks/count, taking the same path value and the same
+// scope/container_id/lane/only_stuck filters as
+// ListProductTasksHandler, and returning how many rows that list would
+// return unpaged. It shares that handler's query-string parser, so the
+// total and the page beneath it can never take different filters; the
+// page_size/page_token parameters it also accepts are ignored, a count
+// being of the whole filtered set.
+func CountProductTasksHandler(tasks store.TaskStore, products store.ProductStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		params, err := parseListProductTasksParams(r, products)
+		if err != nil {
+			writeProductTasksParamError(w, err)
+			return
+		}
+
+		count, err := tasks.CountProductTasks(r.Context(), params)
+		if err != nil {
+			if errors.Is(err, store.ErrMilestoneOutsideProduct) {
+				writeJSONError(w, http.StatusNotFound, "milestone not found in this product")
+				return
+			}
+			writeConsoleQueryError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, ConsoleCountWire{Count: count})
+	}
+}
+
+// errProductTasksScopeUnresolvable marks the one parse failure that is a
+// 404 rather than a 400: the product the {id} names does not exist, so
+// there is nothing whose scope the read could resolve.
+var errProductTasksScopeUnresolvable = errors.New("product not found")
+
+// productLookupError marks a failure resolving the product row itself --
+// distinct from a malformed filter. The request named a well-formed
+// product the store could not answer for, which is a 500 rather than
+// anything the caller can fix.
+type productLookupError struct{ err error }
+
+func (e productLookupError) Error() string { return e.err.Error() }
+
+func (e productLookupError) Unwrap() error { return e.err }
+
+// parseListProductTasksParams is the one reader both
+// ListProductTasksHandler and CountProductTasksHandler use for this read's
+// path value and query string, so the list and the total printed beside it
+// are always built from the same scope, container, lane and only-stuck
+// filters.
+func parseListProductTasksParams(r *http.Request, products store.ProductStore) (store.ListProductTasksParams, error) {
+	productID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		return store.ListProductTasksParams{}, errors.New("invalid id: must be a UUID")
+	}
+
+	scope, err := parseProductTaskScope(r)
+	if err != nil {
+		return store.ListProductTasksParams{}, err
+	}
+
+	lane, err := parseTaskLaneFilter(r)
+	if err != nil {
+		return store.ListProductTasksParams{}, err
+	}
+
+	onlyStuck, err := parseBoolParam(r, onlyStuckQueryParam)
+	if err != nil {
+		return store.ListProductTasksParams{}, err
+	}
+
+	pageSize, err := parsePageSizeParam(r)
+	if err != nil {
+		return store.ListProductTasksParams{}, err
+	}
+
+	// `task` and `milestone_ref` rows are both scope-qualified, so this read
+	// needs productID's own scope_id even though the caller supplied no
+	// session -- resolved from the product row itself, the same LB2
+	// parentage GetProductDeliveryHandler relies on.
+	product, err := products.GetCurrentByID(r.Context(), productID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return store.ListProductTasksParams{}, errProductTasksScopeUnresolvable
+		}
+		return store.ListProductTasksParams{}, productLookupError{err: err}
+	}
+
+	return store.ListProductTasksParams{
+		ScopeID:   product.ScopeID,
+		ProductID: productID,
+		Scope:     scope,
+		Lane:      lane,
+		OnlyStuck: onlyStuck,
+		Page: store.PageParams{
+			PageSize:          pageSize,
+			ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
+		},
+	}, nil
+}
+
+// writeProductTasksParamError maps this read's parse failures onto the
+// three statuses they can mean: a 404 for a product that does not exist, a
+// 400 for any malformed filter, and a 500 for a product lookup that
+// failed on its own terms.
+func writeProductTasksParamError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errProductTasksScopeUnresolvable) {
+		writeJSONError(w, http.StatusNotFound, "product not found")
+		return
+	}
+	var lookup productLookupError
+	if errors.As(err, &lookup) {
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSONError(w, http.StatusBadRequest, err.Error())
 }
 
 // parseProductTaskScope parses the scope/container_id pair this read's

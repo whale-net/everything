@@ -318,49 +318,9 @@ func (s taskStore) ListProductTasks(ctx context.Context, params ListProductTasks
 		}
 	}
 
-	if params.Scope.RequiresContainer() {
-		owns, err := productOwnsContainer(ctx, s.pool, params.ScopeID, params.ProductID, params.Scope.ContainerID)
-		if err != nil {
-			return Page[ProductTaskRow]{}, err
-		}
-		// A container this product does not own is a caller error, refused
-		// distinctly (LB1) rather than answered as a plausible-looking empty
-		// page that would read as "this milestone has no work".
-		if !owns {
-			return Page[ProductTaskRow]{}, ErrMilestoneOutsideProduct
-		}
-	}
-
-	args := []any{string(MilestoneStatusNotStarted), params.ScopeID, params.ProductID}
-	containerFilter := ""
-	switch params.Scope.Kind {
-	case ProductTaskScopeIncomplete:
-		containerFilter = " AND c.kind <> 'backlog' AND " + incompleteContainerFilterSQL("c.id")
-	case ProductTaskScopeMilestone:
-		containerFilter = " AND (c.id = $4 OR c.parent_milestone_id = $4)"
-		args = append(args, params.Scope.ContainerID)
-	case ProductTaskScopeMilepebble:
-		containerFilter = " AND c.id = $4"
-		args = append(args, params.Scope.ContainerID)
-	default:
-		return Page[ProductTaskRow]{}, fmt.Errorf("unknown product task scope kind %q", params.Scope.Kind)
-	}
-
-	if params.Lane != nil {
-		args = append(args, string(*params.Lane))
-		containerFilter += fmt.Sprintf(" AND task.current_lane = $%d", len(args))
-	}
-	if params.OnlyStuck {
-		// Exactly expired-lease, at-the-cap, escalated, or cancelled. The
-		// cap is the package-wide DefaultAttemptCap (no per-task column
-		// carries it), passed in rather than inlined so the predicate and
-		// the row's reported AttemptCap can never disagree.
-		args = append(args, DefaultAttemptCap)
-		containerFilter += fmt.Sprintf(
-			" AND (task.current_claim_id IS NOT NULL AND task.lease_expires_at < NOW()"+
-				" OR task.attempt_count >= $%d"+
-				" OR task.current_escalation_id IS NOT NULL"+
-				" OR task.cancelled_at IS NOT NULL)", len(args))
+	fromWhere, args, err := productTasksQuery(ctx, s.pool, params)
+	if err != nil {
+		return Page[ProductTaskRow]{}, err
 	}
 	if cursor != nil {
 		args = append(args, sortKey.MilestonePosition, sortKey.MilestoneID, sortKey.TaskCreatedAt, cursor.ID)
@@ -370,7 +330,7 @@ func (s taskStore) ListProductTasks(ctx context.Context, params ListProductTasks
 		// id as the final tiebreaker. Written as an explicit disjunction
 		// rather than a row comparison so each level's direction is
 		// readable at a glance -- only the first level is descending.
-		containerFilter += fmt.Sprintf(
+		fromWhere += fmt.Sprintf(
 			" AND (m.position < $%d"+
 				" OR (m.position = $%d AND m.id > $%d"+
 				" OR (m.position = $%d AND m.id = $%d AND (task.created_at > $%d"+
@@ -385,11 +345,7 @@ func (s taskStore) ListProductTasks(ctx context.Context, params ListProductTasks
 			task.current_lane, task.current_escalation_id, esc.reason,
 			task.cancelled_at, task.attempt_count, task.lease_expires_at, task.current_claim_id,
 			m.position
-		FROM task
-		JOIN milestone_ref c ON c.id = task.milestone_id AND c.valid_to IS NULL AND c.scope_id = $2
-		JOIN milestone_ref m ON m.id = COALESCE(c.parent_milestone_id, c.id) AND m.valid_to IS NULL AND m.scope_id = $2
-		LEFT JOIN task_escalation_event esc ON esc.id = task.current_escalation_id
-		WHERE task.scope_id = $2 AND m.product_id = $3` + containerFilter
+	` + fromWhere
 
 	// Fetch one extra row beyond pageSize -- its presence, not a second
 	// COUNT query, is what decides whether NextToken is populated.
@@ -490,4 +446,87 @@ func productOwnsContainer(ctx context.Context, q txQuerier, scopeID, productID, 
 		return false, fmt.Errorf("check container ownership: %w", err)
 	}
 	return exists, nil
+}
+
+// productTasksQuery returns the FROM/JOIN/WHERE clause behind both
+// ListProductTasks and CountProductTasks, plus the arguments it binds, so
+// the total behind "Showing X of Y tasks" is a COUNT(*) over exactly the
+// rows the list pages rather than a second, separately-maintained
+// predicate that could quietly answer for a different scope. It also
+// carries the single-container ownership guard, so a count refuses a
+// container outside the product (ErrMilestoneOutsideProduct, LB1) exactly
+// as its list does -- a total of zero for a milestone that belongs to
+// another product would read as "this milestone has no work".
+//
+// Paging is deliberately not part of the returned clause: the keyset
+// disjunction and LIMIT belong to ListProductTasks alone.
+func productTasksQuery(ctx context.Context, q txQuerier, params ListProductTasksParams) (string, []any, error) {
+	if params.Scope.RequiresContainer() {
+		owns, err := productOwnsContainer(ctx, q, params.ScopeID, params.ProductID, params.Scope.ContainerID)
+		if err != nil {
+			return "", nil, err
+		}
+		// A container this product does not own is a caller error, refused
+		// distinctly (LB1) rather than answered as a plausible-looking empty
+		// page that would read as "this milestone has no work".
+		if !owns {
+			return "", nil, ErrMilestoneOutsideProduct
+		}
+	}
+
+	args := []any{string(MilestoneStatusNotStarted), params.ScopeID, params.ProductID}
+	containerFilter := ""
+	switch params.Scope.Kind {
+	case ProductTaskScopeIncomplete:
+		containerFilter = " AND c.kind <> 'backlog' AND " + incompleteContainerFilterSQL("c.id")
+	case ProductTaskScopeMilestone:
+		containerFilter = " AND (c.id = $4 OR c.parent_milestone_id = $4)"
+		args = append(args, params.Scope.ContainerID)
+	case ProductTaskScopeMilepebble:
+		containerFilter = " AND c.id = $4"
+		args = append(args, params.Scope.ContainerID)
+	default:
+		return "", nil, fmt.Errorf("unknown product task scope kind %q", params.Scope.Kind)
+	}
+
+	if params.Lane != nil {
+		args = append(args, string(*params.Lane))
+		containerFilter += fmt.Sprintf(" AND task.current_lane = $%d", len(args))
+	}
+	if params.OnlyStuck {
+		// Exactly expired-lease, at-the-cap, escalated, or cancelled. The
+		// cap is the package-wide DefaultAttemptCap (no per-task column
+		// carries it), passed in rather than inlined so the predicate and
+		// the row's reported AttemptCap can never disagree.
+		args = append(args, DefaultAttemptCap)
+		containerFilter += fmt.Sprintf(
+			" AND (task.current_claim_id IS NOT NULL AND task.lease_expires_at < NOW()"+
+				" OR task.attempt_count >= $%d"+
+				" OR task.current_escalation_id IS NOT NULL"+
+				" OR task.cancelled_at IS NOT NULL)", len(args))
+	}
+
+	fromWhere := `
+		FROM task
+		JOIN milestone_ref c ON c.id = task.milestone_id AND c.valid_to IS NULL AND c.scope_id = $2
+		JOIN milestone_ref m ON m.id = COALESCE(c.parent_milestone_id, c.id) AND m.valid_to IS NULL AND m.scope_id = $2
+		LEFT JOIN task_escalation_event esc ON esc.id = task.current_escalation_id
+		WHERE task.scope_id = $2 AND m.product_id = $3` + containerFilter
+	return fromWhere, args, nil
+}
+
+// CountProductTasks returns how many rows the unpaged ListProductTasks
+// would hold for params -- the "Y" in "Showing X of Y tasks" for the same
+// scope, lane and only-stuck filters, and never the current page's length;
+// params.Page is ignored, token included, so a count is never the size of
+// a page someone happened to be reading.
+//
+// Shares productTasksQuery with its list, so the total and the rows cannot
+// come to describe different filters. A failed query returns its error
+// rather than 0, for the same reason a failed list is an error rather than
+// an empty page.
+func (s taskStore) CountProductTasks(ctx context.Context, params ListProductTasksParams) (int, error) {
+	_ = ctx
+	_ = params
+	return 0, ErrNotImplemented
 }

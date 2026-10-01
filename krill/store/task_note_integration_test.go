@@ -422,7 +422,7 @@ func TestTaskNoteStore_NoUpdateOrDeletePath(t *testing.T) {
 			noteMethods = append(noteMethods, name)
 		}
 	}
-	assert.ElementsMatch(t, []string{"RecordNote", "ListNotesForTask", "ListNotesForEntity", "TransitionNoteLifecycle", "ListOpenNotes", "AmendNote"}, noteMethods,
+	assert.ElementsMatch(t, []string{"RecordNote", "ListNotesForTask", "ListNotesForEntity", "TransitionNoteLifecycle", "ListOpenNotes", "CountOpenNotes", "AmendNote"}, noteMethods,
 		"FR12: task_note must have no update/delete method for body/kind/target -- only the one append, its two scope-qualified reads, and the lifecycle-transition/open-notes-query pair (M5's C26)")
 
 	ctx := context.Background()

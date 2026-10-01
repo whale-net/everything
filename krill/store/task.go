@@ -263,6 +263,24 @@ type TaskStore interface {
 	// tasks count.
 	SummarizeProductTaskProgress(ctx context.Context, params ProductTaskProgressParams) (ProductTaskProgress, error)
 
+	// CountProductTasks returns how many rows the unpaged
+	// ListProductTasks would hold for the same params -- the "Y" in
+	// "Showing X of Y tasks" (task_product_list.go, FR c4ab6c68). Takes
+	// ListProductTasks' own params type, so scope, lane and only-stuck
+	// filters are the list's, and ignores params.Page: a count is of the
+	// whole filtered set, never of the page being read. Shares the list's
+	// SQL predicate, refuses a container outside the product exactly as the
+	// list does, and returns a failed count as an error rather than as 0.
+	CountProductTasks(ctx context.Context, params ListProductTasksParams) (int, error)
+
+	// CountConsoleOverview returns every number the console Overview shows
+	// -- the four queue sizes plus the recent-escalation, expiring-lease
+	// and open-scope-note sub-lines -- in one read (console_overview.go,
+	// FR c4ab6c68). Each figure is counted over the same rows its queue
+	// list pages, and any failing figure fails the whole read rather than
+	// reporting zero.
+	CountConsoleOverview(ctx context.Context, params ConsoleOverviewParams) (ConsoleOverviewCounts, error)
+
 	// ClaimTask is FR3/FR5's race-safe claim (task_claim.go, issue #2722):
 	// a single transaction that row-locks the `task` (SELECT ... FOR
 	// UPDATE), checks claimability (unclaimed or lease-expired,
@@ -357,6 +375,14 @@ type TaskStore interface {
 	// both reuse.
 	ListClaimedTasks(ctx context.Context, params ListClaimedTasksParams) (Page[ClaimedTaskRow], error)
 
+	// CountClaimedTasks returns how many rows the unpaged
+	// ListClaimedTasks would hold for the same params (task_console.go,
+	// FR c4ab6c68) -- the claimed queue's full size. Takes the list's own
+	// params type so the two take the same filters, ignores params.Page,
+	// shares the list's SQL predicate, and returns a failed count as an
+	// error rather than as 0.
+	CountClaimedTasks(ctx context.Context, params ListClaimedTasksParams) (int, error)
+
 	// GetEscalationEventByID returns the EscalationEvent row for id
 	// (task_escalation.go, issue #2868) -- the one caller today is
 	// work.Assembler.Assemble, resolving the reason behind a task's own
@@ -382,6 +408,14 @@ type TaskStore interface {
 	// its own.
 	ListCancelledTasks(ctx context.Context, params ListCancelledTasksParams) (Page[CancelledTaskRow], error)
 
+	// CountCancelledTasks returns how many rows the unpaged
+	// ListCancelledTasks would hold for the same params (task_console.go,
+	// FR c4ab6c68) -- the cancelled queue's full size. Takes the list's
+	// own params type so the two take the same filters, ignores
+	// params.Page, shares the list's SQL predicate, and returns a failed
+	// count as an error rather than as 0.
+	CountCancelledTasks(ctx context.Context, params ListCancelledTasksParams) (int, error)
+
 	// TransitionNoteLifecycle appends one task_note_lifecycle_event row and
 	// mirrors its Status onto task_note.current_status, in one transaction
 	// (task_note_lifecycle.go, issue #2874, FR11). Open to any persona --
@@ -400,6 +434,15 @@ type TaskStore interface {
 	// reuses ListClaimedTasks' own paging machinery and
 	// identifying-context join style rather than forking a copy.
 	ListOpenNotes(ctx context.Context, params ListOpenNotesParams) (Page[OpenNoteRow], error)
+
+	// CountOpenNotes returns how many rows the unpaged ListOpenNotes would
+	// hold for the same params (task_note_console.go, FR c4ab6c68). Takes
+	// the list's own params type so the two take the same filters, ignores
+	// params.Page, shares the list's SQL predicate, and returns a failed
+	// count as an error rather than as 0. Per-product figures are not
+	// additive into a scope-wide total -- see the method's own doc
+	// comment.
+	CountOpenNotes(ctx context.Context, params ListOpenNotesParams) (int, error)
 
 	// ReleaseLease is FR8's operator-initiated force-close
 	// (task_release.go, issue #2872): a single transaction that refuses a
@@ -438,6 +481,14 @@ type TaskStore interface {
 	// NFR6, #2851 Assumption 11) -- that full history is M4 FR10's
 	// per-task fetch (GET /tasks/{id}).
 	ListEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (Page[EscalatedTaskRow], error)
+
+	// CountEscalatedTasks returns how many rows the unpaged
+	// ListEscalatedTasks would hold for the same params (task_console.go,
+	// FR c4ab6c68) -- the escalation queue's full size. Takes the list's
+	// own params type so the two take the same filters, ignores
+	// params.Page, shares the list's SQL predicate, and returns a failed
+	// count as an error rather than as 0.
+	CountEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (int, error)
 
 	// RequeueTask is FR6's recover half of the recover-or-terminate pair
 	// CancelTask (above) is the other half of (task_requeue.go, issue

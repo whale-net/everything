@@ -33,6 +33,7 @@ go_library(
         "active_edge.go",
         "amend.go",
         "void.go",
+        "console_overview.go",
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",

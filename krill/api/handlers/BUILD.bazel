@@ -63,6 +63,7 @@ go_library(
         "abandon.go",
         "amend.go",
         "console.go",
+        "console_counts.go",
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",

@@ -15,6 +15,7 @@ go_library(
         "abandon.go",
         "amend.go",
         "console.go",
+        "console_counts.go",
         "delivery_shipment.go",
         "design.go",
         "design_summary.go",

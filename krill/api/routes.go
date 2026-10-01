@@ -106,6 +106,7 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, ide
 	// and scope-resolved-from-the-product like GET /products/{id}/delivery.
 	// The per-container read above stays unchanged.
 	mux.HandleFunc("GET /products/{id}/tasks", handlers.ListProductTasksHandler(entities.Tasks(), entities.Products()))
+	mux.HandleFunc("GET /products/{id}/tasks/count", handlers.CountProductTasksHandler(entities.Tasks(), entities.Products()))
 
 	// The product-wide per-container task-progress read (FR 59f664ff):
 	// one call returning every in-scope milestone and milepebble's task
@@ -270,6 +271,18 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, ide
 	// /console/claimed above -- the milestone's headline query, over
 	// store.TaskStore.ListEscalatedTasks.
 	mux.HandleFunc("GET /console/escalated", handlers.ListEscalatedTasksHandler(entities.Tasks()))
+
+	// FR c4ab6c68: the console's counts. Each /console/<queue>/count takes
+	// the same query parameters as the queue's own list endpoint and
+	// returns how many rows that list would hold unpaged, so no figure in
+	// the console is a page length; GET /console/overview is the same
+	// story for the headline numbers in one call. Ungated, like the list
+	// endpoints they sit beside (NFR6's gate is write-only).
+	mux.HandleFunc("GET /console/claimed/count", handlers.CountClaimedTasksHandler(entities.Tasks()))
+	mux.HandleFunc("GET /console/cancelled/count", handlers.CountCancelledTasksHandler(entities.Tasks()))
+	mux.HandleFunc("GET /console/escalated/count", handlers.CountEscalatedTasksHandler(entities.Tasks()))
+	mux.HandleFunc("GET /console/notes/count", handlers.CountOpenNotesHandler(entities.Tasks()))
+	mux.HandleFunc("GET /console/overview", handlers.ConsoleOverviewHandler(entities.Tasks()))
 
 	// task_release (issue #2872, FR8): a Swarm Operator force-closes the
 	// active lease on a claimed task directly, independent of lease
