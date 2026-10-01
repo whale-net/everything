@@ -84,7 +84,9 @@ held) is cleared or every standing blocker has a `ruling`.
    (per milepebble, default 12, the milestone itself uncapped —
    CONVENTIONS.md "FR budget") and cite `Delivers` capabilities correctly, and are you willing to disagree with architect's
    `reconciliation` sign-off if you can point at something specific it
-   missed?
+   missed? Also reject bodies that break CONVENTIONS.md "Requirement text: keep
+   it tight" (multi-obligation, implementation detail, provenance/history, far
+   over ~200 words): `changes_requested`, naming the Requirement ids.
 3. **Decide, by appending one `signoff` revision event:**
    ```
    append_revision_event {

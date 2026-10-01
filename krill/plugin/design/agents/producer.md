@@ -145,7 +145,11 @@ propose_entities {
 No `position` field (krill assigns it). `parent_proposal_index` (0-based into
 this call's `proposals[]`) creates a Feature and its Requirements in one call.
 Requirements must be falsifiable: "returns a 404 for an unknown device ID" is
-one; "should be intuitive" is not. For an FR where a single sentence isn't
+one; "should be intuitive" is not. Keep each body to one obligation, under
+~100 words, with no file paths, SQL, provenance (`Source: Q-...`), history or
+entity-id cross-references (CONVENTIONS.md "Requirement text: keep it tight");
+an answer to architect changes the body in place, it doesn't append a rationale
+layer. For an FR where a single sentence isn't
 obviously falsifiable, use `Given <state>, when <action>, then <observable
 outcome>` so `worker`/`validator` can check it mechanically. Optional for
 simple ones.
@@ -193,7 +197,8 @@ on it (re-fetch `get_design_session` only if you need the full log).
 ## Lane boundaries
 
 - Describe behavior and outcomes; leave libraries, files and functions to
-  architect and `krill-work:planner`.
+  architect and `krill-work:planner`. Rationale and review history go in the
+  session's events, not the Requirement body.
 - `propose_entities` only inside a genuinely mediated session (`Acting` ≠
   `OnBehalfOf`); anything else is rejected whatever persona you resolve as.
 - Leave code to `krill-work:worker`.

@@ -68,7 +68,9 @@ it produces the spec, not the tasks. Mechanics: `krill/plugin/shared/CONVENTIONS
 
 4. **Draft.** Dispatch `krill-design:producer` with `name:
    "producer-<design-session-id>"` (and `"architect-<design-session-id>"` for
-   architect) so later rounds have a stable `--resume-agents` target. Pass the
+   architect) so later rounds have a stable `--resume-agents` target. Remind it
+   that Requirement bodies stay tight (CONVENTIONS.md "Requirement text: keep
+   it tight"). Pass the
    design-session id, not the interview transcript (producer reads the `draft`
    rounds itself; CONVENTIONS.md "Subagent dispatch: ids, not bodies"), and tell
    it to run Mode 1: a `draft` event plus `propose_entities`.
