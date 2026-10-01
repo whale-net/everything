@@ -173,6 +173,7 @@ go_test(
         "featureset_test.go",
         "gate_test.go",
         "mediated_test.go",
+        "deferral_dto_test.go",
         "milestone_delivery_test.go",
         "milestone_status_test.go",
         "nongoal_test.go",
