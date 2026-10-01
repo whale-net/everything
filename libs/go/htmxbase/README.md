@@ -128,6 +128,7 @@ mux.HandleFunc("/favicon.ico", htmxbase.FaviconHandler(faviconIco))
 ## CDN Sources
 
 - **HTMX**: https://unpkg.com/htmx.org@4.0.0/dist/htmx.min.js
+- **HTMX Alpine compat extension** (loaded by the base layout, after core): https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-alpine-compat.min.js -- keeps `x-data` state across morph swaps and batches Alpine's mutation processing during swaps
 - **HTMX SSE extension** (apps using `libs/go/htmxsse` add it in their own `CustomHead`, after core): https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js
 - **Alpine.js**: https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js
 

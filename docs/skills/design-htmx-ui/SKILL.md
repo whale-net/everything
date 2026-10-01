@@ -52,7 +52,9 @@ utilities, all from the pinned CDNs. That means:
   - `HX-Trigger` fires on the requesting element after the swap; if the swap
     removes that element, send `{"showToast": {"target": "body", ...}}`.
 - Alpine is loaded everywhere, but use it only for client-only UI state
-  (open/closed, a reveal). Never use it for data.
+  (open/closed, a reveal). Never use it for data. `htmxbase` also loads
+  htmx's `hx-alpine-compat` extension, so `x-data` state survives morph
+  swaps.
 - Pages must look right in light, night and oled at minimum. `htmxui.Themes`
   also lists `sunset`, which is a proof of concept: check it, but don't
   design for it.

@@ -19,6 +19,7 @@ const BaseLayoutTemplate = `<!DOCTYPE html>
          history "reload" makes Back a plain navigation, since htmx's own refetch sends HX-Request and gets fragments. -->
     <meta name="htmx-config" content='{"noSwap":[204,304,"4xx","5xx"],"history":"reload"}'>
     <script src="https://unpkg.com/htmx.org@4.0.0/dist/htmx.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-alpine-compat.min.js"></script>
 
     <!-- Alpine.js -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
