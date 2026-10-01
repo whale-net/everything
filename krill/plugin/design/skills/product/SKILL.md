@@ -42,8 +42,10 @@ new domain-sized subsystem.
 
 ## The artifact
 
-One `Product`; one `FeatureSet` per capability-map area (a `LoadBearingDecision`
-attaches to the `FeatureSet` it constrains, never the bare `Product`); one
+One `Product`; one `FeatureSet` per capability area, a thematic group of
+capabilities that belong together (a page, surface or subsystem), never a
+timeframe like `Now`/`Next`/`Later` (a `LoadBearingDecision` attaches to the
+`FeatureSet` it constrains, never the bare `Product`); one
 `Milestone` per roadmap entry, whose status lives on the entity
 (`set_milestone_status`/`get_milestone_status_history`). Entities are the
 durable record the moment they're written.
@@ -91,7 +93,7 @@ every FR traces to a delivered capability.
    reconcile. Repeat until architect signs off with no blocking questions, capped
    at 5 rounds (then summarize for the user). With `--resume-agents`, target the
    same named agents via `SendMessage`.
-7. **Human gate and publish.** Present vision, bucketed capability map, LBs and
+7. **Human gate and publish.** Present vision, capability map by area, LBs and
    the milestone list, including what M1 does and doesn't contain. Ask for
    approval, changes or a re-cut. **Changes** → another producer/architect round.
    **Approved** → dispatch producer (Mode P3) to write the entities. This skill

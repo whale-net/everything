@@ -420,9 +420,9 @@ same order:
    lapse.
 5. Put `krill task: <task-id>` at the end of each commit message.
 
-`/krill-work:work-task` runs this for one task. If the work has no task yet,
-create one under the right milestone (`/krill-work:plan`, or `create_task`)
-before starting, rather than doing it untracked.
+`/krill-work:work-task` runs this for one existing task. Work that has no krill
+Task (docs, prompt edits, one-off fixes) is done normally; it isn't a reason
+to create one.
 
 ## Subagent dispatch: ids, not bodies
 

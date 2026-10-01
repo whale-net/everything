@@ -36,11 +36,18 @@ runs the interview in-session; beyond the Mode 0 questions, cover:
 **P1. Draft the brief.** Append a `draft` event with **Vision** (one
 paragraph), **Personas** (one line each), **Capability map**, **Non-goals**.
 Leave *Current state* and *Load-bearing decisions* to architect and *Roadmap*
-to P2. The map is `C1..Cn` in `Now`/`Next`/`Later` buckets, one line each,
-phrased as *a persona can do a thing* (`C2 — A grower can see the current
-reading for one plant.`). A line specifying a status code, payload, table or
-endpoint is an FR; cut it. If the map doesn't fit on a screen, it's two
-products.
+to P2. The map is `C1..Cn`, one line each, phrased as *a persona can do a
+thing* (`C2 — A grower can see the current reading for one plant.`). A line
+specifying a status code, payload, table or endpoint is an FR; cut it. If the
+map doesn't fit on a screen, it's two products.
+
+Group the lines under **capability areas**, each a set of capabilities that
+belong together: the surface or subsystem they make up (`Plant detail page`,
+`Device onboarding`), not when they ship. These become the FeatureSets. Never
+name an area `Now`, `Next`, `Later`, `Soon`, `Backlog` or any other
+timeframe; *when* is the Milestone's `Delivers` (P2), and a second timeline in
+the area names drifts from it. Mark a capability's expected timing, if you
+need to, in its line or the roadmap, not in its area.
 
 **P2. Revise the brief.** Answer architect's open questions with an `answer`
 event (what changed and why, not the whole brief). Fold in architect's
@@ -53,7 +60,7 @@ milestone, so re-cut it. Entry shape:
 M2 — A logged-in grower can see one plant's live readings
 Delivers: C3, C4, C6
 Must not foreclose: LB1, LB3
-Deliberately deferred: multi-plant list (C7 → M3), alerting (C11 → Later)
+Deliberately deferred: multi-plant list (C7 → M3), alerting (C11 → M4)
 FR budget: 12
 ```
 
@@ -61,7 +68,7 @@ Order milestones so each is independently useful; every `Deliberately
 deferred` line names where the thing went.
 
 **P3. Publish.** After the human gate approves: `create_feature_set` per
-capability area, `create_load_bearing_decision` per LB (attached to the
+capability area (a thematic name, never a timeframe), `create_load_bearing_decision` per LB (attached to the
 FeatureSet it constrains), `create_milestone` per roadmap entry with
 `add_delivers`, `add_must_not_foreclose`, `add_deferral`. Milestones start
 `not started`. Hand off with `/krill-design:design <product-id> --milestone
@@ -156,7 +163,7 @@ over-budget: propose a milepebble split, each with an outcome sentence and at
 most its budget, every Requirement in exactly one. After signoff, cut them with
 `create_milepebble {…, fr_budget: 12}` and `add_milepebble_scope`. Only a single
 milepebble over its own budget is over-budget scope. A genuinely new capability
-goes in the product's `Later` bucket (a product amendment); scope for a later
+goes in the product's backlog bucket (a product amendment); scope for a later
 milestone goes in an open question or your notes citing it, never into an FR.
 
 **2. Respond to feedback.** Architect's feedback arrives as `reconciliation`
