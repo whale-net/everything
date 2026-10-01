@@ -419,7 +419,7 @@ func TestRender_BacklogRefsExcludedFromRoadmap(t *testing.T) {
 
 	f1 := newFeature("F1", 1)
 	f1.FeatureSetID = fsID
-	f2 := newFeature("F2 (backlogged)", 2)
+	f2 := newFeature("F2 (parked)", 2)
 	f2.FeatureSetID = fsID
 
 	milestoneID := uuid.New()

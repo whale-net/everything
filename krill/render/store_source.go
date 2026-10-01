@@ -69,3 +69,8 @@ func (s *StoreSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []
 func (s *StoreSource) ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error) {
 	return s.store.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindProduct, productID)
 }
+
+// ListActiveProtects is a read of `lb_protects_feature_active` and nothing else.
+func (s *StoreSource) ListActiveProtects(ctx context.Context, featureIDs []uuid.UUID) ([]store.LBProtectsFeature, error) {
+	return s.store.LBProtects().ListActiveByFeatures(ctx, featureIDs)
+}
