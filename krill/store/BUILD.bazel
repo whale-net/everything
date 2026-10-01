@@ -592,6 +592,39 @@ go_test(
     ],
 )
 
+# Real Postgres coverage for LBProtectsStore (migration 033). Not part of
+# `bazel test //...`.
+#
+#   bazel test //krill/store:lb_protects_integration_test --test_output=all
+go_test(
+    name = "lb_protects_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "lb_protects_integration_test.go",
+        "milestone_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real Postgres integration test for MilestoneAuthoringStore
 # (milestone_authoring.go, migration 010, issue #2683's Testing section):
 # CreateMilestone with outcome+FR budget round-tripping through
