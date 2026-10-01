@@ -17,13 +17,6 @@ A cohesive design language combining clean business-focused UI with vibrant, ene
 | **Warning (Yellow)** | Warnings, pending states | `yellow-500/600` | #eab308 / #ca8a04 |
 | **Neutral (Slate)** | Secondary actions, text, borders | `slate-600/700/800` | #475569 / #334155 / #1e293b |
 
-### Gradient (Hero Headers)
-
-```css
-background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-/* Tailwind: bg-gradient-to-br from-indigo-600 to-purple-600 */
-```
-
 ---
 
 ## Component Patterns
@@ -47,39 +40,16 @@ accent" against the otherwise business-like UI:
 
 ---
 
-### Hero Headers
+### Page Headers
 
-**Usage**: Main section pages (Games, Servers, Sessions, Workshop)  
-**Do NOT use on**: Detail pages (use breadcrumbs instead)
+Every page opens with a plain header: title, status badge (if the object has
+one), and the primary action. Detail pages add breadcrumbs above it. No
+gradient hero banners. Decorative gradients are banned across apps (see the
+`design-htmx-ui` skill).
 
-**Templ Component**: `@components.Hero(title, subtitle, actions)`
-
-```templ
-@components.Hero("Games", "Manage game configurations and deployments") {
-    @components.Button(components.ButtonProps{
-        Text: "+ Create Game",
-        Variant: "primary",
-        URL: "/games/new",
-    })
-}
-```
-
-**Raw HTML** (if not using component):
-```html
-<div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-lg p-6 md:p-8 mb-6 shadow-lg">
-    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div class="text-white">
-            <h1 class="text-2xl md:text-3xl font-bold mb-2">Page Title</h1>
-            <p class="text-indigo-100 text-sm">Page description</p>
-        </div>
-        <div class="flex gap-2">
-            <button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-white hover:bg-gray-50 text-indigo-600 font-semibold rounded-md transition-colors shadow-md">
-                + Create New
-            </button>
-        </div>
-    </div>
-</div>
-```
+**Legacy:** `components.HeroHeader` (the indigo→purple gradient hero) is still
+used on section pages. Replace it with a plain page header when you touch the
+page, and don't add new uses.
 
 ---
 
@@ -440,13 +410,6 @@ All components use Tailwind's `dark:` variant:
 - `text-slate-900 dark:text-white`
 - `border-gray-200 dark:border-slate-700`
 
-### Gradient Visibility
-
-The indigo-purple gradient works in all three themes:
-- **Light**: Full vibrancy
-- **Night**: Slightly muted but visible
-- **OLED**: High contrast against pure black
-
 ---
 
 ## Quick Reference
@@ -465,8 +428,8 @@ The indigo-purple gradient works in all three themes:
 
 | Need | Use |
 |------|-----|
-| Main section page | Hero header with gradient |
-| Detail page | Breadcrumbs (no hero) |
+| Any page | Plain page header (title, status, primary action) |
+| Detail page | Breadcrumbs above the page header |
 | Destructive action | Danger zone at bottom |
 | List of items | Table with hover states |
 | Form | Consistent input styling |
@@ -493,7 +456,7 @@ When migrating a page to daisyUI:
       (in `components/ui.templ`) with `@htmxui.Button`/`@htmxui.Badge`
       (`libs/go/htmxui`) where the shared component already covers the
       case; keep local components only for what `htmxui` doesn't provide
-      (e.g. `@components.Hero`).
+      (e.g. `@components.EmptyState`).
 - [ ] Replace Tailwind `dark:` utility pairs (`bg-white dark:bg-slate-800`,
       etc.) with daisyUI semantic classes driven by `data-theme`
       (`bg-base-100`, `bg-base-200`, `text-base-content`, ...) — see
@@ -502,9 +465,8 @@ When migrating a page to daisyUI:
 - [ ] Replace `bg-indigo-600 hover:bg-indigo-700`-style buttons with
       `btn btn-primary`; `bg-slate-600 hover:bg-slate-700` with
       `btn btn-secondary`; destructive actions with `btn btn-error`.
-- [ ] Add hero header to main section pages (use `@components.Hero`,
-      unchanged — daisyUI has no hero-gradient equivalent in this design
-      system's vocabulary).
+- [ ] Replace `@components.HeroHeader` with a plain page header (see
+      "Page Headers").
 - [ ] Move delete actions to danger zone at bottom.
 - [ ] Update status badges to daisyUI badge classes (`badge badge-success`,
       `badge-warning`, `badge-error`, `badge-secondary`).

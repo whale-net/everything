@@ -39,7 +39,7 @@ Type-safe, component-based UI built with Go + templ + HTMX + Tailwind CSS.
    
    templ List(data types.MyPageData) {
        @layout.Base(data.Layout) {
-           @layout.Hero("Title", "Subtitle")
+           <h1 class="text-2xl font-bold">Title</h1>
            <!-- content -->
        }
    }
