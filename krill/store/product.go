@@ -34,11 +34,11 @@ type productStore struct{ pool *pgxpool.Pool }
 
 var _ ProductStore = productStore{}
 
-const productColumns = `revision_id, id, scope_id, name, vision, position, valid_from, valid_to`
+const productColumns = `revision_id, id, scope_id, name, vision, current_state, position, valid_from, valid_to`
 
 func scanProduct(row pgx.Row) (Product, error) {
 	var p Product
-	err := row.Scan(&p.RevisionID, &p.ID, &p.ScopeID, &p.Name, &p.Vision, &p.Position, &p.ValidFrom, &p.ValidTo)
+	err := row.Scan(&p.RevisionID, &p.ID, &p.ScopeID, &p.Name, &p.Vision, &p.CurrentState, &p.Position, &p.ValidFrom, &p.ValidTo)
 	return p, err
 }
 

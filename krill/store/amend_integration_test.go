@@ -1150,3 +1150,47 @@ func TestMilestoneNotes_SetReplaceAndCarryForwardAcrossAmend(t *testing.T) {
 	err = s.MilestoneAuthoring().SetMilestoneNotes(ctx, uuid.New(), "x", acting, acting)
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
+
+// A current-state survey is a new SCD2 revision under the same id, survives
+// a name/vision amend, and an earlier survey stays readable as-of.
+func TestSetProductCurrentState_RevisionCarryForwardAndAsOf(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "vision")
+	require.NoError(t, err)
+	assert.Nil(t, product.CurrentState)
+
+	first, err := s.Amend().SetProductCurrentState(ctx, product.ID, "# survey one")
+	require.NoError(t, err)
+	assert.Equal(t, product.ID, first.ID)
+	assert.NotEqual(t, product.RevisionID, first.RevisionID)
+	require.NotNil(t, first.CurrentState)
+	assert.Equal(t, "# survey one", *first.CurrentState)
+	assert.Equal(t, "Krill", first.Name)
+	assert.Equal(t, "vision", first.Vision)
+
+	second, err := s.Amend().SetProductCurrentState(ctx, product.ID, "# survey two")
+	require.NoError(t, err)
+
+	amended, err := s.Amend().AmendProduct(ctx, product.ID, "krill2", "vision2")
+	require.NoError(t, err)
+	require.NotNil(t, amended.CurrentState, "name/vision amend must carry the survey forward")
+	assert.Equal(t, "# survey two", *amended.CurrentState)
+
+	atFirst, err := s.History().GetProductAsOf(ctx, product.ID, first.ValidFrom)
+	require.NoError(t, err)
+	require.NotNil(t, atFirst.CurrentState)
+	assert.Equal(t, "# survey one", *atFirst.CurrentState)
+	atSecond, err := s.History().GetProductAsOf(ctx, product.ID, second.ValidFrom)
+	require.NoError(t, err)
+	assert.Equal(t, "# survey two", *atSecond.CurrentState)
+
+	var n int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM product WHERE id = $1`, product.ID).Scan(&n))
+	assert.Equal(t, 4, n)
+
+	_, err = s.Amend().SetProductCurrentState(ctx, uuid.New(), "x")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}

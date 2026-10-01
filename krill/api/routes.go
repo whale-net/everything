@@ -285,6 +285,8 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, ide
 	// only its own authoring content -- never its delivery axis
 	// (FR 39373553).
 	mux.Handle("POST /products/{id}/amend", gate(handlers.AmendProductHandler(entities.Amend())))
+	mux.Handle("POST /products/{id}/current-state", gate(handlers.SetProductCurrentStateHandler(entities.Amend())))
+	mux.HandleFunc("GET /products/{id}/current-state", handlers.GetProductCurrentStateHandler(entities.Products()))
 	mux.Handle("POST /feature-sets/{id}/amend", gate(handlers.AmendFeatureSetHandler(entities.Amend())))
 	mux.Handle("POST /features/{id}/amend", gate(handlers.AmendFeatureHandler(entities.Amend())))
 	mux.Handle("POST /requirements/{id}/amend", gate(handlers.AmendRequirementHandler(entities.Amend())))

@@ -53,8 +53,11 @@ schedule, not a spec of record anyone contributes to. So it is
 relationships, and data flow anyway. `ARCHITECTURE.md`, `README.md`,
 `ENV.md`, and `TOC.md` stay hand-written for a krill-migrated domain.
 
-`product/01-current-state.md` therefore renders as a placeholder that
-points at `<domain>/ARCHITECTURE.md`. It is not a gap waiting to be
+A Product may also store a survey in krill (`set_product_current_state`
+on the design mount; read back with `get_product_current_state` or
+`get_product_slice`). `product/01-current-state.md` then renders it
+verbatim -- no escaping, trimming, or truncation. When none is stored it
+renders as a placeholder that points at `<domain>/ARCHITECTURE.md`. It is not a gap waiting to be
 filled, and no entity type is planned to fill it. Making krill hold this
 content was considered and sized: a new entity type means model design +
 migration + authoring API + MCP tool + render, which is a milestone, not
@@ -117,8 +120,8 @@ A re-render is **not** a full replacement for the hand-authored docs it
 projects from — some prose in the committed files has no entity to render
 from at all:
 
-- **`product/01-current-state.md` always renders as a fixed placeholder.**
-  Deliberate, and now stated in the placeholder itself: the current-state
+- **`product/01-current-state.md` renders a fixed placeholder when no
+  survey is stored** (see above). Deliberate, and now stated in the placeholder itself: the current-state
   survey is hand-authored at `<domain>/ARCHITECTURE.md`, out of the
   renderer's product-doc-set scope on purpose. The placeholder names that
   file so a reader has somewhere to go — it does not read as "krill lost

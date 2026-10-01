@@ -227,6 +227,8 @@ func run() error {
 	tools.RegisterResolveAll(designReg, sessions, entities.Resolve())
 	// list_products: ungated Product discovery, the entry point for every get_*_slice product_id.
 	tools.RegisterListProducts(designReg, entities.Products())
+	tools.RegisterSetProductCurrentState(designReg, sessions, entities.Amend())
+	tools.RegisterGetProductCurrentState(designReg, entities.Products())
 	// list_personas/list_non_goals: ungated discovery for the two entity kinds create_persona/create_non_goal mint, with no other MCP-reachable read path (not part of the slice.Document either).
 	tools.RegisterListPersonas(designReg, entities.Personas())
 	tools.RegisterListNonGoals(designReg, entities.NonGoals())
