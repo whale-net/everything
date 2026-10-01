@@ -29,6 +29,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -248,4 +249,166 @@ func TestTaskStore_EscalateTask_CancelledTask_Refused(t *testing.T) {
 	assert.ErrorIs(t, err, store.ErrTaskCancelled)
 
 	assert.Equal(t, 0, countRows(t, ctx, db, "task_escalation_event", task.ID), "a refused escalate must write no task_escalation_event row")
+}
+
+// TestTaskStore_EscalateTask_ExpectedClaimID_Matches_Succeeds is the
+// observed-state guard's happy path on escalate: guarding the claim the
+// caller's row named still records the manual escalation and force-closes
+// that claim.
+func TestTaskStore_EscalateTask_ExpectedClaimID_Matches_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "guarded escalate", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	result, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &claim.ID,
+	})
+	require.NoError(t, err, "an escalate guarding the claim that is still current must succeed")
+	assert.True(t, result.ClaimForceClosed)
+	assert.Equal(t, store.EscalationReasonManual, result.EscalationEvent.Reason)
+}
+
+// TestTaskStore_EscalateTask_ExpectedClaimID_Stale_Refused is the guard
+// on escalate: an escalate posted from a stale row is refused with
+// ErrObservedStateMismatch, writes no escalation event, and leaves the
+// claim that became current alone -- an escalation is precisely the
+// judgment that force-closes a claim, so it must not act on a claim the
+// caller never saw.
+func TestTaskStore_EscalateTask_ExpectedClaimID_Stale_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "stale escalate", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	staleClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	expireTaskLease(t, ctx, db, task.ID)
+	currentClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self), Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, staleClaim.ID, currentClaim.ID)
+
+	_, err = s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaim.ID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_escalation_event", task.ID), "a refused guarded escalate must record no escalation event")
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_intervention_event", task.ID), "a refused guarded escalate must write no intervention event")
+
+	stillOpen, err := s.Tasks().GetClaimByID(ctx, currentClaim.ID)
+	require.NoError(t, err)
+	assert.Nil(t, stillOpen.ReleasedAt, "a guarded escalate against a stale claim id must never force-close the claim that is current now")
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.CurrentClaimID)
+	assert.Equal(t, currentClaim.ID, *got.CurrentClaimID)
+	assert.Nil(t, got.CurrentEscalationID, "a refused guarded escalate must leave the task un-escalated")
+}
+
+// TestTaskStore_EscalateTask_ExpectedClaimID_NoCurrentClaim_Mismatch is
+// the same rule for the "task holds none" case: a supplied expected claim
+// id against an unclaimed task is the mismatch refusal, never
+// ErrTaskEscalated or any other legality error.
+func TestTaskStore_EscalateTask_ExpectedClaimID_NoCurrentClaim_Mismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "escalate unclaimed", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = s.Tasks().ReleaseLease(ctx, store.ReleaseParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	_, err = s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &claim.ID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrObservedStateMismatch)
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_escalation_event", task.ID), "a refused guarded escalate must record no escalation event")
+}
+
+// TestTaskStore_EscalateTask_Cancelled_BeatsObservedMismatch is the check
+// order: on a cancelled task the existing refusal wins over the guard, so
+// a stale double-submitted Cancel is reported as already-cancelled rather
+// than as a mismatch.
+func TestTaskStore_EscalateTask_Cancelled_BeatsObservedMismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "cancelled then escalated", self)
+	_, err := s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	staleClaim := uuid.New()
+	_, err = s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaim,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrTaskCancelled, "the cancelled refusal runs ahead of the observed-state guard")
+	assert.NotErrorIs(t, err, store.ErrObservedStateMismatch)
+}
+
+// TestTaskStore_EscalateTask_NoExpectedClaimID_Unguarded is the
+// back-compat half: an escalate omitting the expected id behaves exactly
+// as before, including force-closing whatever claim is current.
+func TestTaskStore_EscalateTask_NoExpectedClaimID_Unguarded(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "unguarded escalate", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	staleClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	expireTaskLease(t, ctx, db, task.ID)
+	currentClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self), Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, staleClaim.ID, currentClaim.ID)
+
+	result, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err, "omitting the expected id must leave today's behaviour untouched")
+	assert.True(t, result.ClaimForceClosed)
 }

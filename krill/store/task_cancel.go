@@ -79,6 +79,15 @@ type CancelResult struct {
 // responsible for refusing a cancelled task regardless of that column's
 // value. Nothing else is rewritten (NFR5): task_attempt, verdict, and
 // task_note rows are untouched by this call.
+//
+// The lock read therefore also carries current_escalation_id, and between
+// the already-cancelled refusal and the force-close both
+// CancelTaskParams.ExpectedClaimID and ExpectedEscalationID are compared
+// against the ids just read (checkObservedClaim/checkObservedEscalation,
+// task_observed_state.go) -- a Claimed-row cancel guards the claim, an
+// Escalated-row cancel the escalation, and each supplied id that is no
+// longer current is refused with ErrObservedStateMismatch. Both nil is
+// unguarded, exactly as before.
 func (s taskStore) CancelTask(ctx context.Context, params CancelTaskParams) (CancelResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -88,9 +97,11 @@ func (s taskStore) CancelTask(ctx context.Context, params CancelTaskParams) (Can
 
 	var cancelledAt *time.Time
 	var currentClaimID *uuid.UUID
+	var currentEscalationID *uuid.UUID
 	err = tx.QueryRow(ctx, `
-		SELECT cancelled_at, current_claim_id FROM task WHERE id = $1 AND scope_id = $2 FOR UPDATE
-	`, params.TaskID, params.ScopeID).Scan(&cancelledAt, &currentClaimID)
+		SELECT cancelled_at, current_claim_id, current_escalation_id
+		FROM task WHERE id = $1 AND scope_id = $2 FOR UPDATE
+	`, params.TaskID, params.ScopeID).Scan(&cancelledAt, &currentClaimID, &currentEscalationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CancelResult{}, errParentNotFound("task", params.TaskID)
 	}
@@ -99,6 +110,16 @@ func (s taskStore) CancelTask(ctx context.Context, params CancelTaskParams) (Can
 	}
 	if cancelledAt != nil {
 		return CancelResult{}, fmt.Errorf("%w: task id %s", ErrTaskAlreadyCancelled, params.TaskID)
+	}
+
+	// Both guards run under the same row lock and before anything is
+	// written, so a claim or escalation that changed since the caller's
+	// read is never force-closed or silently superseded by this cancel.
+	if err := checkObservedClaim(params.TaskID, currentClaimID, params.ExpectedClaimID); err != nil {
+		return CancelResult{}, err
+	}
+	if err := checkObservedEscalation(params.TaskID, currentEscalationID, params.ExpectedEscalationID); err != nil {
+		return CancelResult{}, err
 	}
 
 	// forceCloseClaimTx re-acquires the same row lock (a no-op on the same

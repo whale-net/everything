@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/slice"
@@ -137,8 +138,9 @@ func TestRequeueTaskHandler_UnknownField_Rejected(t *testing.T) {
 
 // TestRequeueTaskHandler_StoreRejection_MappedToStatus proves
 // writeRequeueStoreError maps RequeueTask's own named rejections onto the
-// right status: ErrTaskNotEscalated and ErrTaskCancelled to 409,
-// ErrNotFound to 400 -- never a 500 for any of them.
+// right status: ErrTaskNotEscalated, ErrTaskCancelled and the
+// observed-state guard's ErrObservedStateMismatch to 409, ErrNotFound to
+// 400 -- never a 500 for any of them.
 func TestRequeueTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err  error
@@ -146,7 +148,10 @@ func TestRequeueTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 	}{
 		"not escalated": {store.ErrTaskNotEscalated, http.StatusConflict},
 		"cancelled":     {store.ErrTaskCancelled, http.StatusConflict},
-		"not found":     {store.ErrNotFound, http.StatusBadRequest},
+		// The observed-state guard's own refusal gets the same 409 as every
+		// other guarded intervention, and never a 500.
+		"observed state mismatch": {store.ErrObservedStateMismatch, http.StatusConflict},
+		"not found":               {store.ErrNotFound, http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sessions, _, sessionIDStr := newTestSession(t)
@@ -158,4 +163,33 @@ func TestRequeueTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
 		})
 	}
+}
+
+// TestRequeueTaskHandler_ExpectedEscalationID_PassThroughAndOptional covers
+// the observed-state guard's HTTP surface: expected_escalation_id is decoded
+// off the body and handed to the store as the escalation the caller's row
+// observed, and omitting it leaves the requeue unguarded exactly as before.
+func TestRequeueTaskHandler_ExpectedEscalationID_PassThroughAndOptional(t *testing.T) {
+	sessions, _, sessionIDStr := newTestSession(t)
+	escalationID := uuid.New()
+
+	t.Run("supplied", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		assembler := work.NewAssembler(tasks, slice.NewQuerier(nil))
+
+		doRequeueTaskRequest(t, handlers.RequeueTaskHandler(tasks, assembler), sessions, sessionIDStr, uuid.New().String(),
+			`{"expected_escalation_id":"`+escalationID.String()+`"}`)
+
+		require.NotNil(t, tasks.gotRequeueParams.ExpectedEscalationID, "the body's expected_escalation_id must reach the store")
+		assert.Equal(t, escalationID, *tasks.gotRequeueParams.ExpectedEscalationID)
+	})
+
+	t.Run("omitted", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		assembler := work.NewAssembler(tasks, slice.NewQuerier(nil))
+
+		doRequeueTaskRequest(t, handlers.RequeueTaskHandler(tasks, assembler), sessions, sessionIDStr, uuid.New().String(), `{}`)
+
+		assert.Nil(t, tasks.gotRequeueParams.ExpectedEscalationID, "an omitted expected_escalation_id must leave the requeue unguarded, exactly as today")
+	})
 }

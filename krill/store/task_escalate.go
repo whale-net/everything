@@ -105,6 +105,13 @@ type EscalateResult struct {
 //     escalation_event_id=NULL -- the freshly-inserted
 //     task_escalation_event from step 2 is this call's own result, not a
 //     reference back to itself; only requeue names one).
+//
+// Between steps 1 and 2, EscalateParams.ExpectedClaimID is compared
+// against the claim just read (checkObservedClaim, task_observed_state.go),
+// still under the same row lock and before anything is written: a non-nil
+// id that is no longer the task's current claim -- including the task
+// holding none -- is refused with ErrObservedStateMismatch. Nil is
+// unguarded, exactly as before.
 func (s taskStore) EscalateTask(ctx context.Context, params EscalateParams) (EscalateResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -129,6 +136,12 @@ func (s taskStore) EscalateTask(ctx context.Context, params EscalateParams) (Esc
 	}
 	if cancelledAt != nil {
 		return EscalateResult{}, fmt.Errorf("%w: task id %s", ErrTaskCancelled, params.TaskID)
+	}
+	// The guard runs on the claim just read, under the same row lock and
+	// before the escalation is recorded, so a claim that changed since the
+	// caller's read is never force-closed by this call.
+	if err := checkObservedClaim(params.TaskID, currentClaimID, params.ExpectedClaimID); err != nil {
+		return EscalateResult{}, err
 	}
 
 	escalation, err := recordEscalationTx(ctx, tx, RecordEscalationParams{

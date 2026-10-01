@@ -61,6 +61,15 @@ func countRows(t *testing.T, ctx context.Context, db *dbtest.Postgres, table str
 	return count
 }
 
+// expireTaskLease backdates taskID's lease so the next ClaimTask treats the
+// open claim as lapsed and reclaims it -- the way a claim id the caller
+// observed goes stale between a console read and the write that follows it.
+func expireTaskLease(t *testing.T, ctx context.Context, db *dbtest.Postgres, taskID uuid.UUID) {
+	t.Helper()
+	_, err := db.Pool.Exec(ctx, `UPDATE task SET lease_expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, taskID)
+	require.NoError(t, err)
+}
+
 // TestTaskStore_ClaimTask_UnclaimedTaskAllDepsDone_Succeeds is issue
 // #2722's Testing section item 1: claiming an unclaimed task with all
 // dependencies Done succeeds, mints a lease, records exactly one

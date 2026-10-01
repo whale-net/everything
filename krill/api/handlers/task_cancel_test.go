@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/slice"
@@ -135,15 +136,19 @@ func TestCancelTaskHandler_UnknownField_Rejected(t *testing.T) {
 
 // TestCancelTaskHandler_StoreRejection_MappedToStatus proves
 // writeCancelStoreError maps CancelTask's own named rejections onto the
-// right status: ErrTaskAlreadyCancelled to 409, ErrNotFound to 400 --
-// never a 500 for either.
+// right status: ErrTaskAlreadyCancelled and the observed-state guard's
+// ErrObservedStateMismatch to 409, ErrNotFound to 400 -- never a 500 for
+// either.
 func TestCancelTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err  error
 		want int
 	}{
 		"already cancelled": {store.ErrTaskAlreadyCancelled, http.StatusConflict},
-		"not found":         {store.ErrNotFound, http.StatusBadRequest},
+		// The observed-state guard's own refusal gets the same 409 as every
+		// other guarded intervention, and never a 500.
+		"observed state mismatch": {store.ErrObservedStateMismatch, http.StatusConflict},
+		"not found":               {store.ErrNotFound, http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sessions, _, sessionIDStr := newTestSession(t)
@@ -155,4 +160,49 @@ func TestCancelTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
 		})
 	}
+}
+
+// TestCancelTaskHandler_ExpectedIDs_PassThroughAndOptional covers the
+// observed-state guard's HTTP surface on cancel, the one call that takes
+// both ids: a Claimed-row cancel supplies expected_claim_id, an
+// Escalated-row cancel expected_escalation_id, and omitting either leaves
+// that half unguarded exactly as before.
+func TestCancelTaskHandler_ExpectedIDs_PassThroughAndOptional(t *testing.T) {
+	sessions, _, sessionIDStr := newTestSession(t)
+	claimID := uuid.New()
+	escalationID := uuid.New()
+
+	t.Run("claim id supplied", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		assembler := work.NewAssembler(tasks, slice.NewQuerier(nil))
+
+		doCancelTaskRequest(t, handlers.CancelTaskHandler(tasks, assembler), sessions, sessionIDStr, uuid.New().String(),
+			`{"expected_claim_id":"`+claimID.String()+`"}`)
+
+		require.NotNil(t, tasks.gotCancelParams.ExpectedClaimID)
+		assert.Equal(t, claimID, *tasks.gotCancelParams.ExpectedClaimID)
+		assert.Nil(t, tasks.gotCancelParams.ExpectedEscalationID, "a Claimed-row cancel guards the claim only")
+	})
+
+	t.Run("escalation id supplied", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		assembler := work.NewAssembler(tasks, slice.NewQuerier(nil))
+
+		doCancelTaskRequest(t, handlers.CancelTaskHandler(tasks, assembler), sessions, sessionIDStr, uuid.New().String(),
+			`{"expected_escalation_id":"`+escalationID.String()+`"}`)
+
+		require.NotNil(t, tasks.gotCancelParams.ExpectedEscalationID)
+		assert.Equal(t, escalationID, *tasks.gotCancelParams.ExpectedEscalationID)
+		assert.Nil(t, tasks.gotCancelParams.ExpectedClaimID, "an Escalated-row cancel guards the escalation only")
+	})
+
+	t.Run("both omitted", func(t *testing.T) {
+		tasks := &fakeTaskStore{}
+		assembler := work.NewAssembler(tasks, slice.NewQuerier(nil))
+
+		doCancelTaskRequest(t, handlers.CancelTaskHandler(tasks, assembler), sessions, sessionIDStr, uuid.New().String(), `{}`)
+
+		assert.Nil(t, tasks.gotCancelParams.ExpectedClaimID, "omitted ids must leave the cancel unguarded, exactly as today")
+		assert.Nil(t, tasks.gotCancelParams.ExpectedEscalationID)
+	})
 }

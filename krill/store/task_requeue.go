@@ -98,6 +98,14 @@ type RequeueResult struct {
 //  5. Appends one task_intervention_event row (action='requeue',
 //     escalation_event_id naming the resolved escalation).
 //
+// Between steps 1 and 2, RequeueParams.ExpectedEscalationID is compared
+// against the escalation just read (checkObservedEscalation,
+// task_observed_state.go), still under the same row lock and before
+// anything is written: a non-nil id that is no longer the task's current
+// escalation -- including the task holding none -- is refused with
+// ErrObservedStateMismatch, ahead of ErrTaskNotEscalated. Nil is
+// unguarded, exactly as before.
+//
 // Does NOT append a task_attempt row and does NOT increment
 // attempt_count -- requeuing is explicitly not an attempt (FR6, #2851
 // Assumption 7). Does NOT touch task.current_lane -- every escalation
@@ -129,6 +137,12 @@ func (s taskStore) RequeueTask(ctx context.Context, params RequeueParams) (Reque
 	}
 	if cancelledAt != nil {
 		return RequeueResult{}, fmt.Errorf("%w: task id %s", ErrTaskCancelled, params.TaskID)
+	}
+	// The guard runs before ErrTaskNotEscalated, so a requeue carrying an
+	// escalation id the task no longer holds reads as "the state changed
+	// since you looked" rather than as the action being illegal.
+	if err := checkObservedEscalation(params.TaskID, currentEscalationID, params.ExpectedEscalationID); err != nil {
+		return RequeueResult{}, err
 	}
 	if currentEscalationID == nil {
 		return RequeueResult{}, fmt.Errorf("%w: task id %s", ErrTaskNotEscalated, params.TaskID)
