@@ -41,6 +41,7 @@ go_test(
         "dangling_reference_helpers_test.go",
         "dangling_reference_test.go",
         "fake_source_test.go",
+        "current_state_nongoals_test.go",
         "render_test.go",
         "milestone_notes_test.go",
         "stamp_test.go",
