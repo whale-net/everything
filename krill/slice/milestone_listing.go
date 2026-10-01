@@ -318,6 +318,9 @@ type DeferralDTO struct {
 	ID          string `json:"id"`
 	Body        string `json:"body"`
 	Destination string `json:"destination"`
+
+	// CapabilityID is the cited Feature id, omitted when the deferral cites none.
+	CapabilityID string `json:"capability_id,omitempty"`
 }
 
 // NewDeferralDTOs converts store rows to DeferralDTOs, never nil so the
@@ -326,6 +329,9 @@ func NewDeferralDTOs(deferrals []store.MilestoneDeferral) []DeferralDTO {
 	out := make([]DeferralDTO, len(deferrals))
 	for i, d := range deferrals {
 		out[i] = DeferralDTO{ID: d.ID.String(), Body: d.Body, Destination: d.Destination}
+		if d.CapabilityID != nil {
+			out[i].CapabilityID = d.CapabilityID.String()
+		}
 	}
 	return out
 }
