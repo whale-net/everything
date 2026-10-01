@@ -377,6 +377,9 @@ type LBProtectsFeature struct {
 	DecisionID uuid.UUID
 	FeatureID  uuid.UUID
 	CreatedAt  time.Time
+	// Rationale is the optional free-text reason the decision protects the
+	// Feature; empty when none was recorded.
+	Rationale string
 }
 
 // MilestoneStatus discriminates `milestone_status_event.status` (migration

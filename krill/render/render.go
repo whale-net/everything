@@ -862,7 +862,8 @@ func derefString(p *string) string {
 type laterEntry struct {
 	Capability string // "C<n>"
 	Name       string
-	Protectors []string // "LB<n>"
+	Protectors []string // "LB<n>", each suffixed " (<rationale>)" only when a multi-LB entry carries rationales
+	Rationale  string   // sole protector's rationale, if any
 }
 
 // renderLaterCoverage lists every Feature with no active delivers edge from
@@ -909,19 +910,34 @@ func renderLaterCoverage(ctx context.Context, src Source, scopeID, productID uui
 	for _, d := range doc.Decisions {
 		decisionNumbers[d.ID] = d.DisplayNumber
 	}
-	protectors := map[uuid.UUID][]int{}
+	type protector struct {
+		num       int
+		rationale string
+	}
+	protectors := map[uuid.UUID][]protector{}
 	for _, e := range edges {
 		if n, ok := decisionNumbers[e.DecisionID]; ok {
-			protectors[e.FeatureID] = append(protectors[e.FeatureID], n)
+			protectors[e.FeatureID] = append(protectors[e.FeatureID], protector{n, strings.TrimSpace(e.Rationale)})
 		}
 	}
 
 	sort.Slice(later, func(i, j int) bool { return later[i].DisplayNumber < later[j].DisplayNumber })
 	out := make([]laterEntry, len(later))
 	for i, f := range later {
-		nums := protectors[f.ID]
-		sort.Ints(nums)
-		out[i] = laterEntry{Capability: fmt.Sprintf("C%d", f.DisplayNumber), Name: f.Name, Protectors: prefixEach("LB", nums)}
+		ps := protectors[f.ID]
+		sort.Slice(ps, func(a, b int) bool { return ps[a].num < ps[b].num })
+		entry := laterEntry{Capability: fmt.Sprintf("C%d", f.DisplayNumber), Name: f.Name}
+		for _, p := range ps {
+			label := fmt.Sprintf("LB%d", p.num)
+			switch {
+			case len(ps) == 1:
+				entry.Rationale = p.rationale
+			case p.rationale != "":
+				label += " (" + p.rationale + ")"
+			}
+			entry.Protectors = append(entry.Protectors, label)
+		}
+		out[i] = entry
 	}
 	return out, nil
 }
@@ -938,6 +954,9 @@ func renderLaterCoverageMD(b *strings.Builder, later []laterEntry) {
 			b.WriteString("uncovered\n")
 		} else {
 			b.WriteString(strings.Join(e.Protectors, ", "))
+			if e.Rationale != "" {
+				b.WriteString(" — " + e.Rationale)
+			}
 			b.WriteString("\n")
 		}
 	}

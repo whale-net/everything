@@ -94,3 +94,40 @@ func TestRender_RoadmapLaterCoverage(t *testing.T) {
 	assert.Contains(t, files.RoadmapMD, "- C3 — Bare: uncovered")
 	assert.NotContains(t, files.RoadmapMD, "Delivered:")
 }
+
+// A protects edge's rationale renders after its LB; multiple protectors get
+// per-LB parentheticals, and an edge without one renders as before.
+func TestRender_LaterCoverage_Rationale(t *testing.T) {
+	scopeID, productID, fsID := uuid.New(), uuid.New(), uuid.New()
+	mk := func(name string, n int) slice.FeatureEntity {
+		f := newFeature(name, n)
+		f.FeatureSetID = fsID
+		return f
+	}
+	single, multi, plain := mk("Single", 1), mk("Multi", 2), mk("Plain", 3)
+	lb := func(n int) slice.DecisionEntity {
+		return slice.DecisionEntity{EntityRef: slice.EntityRef{ID: uuid.New(), RevisionID: uuid.New()}, Name: "D", DisplayNumber: n}
+	}
+	lb1, lb3 := lb(1), lb(3)
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "W", Vision: "v"},
+			FeatureSets:   []slice.FeatureSetEntity{{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core"}},
+			Features:      []slice.FeatureEntity{single, multi, plain},
+			Decisions:     []slice.DecisionEntity{lb1, lb3},
+		},
+		Protects: []store.LBProtectsFeature{
+			{ID: uuid.New(), DecisionID: lb3.ID, FeatureID: single.ID, Rationale: "authorize the person"},
+			{ID: uuid.New(), DecisionID: lb3.ID, FeatureID: multi.ID, Rationale: "r3"},
+			{ID: uuid.New(), DecisionID: lb1.ID, FeatureID: multi.ID, Rationale: "r1"},
+			{ID: uuid.New(), DecisionID: lb1.ID, FeatureID: plain.ID},
+		},
+	}
+	files, err := render.Render(context.Background(), src, scopeID, productID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.RoadmapMD, "- C1 — Single: LB3 — authorize the person\n")
+	assert.Contains(t, files.RoadmapMD, "- C2 — Multi: LB1 (r1), LB3 (r3)\n")
+	assert.Contains(t, files.RoadmapMD, "- C3 — Plain: LB1\n", "no rationale renders byte-identical to before")
+}
