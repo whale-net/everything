@@ -360,7 +360,7 @@ func (f *fakeAmendStore) CurrentPlacement(ctx context.Context, entityKind string
 	return f.current, nil
 }
 
-func (f *fakeAmendStore) AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string) (store.MilestoneDeferral, error) {
+func (f *fakeAmendStore) AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string, _ *uuid.UUID) (store.MilestoneDeferral, error) {
 	if err := f.record(amendCall{kind: "deferral", id: id, body: &body, destination: destination}); err != nil {
 		return store.MilestoneDeferral{}, err
 	}

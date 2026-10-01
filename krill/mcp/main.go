@@ -238,6 +238,8 @@ func run() error {
 	tools.RegisterDeliveryShipmentAll(designReg, sessions, entities.DeliveryShipments(), entities.MilestoneStatus(), querier)
 	tools.RegisterRecutAll(designReg, sessions, entities.Recut(), querier)
 	tools.RegisterAbandonAll(designReg, sessions, entities.Abandon())
+	// add_lb_protects/withdraw_lb_protects/list_protecting_decisions: LB -> Feature protects association.
+	tools.RegisterLBProtectsAll(designReg, sessions, entities.LBProtects(), entities.Decisions())
 	tools.RegisterGetTaskPayload(designReg, entities.Tasks(), assembler)
 	// list_tasks: ungated per-milestone/milepebble task discovery, feeding get_task its ids -- also registered on workReg below, the same shared-mount exception get_task/abandon_task get.
 	tools.RegisterListTasks(designReg, entities.Tasks())

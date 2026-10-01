@@ -17,6 +17,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -475,7 +476,7 @@ func TestAmendMilestone_LeavesDeliveryAxisUntouched(t *testing.T) {
 	onBehalf := acting
 	require.NoError(t, s.MilestoneAuthoring().AddDelivers(ctx, scopeID, milestone.ID, feature.ID, acting, onBehalf))
 	require.NoError(t, s.MilestoneAuthoring().AddMustNotForeclose(ctx, scopeID, milestone.ID, decision.ID, acting, onBehalf))
-	_, err = s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, onBehalf)
+	_, err = s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", nil, acting, onBehalf)
 	require.NoError(t, err)
 	_, err = s.MilestoneStatus().RecordTransition(ctx, scopeID, milestone.ID, store.MilestoneStatusInProgress, nil, acting, onBehalf)
 	require.NoError(t, err)
@@ -802,11 +803,11 @@ func TestAmendDeferral_SupersedesUnderTheSameID(t *testing.T) {
 	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
 	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
 
-	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 stays unbuilt until M2", "M2", acting, acting)
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 stays unbuilt until M2", "M2", nil, acting, acting)
 	require.NoError(t, err)
 	assert.Nil(t, created.ValidTo, "a freshly added deferral is its own first, current revision")
 
-	amended, err := s.Amend().AmendDeferral(ctx, created.ID, "C4 is unbuilt until M2, which now also carries C5", "M2")
+	amended, err := s.Amend().AmendDeferral(ctx, created.ID, "C4 is unbuilt until M2, which now also carries C5", "M2", nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, created.ID, amended.ID, "amend must never mint a new surrogate id (LB2) -- a corrected deferral is the same deferral")
@@ -851,15 +852,15 @@ func TestAmendDeferral_SuccessiveAmends_ReadsReturnExactlyOneRow(t *testing.T) {
 
 	// A sibling deferral, so "exactly one row" is not satisfied trivially by
 	// an over-aggressive filter that drops everything.
-	other, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, acting)
+	other, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", nil, acting, acting)
 	require.NoError(t, err)
 
-	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 stale", "M2", acting, acting)
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "C4 stale", "M2", nil, acting, acting)
 	require.NoError(t, err)
 
-	_, err = s.Amend().AmendDeferral(ctx, created.ID, "C4 corrected once", "M2")
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "C4 corrected once", "M2", nil)
 	require.NoError(t, err)
-	_, err = s.Amend().AmendDeferral(ctx, created.ID, "C4 corrected twice", "M3")
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "C4 corrected twice", "M3", nil)
 	require.NoError(t, err)
 
 	list, err := s.MilestoneAuthoring().ListDeferrals(ctx, milestone.ID)
@@ -913,7 +914,7 @@ func TestAmendDeferral_AmendMilestoneLeavesItAlone(t *testing.T) {
 	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
 	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
 
-	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, acting)
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", nil, acting, acting)
 	require.NoError(t, err)
 
 	_, err = s.Amend().AmendMilestone(ctx, milestone.ID, "M1 (renamed)", nil)
@@ -937,10 +938,10 @@ func TestAmendDeferral_EmptyDestinationRefused(t *testing.T) {
 	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
 	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
 
-	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, acting)
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", nil, acting, acting)
 	require.NoError(t, err)
 
-	_, err = s.Amend().AmendDeferral(ctx, created.ID, "the UI rewrite, restated", "")
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "the UI rewrite, restated", "", nil)
 	assert.Error(t, err, "FR1: every deferred entry must cite where it went -- an amend may not write the row AddDeferral refuses")
 	assert.Contains(t, err.Error(), "FR1", "the refusal must name the rule it enforces, as AddDeferral's does")
 
@@ -962,14 +963,14 @@ func TestAmendDeferral_UnknownIDIsNotFound(t *testing.T) {
 	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
 	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
 
-	_, err := s.Amend().AmendDeferral(ctx, uuid.New(), "never existed", "M2")
+	_, err := s.Amend().AmendDeferral(ctx, uuid.New(), "never existed", "M2", nil)
 	assert.ErrorIs(t, err, store.ErrNotFound, "amending an id that names no deferral row is ErrNotFound, as every other Amend* method reports")
 
-	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", acting, acting)
+	created, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "the UI rewrite", "Later", nil, acting, acting)
 	require.NoError(t, err)
-	_, err = s.Amend().AmendDeferral(ctx, created.ID, "amended once", "Later")
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "amended once", "Later", nil)
 	require.NoError(t, err)
-	_, err = s.Amend().AmendDeferral(ctx, created.ID, "amended twice", "Later")
+	_, err = s.Amend().AmendDeferral(ctx, created.ID, "amended twice", "Later", nil)
 	require.NoError(t, err, "an already-amended id still names a current row, so it is still amendable")
 
 	var total, current int
@@ -1038,6 +1039,116 @@ func TestAmendMilepebble_RevisesNameAndOutcome_LeavesBudgetHistoryAndDeliveryUnt
 
 	_, err = s.Amend().AmendMilepebble(ctx, milestone.ID, "nope", nil)
 	require.ErrorIs(t, err, store.ErrNotFound, "a milestone id is not a milepebble")
+}
+
+// TestDeferralCapability_ResolvesCurrentCnAtReadTime proves the cited
+// capability's Cn is read live, never stored on the deferral, and that a
+// deferral without a capability is unchanged.
+func TestDeferralCapability_ResolvesCurrentCnAtReadTime(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
+	product, err := s.Products().Create(ctx, scopeID, "Capability Product", "")
+	require.NoError(t, err)
+	fs, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "Caps", nil)
+	require.NoError(t, err)
+	feature, err := s.Features().Create(ctx, scopeID, fs.ID, "Cited capability", nil)
+	require.NoError(t, err)
+
+	cited, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "cites a capability", "M2", &feature.ID, acting, acting)
+	require.NoError(t, err)
+	plain, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "cites nothing", "M2", nil, acting, acting)
+	require.NoError(t, err)
+
+	read := func() map[uuid.UUID]store.MilestoneDeferral {
+		ds, err := s.MilestoneAuthoring().ListDeferrals(ctx, milestone.ID)
+		require.NoError(t, err)
+		out := map[uuid.UUID]store.MilestoneDeferral{}
+		for _, d := range ds {
+			out[d.ID] = d
+		}
+		return out
+	}
+
+	got := read()
+	require.NotNil(t, got[cited.ID].CapabilityDisplayNumber)
+	assert.Equal(t, feature.DisplayNumber, *got[cited.ID].CapabilityDisplayNumber)
+	assert.Nil(t, got[plain.ID].CapabilityID)
+	assert.Nil(t, got[plain.ID].CapabilityDisplayNumber, "a deferral with no capability-id behaves as before")
+
+	_, err = db.Pool.Exec(ctx, `UPDATE feature SET display_number = 99 WHERE id = $1 AND valid_to IS NULL`, feature.ID)
+	require.NoError(t, err)
+	got = read()
+	require.NotNil(t, got[cited.ID].CapabilityDisplayNumber)
+	assert.Equal(t, 99, *got[cited.ID].CapabilityDisplayNumber, "renumbering the capability changes what the deferral reads")
+
+	// An amend with no capability-id keeps the citation.
+	amended, err := s.Amend().AmendDeferral(ctx, cited.ID, "reworded", "M2", nil)
+	require.NoError(t, err)
+	require.NotNil(t, amended.CapabilityID)
+	assert.Equal(t, feature.ID, *amended.CapabilityID)
+
+	// An unknown capability is refused.
+	bogus := uuid.New()
+	_, err = s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "bad", "M2", &bogus, acting, acting)
+	require.Error(t, err)
+}
+
+func TestMilestoneNotes_SetReplaceAndCarryForwardAcrossAmend(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "")
+	require.NoError(t, err)
+	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M9", "outcome", nil, acting, acting)
+	require.NoError(t, err)
+
+	// Unset by default.
+	got, _, _, _, err := s.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Notes)
+
+	// Large, markup-heavy notes round-trip byte for byte.
+	big := strings.Repeat("## why <b>&amp;</b> `x` | y\n", 6000)
+	require.GreaterOrEqual(t, len(big), 100*1024)
+	require.NoError(t, s.MilestoneAuthoring().SetMilestoneNotes(ctx, milestone.ID, big, acting, acting))
+	got, _, _, _, err = s.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Notes)
+	assert.True(t, big == *got.Notes, "notes must round-trip unmodified")
+
+	// Replace.
+	require.NoError(t, s.MilestoneAuthoring().SetMilestoneNotes(ctx, milestone.ID, "v2 notes", acting, acting))
+
+	// Amend carries notes forward; the closed revision keeps its own.
+	amended, err := s.Amend().AmendMilestone(ctx, milestone.ID, "M9 (renamed)", nil)
+	require.NoError(t, err)
+	require.NotNil(t, amended.Notes)
+	assert.Equal(t, "v2 notes", *amended.Notes)
+
+	var closedNotes *string
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT notes FROM milestone_ref WHERE id = $1 AND valid_to IS NOT NULL`, milestone.ID).Scan(&closedNotes))
+	require.NotNil(t, closedNotes)
+	assert.Equal(t, "v2 notes", *closedNotes)
+
+	// Setting after an amend only touches the current revision.
+	require.NoError(t, s.MilestoneAuthoring().SetMilestoneNotes(ctx, milestone.ID, "v3 notes", acting, acting))
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT notes FROM milestone_ref WHERE id = $1 AND valid_to IS NOT NULL`, milestone.ID).Scan(&closedNotes))
+	assert.Equal(t, "v2 notes", *closedNotes)
+
+	// Clearing returns to unset; unknown id is ErrNotFound.
+	require.NoError(t, s.MilestoneAuthoring().SetMilestoneNotes(ctx, milestone.ID, "", acting, acting))
+	got, _, _, _, err = s.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Notes)
+	err = s.MilestoneAuthoring().SetMilestoneNotes(ctx, uuid.New(), "x", acting, acting)
+	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
 // A current-state survey is a new SCD2 revision under the same id, survives

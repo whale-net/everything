@@ -104,3 +104,12 @@ func plainRowExists(ctx context.Context, q txQuerier, table string, id, scopeID 
 	}
 	return exists, nil
 }
+
+// notFoundOr maps pgx.ErrNoRows to ErrNotFound naming table/id and wraps
+// every other error.
+func notFoundOr(err error, table string, id uuid.UUID) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errParentNotFound(table, id)
+	}
+	return fmt.Errorf("look up %s: %w", table, err)
+}

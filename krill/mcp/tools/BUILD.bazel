@@ -21,6 +21,7 @@ go_library(
         "entity_note.go",
         "milestone.go",
         "milestone_status.go",
+        "lb_protects.go",
         "persona_nongoal.go",
         "product.go",
         "recut.go",

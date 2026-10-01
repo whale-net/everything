@@ -95,7 +95,7 @@ var _ MilestoneStore = milestoneStore{}
 // ValidFrom/ValidTo -- see scanMilestoneRef and MilestoneRef's doc
 // comment (models.go) for why the subject-pair and parent columns may be
 // NULL.
-const milestoneRefColumns = `revision_id, id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id, ` +
+const milestoneRefColumns = `revision_id, id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id, notes, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at, ` +
 	`valid_from, valid_to`
@@ -107,7 +107,7 @@ func scanMilestoneRef(row pgx.Row) (MilestoneRef, error) {
 	var actingIss, actingSub, actingKind sql.NullString
 	var onBehalfOfIss, onBehalfOfSub, onBehalfOfKind sql.NullString
 	err := row.Scan(
-		&m.RevisionID, &m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position, &parentMilestoneID,
+		&m.RevisionID, &m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position, &parentMilestoneID, &m.Notes,
 		&actingIss, &actingSub, &actingKind,
 		&onBehalfOfIss, &onBehalfOfSub, &onBehalfOfKind,
 		&m.CreatedAt, &m.ValidFrom, &m.ValidTo,

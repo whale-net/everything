@@ -84,9 +84,11 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, ide
 
 	mux.Handle("POST /milestones", gate(handlers.CreateMilestoneHandler(entities.MilestoneAuthoring())))
 	mux.Handle("POST /milestones/{id}/fr-budget", gate(handlers.SetFRBudgetHandler(entities.MilestoneAuthoring())))
+	mux.Handle("POST /milestones/{id}/notes", gate(handlers.SetMilestoneNotesHandler(entities.MilestoneAuthoring())))
 	mux.Handle("POST /milestones/{id}/delivers", gate(handlers.AddDeliversHandler(entities.MilestoneAuthoring())))
 	mux.Handle("POST /milestones/{id}/must-not-foreclose", gate(handlers.AddMustNotForecloseHandler(entities.MilestoneAuthoring())))
 	mux.Handle("POST /milestones/{id}/deferrals", gate(handlers.AddDeferralHandler(entities.MilestoneAuthoring())))
+	mux.Handle("POST /milestones/{id}/ships-alongside", gate(handlers.AddShipsAlongsideHandler(entities.MilestoneAuthoring())))
 	mux.HandleFunc("GET /milestones/{id}", handlers.GetMilestoneHandler(entities.MilestoneAuthoring()))
 
 	mux.Handle("POST /milestones/{id}/milepebbles", gate(handlers.CreateMilepebbleHandler(entities.MilestoneAuthoring())))

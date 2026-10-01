@@ -132,7 +132,7 @@ func (f recordingAmendStore) CurrentPlacement(_ context.Context, entityKind stri
 	return f.current, nil
 }
 
-func (f recordingAmendStore) AmendDeferral(_ context.Context, id uuid.UUID, body, destination string) (store.MilestoneDeferral, error) {
+func (f recordingAmendStore) AmendDeferral(_ context.Context, id uuid.UUID, body, destination string, _ *uuid.UUID) (store.MilestoneDeferral, error) {
 	*f.calls = append(*f.calls, amendCall{"deferral", id, body, nil})
 	return store.MilestoneDeferral{ID: id, Body: body, Destination: destination}, nil
 }
