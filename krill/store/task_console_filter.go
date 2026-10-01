@@ -10,6 +10,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -58,6 +60,33 @@ func (f ConsoleFilter) Filters() FilterSet {
 		filters = filters.WithUUID(filterKeyMilestoneID, *f.MilestoneID)
 	}
 	return filters
+}
+
+// sqlPredicate renders f as the SQL fragment a console read appends after
+// it has joined `milestone_ref` under alias refAlias, binding each set
+// filter to the next free parameter after nextParam and returning those
+// args in the same order. A milestone filter names one container and
+// keeps its milepebbles' rows too, which is why it matches either the
+// container's own id or the parent a milepebble is cut from.
+//
+// An un-narrowed read returns an empty fragment and no args, so its
+// query is byte-for-byte what it was before ConsoleFilter existed.
+func (f ConsoleFilter) sqlPredicate(refAlias string, nextParam int) (string, []any) {
+	var clauses []string
+	var args []any
+	if f.ProductID != nil {
+		clauses = append(clauses, fmt.Sprintf("AND %s.product_id = $%d", refAlias, nextParam))
+		args = append(args, *f.ProductID)
+		nextParam++
+	}
+	if f.MilestoneID != nil {
+		clauses = append(clauses, fmt.Sprintf("AND (%s.id = $%d OR %s.parent_milestone_id = $%d)", refAlias, nextParam, refAlias, nextParam))
+		args = append(args, *f.MilestoneID)
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return "\n\t\t\t" + strings.Join(clauses, "\n\t\t\t"), args
 }
 
 // guardConsoleFilter refuses a narrowing that names a Product or delivery

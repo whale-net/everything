@@ -259,12 +259,15 @@ go_test(
 # register exactly {list_products, list_tasks}, and each call maps its
 # (in-memory fake) store result onto the shared handlers wire shape.
 # entity_note_registration_test.go covers list_entity_notes the same way,
-# and persona_nongoal_registration_test.go covers
-# RegisterListPersonas/RegisterListNonGoals the same way, all three sharing
-# this file's operatorPersona/discoveryTextOf helpers.
+# persona_nongoal_registration_test.go covers RegisterListPersonas/
+# RegisterListNonGoals the same way, and console_filter_registration_test.go
+# covers the four console queue reads' product/milestone narrowing and their
+# claim_id/escalation_id row identity (FR a6cd917f) the same way, all four
+# sharing this file's operatorPersona/discoveryTextOf helpers.
 go_test(
     name = "discovery_registration_test",
     srcs = [
+        "console_filter_registration_test.go",
         "discovery_registration_test.go",
         "bounded_list_reads_test.go",
         "entity_note_registration_test.go",

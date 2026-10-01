@@ -1002,3 +1002,380 @@ func TestTaskStore_ListEscalatedTasks_RowSizeDoesNotGrowWithHistory(t *testing.T
 	require.NoError(t, err)
 	assert.InDelta(t, len(shortJSON), len(longJSON), 10, "a task's row size must not grow with the size of its attempt/verdict/note history")
 }
+
+// consoleFilterTestProduct creates one Product with a single milestone and
+// returns both ids -- the ConsoleFilter tests' fixture, which needs two
+// products inside one scope and therefore cannot reuse
+// task_integration_test.go's taskTestWorld (which seeds exactly one and
+// does not hand back its product id).
+func consoleFilterTestProduct(t *testing.T, ctx context.Context, s *store.Store, scopeID uuid.UUID, name string, self store.Subject) (productID, milestoneID uuid.UUID) {
+	t.Helper()
+	product, err := s.Products().Create(ctx, scopeID, name, "a product to narrow against")
+	require.NoError(t, err)
+	return product.ID, consoleFilterTestMilestone(t, ctx, s, scopeID, product.ID, name, self)
+}
+
+// consoleFilterTestMilestone adds one more milestone to an existing
+// product -- for the second container a single-product fixture needs.
+func consoleFilterTestMilestone(t *testing.T, ctx context.Context, s *store.Store, scopeID, productID uuid.UUID, name string, self store.Subject) uuid.UUID {
+	t.Helper()
+	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, productID, "M-"+name, "ship it", nil, self, self)
+	require.NoError(t, err)
+	return milestone.ID
+}
+
+// TestTaskStore_ConsoleQueueReads_ProductFilter_KeepsOnlyThatProduct is
+// FR a6cd917f's product-narrowing half on the three task queue reads: a
+// product filter keeps exactly the rows whose task's delivery container
+// belongs to that product (a milepebble counts under the product its own
+// milestone belongs to), and an unfiltered read still returns every
+// product's rows.
+func TestTaskStore_ConsoleQueueReads_ProductFilter_KeepsOnlyThatProduct(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+
+	productA, milestoneA := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+	_, milestoneB := consoleFilterTestProduct(t, ctx, s, scopeID, "B", self)
+	milepebbleA, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestoneA, "MP-A", "a slice of A", nil, self, self)
+	require.NoError(t, err)
+	// A second, uncut milestone in the same product -- a milestone that has
+	// had a milepebble cut can no longer carry a task of its own
+	// (ErrMilestoneHasMilepebbleCut), so the uncut shape needs its own.
+	uncutA := consoleFilterTestMilestone(t, ctx, s, scopeID, productA, "A2", self)
+
+	claimedA, _ := claimTestTask(t, ctx, s, db, scopeID, milepebbleA.ID, "claimed in A", self)
+	claimTestTask(t, ctx, s, db, scopeID, milestoneB, "claimed in B", self)
+	cancelledA, _ := cancelTestTask(t, ctx, s, scopeID, uncutA, "cancelled in A", self)
+	cancelTestTask(t, ctx, s, scopeID, milestoneB, "cancelled in B", self)
+	escalatedA, _ := escalateTestTask(t, ctx, s, scopeID, milepebbleA.ID, "escalated in A", self)
+	escalateTestTask(t, ctx, s, scopeID, milestoneB, "escalated in B", self)
+
+	narrowA := store.ConsoleFilter{ProductID: &productA}
+
+	claimed, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: narrowA})
+	require.NoError(t, err)
+	require.Len(t, claimed.Items, 1, "a product filter must keep only that product's claimed tasks")
+	assert.Equal(t, claimedA.ID, claimed.Items[0].TaskID, "a milepebble's tasks belong to the product its milestone belongs to")
+
+	claimedAll, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	assert.Len(t, claimedAll.Items, 2, "an un-narrowed read must still return every product's rows")
+
+	cancelled, err := s.Tasks().ListCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: narrowA})
+	require.NoError(t, err)
+	require.Len(t, cancelled.Items, 1)
+	assert.Equal(t, cancelledA.ID, cancelled.Items[0].TaskID)
+
+	cancelledAll, err := s.Tasks().ListCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	assert.Len(t, cancelledAll.Items, 2, "an un-narrowed cancelled read must still return every product's rows")
+
+	escalated, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: narrowA})
+	require.NoError(t, err)
+	require.Len(t, escalated.Items, 1)
+	assert.Equal(t, escalatedA.ID, escalated.Items[0].TaskID)
+
+	escalatedAll, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	assert.Len(t, escalatedAll.Items, 2, "an un-narrowed escalated read must still return every product's rows")
+}
+
+// TestTaskStore_ConsoleQueueReads_MilestoneFilter_IncludesMilepebbles is
+// FR a6cd917f's container-narrowing half: a milestone filter keeps that
+// milestone's own tasks and its milepebbles' tasks, a milepebble filter
+// keeps only that milepebble's, and a filter never reaches outside the
+// container it names.
+func TestTaskStore_ConsoleQueueReads_MilestoneFilter_IncludesMilepebbles(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+
+	_, milestone := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+	_, other := consoleFilterTestProduct(t, ctx, s, scopeID, "B", self)
+
+	// The milestone's own task is created before the cut, since a
+	// milestone that already has a milepebble can no longer carry one.
+	onMilestone, _ := claimTestTask(t, ctx, s, db, scopeID, milestone, "on the milestone", self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone, "MP1", "a slice", nil, self, self)
+	require.NoError(t, err)
+	onMilepebble, _ := claimTestTask(t, ctx, s, db, scopeID, milepebble.ID, "on the milepebble", self)
+	claimTestTask(t, ctx, s, db, scopeID, other, "elsewhere", self)
+
+	byMilestone, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{MilestoneID: &milestone},
+	})
+	require.NoError(t, err)
+	ids := map[uuid.UUID]bool{}
+	for _, row := range byMilestone.Items {
+		ids[row.TaskID] = true
+	}
+	assert.Len(t, ids, 2, "a milestone filter must keep the milestone's own tasks and its milepebbles'")
+	assert.True(t, ids[onMilestone.ID])
+	assert.True(t, ids[onMilepebble.ID])
+
+	byMilepebble, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{MilestoneID: &milepebble.ID},
+	})
+	require.NoError(t, err)
+	require.Len(t, byMilepebble.Items, 1, "a milepebble filter must keep only that milepebble's rows")
+	assert.Equal(t, onMilepebble.ID, byMilepebble.Items[0].TaskID)
+
+	otherID := other
+	byOther, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{MilestoneID: &otherID},
+	})
+	require.NoError(t, err)
+	assert.Len(t, byOther.Items, 1, "a container filter must never reach outside the container it names")
+}
+
+// TestTaskStore_ConsoleQueueReads_FilterOutsideScope_Refused is FR
+// a6cd917f's LB1 refusal on all three task queue reads: a product or
+// container outside the caller's scope, and a container belonging to a
+// different product than the product filter it is paired with, are all
+// refused as a missing parent -- never answered with another scope's rows
+// and never as a silently empty page.
+func TestTaskStore_ConsoleQueueReads_FilterOutsideScope_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	otherScopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+
+	productHere, milestoneHere := consoleFilterTestProduct(t, ctx, s, scopeID, "here", self)
+	productThere, milestoneThere := consoleFilterTestProduct(t, ctx, s, otherScopeID, "there", self)
+
+	claimTestTask(t, ctx, s, db, scopeID, milestoneHere, "a claimed row that must never leak", self)
+	cancelTestTask(t, ctx, s, scopeID, milestoneHere, "a cancelled row that must never leak", self)
+	escalateTestTask(t, ctx, s, scopeID, milestoneHere, "an escalated row that must never leak", self)
+
+	_, milestoneElsewhere := consoleFilterTestProduct(t, ctx, s, scopeID, "elsewhere", self)
+
+	t.Run("product_outside_scope", func(t *testing.T) {
+		filter := store.ConsoleFilter{ProductID: &productThere}
+		_, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+		_, err = s.Tasks().ListCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+		_, err = s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+		_, err = s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+	})
+
+	t.Run("container_outside_scope", func(t *testing.T) {
+		filter := store.ConsoleFilter{MilestoneID: &milestoneThere}
+		_, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+		_, err = s.Tasks().ListCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+		_, err = s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+		_, err = s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+	})
+
+	t.Run("container_of_another_product", func(t *testing.T) {
+		filter := store.ConsoleFilter{ProductID: &productHere, MilestoneID: &milestoneElsewhere}
+		_, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound, "a container of another product than the one filtered for is refused against the container, the id the caller got wrong")
+		_, err = s.Tasks().ListCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+		_, err = s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+		_, err = s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: filter})
+		assert.ErrorIs(t, err, store.ErrNotFound)
+	})
+}
+
+// TestTaskStore_ListEscalatedTasks_ReasonFilter_KeepsOnlyThatReason is FR
+// a6cd917f's escalation-reason filter: each of the three reasons keeps only
+// its own rows, an absent filter keeps all three, and a reason outside the
+// enumeration is refused rather than answered as an empty page.
+func TestTaskStore_ListEscalatedTasks_ReasonFilter_KeepsOnlyThatReason(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	_, milestone := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+
+	thrash := createTestTask(t, ctx, s, scopeID, milestone, "thrash-capped", self)
+	tripThrashCap(t, ctx, s, db, scopeID, thrash.ID, self)
+
+	attempt := createTestTask(t, ctx, s, scopeID, milestone, "attempt-capped", self)
+	escalateViaAttemptCap(t, ctx, s, db, scopeID, attempt.ID, self)
+
+	manual, _ := escalateTestTask(t, ctx, s, scopeID, milestone, "manually escalated", self)
+
+	want := map[store.EscalationReason]uuid.UUID{
+		store.EscalationReasonThrashCap:  thrash.ID,
+		store.EscalationReasonAttemptCap: attempt.ID,
+		store.EscalationReasonManual:     manual.ID,
+	}
+	for reason, taskID := range want {
+		page, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+			ScopeID: scopeID,
+			Reason:  &reason,
+		})
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1, "reason %s must keep only its own row", reason)
+		assert.Equal(t, taskID, page.Items[0].TaskID)
+		assert.Equal(t, reason, page.Items[0].Reason)
+	}
+
+	unfiltered, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	assert.Len(t, unfiltered.Items, 3, "an absent reason filter must keep every reason")
+
+	unknown := store.EscalationReason("nonsense")
+	_, err = s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, Reason: &unknown})
+	assert.ErrorIs(t, err, store.ErrUnknownEscalationReason, "a reason outside the enumeration is refused, never silently an empty page")
+}
+
+// TestTaskStore_ClaimedRow_CarriesCurrentClaimID proves the claimed row's
+// new claim_id is the task's own live claim -- the id a release carrying
+// an expected claim is checked against -- and that the escalated row type
+// carries no claim id of its own.
+func TestTaskStore_ClaimedRow_CarriesCurrentClaimID(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	_, milestone := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+
+	_, claim := claimTestTask(t, ctx, s, db, scopeID, milestone, "claimed", self)
+
+	page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, claim.ID, page.Items[0].ClaimID, "the row must carry the task's current open claim id")
+	assert.NotEqual(t, uuid.Nil, page.Items[0].ClaimID)
+
+	assert.NotContains(t, escalatedTaskFieldNames(), "ClaimID", "an escalated row carries no claim id")
+}
+
+// TestTaskStore_EscalatedRow_CarriesCurrentEscalationID proves the
+// escalated row's new escalation_id is the task's own active escalation --
+// the id a requeue or cancel carrying an expected escalation is checked
+// against -- and that the claimed row type carries no escalation id.
+func TestTaskStore_EscalatedRow_CarriesCurrentEscalationID(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	_, milestone := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+
+	_, result := escalateTestTask(t, ctx, s, scopeID, milestone, "escalated", self)
+
+	page, err := s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, result.EscalationEvent.ID, page.Items[0].EscalationID, "the row must carry the task's current escalation id")
+	assert.NotEqual(t, uuid.Nil, page.Items[0].EscalationID)
+
+	assert.NotContains(t, claimedTaskFieldNames(), "EscalationID", "a claimed row carries no escalation id")
+}
+
+// claimedTaskFieldNames/escalatedTaskFieldNames list the two row types'
+// own field names, so the "carries no id of the other kind" assertions
+// above read as the one-liners they are.
+func claimedTaskFieldNames() []string {
+	t := reflect.TypeOf(store.ClaimedTaskRow{})
+	names := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		names = append(names, t.Field(i).Name)
+	}
+	return names
+}
+
+func escalatedTaskFieldNames() []string {
+	t := reflect.TypeOf(store.EscalatedTaskRow{})
+	names := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		names = append(names, t.Field(i).Name)
+	}
+	return names
+}
+
+// TestTaskStore_ConsoleQueueReads_TokenBindsFilterSet is FR 5713b7da on
+// the console queue reads: a token issued under one filter set is refused
+// when presented under another (including under none), and an un-narrowed
+// read keeps the scope-only token it issued before filters existed.
+func TestTaskStore_ConsoleQueueReads_TokenBindsFilterSet(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+
+	productA, milestoneA := consoleFilterTestProduct(t, ctx, s, scopeID, "A", self)
+	productB, milestoneB := consoleFilterTestProduct(t, ctx, s, scopeID, "B", self)
+
+	for i := 0; i < 3; i++ {
+		claimTestTask(t, ctx, s, db, scopeID, milestoneA, fmt.Sprintf("a %d", i), self)
+		claimTestTask(t, ctx, s, db, scopeID, milestoneB, fmt.Sprintf("b %d", i), self)
+	}
+
+	filtered, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{ProductID: &productA},
+		Page:          store.PageParams{PageSize: 1},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, filtered.NextToken)
+
+	same, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{ProductID: &productA},
+		Page:          store.PageParams{PageSize: 1, ContinuationToken: filtered.NextToken},
+	})
+	require.NoError(t, err, "the same filter set must resume normally")
+	assert.Len(t, same.Items, 1)
+
+	_, err = s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{ProductID: &productB},
+		Page:          store.PageParams{PageSize: 1, ContinuationToken: filtered.NextToken},
+	})
+	require.Error(t, err, "a token issued under one filter set must be refused under another, never answered as a wrong-filter page")
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch)
+
+	_, err = s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID: scopeID,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: filtered.NextToken},
+	})
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch, "a filtered token is never a valid unfiltered resume")
+
+	_, err = s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID: scopeID,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: filtered.NextToken},
+	})
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch, "the escalation-reason filter binds into ListEscalatedTasks' own filter set too, so a claimed token never resumes it")
+
+	_, err = s.Tasks().ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID: scopeID,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: filtered.NextToken},
+	})
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch)
+
+	unfiltered, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID: scopeID,
+		Page:    store.PageParams{PageSize: 1},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, unfiltered.NextToken)
+
+	_, err = store.DecodeContinuationToken(scopeID, unfiltered.NextToken)
+	assert.NoError(t, err, "an un-narrowed read must keep the scope-only token it issued before the filters existed")
+
+	_, err = s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{ProductID: &productA},
+		Page:          store.PageParams{PageSize: 1, ContinuationToken: unfiltered.NextToken},
+	})
+	assert.ErrorIs(t, err, store.ErrTokenFilterMismatch, "a scope-only token never resumes a filtered request")
+}

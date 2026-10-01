@@ -318,3 +318,175 @@ func TestTaskNoteConsoleStore_ListOpenNotes_OtherScopeRowsAbsent(t *testing.T) {
 	require.Len(t, page.Items, 1)
 	assert.Equal(t, noteA.ID, page.Items[0].NoteID)
 }
+
+// noteFilterWorld is the fixture one product's whole note-targetable graph:
+// its own id, the five NoteEntityKind tables beneath it, and the delivery
+// container plus one task a task-targeted note can name. Every entity note
+// in these tests resolves to a product by a different path, so a filter on
+// one product exercises all five at once.
+type noteFilterWorld struct {
+	productID     uuid.UUID
+	featureSetID  uuid.UUID
+	featureID     uuid.UUID
+	requirementID uuid.UUID
+	decisionID    uuid.UUID
+	milestoneID   uuid.UUID
+	taskID        uuid.UUID
+}
+
+func newNoteFilterWorld(t *testing.T, ctx context.Context, s *store.Store, scopeID uuid.UUID, name string, self store.Subject) noteFilterWorld {
+	t.Helper()
+
+	product, err := s.Products().Create(ctx, scopeID, name, "a product to narrow against")
+	require.NoError(t, err)
+	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS-"+name, nil)
+	require.NoError(t, err)
+	feature, err := s.Features().Create(ctx, scopeID, featureSet.ID, "F-"+name, nil)
+	require.NoError(t, err)
+	requirement, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "FR-"+name, nil)
+	require.NoError(t, err)
+	decision, err := s.Decisions().Create(ctx, scopeID, featureSet.ID, "LB-"+name, nil)
+	require.NoError(t, err)
+	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M-"+name, "ship it", nil, self, self)
+	require.NoError(t, err)
+	task, err := s.Tasks().CreateTask(ctx, store.CreateTaskParams{
+		ScopeID:      scopeID,
+		MilestoneID:  milestone.ID,
+		Title:        "the task under " + name,
+		LaneSequence: []store.Lane{store.LaneScaffold, store.LaneImplementation, store.LaneTesting, store.LaneValidation, store.LaneDone},
+		StartingLane: store.LaneScaffold,
+		Acting:       self,
+		OnBehalfOf:   self,
+	})
+	require.NoError(t, err)
+
+	return noteFilterWorld{
+		productID:     product.ID,
+		featureSetID:  featureSet.ID,
+		featureID:     feature.ID,
+		requirementID: requirement.ID,
+		decisionID:    decision.ID,
+		milestoneID:   milestone.ID,
+		taskID:        task.ID,
+	}
+}
+
+// recordEntityNote records one open note against a spec entity of the
+// given kind.
+func recordEntityNote(t *testing.T, ctx context.Context, s *store.Store, scopeID uuid.UUID, kind store.NoteEntityKind, entityID uuid.UUID, body string, self store.Subject) store.Note {
+	t.Helper()
+	note, err := s.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID: scopeID, EntityKind: &kind, EntityID: &entityID,
+		Kind: store.NoteKindScopeNote, Body: body, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	return note
+}
+
+// TestTaskNoteConsoleStore_ListOpenNotes_ProductFilter_ResolvesEntityProduct
+// is FR a6cd917f's product-narrowing half for open notes: a product filter
+// keeps a note on a spec entity exactly when that entity belongs to the
+// product -- resolved across all five NoteEntityKind tables, each of which
+// reaches a product by its own path -- alongside the notes on that
+// product's tasks.
+func TestTaskNoteConsoleStore_ListOpenNotes_ProductFilter_ResolvesEntityProduct(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+
+	a := newNoteFilterWorld(t, ctx, s, scopeID, "A", self)
+	b := newNoteFilterWorld(t, ctx, s, scopeID, "B", self)
+
+	// One note on each of the five NoteEntityKind tables plus the one task
+	// target, in each of the two products.
+	var wantA []store.Note
+	for _, world := range []noteFilterWorld{a, b} {
+		notes := []store.Note{
+			recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindProduct, world.productID, "product note", self),
+			recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindFeatureSet, world.featureSetID, "feature set note", self),
+			recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindFeature, world.featureID, "feature note", self),
+			recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindRequirement, world.requirementID, "requirement note", self),
+			recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindLoadBearingDecision, world.decisionID, "decision note", self),
+			recordOpenTaskNote(t, ctx, s, scopeID, world.taskID, "task note", self),
+		}
+		if world.productID == a.productID {
+			wantA = notes
+		}
+	}
+	require.Len(t, wantA, 6, "each product must contribute one note per NoteEntityKind plus one task note")
+
+	page, err := s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{ProductID: &a.productID},
+	})
+	require.NoError(t, err)
+
+	seen := map[uuid.UUID]bool{}
+	for _, row := range page.Items {
+		seen[row.NoteID] = true
+	}
+	assert.Len(t, seen, len(wantA), "a product filter must keep exactly the notes whose target belongs to that product")
+	for _, note := range wantA {
+		assert.True(t, seen[note.ID], "note %s belongs to product A and must survive the filter", note.ID)
+	}
+
+	unfiltered, err := s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	assert.Len(t, unfiltered.Items, 12, "an un-narrowed read must still return every product's notes, entity-targeted included")
+}
+
+// TestTaskNoteConsoleStore_ListOpenNotes_MilestoneFilter_ExcludesEntityNotes
+// is FR a6cd917f's container-narrowing half for open notes: a milestone
+// filter keeps that container's task notes (its milepebbles' included) and
+// excludes every entity-targeted note, which has no delivery container at
+// all.
+func TestTaskNoteConsoleStore_ListOpenNotes_MilestoneFilter_ExcludesEntityNotes(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+
+	world := newNoteFilterWorld(t, ctx, s, scopeID, "A", self)
+	elsewhere := newNoteFilterWorld(t, ctx, s, scopeID, "B", self)
+
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, world.milestoneID, "MP1", "a slice", nil, self, self)
+	require.NoError(t, err)
+	milepebbleTask, err := s.Tasks().CreateTask(ctx, store.CreateTaskParams{
+		ScopeID:      scopeID,
+		MilestoneID:  milepebble.ID,
+		Title:        "under the milepebble",
+		LaneSequence: []store.Lane{store.LaneScaffold, store.LaneImplementation, store.LaneTesting, store.LaneValidation, store.LaneDone},
+		StartingLane: store.LaneScaffold,
+		Acting:       self,
+		OnBehalfOf:   self,
+	})
+	require.NoError(t, err)
+
+	onTask := recordOpenTaskNote(t, ctx, s, scopeID, world.taskID, "on the milestone's own task", self)
+	onMilepebble := recordOpenTaskNote(t, ctx, s, scopeID, milepebbleTask.ID, "on the milepebble's task", self)
+	recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindRequirement, world.requirementID, "on a spec entity", self)
+	recordOpenTaskNote(t, ctx, s, scopeID, elsewhere.taskID, "on another container's task", self)
+
+	page, err := s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{MilestoneID: &world.milestoneID},
+	})
+	require.NoError(t, err)
+
+	seen := map[uuid.UUID]bool{}
+	for _, row := range page.Items {
+		seen[row.NoteID] = true
+	}
+	assert.Len(t, seen, 2, "a milestone filter must keep the container's own task notes and its milepebbles', and nothing else")
+	assert.True(t, seen[onTask.ID])
+	assert.True(t, seen[onMilepebble.ID])
+
+	byMilepebble, err := s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{MilestoneID: &milepebble.ID},
+	})
+	require.NoError(t, err)
+	require.Len(t, byMilepebble.Items, 1, "a milepebble filter must keep only that milepebble's task notes")
+	assert.Equal(t, onMilepebble.ID, byMilepebble.Items[0].NoteID)
+}

@@ -57,10 +57,10 @@ func parseConsoleFilter(productID, milestoneID string) (store.ConsoleFilter, err
 // entity to resolve scope from.
 type listClaimedTasksInput struct {
 	ScopeID     string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
-	ProductID   string `json:"product_id" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
-	MilestoneID string `json:"milestone_id" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
-	PageSize    int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
-	PageToken   string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+	ProductID   string `json:"product_id,omitempty" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
+	MilestoneID string `json:"milestone_id,omitempty" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
+	PageSize    int    `json:"page_size,omitempty" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken   string `json:"page_token,omitempty" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
 }
 
 // listClaimedTasksOutput mirrors krill/api/handlers/console.go's HTTP
@@ -124,10 +124,10 @@ func RegisterListClaimedTasks(reg *server.Registry, tasks store.TaskStore) {
 // gate is write-only).
 type listCancelledTasksInput struct {
 	ScopeID     string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
-	ProductID   string `json:"product_id" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
-	MilestoneID string `json:"milestone_id" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
-	PageSize    int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
-	PageToken   string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+	ProductID   string `json:"product_id,omitempty" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
+	MilestoneID string `json:"milestone_id,omitempty" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
+	PageSize    int    `json:"page_size,omitempty" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken   string `json:"page_token,omitempty" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
 }
 
 // listCancelledTasksOutput mirrors krill/api/handlers/console.go's HTTP
@@ -190,10 +190,10 @@ func RegisterListCancelledTasks(reg *server.Registry, tasks store.TaskStore) {
 // posture for the same reason (see its own doc comment).
 type listOpenNotesInput struct {
 	ScopeID     string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
-	ProductID   string `json:"product_id" jsonschema:"Optional product to narrow to; a note on a spec entity counts when that entity belongs to the product."`
-	MilestoneID string `json:"milestone_id" jsonschema:"Optional milestone or milepebble to narrow to; a note on a spec entity has none and is excluded."`
-	PageSize    int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
-	PageToken   string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+	ProductID   string `json:"product_id,omitempty" jsonschema:"Optional product to narrow to; a note on a spec entity counts when that entity belongs to the product."`
+	MilestoneID string `json:"milestone_id,omitempty" jsonschema:"Optional milestone or milepebble to narrow to; a note on a spec entity has none and is excluded."`
+	PageSize    int    `json:"page_size,omitempty" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken   string `json:"page_token,omitempty" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
 }
 
 // listOpenNotesOutput mirrors krill/api/handlers/console.go's HTTP response
@@ -256,11 +256,11 @@ func RegisterListOpenNotes(reg *server.Registry, tasks store.TaskStore) {
 // gate is write-only).
 type listEscalatedTasksInput struct {
 	ScopeID     string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
-	ProductID   string `json:"product_id" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
-	MilestoneID string `json:"milestone_id" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
-	Reason      string `json:"reason" jsonschema:"Optional escalation reason to narrow to: thrash-cap, attempt-cap or manual; absent returns every reason."`
-	PageSize    int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
-	PageToken   string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+	ProductID   string `json:"product_id,omitempty" jsonschema:"Optional product to narrow to; absent returns every product's rows in the scope."`
+	MilestoneID string `json:"milestone_id,omitempty" jsonschema:"Optional milestone or milepebble to narrow to; a milestone includes its milepebbles' rows."`
+	Reason      string `json:"reason,omitempty" jsonschema:"Optional escalation reason to narrow to: thrash-cap, attempt-cap or manual; absent returns every reason."`
+	PageSize    int    `json:"page_size,omitempty" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken   string `json:"page_token,omitempty" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
 }
 
 // listEscalatedTasksOutput mirrors krill/api/handlers/console.go's HTTP

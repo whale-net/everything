@@ -112,9 +112,6 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 		cursor = &c
 	}
 
-	// Implementation lane: append params.ConsoleFilter's predicate on the
-	// joined milestone_ref below (product_id, plus id/parent_milestone_id
-	// for the container filter).
 	args := []any{params.ScopeID}
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
@@ -127,6 +124,9 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 		JOIN task_claim tc ON tc.id = task.current_claim_id
 		WHERE task.scope_id = $1 AND task.current_claim_id IS NOT NULL
 	`
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	query += filterSQL
+	args = append(args, filterArgs...)
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {
@@ -255,8 +255,6 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 		cursor = &c
 	}
 
-	// Implementation lane: append params.ConsoleFilter's predicate on the
-	// joined milestone_ref below.
 	args := []any{params.ScopeID}
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
@@ -268,6 +266,9 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 		JOIN task_intervention_event ev ON ev.task_id = task.id AND ev.action = 'cancel'
 		WHERE task.scope_id = $1 AND task.cancelled_at IS NOT NULL
 	`
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	query += filterSQL
+	args = append(args, filterArgs...)
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {
@@ -455,8 +456,6 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 		cursor = &c
 	}
 
-	// Implementation lane: append params.ConsoleFilter's predicate on the
-	// joined milestone_ref, and params.Reason's on ev.reason, below.
 	args := []any{params.ScopeID}
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
@@ -471,6 +470,13 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 		JOIN task_escalation_event ev ON ev.id = task.current_escalation_id
 		WHERE task.scope_id = $1 AND task.current_escalation_id IS NOT NULL
 	`
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	query += filterSQL
+	args = append(args, filterArgs...)
+	if params.Reason != nil {
+		query += fmt.Sprintf("\n\t\t\tAND ev.reason = $%d", len(args)+1)
+		args = append(args, string(*params.Reason))
+	}
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {

@@ -114,10 +114,12 @@ func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams
 	// below) is exactly how NextToken is populated only when more rows
 	// genuinely remain, never as a guess.
 	//
-	// Implementation lane: add params.ConsoleFilter's predicate here --
-	// the container filter on the task join's mr, and, for a product
-	// filter only, the noted entity's own product resolved across
-	// whichever of the five NoteEntityKind tables the note names.
+	// A task-targeted note narrows on the task's own delivery container; an
+	// entity-targeted note has no container at all, so a milestone filter
+	// excludes it outright while a product filter keeps it only when the
+	// entity it names resolves to that product. That resolution is the
+	// COALESCE below, walking whichever of the five NoteEntityKind tables
+	// the note names up to the product that owns it.
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			tn.id, tn.kind, tn.body, tn.created_at,
@@ -132,11 +134,23 @@ func (s taskStore) ListOpenNotes(ctx context.Context, params ListOpenNotesParams
 		LEFT JOIN feature f ON tn.entity_kind = 'feature' AND tn.entity_id = f.id AND f.valid_to IS NULL
 		LEFT JOIN requirement r ON tn.entity_kind = 'requirement' AND tn.entity_id = r.id AND r.valid_to IS NULL
 		LEFT JOIN load_bearing_decision lbd ON tn.entity_kind = 'load_bearing_decision' AND tn.entity_id = lbd.id AND lbd.valid_to IS NULL
+		LEFT JOIN feature_set f_fs ON f.feature_set_id = f_fs.id AND f_fs.valid_to IS NULL
+		LEFT JOIN feature r_f ON r.feature_id = r_f.id AND r_f.valid_to IS NULL
+		LEFT JOIN feature_set r_fs ON r_f.feature_set_id = r_fs.id AND r_fs.valid_to IS NULL
+		LEFT JOIN feature_set lbd_fs ON lbd.feature_set_id = lbd_fs.id AND lbd_fs.valid_to IS NULL
 		WHERE tn.scope_id = $1 AND tn.current_status = $2
 			AND ($3::timestamptz IS NULL OR (tn.created_at, tn.id) > ($3::timestamptz, $4::uuid))
+			AND (
+				(tn.task_id IS NOT NULL
+					AND ($6::uuid IS NULL OR mr.product_id = $6)
+					AND ($7::uuid IS NULL OR mr.id = $7 OR mr.parent_milestone_id = $7))
+				OR
+				(tn.task_id IS NULL AND $7::uuid IS NULL
+					AND ($6::uuid IS NULL OR COALESCE(p.id, fs.product_id, f_fs.product_id, r_fs.product_id, lbd_fs.product_id) = $6))
+			)
 		ORDER BY tn.created_at ASC, tn.id ASC
 		LIMIT $5
-	`, params.ScopeID, string(NoteLifecycleStatusNoted), cursorTime, cursorID, pageSize+1)
+	`, params.ScopeID, string(NoteLifecycleStatusNoted), cursorTime, cursorID, pageSize+1, params.ProductID, params.MilestoneID)
 	if err != nil {
 		return Page[OpenNoteRow]{}, fmt.Errorf("list open task_note: %w", err)
 	}
