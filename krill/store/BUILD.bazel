@@ -810,6 +810,7 @@ go_test(
         "delivery_parent_integration_test.go",
         "milestone_authoring_integration_test.go",
         "recut_integration_test.go",
+        "withdraw_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [
