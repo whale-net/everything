@@ -722,7 +722,7 @@ func TestMigration004_SchemaContract(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{
 		"revision_id", "id", "scope_id", "product_id", "name", "created_at",
-		"kind", "outcome", "fr_budget", "position", "parent_milestone_id",
+		"kind", "outcome", "notes", "fr_budget", "position", "parent_milestone_id",
 		"created_by_acting_iss", "created_by_acting_sub", "created_by_acting_kind",
 		"created_by_on_behalf_of_iss", "created_by_on_behalf_of_sub", "created_by_on_behalf_of_kind",
 		"valid_from", "valid_to",
@@ -3501,4 +3501,74 @@ func TestMigration024_UpDownRoundTrip(t *testing.T) {
 
 	// The whole schema is back where it started.
 	require.NoError(t, runner.Down(), "roll the whole migration set back -- 024's Down must hand 023's Down a table it can still reverse")
+}
+
+// TestMigration037_ShipsAlongsideSCD2 asserts milestone_ships_alongside
+// carries the SCD2 pair (so nextSiblingPosition's valid_to filter works),
+// the current-rows-only indexes, and the backfill/rollback behaviour.
+func TestMigration037_ShipsAlongsideSCD2(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(36))
+	assert.False(t, columnExists(t, ctx, db, "milestone_ships_alongside", "valid_to"))
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('ships-scd2-037/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	authoredAt := time.Now().Add(-48 * time.Hour).UTC().Truncate(time.Second)
+	var rowID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ships_alongside (
+			scope_id, milestone_id, body,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at
+		) VALUES ($1, $2, 'pre-037 row', 'i', 's', 'human', 'i', 's', 'human', $3) RETURNING id
+	`, scopeID, uuid.New(), authoredAt).Scan(&rowID))
+
+	require.NoError(t, runner.Up())
+
+	for _, col := range []struct{ name, dataType string }{
+		{"revision_id", "uuid"},
+		{"valid_from", "timestamp with time zone"},
+		{"valid_to", "timestamp with time zone"},
+	} {
+		dataType, _ := nullableColumn(t, ctx, db, "milestone_ships_alongside", col.name)
+		assert.Equal(t, col.dataType, dataType, "milestone_ships_alongside.%s", col.name)
+	}
+	_, nullable := nullableColumn(t, ctx, db, "milestone_ships_alongside", "valid_from")
+	assert.Equal(t, "NO", nullable)
+	_, nullable = nullableColumn(t, ctx, db, "milestone_ships_alongside", "valid_to")
+	assert.Equal(t, "YES", nullable)
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "milestone_ships_alongside", "revision_id"))
+	assert.False(t, hasPrimaryKeyOn(t, ctx, db, "milestone_ships_alongside", "id"))
+	for _, index := range []string{
+		"milestone_ships_alongside_milestone_idx",
+		"milestone_ships_alongside_scope_idx",
+		"milestone_ships_alongside_current_id_idx",
+	} {
+		assert.True(t, hasIndexNamed(t, ctx, db, "milestone_ships_alongside", index), index)
+		assert.True(t, indexCoversCurrentRowsOnly(t, ctx, db, "milestone_ships_alongside", index), index)
+	}
+
+	var validFrom time.Time
+	var validTo sql.NullTime
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT valid_from, valid_to FROM milestone_ships_alongside WHERE id = $1
+	`, rowID).Scan(&validFrom, &validTo))
+	assert.False(t, validTo.Valid, "pre-existing rows must land current")
+	assert.WithinDuration(t, authoredAt, validFrom, time.Second, "valid_from backfilled from created_at")
+
+	// Down then Up again: reversible and re-appliable.
+	require.NoError(t, runner.Migrate(36))
+	assert.False(t, columnExists(t, ctx, db, "milestone_ships_alongside", "valid_to"))
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "milestone_ships_alongside", "id"))
+	require.NoError(t, runner.Up())
+	assert.True(t, columnExists(t, ctx, db, "milestone_ships_alongside", "valid_to"))
 }
