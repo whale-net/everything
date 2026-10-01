@@ -120,6 +120,25 @@ func TestRender_HTMX4ScriptAndConfig(t *testing.T) {
 	}
 }
 
+// TestRender_AlpineCompatLoadsAfterCore asserts the Alpine compat extension
+// is present and registered after htmx core (extensions need core loaded).
+func TestRender_AlpineCompatLoadsAfterCore(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Render(&buf, LayoutData{Title: "T", Content: "<p>x</p>"}); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	output := buf.String()
+
+	coreIdx := strings.Index(output, "htmx.org@4.0.0/dist/htmx.min.js")
+	compatIdx := strings.Index(output, "htmx.org@4.0.0/dist/ext/hx-alpine-compat.min.js")
+	if compatIdx < 0 {
+		t.Fatal("Render() output missing the hx-alpine-compat extension script")
+	}
+	if compatIdx < coreIdx {
+		t.Errorf("hx-alpine-compat (idx %d) must load after htmx core (idx %d)", compatIdx, coreIdx)
+	}
+}
+
 func TestRenderError(t *testing.T) {
 	// Test that valid data doesn't error
 	var buf bytes.Buffer
