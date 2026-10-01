@@ -138,6 +138,10 @@ func (f *fakeTaskStore) ListProductTasks(ctx context.Context, params store.ListP
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) SummarizeProductTaskProgress(ctx context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	panic("not used by this test")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that

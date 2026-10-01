@@ -30,6 +30,7 @@ var expectedWorkSurfaceToolNames = []string{
 	"get_task",
 	"list_tasks",
 	"list_product_tasks",
+	"get_product_task_progress",
 	"claim_task",
 	"heartbeat_task",
 	"complete_task",
@@ -77,6 +78,7 @@ func RegisterWorkAll(reg *server.Registry, entities *store.Store, sessions store
 	RegisterGetTaskPayload(reg, entities.Tasks(), assembler)
 	RegisterListTasks(reg, entities.Tasks())
 	RegisterListProductTasks(reg, entities.Tasks(), entities.Products())
+	RegisterGetProductTaskProgress(reg, entities.Tasks(), entities.Products())
 	RegisterClaimTask(reg, sessions, entities.Tasks(), assembler)
 	RegisterHeartbeatTask(reg, sessions, entities.Tasks())
 	RegisterCompleteTask(reg, sessions, entities.Tasks(), assembler)
