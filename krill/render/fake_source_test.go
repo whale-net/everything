@@ -41,6 +41,8 @@ type fakeSource struct {
 	StatusCalls [][]uuid.UUID
 	// Notes is what ListProductNotes returns.
 	Notes []store.Note
+	// Protects is what ListActiveProtects filters by feature id.
+	Protects []store.LBProtectsFeature
 }
 
 var _ render.Source = (*fakeSource)(nil)
@@ -80,4 +82,18 @@ func (f *fakeSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []u
 
 func (f *fakeSource) ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error) {
 	return f.Notes, nil
+}
+
+func (f *fakeSource) ListActiveProtects(ctx context.Context, featureIDs []uuid.UUID) ([]store.LBProtectsFeature, error) {
+	want := map[uuid.UUID]bool{}
+	for _, id := range featureIDs {
+		want[id] = true
+	}
+	var out []store.LBProtectsFeature
+	for _, e := range f.Protects {
+		if want[e.FeatureID] {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
