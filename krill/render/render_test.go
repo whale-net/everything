@@ -850,10 +850,16 @@ func TestRender_CapabilityMapDefaultsToHeadlines(t *testing.T) {
 	assert.NotContains(t, files.CapabilityMapMD, "**FR1**")
 }
 
-// By default PRODUCT.md carries headlines only: no persona/decision/note bodies.
-func TestRender_ProductMDDefaultsToHeadlines(t *testing.T) {
+// PRODUCT.md always carries full persona, decision, and non-goal bodies; only
+// product notes stay headline-only without detail.
+func TestRender_ProductMDCarriesFullProseByDefault(t *testing.T) {
 	src := &fakeSource{
-		Doc: reqDoc(nil, nil),
+		Doc:      reqDoc(nil, nil),
+		Personas: []store.Persona{{Name: "Dev", Description: strPtr("First. PERSONA-SECOND")}},
+		NonGoals: []store.NonGoal{
+			{Name: "Perm", Kind: store.NonGoalKindPermanent, Body: strPtr("PERM-BODY")},
+			{Name: "Defer", Kind: store.NonGoalKindDeferred, Body: strPtr("DEFER-BODY")},
+		},
 		Notes: []store.Note{{
 			ID:            uuid.New(),
 			Kind:          store.NoteKind("scope-note"),
@@ -866,10 +872,34 @@ func TestRender_ProductMDDefaultsToHeadlines(t *testing.T) {
 	files, err := render.Render(context.Background(), src, uuid.New(), uuid.New())
 	require.NoError(t, err)
 
-	assert.Contains(t, files.ProductMD, "- **LB1** — Pick X")
-	assert.Contains(t, files.ProductMD, "First sentence.")
-	assert.NotContains(t, files.ProductMD, "DECISION-BODY")
+	assert.Contains(t, files.ProductMD, "### LB1 — Pick X")
+	assert.Contains(t, files.ProductMD, "DECISION-BODY")
+	assert.Contains(t, files.ProductMD, "PERSONA-SECOND")
+	assert.Contains(t, files.ProductMD, "PERM-BODY")
+	assert.Contains(t, files.ProductMD, "DEFER-BODY")
 	assert.NotContains(t, files.ProductMD, "SECOND-SENTENCE-BODY")
+}
+
+// A Feature's cheap-expensive-later note shows in the capability map where
+// recorded, and other note kinds on the Feature do not.
+func TestRender_CapabilityMapShowsCheapExpensiveLater(t *testing.T) {
+	f1, f2 := newFeature("F1", 1), newFeature("F2", 2)
+	note := func(kind, body string) store.Note {
+		return store.Note{ID: uuid.New(), Kind: store.NoteKind(kind), CurrentStatus: store.NoteLifecycleStatus("noted"), Body: body}
+	}
+	src := &fakeSource{
+		Doc: reqDoc([]slice.FeatureEntity{f1, f2}, nil),
+		FeatureNotes: map[uuid.UUID][]store.Note{
+			f1.ID: {note("cheap-expensive-later", "CHEAP-STATEMENT"), note("comment", "OTHER-COMMENT")},
+		},
+	}
+	for _, opts := range [][]render.Option{nil, {render.WithDetail()}} {
+		files, err := render.Render(context.Background(), src, uuid.New(), uuid.New(), opts...)
+		require.NoError(t, err)
+		assert.Contains(t, files.CapabilityMapMD, "Stays cheap / expensive later:** CHEAP-STATEMENT")
+		assert.NotContains(t, files.CapabilityMapMD, "OTHER-COMMENT")
+		assert.Equal(t, 1, strings.Count(files.CapabilityMapMD, "Stays cheap / expensive later"))
+	}
 }
 
 // Headings inside a note body must nest under the document's own outline.
