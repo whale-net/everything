@@ -1,0 +1,34 @@
+<!-- wf: name="home" title="Overview" -->
+<div class="space-y-6">
+  <p class="wf-note">Primary object: product. Primary action: open what needs attention.</p>
+  <div class="flex flex-wrap items-center gap-3">
+    <h1 class="text-2xl font-semibold">krill</h1>
+    <span class="badge badge-warning">M5 in progress</span>
+    <div class="flex-1"></div>
+    <a href="#/needs-attention" class="btn btn-primary">Review 3 escalated tasks</a>
+  </div>
+  <div class="stats stats-vertical sm:stats-horizontal shadow border border-base-300 bg-base-100 w-full">
+    <div class="stat"><div class="stat-title">Escalated</div><div class="stat-value text-error">3</div><div class="stat-desc">1 new in the last hour</div></div>
+    <div class="stat"><div class="stat-title">Claimed</div><div class="stat-value">7</div><div class="stat-desc">2 leases expire within 10 min</div></div>
+    <div class="stat"><div class="stat-title">Open notes</div><div class="stat-value">12</div><div class="stat-desc">4 scope notes</div></div>
+    <div class="stat"><div class="stat-title">Blocking questions</div><div class="stat-value text-warning">2</div><div class="stat-desc">1 design session</div></div>
+  </div>
+  <div class="grid gap-6 lg:grid-cols-2">
+    <div class="card bg-base-100 border border-base-300"><div class="card-body">
+      <h2 class="card-title">Needs attention</h2>
+      <ul class="divide-y divide-base-300">
+        <li class="py-2 flex items-center gap-2"><span class="badge badge-error badge-soft">thrash cap</span><a class="link flex-1" href="#/task-detail">Wire claim guard into release handler</a><span class="text-sm text-base-content/70">12 min ago</span></li>
+        <li class="py-2 flex items-center gap-2"><span class="badge badge-error badge-soft">attempt cap</span><a class="link flex-1" href="#/task-detail">Paginate ListClaimedTasks</a><span class="text-sm text-base-content/70">1 h ago</span></li>
+        <li class="py-2 flex items-center gap-2"><span class="badge badge-warning badge-soft">lease expired</span><a class="link flex-1" href="#/task-detail">Backfill note lifecycle migration</a><span class="text-sm text-base-content/70">3 h ago</span></li>
+      </ul>
+      <div class="card-actions justify-end"><a class="btn btn-ghost" href="#/needs-attention">See all</a></div>
+    </div></div>
+    <div class="card bg-base-100 border border-base-300"><div class="card-body">
+      <h2 class="card-title">Milestones in flight</h2>
+      <ul class="space-y-3">
+        <li><div class="flex items-center gap-2"><a class="link font-medium" href="#/milestone-detail">M5 Escalation console</a><span class="badge badge-warning">in progress</span></div><progress class="progress progress-warning w-full" value="6" max="9"></progress><span class="text-sm text-base-content/70">6 of 9 tasks done</span></li>
+        <li><div class="flex items-center gap-2"><a class="link font-medium" href="#/milestones">M6 UI facelift</a><span class="badge badge-info badge-soft">in design</span></div><span class="text-sm text-base-content/70">Spec not yet signed off</span></li>
+      </ul>
+    </div></div>
+  </div>
+</div>

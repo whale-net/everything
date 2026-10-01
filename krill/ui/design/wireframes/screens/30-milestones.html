@@ -1,0 +1,17 @@
+<!-- wf: name="milestones" title="Milestones" -->
+<div class="space-y-4">
+  <p class="wf-note">Primary object: milestone. Primary action: open a milestone. Replaces the nested list on "delivery &amp; roadmap"; milepebbles expand inline, the breakdown lives on the detail page.</p>
+  <div class="flex flex-wrap items-center gap-3"><h1 class="text-2xl font-semibold">Milestones</h1><div class="flex-1"></div>
+    <select class="select select-bordered" aria-label="Status"><option>All statuses</option><option>in progress</option><option>shipped</option></select></div>
+  <div class="card bg-base-100 border border-base-300 overflow-x-auto">
+    <table class="table">
+      <thead><tr><th>Milestone</th><th>Status</th><th>Progress</th><th class="text-right">FR budget</th><th>Outcome</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td><a class="link font-medium" href="#/milestone-detail">M6 UI facelift</a></td><td><span class="badge badge-info badge-soft">in design</span></td><td class="text-base-content/70">No tasks yet</td><td class="text-right">12</td><td class="max-w-xs truncate">Operators act on stuck work without leaving a list.</td></tr>
+        <tr class="hover"><td><a class="link font-medium" href="#/milestone-detail">M5 Escalation console</a></td><td><span class="badge badge-warning">in progress</span></td><td><progress class="progress progress-warning w-32" value="6" max="9"></progress> 6/9</td><td class="text-right">12</td><td class="max-w-xs truncate">Escalate, requeue and cancel from the console.</td></tr>
+        <tr class="hover"><td><a class="link font-medium" href="#/milestone-detail">M4 Work axis</a></td><td><span class="badge badge-success">shipped</span></td><td><progress class="progress progress-success w-32" value="14" max="14"></progress> 14/14</td><td class="text-right">12</td><td class="max-w-xs truncate">Task, claim, lease, attempt and note.</td></tr>
+        <tr class="hover"><td><a class="link font-medium" href="#/milestone-detail">M3 Delivery axis</a></td><td><span class="badge badge-warning badge-soft">partially complete</span></td><td><progress class="progress progress-warning w-32" value="10" max="12"></progress> 10/12</td><td class="text-right">12</td><td class="max-w-xs truncate">Milepebbles, status history, shipments.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>

@@ -1,0 +1,48 @@
+<!-- wf: name="task-detail" title="Task detail" -->
+<div class="space-y-4">
+  <div class="breadcrumbs text-sm"><ul><li><a href="#/home">krill</a></li><li><a href="#/milestone-detail">M5 Escalation console</a></li><li><a href="#/tasks">Interventions</a></li><li>Wire claim guard into release handler</li></ul></div>
+  <p class="wf-note">Primary object: task. Primary action: requeue. Properties rail on the right at lg, stacked below on small screens.</p>
+  <div class="flex flex-wrap items-center gap-3">
+    <h1 class="text-2xl font-semibold">Wire claim guard into release handler</h1>
+    <span class="badge badge-error">escalated</span>
+    <div class="flex-1"></div>
+    <button class="btn btn-primary">Requeue</button>
+    <div class="dropdown dropdown-end"><button tabindex="0" class="btn btn-ghost" aria-label="More actions">More</button>
+      <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box border border-base-300 z-10 w-44 p-2 shadow"><li><a>Release claim</a></li><li><a class="text-error">Cancel task</a></li></ul></div>
+  </div>
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+    <section class="min-w-0 space-y-4">
+      <ul class="steps w-full">
+        <li class="step step-primary">Scaffold</li><li class="step step-primary">Implementation</li><li class="step">Testing</li><li class="step">Validation</li><li class="step">Done</li>
+      </ul>
+      <div role="tablist" class="tabs tabs-border">
+        <a role="tab" class="tab tab-active">Overview</a><a role="tab" class="tab">Notes <span class="badge badge-ghost badge-sm ml-2">2</span></a><a role="tab" class="tab">Dependencies <span class="badge badge-ghost badge-sm ml-2">1</span></a><a role="tab" class="tab">Spec slice</a>
+      </div>
+      <div class="alert alert-error"><span>Escalated after 3 attempts (thrash cap). Requeue resets the thrash counter and keeps notes.</span></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2">
+        <h2 class="card-title">Description</h2>
+        <p>Release must verify the caller still holds the claim it observed before it clears it. Reject with the current claim when the ids differ.</p>
+      </div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2">
+        <h2 class="card-title">Latest notes</h2>
+        <div class="flex gap-2 items-start"><span class="badge badge-ghost">scope note</span><span class="badge badge-neutral">open</span><p class="flex-1">Release currently ignores claim id; needs a store-level guard first.</p></div>
+        <div class="flex gap-2 items-start"><span class="badge badge-ghost">finding</span><span class="badge badge-neutral">open</span><p class="flex-1">Validator reverted lane twice on the same assertion.</p></div>
+      </div></div>
+      <details class="collapse collapse-arrow bg-base-100 border border-base-300"><summary class="collapse-title font-semibold">Spec slice (raw JSON)</summary><div class="collapse-content"><pre class="text-xs overflow-x-auto">{ "task": { "current_lane": "implementation" } }</pre></div></details>
+    </section>
+    <aside class="space-y-4">
+      <div class="card bg-base-100 border border-base-300"><dl class="card-body gap-3 text-sm">
+        <div><dt class="text-base-content/70">Lane</dt><dd><span class="badge badge-ghost">Implementation</span></dd></div>
+        <div><dt class="text-base-content/70">Attempts</dt><dd>3 of 3 <span class="text-base-content/70">(lease lapses count)</span></dd></div>
+        <div><dt class="text-base-content/70">Claim</dt><dd>None. Last held by worker-3</dd></div>
+        <div><dt class="text-base-content/70">Escalated</dt><dd title="2026-09-30 13:50 UTC">12 min ago</dd></div>
+        <div><dt class="text-base-content/70">Milepebble</dt><dd><a class="link" href="#/tasks">Interventions</a></dd></div>
+        <div><dt class="text-base-content/70">Task id</dt><dd><button class="badge badge-ghost font-mono" aria-label="Copy task id">7f3a9c21</button></dd></div>
+      </dl></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2 text-sm">
+        <h2 class="font-semibold">Depends on</h2>
+        <a class="link" href="#/task-detail">Store-level claim guard</a><span class="badge badge-success badge-sm">Done</span>
+      </div></div>
+    </aside>
+  </div>
+</div>

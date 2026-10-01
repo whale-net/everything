@@ -1,0 +1,64 @@
+<div class="drawer lg:drawer-open min-h-screen bg-base-200">
+  <input id="app-drawer" type="checkbox" class="drawer-toggle"/>
+  <div class="drawer-content flex flex-col min-w-0">
+    <header class="navbar sticky top-0 z-30 gap-2 bg-base-100 border-b border-base-300 px-4">
+      <label for="app-drawer" class="btn btn-ghost btn-square lg:hidden" aria-label="Open navigation">
+        <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </label>
+      <div class="flex-1 min-w-0"></div>
+      <div class="flex-none flex items-center gap-2">
+        <div class="avatar placeholder">
+          <div class="bg-primary text-primary-content w-9 rounded-full"><span class="text-sm">AH</span></div>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="flex-1 p-4 lg:p-6">
+<!-- wf:screen -->
+    </main>
+  </div>
+  <div class="drawer-side z-40">
+    <label for="app-drawer" class="drawer-overlay" aria-label="Close navigation"></label>
+    <aside class="flex min-h-full w-56 flex-col bg-neutral text-neutral-content">
+      <a href="#/home" class="btn btn-ghost m-2 justify-start text-lg text-neutral-content">krill</a>
+      <div class="px-3 pb-2">
+        <select class="select select-bordered w-full text-base-content" aria-label="Product">
+          <option selected>krill</option>
+          <option>whagent_net</option>
+          <option>friendly_computing_machine</option>
+        </select>
+      </div>
+      <ul class="menu menu-sm w-full gap-0.5">
+        <li><a href="#/home">Overview</a></li>
+        <li>
+          <h2 class="menu-title text-sm font-bold text-neutral-content">Work</h2>
+          <ul>
+            <li><a href="#/needs-attention">Needs attention <span class="badge badge-error badge-sm">3</span></a></li>
+            <li><a href="#/tasks">Tasks</a></li>
+            <li><a href="#/board">Board</a></li>
+          </ul>
+        </li>
+        <li>
+          <h2 class="menu-title text-sm font-bold text-neutral-content">Delivery</h2>
+          <ul><li><a href="#/milestones">Milestones</a></li></ul>
+        </li>
+        <li>
+          <h2 class="menu-title text-sm font-bold text-neutral-content">Design</h2>
+          <ul><li><a href="#/sessions">Design sessions</a></li></ul>
+        </li>
+        <li>
+          <h2 class="menu-title text-sm font-bold text-neutral-content">Spec</h2>
+          <ul>
+            <li><a href="#/spec">Capabilities</a></li>
+            <li><a href="#/spec">Decisions</a></li>
+            <li><a href="#/spec">Personas</a></li>
+            <li><a href="#/spec">Non-goals</a></li>
+          </ul>
+        </li>
+        <li>
+          <h2 class="menu-title text-sm font-bold text-neutral-content">Admin</h2>
+          <ul><li><a href="#/credentials">Credentials</a></li></ul>
+        </li>
+      </ul>
+    </aside>
+  </div>
+</div>

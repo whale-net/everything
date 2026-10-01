@@ -1,0 +1,16 @@
+<!-- wf: name="spec" title="Spec" -->
+<div class="space-y-4">
+  <p class="wf-note">Primary object: feature set. Primary action: read a requirement. Read-only. Tabs replace the old per-product sub-nav and the sidebar links all land here with the matching tab. Feature sets and features show their description as a subtitle (the API returns one for each). No attention or escalation content on spec pages; the Work pages own that. Quick look opens a blade (see "Requirement quick look").</p>
+  <div class="flex flex-wrap items-center gap-3"><h1 class="text-2xl font-semibold">Spec</h1><span class="text-base-content/70">krill</span></div>
+  <div role="tablist" class="tabs tabs-border"><a role="tab" class="tab tab-active">Capabilities</a><a role="tab" class="tab">Decisions</a><a role="tab" class="tab">Personas</a><a role="tab" class="tab">Non-goals</a></div>
+  <div class="space-y-3">
+    <div class="collapse collapse-arrow bg-base-100 border border-base-300"><input type="checkbox" checked/><div class="collapse-title font-semibold">Escalation console <span class="badge badge-ghost badge-sm ml-2">3 features</span><div class="font-normal text-sm text-base-content/70">Operators see every claimed, escalated and cancelled task and intervene without leaving the console.</div></div><div class="collapse-content">
+      <div class="overflow-x-auto"><table class="table table-sm"><thead><tr><th>Feature</th><th>Requirements</th><th>Milestone</th></tr></thead><tbody>
+        <tr class="hover"><td><a class="link" href="#/requirement-quicklook">C12 Cancel from console</a><div class="text-sm text-base-content/70">Cancel an escalated task from its row.</div></td><td>4</td><td><span class="badge badge-warning badge-sm">M5</span></td></tr>
+        <tr class="hover"><td><a class="link" href="#/requirement-quicklook">C13 Requeue with counter reset</a><div class="text-sm text-base-content/70">Requeue clears the thrash counter and keeps notes.</div></td><td>3</td><td><span class="badge badge-warning badge-sm">M5</span></td></tr>
+        <tr class="hover"><td><a class="link" href="#/requirement-quicklook">C14 Open notes view</a><div class="text-sm text-base-content/70">Every note still in an open lifecycle status.</div></td><td>2</td><td><span class="badge badge-success badge-sm">M4</span></td></tr>
+      </tbody></table></div>
+    </div></div>
+    <div class="collapse collapse-arrow bg-base-100 border border-base-300"><input type="checkbox"/><div class="collapse-title font-semibold">Work axis <span class="badge badge-ghost badge-sm ml-2">5 features</span><div class="font-normal text-sm text-base-content/70">Tasks move through lanes under claim, lease and attempt rules.</div></div><div class="collapse-content">...</div></div>
+  </div>
+</div>

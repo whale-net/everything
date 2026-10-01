@@ -1,0 +1,23 @@
+<!-- wf: name="session-detail" title="Session detail" -->
+<div class="space-y-4">
+  <div class="breadcrumbs text-sm"><ul><li><a href="#/home">krill</a></li><li><a href="#/sessions">Design sessions</a></li><li>Facelift the operator UI</li></ul></div>
+  <p class="wf-note">Primary object: design session. Primary action: answer blocking questions. Questions sit in the rail so they stay visible while reading the timeline; follow-up posts in place.</p>
+  <div class="flex flex-wrap items-center gap-3"><h1 class="text-2xl font-semibold">Facelift the operator UI onto a workspace shell</h1><span class="badge badge-info badge-soft">architect review</span></div>
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <section class="min-w-0 space-y-4">
+      <ul class="timeline timeline-vertical timeline-compact timeline-snap-icon">
+        <li><div class="timeline-middle"><span class="badge badge-primary badge-xs"></span></div><div class="timeline-end timeline-box w-full"><div class="flex items-center gap-2"><span class="badge badge-ghost">draft</span><span class="font-medium">producer</span><span class="text-sm text-base-content/70">1 h ago</span></div><p class="mt-1">Drafted 9 requirements across shell, tasks, delivery, design and ops.</p></div><hr/></li>
+        <li><hr/><div class="timeline-middle"><span class="badge badge-warning badge-xs"></span></div><div class="timeline-end timeline-box w-full"><div class="flex items-center gap-2"><span class="badge badge-warning badge-soft">reconciliation</span><span class="font-medium">architect</span><span class="text-sm text-base-content/70">40 min ago</span></div><p class="mt-1">Cancel confirmation page conflicts with the confirmation ladder. Two questions opened.</p></div></li>
+      </ul>
+      <form class="card bg-base-100 border border-base-300"><div class="card-body gap-3"><h2 class="card-title">Follow up</h2>
+        <textarea class="textarea textarea-bordered w-full" rows="3" aria-label="Follow-up"></textarea>
+        <div class="card-actions justify-end"><button type="button" class="btn btn-success">Send follow-up</button></div></div></form>
+    </section>
+    <aside class="space-y-4"><div class="card bg-base-100 border border-base-300"><div class="card-body gap-3 text-sm"><h2 class="font-semibold">Open questions</h2>
+      <label class="flex gap-2"><input type="checkbox" class="checkbox"/><span><span class="badge badge-error badge-soft badge-sm">blocking</span> Should ops queues be product-wide or milestone-scoped?</span></label>
+      <label class="flex gap-2"><input type="checkbox" class="checkbox"/><span><span class="badge badge-error badge-soft badge-sm">blocking</span> Keep the per-region Refresh button once polling lands?</span></label>
+      <label class="flex gap-2"><input type="checkbox" class="checkbox"/><span><span class="badge badge-ghost badge-sm">non-blocking</span> Collapse-to-icons sidebar?</span></label>
+    </div></div>
+    <div class="card bg-base-100 border border-base-300"><dl class="card-body gap-3 text-sm"><div><dt class="text-base-content/70">Opened by</dt><dd>alex via session s-41</dd></div><div><dt class="text-base-content/70">Session id</dt><dd><button class="badge badge-ghost font-mono">d90a77e3</button></dd></div></dl></div></aside>
+  </div>
+</div>
