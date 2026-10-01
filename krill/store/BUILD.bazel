@@ -63,6 +63,7 @@ go_library(
         "scope.go",
         "session.go",
         "slice.go",
+        "source_stamp.go",
         "store.go",
         "task.go",
         "task_abandon.go",

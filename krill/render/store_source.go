@@ -2,6 +2,7 @@ package render
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -73,4 +74,11 @@ func (s *StoreSource) ListProductNotes(ctx context.Context, scopeID, productID u
 // ListActiveProtects is a read of `lb_protects_feature_active` and nothing else.
 func (s *StoreSource) ListActiveProtects(ctx context.Context, featureIDs []uuid.UUID) ([]store.LBProtectsFeature, error) {
 	return s.store.LBProtects().ListActiveByFeatures(ctx, featureIDs)
+}
+
+var _ StampSource = (*StoreSource)(nil)
+
+// ProductSourceTime reports the Product's latest spec change time.
+func (s *StoreSource) ProductSourceTime(ctx context.Context, productID uuid.UUID) (time.Time, error) {
+	return s.store.ProductSourceTime(ctx, productID)
 }

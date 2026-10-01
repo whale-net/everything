@@ -35,6 +35,8 @@ func run() error {
 	product := flag.String("product", "", "name of the Product to render (required)")
 	out := flag.String("out", "", "directory to write PRODUCT.md + product/*.md into (required)")
 	detail := flag.Bool("detail", false, "render full Requirement bodies in the capability map (default: headlines only)")
+	check := flag.Bool("check", false, "write nothing; exit non-zero naming files whose committed content differs from a fresh render")
+	force := flag.Bool("force", false, "render even if the committed docs carry a newer source stamp than the live data")
 	databaseURL := flag.String("database-url", os.Getenv("PG_DATABASE_URL"), "Postgres connection string (defaults to PG_DATABASE_URL, then //libs/go/db's own fallback)")
 	flag.Parse()
 
@@ -88,6 +90,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("render %q: %w", *product, err)
 	}
+
+	_, _ = *check, *force // wired in the Implementation lane
 
 	for rel, content := range files.FileMap() {
 		path := filepath.Join(*out, rel)
