@@ -18,14 +18,10 @@
 // directly rather than standing up the MCP wire protocol: the MCP tool's
 // own correctness (auth, byte-identical JSON shape) is already covered by
 // issue #2494's own tests, and slice.Querier.GetProductSlice is the exact
-// code every one of that surface's calls executes. The domain-branch
-// decision itself -- krill's own domain calls this live, every other
-// domain still reads the file -- lives in
-// the design skill's SKILL.md and the producer persona (under
-// krill/plugin/design), which ship no Bazel test
-// target to exercise automatically; root plan issue #2485's own
-// acceptance criteria calls for verifying that one by diff review
-// instead.
+// code every one of that surface's calls executes. The design skill and
+// producer persona (under krill/plugin/design) read a milestone live from
+// krill and ship no Bazel test target to exercise that automatically; it
+// is verified by diff review instead.
 //
 // Run explicitly (requires a working Docker daemon), same as the
 // round-trip suite this file shares a target with:

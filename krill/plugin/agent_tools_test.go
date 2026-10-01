@@ -222,7 +222,7 @@ func TestWorkAgentsReachTaskLifecycleTools(t *testing.T) {
 	// Personas that call at least one tool registered on /mcp/work.
 	// help.md and quick-task.md are absent deliberately: help.md is the
 	// shared triage persona (symlinked into both plugins, no MCP writes),
-	// and quick-task.md only ever reads spec slices.
+	// and quick-task.md only reads product discovery and spec slices.
 	needWorkMount := []string{
 		"worker.md",
 		"validator.md",

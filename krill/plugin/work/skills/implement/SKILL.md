@@ -1,6 +1,6 @@
 ---
 name: implement
-description: Runs the swimlane execution phase of a krill-work plan — orchestrates worker and validator personas in parallel batches, via per-task branches created in dedicated worktrees, over ready krill Tasks from planner's manifest until every task reaches Done, then hands each batch's push/PR integration and continuous trunk-merge off to a mergepush subagent. Requires the task manifest /krill-work:plan produced (Milestone path) or the Project board it created (no-Milestone path).
+description: Runs the swimlane execution phase of a krill-work plan — orchestrates worker and validator personas in parallel batches, via per-task branches created in dedicated worktrees, over ready krill Tasks from planner's manifest until every task reaches Done, then hands each batch's push/PR integration and continuous trunk-merge off to a mergepush subagent. Requires a krill Milestone with the tasks /krill-work:plan created; with none, it stops and says to cut the milestone first.
 ---
 
 # implement
@@ -11,8 +11,7 @@ them, then dispatches `mergepush` once per batch to push, open/refresh PRs,
 and merge into `main` whatever is `Done` and safe to land. The pipeline is
 trunk-oriented — most tasks land individually as they validate, not all at
 the end. Git mechanics (branch naming, worktree creation, PR shape) are in
-`krill/plugin/shared/CONVENTIONS.md` § "No-Milestone GitHub fallback" ->
-"Git hygiene".
+`krill/plugin/shared/CONVENTIONS.md` § "Git hygiene".
 
 **Responsibilities.** The orchestrator creates every branch and its
 worktree itself and resolves any merge conflict that arises (inline for a
@@ -26,15 +25,19 @@ before the next scan, so `git`/`gh` output stays out of this session.
 ## Usage
 
 ```
-/krill-work:implement <milestone-id>     # Milestone path — needs the task manifest plan produced
-/krill-work:implement 123                # no-Milestone GitHub fallback: the tracking issue number
+/krill-work:implement <milestone-id>
 /krill-work:implement <milestone-id> --max-subagents 2
 ```
+
+`<milestone-id>` is required. With no krill Milestone (or no tasks under
+it), stop and report the "Milestone required" hard stop in CONVENTIONS.md:
+cut the milestone first (`/krill-design:product`/`/krill-design:design`),
+then run `/krill-work:plan`.
 
 `--max-subagents <N>` — workers/validators run concurrently per batch;
 defaults to 4.
 
-## Steps (Milestone path)
+## Steps
 
 0. **Prerequisites:** `git config rerere.enabled true`, `git config
    remote.pushDefault origin`, `git fetch origin main`. Track
@@ -91,23 +94,3 @@ Every `worker`/`validator` dispatch has a working
 `claim_task`/`complete_task` surface — see `agents/worker.md`. A
 `forbidden` from either is a real regression; don't route around it,
 surface it in your report as-is.
-
-## Steps (no-Milestone GitHub fallback)
-
-`<n>` is the GitHub tracking issue `krill-work:planner` minted. Same loop
-as above with the Project board in place of krill:
-1. Confirm a `Project board: <url>` comment exists on `<n>`
-   (`gh issue view <n> --comments`); if not, point to `/krill-work:plan
-   <feature-set-id>` and stop.
-2. Scan swimlanes in order (`Scaffold`, `Implementation`, `Testing`,
-   `Validation`) for unassigned items with `Part of #<n>` whose `Depends
-   on:` issues are all `CLOSED` (mechanics in CONVENTIONS.md § "No-Milestone
-   GitHub fallback"); branch names use the tracking issue number and the
-   task issue number.
-3. Dispatch `krill-work:worker`/`validator` with `<n>`, `<project-number>`,
-   the swimlane, the task issue number, and the worktree path; then
-   `mergepush` with `<n>`, the tuples, and `<done-task-numbers>` (tasks now
-   at `Status: Done`, re-queried from the board). Seed `<plan-branches>`
-   from the board's tasks past `Implementation`.
-4. Report as above, pointing to `/krill-work:validate <n>` when all are
-   `Done`.

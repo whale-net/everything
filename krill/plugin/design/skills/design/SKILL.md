@@ -1,6 +1,6 @@
 ---
 name: design
-description: Design one feature's or one milestone's specification — interviews you for requirements/user stories, opens a krill DesignSession and drafts Requirements as revision events, then loops producer/architect until architect signs off, ready for /krill-design:review. Optionally holds a stakeholder meeting with every persona in the spec before hand-off. Run this before a GitHub Project board or task issues exist — for task breakdown after signoff, use /krill-work:plan instead. Takes --milestone M<n> against a product:approved brief to spec exactly one milestone; if the request is a whole product rather than one feature, run /krill-design:product first instead of designing it all at once.
+description: Design one feature's or one milestone's specification — interviews you for requirements/user stories, opens a krill DesignSession and drafts Requirements as revision events, then loops producer/architect until architect signs off, ready for /krill-design:review. Optionally holds a stakeholder meeting with every persona in the spec before hand-off. Run this before any krill Tasks exist — for task breakdown after signoff, use /krill-work:plan instead. Takes --milestone M<n> against a krill-hosted Product to spec exactly one milestone; if the request is a whole product rather than one feature, run /krill-design:product first instead of designing it all at once.
 ---
 
 # design
@@ -9,7 +9,7 @@ Orchestrates the `krill-design` pipeline inside a krill DesignSession from a
 feature idea up to architect sign-off, optionally including a stakeholder
 meeting round. Comes before `/krill-design:review` (human approval) and
 `/krill-work:plan` (task breakdown) — this skill produces the spec, not the
-Project board. See `krill/plugin/shared/CONVENTIONS.md` for the
+tasks. See `krill/plugin/shared/CONVENTIONS.md` for the
 design-session mechanics.
 
 ## Usage
@@ -17,7 +17,7 @@ design-session mechanics.
 ```
 /krill-design:design "short feature description"
 /krill-design:design <design-session-id>            # resume an existing session
-/krill-design:design 42 --milestone M2               # spec milestone M2 of product brief issue #42
+/krill-design:design <product-id> --milestone M2     # spec milestone M2 of a krill-hosted product
 /krill-design:design                                 # no args — ask what the feature is
 ```
 
@@ -25,7 +25,7 @@ design-session mechanics.
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `--milestone M<n>` | none | Scope this design to one milestone of an approved product (the positional argument is then the product id). Producer specs only that milestone's outcome; architect also checks the draft against the milestone's `Must not foreclose` decisions. |
+| `--milestone M<n>` | none | Scope this design to one milestone of a krill-hosted product (the positional argument is then the krill Product id). Producer specs only that milestone's outcome; architect also checks the draft against the milestone's `Must not foreclose` decisions. |
 | `--stakeholder-meeting` | off | After architect sign-off, run `/krill-design:stakeholder-meeting`: every persona in the spec gives a round of feedback, and any blocker goes back through the producer/architect loop before hand-off to review. |
 | `--stakeholder-rounds <n>` | `2` | Max stakeholder meeting rounds before stopping and summarizing standing blockers for the user. Implies `--stakeholder-meeting`. |
 | `--personas "<a,b>"` | spec personas | Meet with only these personas. Implies `--stakeholder-meeting`. |
@@ -35,25 +35,28 @@ design-session mechanics.
 
 0. **Check the scope of the request.** Stop and recommend
    `/krill-design:product` for a whole product/app/subsystem; flag a
-   milestone draft heading past ~20 Requirements the same way.
+   milepebble draft heading well past ~12 Requirements (the per-milepebble
+   target, not a hard cap) by suggesting a split into milepebbles. Milestones
+   themselves have no FR cap.
 
-1. **Survey related issues.** `gh issue list` for overlapping
-   `idea`/`source:scope-note` issues before intake. This stays on GitHub;
-   krill has no issue-tracking entity of its own yet.
+1. **Survey related spec.** For a krill-hosted product, call
+   `get_product_slice {id}` and `get_backlog {product_id}` and note any
+   existing Feature/Requirement or backlog scope that overlaps the request,
+   before intake.
 
 2. **Resolve the design session.**
-   - **Check `--milestone` first** — the positional argument is a product
-     issue number. `gh issue view <n>` and confirm `product:approved`; read
-     `<domain>/PRODUCT.md` → `product/03-roadmap.md` for the milestone entry
-     — **except for a product hosted in krill** (krill's own domain, or one
-     imported via `krill/importer`), where a real krill Milestone entity
-     exists: call `get_milestone {id}` for its exact authoring
+   - **Check `--milestone` first** — the positional argument is a krill
+     Product id (`get_scope {}` then `list_products {scope_id}` finds it).
+     Resolve `M<n>` to a Milestone id with `list_product_delivery
+     {product_id}`, then call `get_milestone {id}` for its exact authoring
      fields/`Delivers`/`Must not foreclose`/deferrals (an exact per-milestone
-     read, not `get_product_slice`'s whole-product superset). Take the last
-     `Ledger: M<n> → <status> (<design-session-id>)` tracking-issue comment
-     for a non-krill-hosted product, or `get_milestone_status {id}` for a
-     krill-hosted one — already `in design` or later means resume that
-     session id instead of opening a new one.
+     read, not `get_product_slice`'s whole-product superset). **If the
+     product isn't hosted in krill or has no such milestone, stop** and
+     report the "Milestone required" hard stop in CONVENTIONS.md — run
+     `/krill-design:product` first. `get_milestone_status {id}` already
+     `in design` or later means resume: the latest `in design` transition's
+     note in `get_milestone_status_history {id}` names the design-session id
+     (step 3) — resume that session instead of opening a new one.
    - If given a design-session id, call `get_design_session` and
      `list_open_questions {blocking: true}`. Zero blocking questions after a
      `reconciliation` event means architect has already signed off — skip to
@@ -63,19 +66,18 @@ design-session mechanics.
 
 3. **Intake (new designs only).** Call `open_design_session {krill_session_id,
    product_id, opening_submission}` — `opening_submission` is the request as
-   given, or (with `--milestone`) the milestone's roadmap entry / live
-   `get_product_slice` result quoted verbatim (same krill-domain carve-out as
-   step 2). There is no separate "intake discussion" artifact to create —
-   the DesignSession's own event log is the durable record. Conduct the
+   given, or (with `--milestone`) the milestone's live `get_milestone`
+   result quoted verbatim. There is no separate "intake discussion"
+   artifact to create — the DesignSession's own event log is the durable
+   record. Conduct the
    interview conversationally directly in this session (do not delegate —
    it needs live back-and-forth), following `agents/producer.md` Mode 0 —
    including recording each interview round as a `draft` revision event, so
    the interview lives on the session rather than only in this context.
-   If step 1 turned up real overlap, open with those issue numbers. If this
-   is a milestone, post `gh issue comment <product-issue> --body "Ledger:
-   M<n> → in design (<design-session-id>)"` before interviewing — or, for a
-   krill-hosted milestone, call `set_milestone_status {milestone_id,
-   status: "in design"}` instead (CONVENTIONS.md).
+   If step 1 turned up real overlap, open with those entities. If this is a
+   milestone, call `set_milestone_status {milestone_id, status: "in design",
+   note: "design session <design-session-id>"}` before interviewing
+   (CONVENTIONS.md) — the note is how a later run finds the session.
 
 4. **Draft the specification.** Dispatch with an explicit `name: "producer-
    <design-session-id>"` (and `name: "architect-<design-session-id>"` for
@@ -107,8 +109,8 @@ design-session mechanics.
    architect has signed off, invoke `/krill-design:stakeholder-meeting
    <design-session-id>` — passing `--personas` through. Cleared → step 8.
    Blocked → dispatch `krill-design:producer` (Mode 2) with the
-   design-session id and meeting discussion URL (not the blocker text) to
-   answer the consolidated blockers via an `answer` event, dispatch
+   design-session id and round number (the blockers are open `SB-` questions
+   it reads itself) to answer them via an `answer` event, dispatch
    `krill-design:architect` for a fresh `reconciliation`, hold the next
    round. Cap at `--stakeholder-rounds`; if blockers still stand, stop and
    summarize — unless running inside `loop-design-panel`, which takes over
@@ -120,15 +122,14 @@ design-session mechanics.
    <design-session-id>` runs the same pipeline unattended.
 
    **With `--milestone`:** also report the Requirement count against the
-   FR budget. For a krill-hosted milestone the budget is per milepebble
-   (CONVENTIONS.md "FR budget"): report each milepebble's count against
-   its `fr_budget` from `list_milepebbles` (default 12); a milestone over
-   12 with no milepebbles cut yet needs a proposed milepebble split, not a
-   scope cut. Otherwise use the roadmap file's `FR budget` line. `review`
-   appends the `signoff` event that makes the proposed entities the
-   approved plan as usual; producer posts `Ledger: M<n> → planned
-   (<design-session-id>)` on the tracking issue, or for a krill-hosted
-   milestone calls `set_milestone_status {milestone_id, status: "designed"}`
-   then `{status: "planned"}` — the edge table (CONVENTIONS.md) puts
-   `designed` between `in design` and `planned`, so the two calls are
-   required, not redundant.
+   FR budget, which is per milepebble (CONVENTIONS.md "FR budget"): report
+   each milepebble's count against its `fr_budget` from `list_milepebbles`
+   (default 12); a milestone over 12 with no milepebbles cut yet needs a
+   proposed milepebble split, not a scope cut. `review` appends the
+   `signoff` event that makes the proposed entities the approved plan and
+   moves the milestone through `designed` to `planned` (CONVENTIONS.md edge
+   table).
+
+   `/krill-work:plan` needs a Milestone: if this design wasn't scoped to one
+   (no `--milestone`), cut one first with `create_milestone` and
+   `add_delivers` (CONVENTIONS.md "Milestone required").

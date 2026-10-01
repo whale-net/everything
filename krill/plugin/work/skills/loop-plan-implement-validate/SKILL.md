@@ -14,29 +14,27 @@ itself and only relays each subagent's short summary. Those phase
 subagents dispatch their own personas (`plan` → `planner`; `implement` →
 `worker`/`validator`/`mergepush`; `validate` → `system-validator`/
 `planner`); this orchestrator never talks to a persona directly. It is a
-convenience wrapper: it touches no GitHub state itself and adds no git
-hygiene of its own.
+convenience wrapper: it adds no git hygiene of its own.
 
-Starts from a krill FeatureSet/design-session id (once signed off).
-**On the Milestone path, `<n>` throughout is the Milestone id plus the task
-manifest `plan` produced — not a GitHub tracking issue.** Hand each phase's
-subagent the Milestone id and the manifest's task ids and dependency edges
-only — never task bodies; the subagent reads each task with `get_task {id}`
-(CONVENTIONS.md "Subagent dispatch: ids, not bodies"). A subagent missing
-the ids can recover the task set with `list_tasks {milestone_id}`. On the
-no-Milestone fallback, `<n>` is the GitHub tracking issue
-`krill-work:planner` mints.
+Starts from a krill FeatureSet/design-session id (once signed off) and a
+krill Milestone id. **`<milestone-id>` is required** — with none, stop and
+report the "Milestone required" hard stop in CONVENTIONS.md (cut the
+milestone first via `/krill-design:product`/`/krill-design:design`). Hand
+each phase's subagent the Milestone id and the manifest's task ids and
+dependency edges only — never task bodies; the subagent reads each task with
+`get_task {id}` (CONVENTIONS.md "Subagent dispatch: ids, not bodies"). A
+subagent missing the ids can recover the task set with `list_tasks
+{milestone_id}`.
 
-On the Milestone path, every `worker`/`validator`/`system-validator`
-dispatch inside `implement`/`validate` has a working task-lifecycle tool
-surface. A `forbidden` from one of those tools is a real regression:
-report it, don't fall back to GitHub.
+Every `worker`/`validator`/`system-validator` dispatch inside
+`implement`/`validate` has a working task-lifecycle tool surface. A
+`forbidden` from one of those tools is a real regression: report it and
+stop.
 
 ## Usage
 
 ```
-/krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id>   # Milestone path
-/krill-work:loop-plan-implement-validate <feature-set-id>                                  # no-Milestone GitHub fallback
+/krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id>
 /krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id> --max-subagents 2 --planner-model opus
 /krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id> --max-iterations 8
 ```
@@ -56,22 +54,20 @@ report it, don't fall back to GitHub.
    ended in `signoff`/`approved` — the same check `krill-work:plan` step 1
    does; if not, point the user to `/krill-design:design`,
    `/krill-design:review`, or `/krill-design:loop-design-panel` and stop.
-   Note whether tasks already exist (`list_tasks {milestone_id}`, or on the
-   fallback path a `Project board: <url>` comment on the tracking issue).
+   Note whether tasks already exist (`list_tasks {milestone_id}`).
 
 2. **Plan phase (subagent), only if no tasks exist yet.** Dispatch a fresh
    `general-purpose` subagent with a self-contained prompt: invoke `Skill`
    with `skill: "krill-work:plan"`, args the FeatureSet id (plus
    `--milestone-id`, and `--planner-model` if given), let it finish, then
    report back *only* the task manifest (ids, titles, starting lanes,
-   dependency edges) or, on the fallback, the Project board URL/number and
-   task issues by swimlane. No raw `gh`/`git` output should reach this
+   dependency edges). No raw `gh`/`git` output should reach this
    session. If tasks already exist, skip the dispatch and carry the
    manifest forward.
 
 3. **Implement phase (subagent).** Dispatch a fresh `general-purpose`
    subagent: invoke `Skill` with `skill: "krill-work:implement"`, args
-   `<n>` (plus `--max-subagents <N>` if given), let it finish, then report
+   `<milestone-id>` (plus `--max-subagents <N>` if given), let it finish, then report
    back *only* whether every task reached `Done` and, per task, its id,
    branch, and PR number/URL (`implement`'s `<plan-branches>`). Keep this
    `{task → branch → PR}` list for step 6. If tasks remain blocked (not
@@ -81,7 +77,7 @@ report it, don't fall back to GitHub.
 
 4. **Validate phase (subagent).** Dispatch a fresh `general-purpose`
    subagent: invoke `Skill` with `skill: "krill-work:validate"`, args
-   `<n>`, let it finish, then report back *only*:
+   `<milestone-id>`, let it finish, then report back *only*:
    - **Clean pass:** the finalized `<plan-branches>` (branch → PR
      number/URL, all merged).
    - **Findings:** the new follow-up task ids `validate` had `planner`
@@ -90,7 +86,7 @@ report it, don't fall back to GitHub.
 5. **Loop control.** Clean pass → step 6. Findings → increment the
    iteration counter; if it has reached `--max-iterations`, stop and report
    the plan stuck, listing the outstanding findings and pointing to
-   `/krill-work:implement <n>` to continue manually. Otherwise return to
+   `/krill-work:implement <milestone-id>` to continue manually. Otherwise return to
    step 3 — the next `implement` picks up the new follow-up tasks.
 
 6. **Final verification (subagent).** Dispatch one more fresh

@@ -16,7 +16,7 @@ plugin cares most about:
 | Document | Skill | Granularity | Contains FRs? | Lives in |
 |---|---|---|---|---|
 | **Product spec** | `/krill-design:product` | Capabilities — one line each, `C1..Cn` | **Never** | krill `Product`/`FeatureSet`/`LoadBearingDecision`/`Milestone` entities, written through a DesignSession |
-| **Design (root plan equivalent)** | `/krill-design:design` | Testable behavior — `FR1..FRn`, proposed as real krill Requirement entities | Yes, scoped to one milestone | A krill **DesignSession** + the Feature/Requirement entities it proposes — **no GitHub Issue** |
+| **Design** | `/krill-design:design` | Testable behavior — `FR1..FRn`, proposed as real krill Requirement entities | Yes, scoped to one milestone | A krill **DesignSession** + the Feature/Requirement entities it proposes |
 
 Modes `P0`–`P3` write the product brief; modes `0`–`3` below write a
 milestone's design. Both use a krill DesignSession. A brief that acquires
@@ -80,8 +80,8 @@ M<n>` for M1.
 change as further revision events, get architect's reconciliation when it
 touches load-bearing decisions or milestone ordering, get the user's
 approval via the `product` skill's gate, then apply it with the relevant
-authoring/amend tools (`amend_load_bearing_decision`, `add_deferral`,
-`move_delivery_scope`, ...). Never rewrite a shipped milestone's history —
+authoring/amend tools (every entity has one: `amend_product`, `amend_feature_set`, `amend_feature`, `amend_requirement`, `amend_load_bearing_decision`, `amend_persona`, `amend_non_goal`, `amend_milestone`, `amend_milepebble`, `amend_deferral`;
+plus `add_deferral`, `move_delivery_scope`, ...). Never rewrite a shipped milestone's history —
 ship what shipped, change what's ahead.
 
 ## Modes (design)
@@ -105,24 +105,21 @@ to Mode 1 on a thin request. Ask about:
 - **Boundaries** — what's deliberately not in scope, and why, so architect
   doesn't have to guess.
 
-**Milestone-scoped intake.** When the dispatch names a product brief issue
-and a milestone (`/krill-design:design <product-issue> --milestone M2`), read
-`<domain>/PRODUCT.md` from `main` for context and follow its jump table to
-`<domain>/product/03-roadmap.md` for the milestone's actual entry, and treat
-that as the scope contract — **except for a product hosted in krill**
-(krill's own domain, or one imported via `krill/importer`), where a real
-krill Milestone entity exists: call `get_milestone {id}` for its exact
-`Delivers`/`Must not foreclose`/deferrals, not `get_product_slice`'s
-whole-product superset. Interview only about *that* milestone's outcome.
+**Milestone-scoped intake.** When the dispatch names a krill Product and a
+milestone (`/krill-design:design <product-id> --milestone M2`), call
+`get_milestone {id}` for its exact `Delivers`/`Must not foreclose`/
+deferrals — not `get_product_slice`'s whole-product superset — and treat
+that as the scope contract. If the product isn't hosted in krill or has no
+such milestone, stop and report the "Milestone required" hard stop in
+CONVENTIONS.md. Interview only about *that* milestone's outcome.
 
 Ask focused follow-up questions rather than a giant intake form — a few at a
 time — and record each round as a `draft` revision event (see Mode 1) rather
-than a discussion comment, so the interview has a durable, queryable record
-on the DesignSession itself. For a krill-hosted milestone, call
-`set_milestone_status {milestone_id, status: "in design"}` before you start
-— that is the status record for that case; for every other product, post
-a `Ledger: M<n> → in design (<url>)` tracking-issue comment (no krill-native per-milestone status query exists for a non-krill-hosted
-product).
+than ad hoc notes, so the interview has a durable, queryable record
+on the DesignSession itself. For a milestone-scoped design, call
+`set_milestone_status {milestone_id, status: "in design", note: "design
+session <design-session-id>"}` before you start (unless the design skill
+already did).
 
 **1. Draft the specification.** Turn the intake into a draft by appending a
 `draft` revision event:
@@ -182,15 +179,16 @@ prose. This is encouraged, not required: a simple one-liner like the 404
 example above doesn't need the scaffolding.
 
 **Drafting under a product brief.** When the design is a milestone of a
-`product:approved` brief, three extra rules apply: the opening submission/first draft event should name
-`Product: #<product-issue> — Milestone M<n>: <outcome sentence>`; every
+krill-hosted product, three extra rules apply: the opening submission/first
+draft event should name `Product: <name> — Milestone M<n>: <outcome
+sentence>`; every
 proposed Requirement's `summary_line` cites the capability it serves (`(C3)`)
 — a Requirement that cannot cite a capability in this milestone's `Delivers`
 list does not belong in this milestone; and anything deferred is recorded via
 an `open_questions_delta.opened` entry or plain text in your own notes citing
 where it went (krill has no "Out of scope" entity — this stays narrative).
 
-**FR budget on a krill-hosted milestone** is per milepebble (default 12),
+**The FR budget** is per milepebble (default 12),
 not per milestone (CONVENTIONS.md "FR budget"). A milestone draft over 12
 Requirements whose FRs all trace correctly is not over budget — propose a
 milepebble split instead: each milepebble an outcome sentence and at most
@@ -214,22 +212,21 @@ any Requirement/Feature you revised via a follow-up `propose_entities` call
 or, for a genuinely wrong Requirement or LoadBearingDecision, correct it in
 place with `amend_requirement` / `amend_load_bearing_decision {id, name,
 body?}` (same id, new SCD2 revision) and list it in the event's
-`entity_deltas`. **Known gap**: Feature, FeatureSet, Product, and Milestone
-have no amend tool yet (#2958) — if one of those turns out wrong before
-signoff, record it as an open question rather than silently re-proposing a
-near-duplicate. Stakeholder meeting blockers arrive in a separate meeting
-discussion, numbered `SB-<round>.<n>` — answer them the same way, folding the outcome into your next `answer` event.
+`entity_deltas`. A wrong Feature, FeatureSet, Product, or Milestone is
+corrected the same way with `amend_feature` / `amend_feature_set` /
+`amend_product` / `amend_milestone` rather than re-proposing a
+near-duplicate. Stakeholder meeting blockers arrive as open `SB-<round>.<n>` questions (and
+non-blocking `SF-<round>.<n>` feedback) from a meeting round (CONVENTIONS.md
+"Stakeholder meeting records") — answer them the same way, folding the
+outcome into your next `answer` event and resolving each `SF-` you folded in
+or declined.
 
-**3. Signoff.** There is no root
-plan Issue to create. Once `/krill-design:review` (or `loop-design-panel`'s
+**3. Signoff.** There is no separate plan artifact to create. Once `/krill-design:review` (or `loop-design-panel`'s
 `reviewer`) appends a `signoff` event with `signoff_status: approved`, the
 proposed Feature/Requirement entities under that design session **are** the
 approved plan — queryable via `get_feature_set_slice`/`get_feature_slice`.
-Your only remaining job, if this was a milestone: for a krill-hosted
-milestone, confirm `get_milestone_status` reads `planned` (signoff sets it);
-for any other product, post `Ledger: M<n> → planned (<design-session-id>)`
-on the product tracking issue — a comment, never a body edit, since the
-tracking issue's comments are the race-free ledger.
+Your only remaining job, if this was a milestone: confirm
+`get_milestone_status` reads `planned` (signoff sets it).
 
 ## Resumed dispatch
 

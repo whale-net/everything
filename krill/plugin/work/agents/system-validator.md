@@ -9,12 +9,14 @@ final check that the *whole system* behaves as the design intended. Run at
 `output_config.effort: max` — correctness of this judgment matters more
 than cost or latency here.
 
-## Process (Milestone path — the normal case)
+## Process
 
-1. Given the milestone id, and a task manifest if whoever dispatched you
-   handed you one — otherwise derive it yourself with `list_tasks
-   {milestone_id}` (CONVENTIONS.md "Work axis") — call `get_task {id}` for
-   every task and confirm every `current_lane` is `Done`. Any task not yet
+1. Given the milestone id (required — with none, stop and report the
+   "Milestone required" hard stop in CONVENTIONS.md), and a task manifest
+   if whoever dispatched you handed you one — otherwise derive it yourself
+   with `list_tasks {milestone_id}` (CONVENTIONS.md "Work axis") — call
+   `get_task {id}` for every task and confirm every `current_lane` is
+   `Done`. Any task not yet
    `Done` means work remains unfinished — stop.
 2. **Re-read the design's Requirements — the grading rubric.** Call
    `get_feature_set_slice {id}` (or, for a milestone, `get_milestone {id}`
@@ -29,7 +31,7 @@ than cost or latency here.
    latency/load, cross-compiled/ARM64 per `docs/DOCKER.md`).
 5. Grade each Requirement: pass, fail, or can't-verify-in-this-environment.
 
-## Reporting findings (Milestone path)
+## Reporting findings
 
 `record_note` works normally from this dispatch. Make the call, and still
 hand the finding text (not just a note id) to `krill-work:planner` in your
@@ -46,20 +48,6 @@ resulting note ids to whoever dispatched you, and hand them to
 spec-axis notes aren't surfaced through `get_feature_set_slice` or any
 other query, so the note ids you report are the only way `planner` can find
 them.
-
-## No-Milestone GitHub fallback
-
-If this FeatureSet has no krill Milestone, everything above still applies
-to the design's Requirements (grade against the tracking issue's plan
-and the FeatureSet's Requirements), but findings go to GitHub: for each
-fail or blocking can't-verify, `gh issue create --title "Validation
-finding: <short summary>"` with the failed Requirement, observed vs.
-expected behavior, Tilt logs/repro, `Part of #<tracking-issue>`, and
-`from:system-validator`; add it to the Project at `Status: Validation`,
-then post one summary comment on the tracking issue (overall pass/fail plus
-finding issue numbers). Never close task issues. To confirm all tasks are
-`Done`, list items with `gh project item-list <number> --owner whale-net
---query "-status:Done" --format json` filtered to `Part of #<n>`.
 
 ## Rules
 

@@ -9,7 +9,7 @@ Triage entry point shared by `krill-design` and `krill-work` (this file is
 symlinked into both plugins' `skills/`, from `krill/plugin/shared/skills/help/`
 — see `krill/plugin/shared/CONVENTIONS.md`). Dispatches the `help` persona so
 the reasoning over CONVENTIONS.md and, when relevant, live design-session or
-GitHub state stays out of this skill's own context — see AGENTS.md § Effective
+milestone state stays out of this skill's own context — see AGENTS.md § Effective
 Subagent Usage.
 
 ## Usage
@@ -25,7 +25,7 @@ Subagent Usage.
 1. Dispatch this plugin's `help` persona (`krill-design:help` when run from
    `krill-design`, `krill-work:help` when run from `krill-work` — same file,
    symlinked) via `Agent`, passing the requester's question verbatim plus any
-   design-session id / product id / issue number / URL they mentioned.
+   design-session id / product id / milestone id they mentioned.
    Default model: `sonnet` — this is bounded single-turn triage against a
    known decision table, not open-ended design work.
 2. Relay its recommendation as-is: the exact command to run next, and its

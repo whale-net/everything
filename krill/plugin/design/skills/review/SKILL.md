@@ -8,7 +8,7 @@ description: The human review gate for a krill-design design — reviews an arch
 Drives the human review gate for a planned feature. Reviews the
 architect-approved draft in a krill DesignSession, and upon approval appends
 the `signoff` revision event that makes the design's proposed entities the
-approved plan — there is no root plan Issue to create (see
+approved plan — there is no separate plan artifact to create (see
 `krill/plugin/shared/CONVENTIONS.md`).
 
 ## Usage
@@ -45,24 +45,18 @@ approved plan — there is no root plan Issue to create (see
      entity_deltas: []
    }
    ```
-   - **If this is a milestone of a product brief not hosted in krill** —
-     post `gh issue comment <product-issue> --body "Ledger: M<n> → planned
-     (<design-session-id>)"` on the tracking issue (never a body edit). **If
-     it's a krill-hosted milestone** — call `set_milestone_status
-     {milestone_id, status: "designed"}` then `{status: "planned"}`
-     instead (the edge table requires the `designed` rung between
-     `in design` and `planned` — CONVENTIONS.md; works from an ordinary
-     Claude Code dispatch today, whale-net/everything#2928).
+   - **If this design is scoped to a milestone** — call
+     `set_milestone_status {milestone_id, status: "designed"}` then
+     `{status: "planned", note: "design session <design-session-id>
+     signed off"}` (the edge table requires the `designed` rung between
+     `in design` and `planned` — CONVENTIONS.md).
    - Tell the user the design is approved and that `/krill-work:plan
-     <feature-set-id>` (plus `--milestone-id <id>` if one exists) is the
-     next step. **On the Milestone path, task breakdown is fully
-     krill-native — no GitHub Project or tracking issue at all** — `plan`
-     creates real krill `Task` entities via `create_task`/
-     `declare_task_dependencies` and returns a task manifest (see
-     `krill-work/CONVENTIONS.md` "Work axis"). Without a Milestone id, `plan`
-     still falls back to a GitHub Project/tracking issue (no krill Task
-     container exists outside a Milestone, NFR7 — a real capability gap, not
-     a default). If no stakeholder meeting was held, mention
+     <feature-set-id> --milestone-id <id>` is next — `plan` creates real
+     krill `Task` entities via `create_task`/`declare_task_dependencies` and
+     returns a task manifest (see `krill-work/CONVENTIONS.md` "Work axis").
+     `plan` requires a Milestone; if this design wasn't scoped to one, cut
+     it first (`create_milestone`/`add_delivers`, CONVENTIONS.md "Milestone
+     required"). If no stakeholder meeting was held, mention
      `/krill-design:stakeholder-meeting <design-session-id>` is still
      available before implementation starts.
 
