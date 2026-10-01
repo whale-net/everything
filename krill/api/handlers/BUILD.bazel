@@ -142,7 +142,11 @@ go_library(
 # (task_requeue_test.go, issue #2876's Testing section: the same
 # session-derived pass-through/validation/NFR6 shape, plus
 # writeRequeueStoreError mapping ErrTaskNotEscalated/ErrTaskCancelled to
-# 409).
+# 409), and the product-wide per-container task-progress read's HTTP surface
+# (task_progress_test.go, FR 59f664ff: the ContainerTaskProgressWire
+# shape, total-is-the-per-lane-sum rule, has_tasks flag separating "No tasks
+# yet" from "0 of 0", the shared scope-param validation, and the
+# 404 ErrMilestoneOutsideProduct/unknown-product mappings).
 # fakeSessionStore/fake entity stores/fakeAmendStore/fakeDesignSessionStore/
 # fakeRevisionEventStore/fakeEntitySetQuerier/fakeTaskStore stand in for
 # krill/store's (and krill/slice's) interfaces, so none of this needs
@@ -206,6 +210,7 @@ go_test(
         "task_observed_state_test.go",
         "task_payload_test.go",
         "task_product_list_test.go",
+        "task_progress_test.go",
         "task_reclaim_test.go",
         "task_release_test.go",
         "task_requeue_test.go",

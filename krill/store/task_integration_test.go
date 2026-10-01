@@ -8,7 +8,11 @@
 // validation branch (out of order, duplicate, empty, starting lane not a
 // member, and a lane-skipping sequence accepted), and NFR1/NFR3's
 // scope_id/two-subject attribution, plus ListTasksByMilestone (issue
-// #2941). See store_integration_test.go's
+// #2941) and the product-wide reads over them -- ListProductTasks (FR
+// cfcd1104) and SummarizeProductTaskProgress (FR 59f664ff: per-container
+// totals, per-lane counts, cancelled counting, the backlog-bucket
+// exclusion, the incomplete-container predicate, and the aggregate's
+// empty-vs-unknown-product disambiguation). See store_integration_test.go's
 // package doc for why this file only builds under the "integration" build
 // tag.
 //
@@ -1368,4 +1372,138 @@ func TestTaskStore_SummarizeProductTaskProgress_IncompletePredicate(t *testing.T
 	// its own milestone is out of scope, and the milepebble never covered
 	// it. The task read agrees -- that task is in neither listing.
 	assert.NotContains(t, rowTaskIDs(listIncomplete(t, ctx, s, scopeID, fx.productID)), shippedDirect.ID)
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_BacklogBucketIsNeverAContainer
+// is the backlog half of the scope rule. The bucket is a milestone_ref row
+// like any other, so the read's own kind filter is the only thing keeping
+// it out -- a progress list must never show a "Backlog" progress bar for
+// work that is not being delivered. CreateTask refuses to scope a task to
+// the bucket, so the row is inserted directly: this proves the read's
+// exclusion rather than leaning on the write-path refusal.
+func TestTaskStore_SummarizeProductTaskProgress_BacklogBucketIsNeverAContainer(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	backlog, err := s.Recut().GetOrCreateBacklog(ctx, scopeID, fx.productID, self, self)
+	require.NoError(t, err)
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task (
+			scope_id, milestone_id, title, lane_sequence, current_lane,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, 'stranded in the backlog', ARRAY['Scaffold'], 'Scaffold',
+			$3, $3, $4, $3, $3, $4)
+		RETURNING id
+	`, scopeID, backlog.ID, self.Iss, string(self.Kind)).Scan(new(uuid.UUID)))
+
+	ours := createProductTask(t, ctx, s, scopeID, fx.uncutID, "real work", self)
+	progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+
+	assert.NotContains(t, containerIDs(progress), backlog.ID,
+		"the backlog bucket is never a container in the progress aggregate")
+	assert.Equal(t, 1, containerRow(t, progress, fx.uncutID, uuid.Nil).Total(),
+		"the real milestone's count is unaffected by the bucket")
+
+	// The task read agrees, so no caller can find the stranded task under
+	// one read and not the other.
+	assert.Equal(t, []uuid.UUID{ours.ID}, rowTaskIDs(listIncomplete(t, ctx, s, scopeID, fx.productID)))
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_NoContainers_IsNotAnUnknownProduct
+// covers the aggregate's one probe. An empty Containers slice is ambiguous
+// -- a product whose every container is shipped looks exactly like a
+// product id that does not exist -- so the read resolves it: the former is
+// an empty success, the latter ErrNotFound. A caller must never read "no
+// tasks yet" where the truth is "no such product".
+func TestTaskStore_SummarizeProductTaskProgress_NoContainers_IsNotAnUnknownProduct(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// Every container shipped, so nothing is in the incomplete scope.
+	setContainerStatus(t, ctx, s, scopeID, fx.uncutID, store.MilestoneStatusShipped, self)
+	setContainerStatus(t, ctx, s, scopeID, fx.cutID, store.MilestoneStatusShipped, self)
+	setContainerStatus(t, ctx, s, scopeID, fx.pebbleID, store.MilestoneStatusShipped, self)
+
+	t.Run("an existing product with no in-scope container is an empty success", func(t *testing.T) {
+		progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+		assert.Empty(t, progress.Containers)
+		assert.NotNil(t, progress.Containers, "never nil: a caller indexes it without a check")
+		assert.Equal(t, fx.productID, progress.ProductID)
+	})
+
+	t.Run("a product with no current row is ErrNotFound", func(t *testing.T) {
+		progress, err := s.Tasks().SummarizeProductTaskProgress(ctx, store.ProductTaskProgressParams{
+			ScopeID:   scopeID,
+			ProductID: uuid.New(),
+			Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		})
+		require.ErrorIs(t, err, store.ErrNotFound)
+		assert.Empty(t, progress.Containers, "a refused product yields no rows at all")
+	})
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_SingleContainerScopes is the
+// two non-default scopes: a milestone scope reports the milestone AND its
+// milepebbles (the whole cut, the same rows the product-wide scope would
+// report for that milestone), and a milepebble scope reports only that
+// milepebble. Both answer whatever the container's status is, and both leave
+// the product's other containers out entirely.
+func TestTaskStore_SummarizeProductTaskProgress_SingleContainerScopes(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "pebble work", self)
+	createLaneTask(t, ctx, s, scopeID, fx.pebbleID, "pebble done", store.LaneDone, self)
+	createProductTask(t, ctx, s, scopeID, fx.uncutID, "elsewhere", self)
+	// Shipped or not, a named container is still reported.
+	setContainerStatus(t, ctx, s, scopeID, fx.cutID, store.MilestoneStatusShipped, self)
+	setContainerStatus(t, ctx, s, scopeID, fx.pebbleID, store.MilestoneStatusShipped, self)
+
+	read := func(scope store.ProductTaskScope) store.ProductTaskProgress {
+		t.Helper()
+		progress, err := s.Tasks().SummarizeProductTaskProgress(ctx, store.ProductTaskProgressParams{
+			ScopeID: scopeID, ProductID: fx.productID, Scope: scope,
+		})
+		require.NoError(t, err)
+		return progress
+	}
+
+	t.Run("milestone scope is the whole cut", func(t *testing.T) {
+		progress := read(store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: fx.cutID})
+		assert.Equal(t, []uuid.UUID{fx.cutID, fx.pebbleID}, containerIDs(progress))
+		assert.Equal(t, 2, containerRow(t, progress, fx.cutID, uuid.Nil).Total(),
+			"the milestone's own row covers its milepebbles' tasks")
+		assert.Equal(t, 2, containerRow(t, progress, fx.cutID, fx.pebbleID).Total())
+		assert.Equal(t, 1, containerRow(t, progress, fx.cutID, fx.pebbleID).Done())
+	})
+
+	t.Run("milepebble scope is that milepebble alone", func(t *testing.T) {
+		progress := read(store.ProductTaskScope{Kind: store.ProductTaskScopeMilepebble, ContainerID: fx.pebbleID})
+		assert.Equal(t, []uuid.UUID{fx.pebbleID}, containerIDs(progress))
+		row := containerRow(t, progress, fx.cutID, fx.pebbleID)
+		assert.Equal(t, 2, row.Total())
+		require.NotNil(t, row.Milepebble)
+		assert.Equal(t, store.MilestoneStatusShipped, row.Milepebble.Status, "a named container is reported whatever its status")
+		assert.Equal(t, store.MilestoneStatusShipped, row.Milestone.Status)
+	})
+
+	t.Run("an unknown scope kind is refused", func(t *testing.T) {
+		_, err := s.Tasks().SummarizeProductTaskProgress(ctx, store.ProductTaskProgressParams{
+			ScopeID:   scopeID,
+			ProductID: fx.productID,
+			Scope:     store.ProductTaskScope{Kind: "everything"},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown product task scope kind")
+	})
 }
