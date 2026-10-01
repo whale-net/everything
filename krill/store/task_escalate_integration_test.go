@@ -10,7 +10,11 @@
 // task_escalation_event exists, reason 'manual', even when the force-close
 // itself crosses DefaultAttemptCap), escalating an already-escalated task
 // (this task's own documented choice: reject by reusing ErrTaskEscalated,
-// no second active escalation), and escalating a cancelled task refused.
+// no second active escalation), escalating a cancelled task refused, and
+// escalating a task already in the terminal Done lane refused with its own
+// named error -- with that refusal leaving a Done-lane task's live claim
+// untouched, and with the counter-driven reasons other verbs record
+// unaffected by it.
 // Shares
 // task_integration_test.go's test-store/test-scope/test-world/subject
 // helpers, task_dependency_integration_test.go's createTestTask helper,
@@ -28,6 +32,7 @@ package store_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -411,4 +416,186 @@ func TestTaskStore_EscalateTask_NoExpectedClaimID_Unguarded(t *testing.T) {
 	})
 	require.NoError(t, err, "omitting the expected id must leave today's behaviour untouched")
 	assert.True(t, result.ClaimForceClosed)
+}
+
+// TestTaskStore_EscalateTask_DoneLaneTask_Refused is a manual escalate of
+// a task already in the terminal Done lane: refused with the named
+// ErrTaskAlreadyDone, writing no escalation event, no intervention event
+// and no force-closed claim.
+func TestTaskStore_EscalateTask_DoneLaneTask_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "done-lane escalate", self)
+	setTaskLane(t, ctx, db, task.ID, store.LaneDone)
+
+	_, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.Error(t, err, "a manual escalate of a Done-lane task must be refused")
+	assert.ErrorIs(t, err, store.ErrTaskAlreadyDone)
+
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_escalation_event", task.ID), "a refused Done-lane escalate must record no escalation event")
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_intervention_event", task.ID), "a refused Done-lane escalate must write no intervention event")
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CurrentEscalationID, "the refused escalate must leave the task un-escalated")
+	assert.Equal(t, 0, got.AttemptCount, "a refused escalate must not count an attempt")
+}
+
+// TestTaskStore_EscalateTask_DoneLaneTask_RefusalIsDistinct pins the named
+// error apart from every neighbouring refusal, so a client can tell "the
+// task is finished" from the cancelled, already-escalated and
+// observed-state-mismatch conditions without parsing message text.
+func TestTaskStore_EscalateTask_DoneLaneTask_RefusalIsDistinct(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "done-lane escalate distinct", self)
+	setTaskLane(t, ctx, db, task.ID, store.LaneDone)
+
+	_, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.Error(t, err)
+	for _, other := range []error{store.ErrTaskCancelled, store.ErrTaskAlreadyCancelled, store.ErrTaskEscalated, store.ErrObservedStateMismatch} {
+		assert.NotErrorIs(t, err, other, "the Done-lane refusal must be distinguishable from %v", other)
+	}
+}
+
+// TestTaskStore_EscalateTask_DoneLaneTask_BeatsObservedMismatch fixes the
+// ordering inside the row-locked transaction: a Done-lane task holds no
+// claim, so an escalate carrying a claim the caller observed is refused
+// for the reason that is true of the task (it is finished) rather than
+// for the claim guard, which is a statement about what moved since the
+// caller's read.
+func TestTaskStore_EscalateTask_DoneLaneTask_BeatsObservedMismatch(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "done then guarded escalate", self)
+	setTaskLane(t, ctx, db, task.ID, store.LaneDone)
+
+	staleClaim := uuid.New()
+	_, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+		ExpectedClaimID: &staleClaim,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrTaskAlreadyDone)
+	assert.NotErrorIs(t, err, store.ErrObservedStateMismatch)
+}
+
+// TestTaskStore_EscalateTask_NonTerminalLane_StillEscalates is the
+// back-compat half of the Done-lane refusal: every other lane, including
+// the last non-terminal one, still records the manual escalation, so the
+// check is on the terminal lane specifically and not on "late in the
+// sequence".
+func TestTaskStore_EscalateTask_NonTerminalLane_StillEscalates(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "validation-lane escalate", self)
+	setTaskLane(t, ctx, db, task.ID, store.LaneValidation)
+
+	result, err := s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err, "a non-terminal lane must still be manually escalatable")
+	assert.Equal(t, store.LaneValidation, result.EscalationEvent.LaneAtEscalation)
+}
+
+// TestTaskStore_EscalateTask_DoneLaneClaimedTask_Refused is the Done-lane
+// refusal against a task that still holds a live claim -- the shape the
+// unclaimed-task cases above cannot reach. The refusal must leave the
+// caller's task exactly as it found it: the claim unreleased and still
+// current, no attempt counted, no force-closed task_attempt row and no
+// event of either kind written. An operator whose escalate is refused has
+// not touched the claimant's lease, which is what makes the refusal safe to
+// retry or ignore rather than a destructive error.
+func TestTaskStore_EscalateTask_DoneLaneClaimedTask_Refused(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "done lane with live claim", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	setTaskLane(t, ctx, db, task.ID, store.LaneDone)
+
+	_, err = s.Tasks().EscalateTask(ctx, store.EscalateParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.Error(t, err, "a Done-lane task must be refused even while it still holds a live claim")
+	assert.ErrorIs(t, err, store.ErrTaskAlreadyDone)
+
+	var releasedAt *time.Time
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT released_at FROM task_claim WHERE id = $1`, claim.ID).Scan(&releasedAt))
+	assert.Nil(t, releasedAt, "a refused Done-lane escalate must not force-close the claim")
+
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_escalation_event", task.ID), "no escalation event may be written")
+	assert.Equal(t, 0, countRows(t, ctx, db, "task_intervention_event", task.ID), "no intervention event may be written")
+	assert.Equal(t, 1, countRows(t, ctx, db, "task_attempt", task.ID), "only the claim's own row may exist -- the refused call must not record a force-closed attempt")
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.CurrentEscalationID, "the task must be left un-escalated")
+	assert.Equal(t, 0, got.AttemptCount, "a refused escalate must not count an attempt")
+	require.NotNil(t, got.CurrentClaimID)
+	assert.Equal(t, claim.ID, *got.CurrentClaimID, "the claim must still be the task's current one")
+}
+
+// TestTaskStore_EscalateTask_AutomaticEscalation_UnaffectedByDoneRefusal
+// pins the criterion that this refusal is manual-only: the counter-driven
+// reasons other verbs record reach recordEscalationTx directly, never
+// through EscalateTask, so an attempt-cap escalation on a Done-lane task is
+// still recorded. Were the Done check ever pushed down into
+// recordEscalationTx, this would start failing with ErrTaskAlreadyDone --
+// which is exactly the regression the criterion rules out.
+func TestTaskStore_EscalateTask_AutomaticEscalation_UnaffectedByDoneRefusal(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "done lane automatic cap", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	setTaskLane(t, ctx, db, task.ID, store.LaneDone)
+	_, err = db.Pool.Exec(ctx, `UPDATE task SET attempt_count = $1 WHERE id = $2`, store.DefaultAttemptCap-1, task.ID)
+	require.NoError(t, err)
+
+	result, err := s.Tasks().AbandonClaim(ctx, store.AbandonParams{
+		ScopeID: scopeID, TaskID: task.ID, ClaimID: claim.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err, "the Done-lane refusal is manual-only -- an attempt-cap escalation is still recorded")
+	assert.True(t, result.CapExhausted)
+	require.NotNil(t, result.EscalationReason)
+	assert.Equal(t, store.EscalationReasonAttemptCap, *result.EscalationReason)
+
+	var reason string
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT reason FROM task_escalation_event WHERE task_id = $1`, task.ID).Scan(&reason))
+	assert.Equal(t, string(store.EscalationReasonAttemptCap), reason, "the automatic reason must be recorded unchanged")
 }

@@ -122,9 +122,9 @@ func TestEscalateTaskHandler_UnknownField_Rejected(t *testing.T) {
 // TestEscalateTaskHandler_StoreRejection_MappedToStatus proves
 // writeStoreError maps EscalateTask's own named rejections onto the right
 // status: ErrTaskEscalated (this task's own choice for an already-
-// escalated task), ErrTaskCancelled and the observed-state guard's
-// ErrObservedStateMismatch to 409, ErrNotFound to 400 -- never a 500 for
-// any of them.
+// escalated task), ErrTaskCancelled, ErrTaskAlreadyDone and the
+// observed-state guard's ErrObservedStateMismatch to 409, ErrNotFound to
+// 400 -- never a 500 for any of them.
 func TestEscalateTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err  error
@@ -135,7 +135,9 @@ func TestEscalateTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 		// The observed-state guard's own refusal gets the same 409 as every
 		// other guarded intervention, and never a 500.
 		"observed state mismatch": {store.ErrObservedStateMismatch, http.StatusConflict},
-		"not found":               {store.ErrNotFound, http.StatusBadRequest},
+		// A manual escalate of a Done-lane task shares that same 409.
+		"already done": {store.ErrTaskAlreadyDone, http.StatusConflict},
+		"not found":    {store.ErrNotFound, http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sessions, _, sessionIDStr := newTestSession(t)

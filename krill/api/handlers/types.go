@@ -92,6 +92,10 @@ func isUniqueViolation(err error) bool {
 //   - store.ErrObservedStateMismatch (the observed-state guard shared by
 //     release/requeue/cancel/escalate, task_observed_state.go) -- the
 //     claim or escalation the caller observed is no longer current    -> 409
+//   - store.ErrTaskAlreadyDone (a manual escalate of a task already in
+//     the terminal Done lane, task_escalate.go) -- the task is finished,
+//     nothing left to recover; the same 409, mapped alongside the
+//     observed-state refusal rather than by a second table             -> 409
 //   - store.ErrNameConflict (an amend's replacement name collides with a
 //     live sibling, errors.go) / a scope-qualified unique-constraint
 //     violation                                                  -> 409
@@ -124,6 +128,11 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		// the answer is the same for every guarded intervention -- re-read
 		// the row and decide again (release, escalate).
 		errors.Is(err, store.ErrObservedStateMismatch),
+		// A manual escalate of a Done-lane task: the request was
+		// well-formed and the answer is a conflict for the same reason
+		// the guard above is -- the row is not in a state this verb acts
+		// on -- so it shares that one case instead of adding its own.
+		errors.Is(err, store.ErrTaskAlreadyDone),
 		errors.Is(err, store.ErrNameConflict),
 		// Void's two refusals (FR 2a3a8eef). Both are conflicts, not bad
 		// requests: the request was well-formed, but the target is spoken

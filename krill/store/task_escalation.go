@@ -185,6 +185,16 @@ var ErrTaskEscalated = errors.New("krill/store: task is escalated")
 // task's cancelled_at is non-NULL (FR7's dead-letter terminal state).
 var ErrTaskCancelled = errors.New("krill/store: task is cancelled")
 
+// ErrTaskAlreadyDone is EscalateTask's (task_escalate.go) named rejection
+// of a manual escalation of a task already in the terminal Done lane. A
+// finished task has no operator to recover it for -- an escalation would
+// only produce an intervention event on a task no requeue or claim can
+// act on again. Distinct from ErrTaskCancelled (a dead-lettered task),
+// ErrTaskEscalated (a task with one live escalation) and
+// ErrObservedStateMismatch (a claim that moved since the caller's read),
+// which are separate conditions with separate next steps.
+var ErrTaskAlreadyDone = errors.New("krill/store: task is already in the terminal Done lane")
+
 // ErrTaskNotEscalated is a later verb's named rejection (FR6's requeue) of
 // an attempt to resolve an escalation on a task that has none active --
 // declared here so that verb's own task validates against this one
