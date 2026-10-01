@@ -211,6 +211,8 @@ func run() error {
 	// reparent_feature rides the same fan-out: it is the move verb an amend
 	// refusal names, so the two have to land on the same mount together.
 	tools.RegisterAmendAll(designReg, sessions, entities.Amend(), entities.Reparent())
+	// amend_note: append-only note correction (new row superseding the old).
+	tools.RegisterAmendNote(designReg, sessions, entities.Tasks())
 	// void_entity: the tombstone verb (the SCD2 close-WITHOUT-successor),
 	// and list_void_events, its audit read. The MCP twin of the seven
 	// POST /{kind}/{id}/void routes, with the kind as an argument rather

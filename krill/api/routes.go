@@ -290,6 +290,8 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, ide
 	mux.Handle("POST /non-goals/{id}/amend", gate(handlers.AmendNonGoalHandler(entities.Amend())))
 	mux.Handle("POST /load-bearing-decisions/{id}/amend", gate(handlers.AmendLoadBearingDecisionHandler(entities.Amend())))
 	mux.Handle("POST /milestones/{id}/amend", gate(handlers.AmendMilestoneHandler(entities.Amend())))
+	mux.Handle("POST /milepebbles/{id}/amend", gate(handlers.AmendMilepebbleHandler(entities.Amend())))
+	mux.Handle("POST /notes/{id}/amend", gate(handlers.AmendNoteHandler(entities.Tasks())))
 
 	// void: the tombstone verb, the other half of the LB3 boundary call
 	// amend draws. Every void-able spec-axis kind has one; a Milestone does

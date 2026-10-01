@@ -270,3 +270,21 @@ func AmendMilestoneHandler(amend store.AmendStore) http.HandlerFunc {
 		finishAmend(w, err, amended.ID)
 	}
 }
+
+// AmendMilepebbleHandler returns POST /milepebbles/{id}/amend: the milepebble
+// twin of AmendMilestoneHandler, refusing an id that is not a milepebble.
+// Must be mounted behind RequireSession.
+func AmendMilepebbleHandler(amend store.AmendStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := beginAmend(w, r)
+		if !ok {
+			return
+		}
+		var req amendMilestoneRequest
+		if !decodeAmendBody(w, r, amend, id, "milepebble", &req, &req.AmendPlacementChange, func() string { return req.Name }) {
+			return
+		}
+		amended, err := amend.AmendMilepebble(r.Context(), id, req.Name, req.Outcome)
+		finishAmend(w, err, amended.ID)
+	}
+}

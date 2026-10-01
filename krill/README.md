@@ -96,6 +96,8 @@ tools share.
 | `move_delivery_scope`, `get_backlog` | `RecutStore` (FR5) |
 | `abandon_milestone` | `AbandonStore` (FR6) |
 | `list_product_delivery` | `slice.Querier.ListProductDelivery` (FR11) |
+| `amend_milepebble` | `AmendStore.AmendMilepebble` (FR c3455d39) -- replaces name + outcome as a new SCD2 revision under the same id; FR budget, status history and delivery axis untouched. Also `POST /milepebbles/{id}/amend`. |
+| `amend_note` | `TaskStore.AmendNote` (FR e18afe39) -- appends a new note row superseding the old (retained, linked by `supersedes_note_id`, migration 030); the new row keeps kind and lifecycle status. Also `POST /notes/{id}/amend`. |
 
 ## Work-axis endpoints (M4, issues #2719-#2728)
 

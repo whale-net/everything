@@ -75,10 +75,7 @@ func ListEntityNotes(ctx context.Context, scopes NoteEntityScopes, tasks store.T
 	resp := ListEntityNotesResponse{
 		EntityKind: string(kind),
 		EntityID:   id.String(),
-		Notes:      make([]NoteWire, len(notes)),
-	}
-	for i, n := range notes {
-		resp.Notes[i] = toNoteResponse(n)
+		Notes:      toNoteResponses(notes),
 	}
 	return resp, nil
 }

@@ -370,6 +370,10 @@ type TaskStore interface {
 	// entity_kind/entity_id -- see Note's own doc comment (task_note.go).
 	TransitionNoteLifecycle(ctx context.Context, params TransitionNoteLifecycleParams) (NoteLifecycleEvent, error)
 
+	// AmendNote appends a new note row superseding NoteID (task_note_amend.go),
+	// keeping the old row; ErrNoteAlreadySuperseded if it already has a successor.
+	AmendNote(ctx context.Context, params AmendNoteParams) (Note, error)
+
 	// ListOpenNotes returns every note in params.ScopeID whose
 	// current_status is NoteLifecycleStatusNoted (task_note_console.go,
 	// issue #2874, FR12), bounded and continuable per params.Page (NFR6) --

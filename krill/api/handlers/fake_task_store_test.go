@@ -54,6 +54,9 @@ import (
 // assert scope_id/subject-pair pass-through, NFR1/NFR6) and can be told
 // to fail with a fixed error.
 type fakeTaskStore struct {
+	amendNoteParams store.AmendNoteParams
+	amendNoteResult store.Note
+
 	createErr error
 
 	gotParams store.CreateTaskParams
@@ -327,3 +330,8 @@ func (f *fakeTaskStore) ListTasksByMilestone(ctx context.Context, milestoneID uu
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)
+
+func (f *fakeTaskStore) AmendNote(ctx context.Context, params store.AmendNoteParams) (store.Note, error) {
+	f.amendNoteParams = params
+	return f.amendNoteResult, nil
+}
