@@ -260,7 +260,7 @@ func (s amendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name strin
 		func(ctx context.Context, q txQuerier, current MilestoneRef) (MilestoneRef, error) {
 			args := []any{
 				current.ID, current.ScopeID, current.ProductID, name, string(current.Kind), outcome,
-				current.FRBudget, current.Position, current.ParentMilestoneID,
+				current.FRBudget, current.Position, current.ParentMilestoneID, current.Notes,
 			}
 			args = append(args, subjectArgs(current.CreatedByActing)...)
 			args = append(args, subjectArgs(current.CreatedByOnBehalfOf)...)
@@ -268,11 +268,11 @@ func (s amendStore) AmendMilestone(ctx context.Context, id uuid.UUID, name strin
 
 			amended, err := scanMilestoneRef(q.QueryRow(ctx, `
 				INSERT INTO milestone_ref (
-					id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id,
+					id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id, notes,
 					created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
 					created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind,
 					created_at
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 				RETURNING `+milestoneRefColumns, args...))
 			return amended, errNameConflict("milestone_ref", "insert amended milestone_ref", err)
 		})
