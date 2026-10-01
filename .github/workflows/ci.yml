@@ -293,7 +293,7 @@ jobs:
         # Uses oci_image_index with platform transitions for true multiarch images
         # If this fails, ARM64 deployments will crash at runtime!
         echo "::group::Cross-Compilation Verification"
-        bazel test --config=ci //tools/scripts:test_cross_compilation --test_output=streamed
+        bazel test --config=ci //tools/scripts:test_cross_compilation
         echo "::endgroup::"
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
@@ -338,6 +338,14 @@ jobs:
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
         bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+
+    - name: Pre-pull test container images
+      run: |
+        # Pulled in parallel up front so a slow registry doesn't eat the
+        # per-test container startup timeout.
+        docker pull postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea &
+        docker pull cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1 &
+        wait
 
     - name: Run container-backed database tests
       run: |
@@ -417,7 +425,7 @@ jobs:
         echo "::group::Database Integration Tests"
         # No --test_tag_filters: combining it with explicit labels makes Bazel
         # report "No test targets were found" (see libs/go/dbtest/README.md).
-        bazel coverage --config=ci $TARGETS --test_output=streamed
+        bazel coverage --config=ci $TARGETS
         echo "::endgroup::"
         bazel shutdown
 
