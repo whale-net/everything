@@ -1,6 +1,6 @@
 ---
 name: product
-description: Scope a product before any feature spec exists — interviews you for vision, personas, and a capability map, has the architect record current state and the load-bearing decisions that later capabilities depend on, then breaks the product into milestones as krill entities (Product, FeatureSet, LoadBearingDecision, Milestone). Run this first when a request is a whole product/app rather than one feature; each milestone is then specced with /krill-design:design <product-id> --milestone M<n>. Also the right target for "scope this out", "what should v1 be", "break this into milestones", or when a design has ballooned past ~20 FRs.
+description: Scope a product before any feature spec exists — interviews you for vision, personas, and a capability map, has the architect record current state and the load-bearing decisions that later capabilities depend on, then breaks the product into milestones as krill entities (Product, FeatureSet, LoadBearingDecision, Milestone). Run this first when a request is a whole product/app rather than one feature; each milestone is then specced with /krill-design:design <product-id> --milestone M<n>. Also the right target for "scope this out", "what should v1 be", "break this into milestones", or when a design has ballooned far past ~12 FRs per milepebble.
 ---
 
 # product
@@ -39,8 +39,8 @@ design-session mechanics.
 A single feature added to an existing system goes straight to
 `/krill-design:design`. Use this skill when the request is a product or
 subsystem that doesn't exist yet, when "what's in v1" is genuinely
-unsettled, or when a design has ballooned past ~20 FRs (feed the ballooned
-draft in as the description). If a single *milestone's* design re-balloons,
+unsettled, or when a design has ballooned far past ~12 FRs per milepebble (feed the
+ballooned draft in as the description). If a single *milestone's* design re-balloons,
 prefer splitting the roadmap with an extra milestone unless it genuinely
 spans a new domain-sized subsystem.
 
@@ -144,14 +144,17 @@ every FR traces to a capability the milestone delivers.
    per LB, `create_milestone` per roadmap entry (with `add_delivers`,
    `add_must_not_foreclose`, `add_deferral`). This skill runs its own gate
    rather than `/krill-design:review`, which gates a milestone design.
-8. **Amendment (existing product).** Reality changes roadmaps, but the
-   brief is never edited silently: producer (Mode P2) drafts the change as
+8. **Amendment (existing product).** Also the route when `/krill-work:plan`
+   stops for want of a Milestone: cut it here. Reality changes roadmaps, but
+   the brief is never edited silently: producer (Mode P2) drafts the change as
    further `append_revision_event` calls (or a new session), architect
    reconciles it when it touches load-bearing decisions or milestone
    ordering (recording that it reconciled even when it finds no impact),
    the user approves the diff, then producer applies it with the relevant
-   authoring/amend tools (`amend_load_bearing_decision`, `add_deferral`,
-   `move_delivery_scope`, `create_milestone`, ...). Never rewrite a shipped
+   authoring/amend tools (every entity has one: `amend_product`, `amend_feature_set`, `amend_feature`, `amend_requirement`,
+   `amend_load_bearing_decision`, `amend_persona`, `amend_non_goal`,
+   `amend_milestone`, `amend_milepebble`, `amend_deferral`;
+   plus `add_deferral`, `move_delivery_scope`, `create_milestone`, ...). Never rewrite a shipped
    milestone's history — ship what shipped, change what's ahead.
 9. **Hand off.** Tell the user the brief is written and that
    `/krill-design:design <product-id> --milestone M1` is next, and name

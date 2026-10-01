@@ -20,8 +20,7 @@ than pausing the loop.
 
 Exactly one of two dispatch shapes, named in your prompt:
 
-- **Ruling** — a design-session id, the meeting discussion URL(s) for the
-  round(s) still blocked, and the round number.
+- **Ruling** — a design-session id and the round number(s) still blocked.
 - **Agent review** — a design-session id, told that architect has signed off
   (a `reconciliation` event with no open blocking questions — see
   `architect.md`) and the stakeholder meeting (if any) is cleared or already
@@ -32,15 +31,15 @@ Exactly one of two dispatch shapes, named in your prompt:
 Dispatched when `/krill-design:stakeholder-meeting`'s own cap is hit with
 blockers still standing.
 
-1. **Read every standing blocker.** Follow the `Stakeholder meeting round
-   <N>: <url>` link comments (the meeting mechanic stays on GitHub
-   Discussions) back to each round's minutes comment; take the consolidated
-   blockers (`SB-<round>.<n>`) that producer's prior response did not
-   resolve to the raising persona's satisfaction.
+1. **Read every standing blocker.** `list_open_questions {design_session_id,
+   blocking: true}` and `get_design_session` for the round's `SB-<round>.<n>`
+   blockers (CONVENTIONS.md "Stakeholder meeting records"); take those that
+   producer's prior `answer` did not resolve to the raising persona's
+   satisfaction.
 2. **Read the design.** `get_design_session_slice {design_session_id}` for
    the current entity state, plus the affected domain's `TOC.md`/
-   `ARCHITECTURE.md`/`PRODUCT.md` (if a milestone) for the constraints a
-   human reviewer would actually check against.
+   `ARCHITECTURE.md` and, if milestone-scoped, `get_milestone {id}`, for the
+   constraints a human reviewer would actually check against.
 3. **Decide each standing blocker independently:**
    - **Sustain** — the blocker is valid: state the specific Requirement
      change producer must make. Vague concerns don't get sustained on
@@ -58,12 +57,14 @@ blockers still standing.
      // verified_against is forbidden on a ruling event
    }
    ```
-   The event itself just marks that a ruling happened at this point in the
-   log and has no body field, so post the per-blocker Sustain/Overrule
-   reasoning and the closing tally (`<s> sustained, <o> overruled`) as a
-   `Reviewer ruling (round <N>)` comment on the meeting discussion. Return
-   only the tally and that comment's URL to `loop-design-panel`, which hands
-   the URL (not the text) to producer for the next `answer` round.
+   Carry each decision in the event's `open_questions_delta`
+   (CONVENTIONS.md "Stakeholder meeting records"): `resolved` names every
+   overruled `SB-` id, with a non-blocking `SR-<round>.<n>` opened alongside
+   (`Overruled SB-<round>.<n>: <rationale>`); every sustained `SB-` id is
+   re-opened under the same id with text `Sustained: <the Requirement
+   change producer must make>`. Return only the tally (`<s> sustained, <o>
+   overruled`) to `loop-design-panel`, which hands producer the design-session
+   id and round number for the next `answer` round.
 5. **Return control** to `loop-design-panel` — you do not update entities
    yourself (that's producer's `propose_entities` job, fed by your ruling)
    and you do not re-run the stakeholder meeting.
@@ -78,12 +79,10 @@ held) is cleared or every standing blocker has a `ruling`.
    just the slice) and `get_design_session_slice` for the current entities.
 2. **Apply the same bar a human reviewer would:** does the design deliver
    what the intake asked for, is
-   any cheap non-blocking stakeholder feedback still unfolded for no stated
-   reason, does it stay inside its FR budget (per milepebble for a
-   krill-hosted milestone, default 12, the milestone itself uncapped —
-   CONVENTIONS.md "FR budget"; the roadmap's `FR budget` otherwise) and
-   cite `Delivers`
-   capabilities correctly, and are you willing to disagree with architect's
+   any cheap non-blocking stakeholder feedback (an open `SF-` question)
+   still unfolded for no stated reason, does it stay inside its FR budget
+   (per milepebble, default 12, the milestone itself uncapped —
+   CONVENTIONS.md "FR budget") and cite `Delivers` capabilities correctly, and are you willing to disagree with architect's
    `reconciliation` sign-off if you can point at something specific it
    missed?
 3. **Decide, by appending one `signoff` revision event:**
@@ -107,8 +106,8 @@ held) is cleared or every standing blocker has a `ruling`.
 
 - Entity edits, including via `propose_entities`, stay producer's job — same
   as with stakeholder feedback.
-- Task issues and a Project board are out of scope here; that starts only
-  once `krill-work:planner` is dispatched.
+- Task creation is out of scope here; it starts only once
+  `krill-work:planner` is dispatched.
 - If dispatched again after `loop-design-panel`'s own cap is already
   exhausted, say so plainly and let the orchestrator escalate to the human —
   don't manufacture another ruling to avoid stopping.

@@ -7,12 +7,12 @@ This file is symlinked into both plugins' directories — edit only here.
 
 ## Known limitations
 
-**A `gh issue`/`gh project` call anywhere in a Milestone-path step of
-`worker.md`/`validator.md`/`planner.md` is a bug — fix it, don't route
-around it.** On a krill-hosted Milestone, swimlane execution (claim, lane
-advance/revert, notes, dependencies) is entirely krill-native.
-`mergepush`'s `git`/`gh` calls are exempt — that's the actual merge
-mechanism, not spec/work tracking.
+**A GitHub issue or project call in any plugin step is a bug — fix it, don't
+route around it.** Spec, design, and work tracking (design sessions, milestone
+status, claim, lane advance/revert, notes, dependencies) is entirely
+krill-native. The only `git`/`gh` use is code integration: `mergepush`
+pushing task branches and opening/merging code PRs, and the worker/validator
+branch-and-worktree commit mechanics.
 
 @snippets/task-lifecycle-blocker.md
 
@@ -22,30 +22,23 @@ ops-write tools (`release_task`, `requeue_task`, `escalate_task`,
 `cancel_task`), `transition_note_lifecycle`, and every milestone/product/
 delivery-authoring tool (`create_product`, `create_feature_set`,
 `create_load_bearing_decision`, `create_persona`, `create_non_goal`,
-`amend_requirement`, `amend_load_bearing_decision`, `propose_entities`,
+`amend_product`, `amend_feature_set`, `amend_feature`, `amend_requirement`,
+`amend_load_bearing_decision`, `amend_persona`, `amend_non_goal`,
+`amend_milestone`, `amend_milepebble`, `amend_deferral`, `propose_entities`,
 `create_milestone`, `set_fr_budget`, `add_delivers`,
 `add_must_not_foreclose`, `add_deferral`, `create_milepebble`,
 `add_milepebble_scope`, `add_discovered_scope`, `move_delivery_scope`,
 `mark_delivered_item_shipped`, `abandon_milestone`, `set_milestone_status`).
 
-**Two open capability gaps, not plugin oversights:**
-1. **No Task container exists outside a Milestone/Milepebble** —
-   `create_task` requires `milestone_id`; a bare FeatureSet/Requirement id
-   is rejected (NFR7), and most domains' `PRODUCT.md` still isn't
-   krill-hosted. For that case, `krill-work` falls back to
-   GitHub Issues/a Project (see "No-Milestone GitHub fallback" below) —
-   say so explicitly when you take this path.
-2. **`list_tasks` covers milestone-wide task discovery, but not
-   claimability.** `list_tasks {milestone_id}` (ungated, any persona,
-   `/mcp/work`, also `/mcp/design`) returns every task under a
-   milestone/milepebble — id, title, `current_lane`, attempt count, and
-   whether a claim is currently live — so `planner`'s hand-carried summary
-   isn't the only way to find a milestone's task ids (see "Work
-   axis" below). It does **not** filter by claimable: unresolved
-   dependencies, the attempt cap, and an active escalation are invisible
-   to it — `claim_task` still needs a `task_id` already in hand, and a
-   caller still cross-checks `get_task {id}` per candidate before calling
-   it.
+**One open capability gap, not a plugin oversight:** `list_tasks
+{milestone_id}` (ungated, any persona, `/mcp/work`, also `/mcp/design`)
+returns every task under a milestone/milepebble — id, title, `current_lane`,
+attempt count, and whether a claim is currently live — so `planner`'s
+hand-carried summary isn't the only way to find a milestone's task ids (see
+"Work axis" below). It does **not** filter by claimable: unresolved
+dependencies, the attempt cap, and an active escalation are invisible to it —
+`claim_task` still needs a `task_id` already in hand, and a caller still
+cross-checks `get_task {id}` per candidate before calling it.
 
 Milestone authoring and delivery status/shipment/recut/abandon mount on
 `/mcp/design` (`krill/mcp/main.go`'s `designReg`); the work axis's own
@@ -155,42 +148,32 @@ name, vision}]}` (ungated, `/mcp/design`) is the discovery entry point for
 `get_product_slice`'s `product_id`; its `scope_id` comes from
 `init_session`'s response (see "Session bootstrapping" above).
 
-### record_note fallback for anchor-less designs
+### Stakeholder meeting records
 
-A design conversation normally gets a durable link comment posted somewhere
-GitHub-native — a Discussion link on the product tracking issue's `Ledger:`
-comment. That anchor doesn't exist for a krill-hosted product/milestone
-(one whose status is tracked purely via
-`set_milestone_status`/`get_milestone_status`, never a `Ledger:`
-tracking-issue comment — see "Milestone and delivery-axis tools" above).
-Any skill that needs to leave a durable pointer against a design in that
-situation (a stakeholder meeting round's link, an amendment note, or
-similar) uses this standardized fallback instead of improvising one per
-run:
+A stakeholder meeting round is recorded on the DesignSession itself, as open
+questions, so every persona reads it back with `list_open_questions`/
+`get_design_session` and no second store exists. The meeting skill appends
+one `reconciliation` event per round (the round reconciles the draft against
+each persona's needs; `verified_against` is required like any
+`reconciliation`) whose `open_questions_delta.opened` carries:
 
-- Call `record_note {entity_kind: "feature_set", entity_id: <anchor>,
-  kind: "comment", body: <the same fixed-format string the GitHub path
-  would have posted, e.g. "Stakeholder meeting round <N>: <url>">}`.
-- `<anchor>` is the FeatureSet the design's Requirements/Features roll up
-  under: read it from `get_design_session_slice`'s FeatureSet entries, or
-  — if the session's events never touched the FeatureSet itself, only
-  Features/Requirements under a pre-existing one — resolve it via that
-  Feature's/Requirement's `feature_set_id`.
-- `design_session` is not itself a valid `record_note` `entity_kind` (the
-  fixed enumeration is `product, feature_set, feature, requirement,
-  load_bearing_decision`), which is why the FeatureSet, not the session, is
-  the target.
-- Keep the body string identical in shape to whatever the GitHub-anchored
-  path would have posted, so both paths stay grep-discoverable the same
-  way — this is a location fallback, not a different format.
+- `SM-<N>` (`blocking: false`, opened **and** `resolved` in the same event) —
+  the round's marker: attending personas and `cleared` or `blocked (<k>
+  blockers)`. Counting `SM-` ids in `get_design_session` gives the next
+  round number.
+- `SB-<N>.<n>` (`blocking: true`) — a consolidated blocker: the Requirement
+  or entity id it attaches to, what breaks for the persona, and the outcome
+  that resolves it. Producer resolves it with an `answer` event, exactly like
+  an architect question.
+- `SF-<N>.<n>` (`blocking: false`) — guidance or non-blocking feedback,
+  text prefixed `Guidance (<persona>):` / `Feedback (<persona>):`. Producer
+  resolves it in an `answer` event once folded in or declined.
 
-`record_note` works from this dispatch — make the call; if it fails,
-report the exact error and the link/body text you tried to record so it
-isn't lost, and do not fall back to opening a GitHub Discussion/issue to
-route around it.
-
-See `krill-design:stakeholder-meeting`'s step 4 for the concrete
-application.
+`reviewer`'s ruling is a `ruling` event whose `resolved` names every
+overruled `SB-` id (each with a non-blocking `SR-<N>.<n>` opened alongside:
+`Overruled SB-<N>.<n>: <rationale>`) and which re-opens every sustained
+`SB-` id under the same id with text `Sustained: <the Requirement change
+producer must make>`.
 
 ## Milestone and delivery-axis tools
 
@@ -276,8 +259,7 @@ The full verb set: `create_task`, `declare_task_dependencies`,
 `claim_task`, `heartbeat_task`, `complete_task`, `abandon_task`,
 `record_note`, `transition_note_lifecycle`, plus `get_task` to re-read
 current state. **A krill `Task`'s `current_lane` is never stale** — every
-verb below mutates it directly; there is no second, GitHub-side source of
-truth on the Milestone path.
+verb below mutates it directly; there is no second source of truth.
 
 - `create_task {krill_session_id, milestone_id, title, body?,
   lane_sequence[], starting_lane}` → `{id}`. `lane_sequence` is an ordered
@@ -288,7 +270,7 @@ truth on the Milestone path.
   `PersonaSwarmOperator`** — works from an ordinary interactive session
   (the normal way this plugin is used). Fails "forbidden" under a fully
   unattended whagent-net-authenticated dispatch with no human present —
-  stop and say so plainly rather than falling back silently.
+  stop and say so plainly rather than working around it.
 - `declare_task_dependencies {krill_session_id, task_id,
   depends_on_task_ids[]}` — `task_id` is excluded from the claimable set
   until every id in `depends_on_task_ids` reaches its own `Done` lane.
@@ -357,96 +339,66 @@ Its `current_lane`/`attempt_count`/`has_live_claim` fields are a discovery
 aid, not a substitute for the real thing — still re-read each task's live
 state via `get_task {id}` before acting on it.
 
-For a FeatureSet with no krill Milestone to scope `create_task` to,
-`krill-work` runs on GitHub Issues and a Project's `Status` field instead —
-see "No-Milestone GitHub fallback" below. Every persona that takes that
-path must say so in its output.
+### Milestone required (hard stop)
 
-## No-Milestone GitHub fallback
+`create_task` needs a milestone/milepebble id, and every `krill-work` skill
+and persona that creates, finds, or validates tasks needs the same Milestone.
+When none scopes the work — or the product isn't hosted in krill at all —
+stop and say: "No krill Milestone scopes this work. Cut one first:
+`/krill-design:product <product-id>` to add a milestone to a krill-hosted
+product (or host a new one), then `/krill-design:design <product-id>
+--milestone M<n>`, then re-run." Never substitute an issue, a board, or any
+other tracking store.
 
-Used only when no krill Milestone scopes the work (see "Known
-limitations"). `OWNER` is `whale-net`, repo `whale-net/everything`.
+## Git hygiene
 
-**Tracking issue and Project.** The tracking issue (number `<n>`) is the
-root of the plan; its comments are the race-free ledger (never edit its
-body for progress). Planner sets up the Project once, idempotently — check
-`gh issue view <n> --comments` for a `Project board: <url>` comment first:
-`gh project create --owner whale-net --title "Plan: <title> (#<n>)"
---format json`, `gh project link <number> --owner whale-net --repo
-whale-net/everything`, then repurpose the built-in `Status` field to the
-swimlane options (`updateProjectV2Field` GraphQL mutation via `gh api
-graphql`): `Scaffold`, `Implementation`, `Testing`, `Validation`, `Done`,
-plus scope-note lanes `Noted`, `Carry-over`, `Deferred`. Finish with
-`gh issue comment <n> --body "Project board: <url>"`.
-
-**Task issues.** Planner creates one issue per cohesive vertical slice
-(not per file or per phase; no task-count cap), adds it to the Project, and
-sets `Status` to its starting lane (`gh issue create`, `gh project
-item-add`, `gh project item-edit ... --field Status --value <lane>`).
-Each body has `Part of #<n>`, an optional `Depends on: #<a>, #<b>` line,
-scope and acceptance criteria per phase, and file paths/targets. Sequence
-with expand-contract: additive tasks depend only on scaffolding; a task
-that changes or removes something existing callers use `Depends on:` every
-task that migrates those callers, so each task is safe to land on trunk on
-its own once validated.
-
-**Finding and claiming work.** Query one swimlane at a time: `gh project
-item-list <number> --owner whale-net --query "status:<Lane> no:assignee"
---format json`, filtered with `jq` to bodies matching `Part of #<n>`. A
-task is ready only when every `Depends on:` issue is `CLOSED` — check all
-dependencies in one aliased `gh api graphql` call, not one call each.
-Claim with `gh issue edit <task> --add-assignee @me`.
-
-**Lane moves (same semantics as `complete_task` verdicts).** Worker
-finishes a phase: comment a summary, set `Status` to the next lane, remove
-the assignee. A failed test or validation criterion: comment the defect,
-set `Status` back to `Implementation`, remove the assignee. Validator
-passing `Validation`: `gh issue close <task> --comment "Validated: ..."`
-and set `Status` to `Done`. Phase commits use `scaffold:` / `feat:` /
-`test:` prefixes with `Part of #<n>` in the body.
-
-**Git hygiene.** Each task gets its own branch and worktree and, once
-pushed, its own small PR based on its real dependency's branch (or `main`),
-merged into `main` continuously as soon as the task is `Done` and its
-dependencies are already on trunk.
+Each task gets its own branch and worktree and, once pushed, its own small
+PR based on its real dependency's branch (or `main`), merged into `main`
+continuously as soon as the task is `Done` and its dependencies are already
+on trunk. The PR is the code-review mechanism only; it carries no issue,
+board, or label bookkeeping, and task state lives in krill.
 - Only `implement`, `validate`, and `mergepush` run `git push`/`gh pr`;
   `worker`/`validator` write code only inside the worktree they're handed.
-- Branch name: `pm[<attempt>]-<n>/<task-issue>-<slug>` (slug = 3-5 word
-  kebab-case of the issue title). Before creating a branch, look for an
-  existing `pm*-<n>/<task-issue>-*` branch (local, then remote) and reuse
-  it; mint `pm2-`, `pm3-`, ... only when a branch must be abandoned. Never
-  delete and recreate the same name.
+- Branch name: `pm[<attempt>]-<milestone>/<task>-<slug>` (ids are the krill
+  Milestone and Task ids; slug = 3-5 word kebab-case of the task title).
+  Before creating a branch, look for an existing `pm*-<milestone>/<task>-*`
+  branch (local, then remote) and reuse it; mint `pm2-`, `pm3-`, ... only
+  when a branch must be abandoned. Never delete and recreate the same name.
 - Create with `git fetch origin main` then `git worktree add
-  .claude/worktrees/<task-issue> -b <branch> <fork-point>`, where
-  `<fork-point>` is `origin/main` (never local `main`) or the single
-  dependency's branch; with several dependency branches, fork from one and
-  `git merge --no-edit` the rest inside the worktree, resolving conflicts
-  before dispatching a worker. Set `git config rerere.enabled true` once.
+  .claude/worktrees/<task> -b <branch> <fork-point>`, where `<fork-point>`
+  is `origin/main` (never local `main`) or the single dependency's branch;
+  with several dependency branches, fork from one and `git merge --no-edit`
+  the rest inside the worktree, resolving conflicts before dispatching a
+  worker. Set `git config rerere.enabled true` once.
+- Phase commits use `scaffold:` / `feat:` / `test:` prefixes with
+  `krill task: <task-id>` in the body.
 - `mergepush` pushes each branch from its worktree, opens/finds its PR
   (`gh pr create --head <branch> --base <parent>`; title = task title,
-  body = `Task: #<task-issue>` plus 2-3 sentences of context, no closing
+  body = `krill task: <task-id>` plus 2-3 sentences of context, no closing
   keyword), then merges `Done` tasks in dependency order with
   `gh pr merge <branch> --squash` only when `mergeable` is `MERGEABLE` and
   every check has finished green. Pending/failing checks are a
   wait-for-next-batch condition, never a reason to merge anyway.
 - Before system validation, build a local, never-pushed integration branch
-  `pm-<n>-integration` from `main` by merging every task's tip.
-- Closing out: dispatch `mergepush` once more with every task as done,
-  verify every PR is `MERGED`, and comment `PRs: <url>, ...` on the
-  tracking issue (one `gh pr list --json number,url,headRefName` call).
+  `pm-<milestone>-integration` from `main` by merging every task's tip.
+- Closing out: dispatch `mergepush` once more with every task as done and
+  verify every PR is `MERGED` with one `gh pr list --json
+  number,url,headRefName` call.
 
-**System validation and scope notes.** After every task is `Done`,
-`system-validator` files finding issues on the Project at `Status:
-Validation` with `from:system-validator`; planner turns blocking findings
-into follow-up task issues starting in `Scaffold` or `Implementation`.
-Any persona noticing out-of-scope work files a scope-note issue at `Status:
-Noted` with `from:<persona>`; planner classifies each `Carry-over`
-(cross-cutting), `Deferred` (plan-specific cut), or closes it, and
-schedules real tasks for the first two.
+## System validation and scope notes
+
+After every task is `Done`, `system-validator` records each finding as a
+`scope-note` on the FeatureSet (`record_note`); `planner` turns blocking
+findings into follow-up tasks starting in `Scaffold` or `Implementation`
+and closes each note with `transition_note_lifecycle`. Any persona noticing
+out-of-scope work records a `scope-note` on its task (`record_note`);
+`planner` classifies each `carried-over` (cross-cutting), `deferred`
+(milestone-specific cut), or `closed`, and schedules real tasks for
+actioned ones.
 
 **Rate limits.** Never re-derive state the caller already resolved, batch
-same-shaped per-item calls (aliased GraphQL, one `gh pr list` + `jq`), and
-serialize anything touching `main`. On a `gh` rate-limit error (403 with
+same-shaped per-item calls (one `gh pr list` + `jq`), and serialize anything
+touching `main`. On a `gh` rate-limit error (403 with
 `x-ratelimit-remaining: 0`, or the secondary-limit message), back off and
 retry once before reporting failure.
 
@@ -475,8 +427,9 @@ Pass a body only when it has no krill home to read it from, and say so in
 the dispatch: live human input not yet recorded (e.g. `review`'s
 change-request text), and output a known blocker kept from being written
 (e.g. `system-validator` findings while `record_note` is blocked). For
-content that lives on GitHub (meeting minutes, reviewer rulings), pass the
-discussion/comment URL, not its text.
+meeting rounds and rulings, which live on the DesignSession as open
+questions (see "Stakeholder meeting records"), pass the design-session id
+and round number, not their text.
 
 **Dispatch prompt shape.** A persona's `agents/*.md` file is the subagent's
 system prompt — fully caller-invariant, and it always precedes the dispatch
@@ -503,5 +456,5 @@ instead of interleaving ids through prose.
 
 For the design axis, prefer one `get_design_session`/`get_design_session_slice`
 call over re-deriving state from a replayed event log yourself. For the work
-axis, never re-derive resolved state, batch same-shaped `gh` calls, and
+axis, never re-derive resolved state, batch same-shaped `gh pr` calls, and
 serialize anything touching `main`.

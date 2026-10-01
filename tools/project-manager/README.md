@@ -6,8 +6,8 @@ AGY and Claude Code plugin providing a multi-persona project-management pipeline
 **Superseded-in-progress by krill.** `krill/plugin/design` and
 `krill/plugin/work` are a first-iteration fork of this plugin's personas and
 skills, adapted to call krill's own MCP tools (design sessions, typed
-Feature/Requirement entities) on the design axis; the work axis still drives
-GitHub Issues/Projects, pending krill's M3/M4 work-tracking surface. This
+Feature/Requirement entities) on the design axis and krill Tasks on the work
+axis, with no GitHub issue/Project path. This
 plugin keeps working as-is — nothing here is deprecated yet — but new
 design-pipeline development should happen in krill's fork. See
 `krill/plugin/shared/CONVENTIONS.md`.

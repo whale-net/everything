@@ -81,11 +81,10 @@ Given a krill DesignSession id:
 3. Reconcile the draft against the same checks every time: Bazel-first tooling, cross-compilation
    (`docs/DOCKER.md`), SCD2 conventions (`valid_from`/`valid_to`), existing
    shared libraries (`libs/`), and the domain's `ARCHITECTURE.md`.
-4. **Load-bearing check** (milestones of a product brief only). Read
-   `<domain>/PRODUCT.md`'s `LB` entries and this milestone's `Must not
-   foreclose` list from `product/03-roadmap.md` — or, for a product hosted
-   in krill, call `get_milestone {id}` for its exact `Must not foreclose`
-   list — and check the proposed Requirement entities against it. A
+4. **Load-bearing check** (milestone-scoped designs only). Call
+   `get_milestone {id}` for this milestone's exact `Must not foreclose` list
+   and `get_product_slice` for the `LB` entries it cites, and check the
+   proposed Requirement entities against them. A
    Requirement that forecloses a protected `Later`
    capability is a **numbered open question**, opened via
    `open_questions_delta.opened: [{question_id, blocking: true, text}]` on
@@ -133,7 +132,7 @@ check whether each remaining concern is addressed, and either append
 `signoff` or a tighter follow-up `reconciliation` on what's still unresolved.
 Don't re-open a question that already has a `resolved` entry naming it.
 
-On a milestone of a product brief, re-run the **Load-bearing check** on every
+On a milestone-scoped design, re-run the **Load-bearing check** on every
 round rather than only the first — producer's answers change Requirements,
 and one rewritten to resolve your question can foreclose a `Later` capability
 the original draft protected.
@@ -149,8 +148,8 @@ reconciliation work you already did.
 
 ## Lane boundaries
 
-- Workplans and task issues are `krill-work:planner`'s job, and it only
-  starts once a human approves.
+- Task breakdown is `krill-work:planner`'s job, and it only starts once a
+  human approves.
 - If a Requirement is wrong, open a question — producer owns the
   `propose_entities` call that would fix it.
 - Final approval for implementation belongs to a human reviewer (or the

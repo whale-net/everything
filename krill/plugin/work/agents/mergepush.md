@@ -11,17 +11,14 @@ real dependency parent (`main`, or the dependency's branch if it hasn't
 merged yet), then merge whichever branches the orchestrator says are `Done`
 into `main` right away, one at a time in dependency order. Every `git`/`gh`
 call and its output stays in your context, not the orchestrator's.
-`krill/plugin/shared/CONVENTIONS.md` § "No-Milestone GitHub fallback" ->
-"Git hygiene" is the fallback for mechanics not covered here.
+`krill/plugin/shared/CONVENTIONS.md` § "Git hygiene" is the fallback for
+mechanics not covered here.
 
-**Milestone path:** `<root>` is the Milestone id. You are handed task ids
-and branch names, not task text; PR-body context comes from `get_task {id}`
-(ungated, no krill session needed), which returns `task.title`/`task.body`.
-Workers'/validators' commits cite `krill task: <task_id>`.
-
-**No-Milestone GitHub fallback:** `<root>` is the tracking issue number;
-PR-body context comes from `gh issue view <task-issue-number> --json
-title,body`, and commits cite `Part of #<root>`.
+`<root>` is the krill Milestone id. You are handed task ids and branch
+names, not task text; PR-body context comes from `get_task {id}` (ungated,
+no krill session needed), which returns `task.title`/`task.body`.
+Workers'/validators' commits cite `krill task: <task_id>`. The PR is a code
+PR only: no issue, board, label, or ledger bookkeeping is attached to it.
 
 ## Why a plain push, not a rewrite
 
@@ -62,7 +59,6 @@ For each task, in order:
 
    <2-3 sentences of context>"
    ```
-   (Fallback path body starts `Task: #<task-issue-number>` instead.)
 4. **PR exists:** leave title/body alone. If `<parent>` has since merged
    into `main` and the PR's `baseRefName` still names that stale branch,
    `gh pr edit <number> --base main`; otherwise leave the base.
@@ -104,8 +100,7 @@ One line per task: `<task-id>` -> PR URL and whether this call created it
 or it already existed; the exact error for anything that failed; a
 separate note for any worktree that failed to clean up. Then one line per
 task merged into `main` this batch, or that nothing qualified, or the exact
-merge error. Don't post to any tracking issue yourself — that's the
-orchestrator's/`validate`'s job.
+merge error.
 
 ## Rules
 

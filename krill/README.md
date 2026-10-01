@@ -446,26 +446,23 @@ the FR5-FR9 spec surface, plus (issue #2547) `krill-mcp-design-tilt`
 per mount per environment, since each is its own pre-filtered MCP endpoint.
 It also carries the design-axis personas (`producer`/`architect`/`reviewer`/
 `stakeholder`) and skills (`product`/`design`/`review`/
-`stakeholder-meeting`/`loop-design-panel`) which call krill's own MCP tools rather than driving GitHub
-Discussions. See `plugin/shared/CONVENTIONS.md`.
+`stakeholder-meeting`/`loop-design-panel`), which call krill's own MCP tools
+and record every design step, stakeholder round included, on the
+DesignSession. See `plugin/shared/CONVENTIONS.md`.
 
 `plugin/work/` (registered as `krill-work`) is the companion plugin for the
-work/execution axis: MCP access to the FR5-FR9 spec surface plus the same
-`/mcp/design` mount `krill-design` uses (milestone/delivery-axis tools and
-`create_task` also register there -- see "Delivery-axis endpoints" above),
-plus the work-axis personas (`planner`/`worker`/`validator`/
-`system-validator`/`mergepush`/`quick-task`) and skills
-(`plan`/`implement`/`validate`/`loop-plan-implement-validate`) `quick-task` is the krill-aware lightweight persona -- see its own
-file for why. Milestone authoring/status and `create_task` (M3, M4 FR1) are real
-and used where a product is actually hosted in krill; task claim/
-heartbeat/complete/abandon/note, dependency declaration, and the
-`GET /tasks/{id}` payload document a worker uses to discover a task's
-current lane and any live claim (M4, this milestone, #2717 -- see
-"Work-axis endpoints" above) are now real too. There is still no
-lane/status *query* endpoint for a worker to discover ready work across a
-whole scope without already knowing a task id, so swimlane execution still
-rides on GitHub Issues/Projects either way. See `plugin/shared/CONVENTIONS.md`
-for exactly what's real versus still a `TODO(M4)`.
+work/execution axis: `.mcp.json` / `mcp_config.json` register the same
+`krill-mcp-{tilt,dev,prod}` spec servers plus `krill-mcp-work-{tilt,dev,prod}`
+(the `/mcp/work` mount: task lifecycle, `record_note`, and the ungated
+milestone/product discovery reads), plus the work-axis personas
+(`planner`/`worker`/`validator`/`system-validator`/`mergepush`/`quick-task`)
+and skills (`plan`/`implement`/`validate`/`loop-plan-implement-validate`).
+Swimlane execution is entirely krill-native: tasks live under a krill
+Milestone, and a missing Milestone is a hard stop ("cut the milestone
+first"), never a GitHub issue/Project substitute. The only GitHub use is
+`mergepush`'s code PRs. `quick-task` is the krill-aware lightweight persona
+-- see its own file for why. See `plugin/shared/CONVENTIONS.md` for the
+tool-by-tool contract.
 
 `plugin/shared/` holds the `CONVENTIONS.md` and the `help`/`status`
 persona/skill both plugins symlink in, so they never drift apart.

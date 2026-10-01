@@ -1,3 +1,3 @@
-The `PersonaAgent`-only blocker that once made `claim_task`, `heartbeat_task`, `complete_task`, `abandon_task` and `record_note` fail `forbidden` from an ordinary Claude Code session is **fixed** (#2930, #2933) — every one of those tools' allow-lists now names `PersonaSwarmOperator` alongside `PersonaAgent`, so a krill-work subagent resolves a persona the gate accepts. Call them normally.
+`claim_task`, `heartbeat_task`, `complete_task`, `abandon_task` and `record_note` all allow `PersonaSwarmOperator` alongside `PersonaAgent`, so a krill-work subagent in an ordinary Claude Code session resolves a persona the gate accepts. Call them normally.
 
-**If one of these five ever does return `forbidden`, that is a real regression, not a known condition.** Report the exact error and the tool name, and do not fall back to `gh issue`/`gh project` to route around it. Tracking: whale-net/everything#3027 (this snippet asserted the blocker was still live).
+**If one of these five ever returns `forbidden`, that is a real regression, not a known condition.** Report the exact error and the tool name, and stop; do not work around it.

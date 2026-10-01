@@ -1,5 +1,13 @@
 # The design skill's live milestone read (FR21, root plan issue #2485)
 
+**Update: the design skill is now krill-native only.** Its `--milestone`
+step resolves `M<n>` through `list_product_delivery` and reads
+`get_milestone`/`get_milestone_status`; a product not hosted in krill, or
+without that milestone, is a hard stop that points at `/krill-design:product`.
+The roadmap-file branch, the GitHub pointer-artifact Product-id lookup, and
+the "unwired call site" gap below are history and no longer describe the
+plugin.
+
 FR21 is M1's one concrete self-hosting *consumer*: the design skill's
 `--milestone` milestone-read step (`plugin/design/skills/design/SKILL.md`
 step 2, and the producer persona's "Milestone-scoped intake") reads `<domain>/product/03-roadmap.md` for every
