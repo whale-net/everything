@@ -106,7 +106,7 @@ type AmendStore interface {
 	// destination as given. An empty destination is refused, exactly as
 	// AddDeferral refuses one (FR1). Returns ErrNotFound if id has no
 	// current row.
-	AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string) (MilestoneDeferral, error)
+	AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string, capabilityID *uuid.UUID) (MilestoneDeferral, error)
 }
 
 type amendStore struct{ pool *pgxpool.Pool }
@@ -305,24 +305,32 @@ func (s amendStore) AmendMilepebble(ctx context.Context, id uuid.UUID, name stri
 // corrected deferral keeps its original authorship and reads as a revision
 // of it, while the superseded row beside it retains the pre-correction text
 // in full.
-func (s amendStore) AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string) (MilestoneDeferral, error) {
+func (s amendStore) AmendDeferral(ctx context.Context, id uuid.UUID, body, destination string, capabilityID *uuid.UUID) (MilestoneDeferral, error) {
 	if destination == "" {
 		return MilestoneDeferral{}, fmt.Errorf("destination: required -- every deferred entry must cite where it went (FR1)")
 	}
+	// A nil capabilityID leaves the deferral's current citation unchanged.
 	return supersede(ctx, s.pool, "milestone_deferral", milestoneDeferralColumns, scanMilestoneDeferral, id,
 		func(ctx context.Context, q txQuerier, current MilestoneDeferral) (MilestoneDeferral, error) {
+			if capabilityID == nil {
+				capabilityID = current.CapabilityID
+			} else if ok, err := currentRowExists(ctx, q, "feature", *capabilityID, current.ScopeID); err != nil {
+				return MilestoneDeferral{}, err
+			} else if !ok {
+				return MilestoneDeferral{}, errParentNotFound("feature", *capabilityID)
+			}
 			amended, err := scanMilestoneDeferral(q.QueryRow(ctx, `
 				INSERT INTO milestone_deferral (
 					id, scope_id, milestone_id, body, destination, position,
 					created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
 					created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind,
-					created_at
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+					created_at, capability_id
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 				RETURNING `+milestoneDeferralColumns,
 				current.ID, current.ScopeID, current.MilestoneID, body, destination, current.Position,
 				current.CreatedByActing.Iss, current.CreatedByActing.Sub, string(current.CreatedByActing.Kind),
 				current.CreatedByOnBehalfOf.Iss, current.CreatedByOnBehalfOf.Sub, string(current.CreatedByOnBehalfOf.Kind),
-				current.CreatedAt))
+				current.CreatedAt, capabilityID))
 			if err != nil {
 				return MilestoneDeferral{}, fmt.Errorf("insert amended milestone_deferral: %w", err)
 			}

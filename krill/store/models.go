@@ -309,6 +309,14 @@ type MilestoneDeferral struct {
 	Position    int       `json:"position"`
 	CreatedAt   time.Time `json:"created_at"`
 
+	// CapabilityID optionally cites a Feature by id (migration 031); its
+	// current Cn is resolved at read time, never stored.
+	CapabilityID *uuid.UUID `json:"capability_id"`
+
+	// CapabilityDisplayNumber is the cited Feature's current Cn, filled by
+	// ListDeferrals at read time; nil when no capability is cited.
+	CapabilityDisplayNumber *int `json:"capability_cn,omitempty"`
+
 	// ValidFrom/ValidTo are the SCD2 pair (migration 024). ValidTo nil
 	// marks the current revision -- the only one any read returns.
 	ValidFrom time.Time  `json:"valid_from"`

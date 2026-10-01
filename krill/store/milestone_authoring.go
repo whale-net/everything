@@ -76,7 +76,7 @@ type MilestoneAuthoringStore interface {
 	// AddDeferral records one deliberately-deferred item under
 	// milestoneID. destination must be non-empty (FR1: every deferred
 	// entry cites where it went).
-	AddDeferral(ctx context.Context, scopeID, milestoneID uuid.UUID, body, destination string, acting, onBehalfOf Subject) (MilestoneDeferral, error)
+	AddDeferral(ctx context.Context, scopeID, milestoneID uuid.UUID, body, destination string, capabilityID *uuid.UUID, acting, onBehalfOf Subject) (MilestoneDeferral, error)
 
 	// ListDeferrals returns every MilestoneDeferral row for milestoneID,
 	// ordered by Position.
@@ -168,7 +168,7 @@ var _ MilestoneAuthoringStore = milestoneAuthoringStore{}
 const milestoneDeferralColumns = `revision_id, id, scope_id, milestone_id, body, destination, position, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at, ` +
-	`valid_from, valid_to`
+	`valid_from, valid_to, capability_id`
 
 func scanMilestoneDeferral(row pgx.Row) (MilestoneDeferral, error) {
 	var d MilestoneDeferral
@@ -177,7 +177,7 @@ func scanMilestoneDeferral(row pgx.Row) (MilestoneDeferral, error) {
 		&d.RevisionID, &d.ID, &d.ScopeID, &d.MilestoneID, &d.Body, &d.Destination, &d.Position,
 		&d.CreatedByActing.Iss, &d.CreatedByActing.Sub, &actingKind,
 		&d.CreatedByOnBehalfOf.Iss, &d.CreatedByOnBehalfOf.Sub, &onBehalfOfKind,
-		&d.CreatedAt, &d.ValidFrom, &d.ValidTo,
+		&d.CreatedAt, &d.ValidFrom, &d.ValidTo, &d.CapabilityID,
 	)
 	if err != nil {
 		return MilestoneDeferral{}, err
@@ -418,7 +418,7 @@ func (s milestoneAuthoringStore) AddMustNotForeclose(ctx context.Context, scopeI
 	return s.addRelation(ctx, scopeID, milestoneID, entityID, MilestoneRelationMustNotForeclose, acting, onBehalfOf)
 }
 
-func (s milestoneAuthoringStore) AddDeferral(ctx context.Context, scopeID, milestoneID uuid.UUID, body, destination string, acting, onBehalfOf Subject) (MilestoneDeferral, error) {
+func (s milestoneAuthoringStore) AddDeferral(ctx context.Context, scopeID, milestoneID uuid.UUID, body, destination string, capabilityID *uuid.UUID, acting, onBehalfOf Subject) (MilestoneDeferral, error) {
 	if destination == "" {
 		return MilestoneDeferral{}, fmt.Errorf("destination: required -- every deferred entry must cite where it went (FR1)")
 	}
@@ -437,6 +437,16 @@ func (s milestoneAuthoringStore) AddDeferral(ctx context.Context, scopeID, miles
 		return MilestoneDeferral{}, errParentNotFound("milestone_ref", milestoneID)
 	}
 
+	if capabilityID != nil {
+		ok, err := currentRowExists(ctx, tx, "feature", *capabilityID, scopeID)
+		if err != nil {
+			return MilestoneDeferral{}, err
+		}
+		if !ok {
+			return MilestoneDeferral{}, errParentNotFound("feature", *capabilityID)
+		}
+	}
+
 	position, err := nextSiblingPosition(ctx, tx, "milestone_deferral", "milestone_id", milestoneID, scopeID)
 	if err != nil {
 		return MilestoneDeferral{}, err
@@ -446,12 +456,13 @@ func (s milestoneAuthoringStore) AddDeferral(ctx context.Context, scopeID, miles
 		INSERT INTO milestone_deferral (
 			scope_id, milestone_id, body, destination, position,
 			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
-			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind,
+			capability_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING `+milestoneDeferralColumns,
 		scopeID, milestoneID, body, destination, position,
 		acting.Iss, acting.Sub, string(acting.Kind),
-		onBehalfOf.Iss, onBehalfOf.Sub, string(onBehalfOf.Kind)))
+		onBehalfOf.Iss, onBehalfOf.Sub, string(onBehalfOf.Kind), capabilityID))
 	if err != nil {
 		return MilestoneDeferral{}, fmt.Errorf("insert milestone_deferral: %w", err)
 	}
@@ -482,7 +493,29 @@ func (s milestoneAuthoringStore) ListDeferrals(ctx context.Context, milestoneID 
 		}
 		deferrals = append(deferrals, d)
 	}
-	return deferrals, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	return deferrals, s.resolveCapabilityNumbers(ctx, deferrals)
+}
+
+// resolveCapabilityNumbers fills each cited deferral's current Cn; the
+// number is never stored, so a renumbered capability reads fresh.
+func (s milestoneAuthoringStore) resolveCapabilityNumbers(ctx context.Context, deferrals []MilestoneDeferral) error {
+	for i := range deferrals {
+		if deferrals[i].CapabilityID == nil {
+			continue
+		}
+		var n *int
+		err := s.pool.QueryRow(ctx, `SELECT display_number FROM feature WHERE id = $1 AND valid_to IS NULL`,
+			*deferrals[i].CapabilityID).Scan(&n)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("resolve capability number: %w", err)
+		}
+		deferrals[i].CapabilityDisplayNumber = n
+	}
+	return nil
 }
 
 func (s milestoneAuthoringStore) GetMilestone(ctx context.Context, id uuid.UUID) (MilestoneRef, []EntityMilestone, []EntityMilestone, []MilestoneDeferral, error) {

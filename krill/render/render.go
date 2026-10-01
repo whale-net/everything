@@ -750,7 +750,11 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 		if len(m.Deferrals) > 0 {
 			items := make([]string, len(m.Deferrals))
 			for i, d := range m.Deferrals {
-				items[i] = fmt.Sprintf("%s (→ %s)", d.Body, d.Destination)
+				body := d.Body
+				if d.CapabilityDisplayNumber != nil {
+					body = fmt.Sprintf("%s [C%d]", body, *d.CapabilityDisplayNumber)
+				}
+				items[i] = fmt.Sprintf("%s (→ %s)", body, d.Destination)
 			}
 			b.WriteString("- Deliberately deferred: ")
 			b.WriteString(strings.Join(items, "; "))
