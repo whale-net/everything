@@ -76,7 +76,12 @@ Given a DesignSession id:
    `valid_to`), existing `libs/`, and the domain's `ARCHITECTURE.md`.
 4. **Load-bearing check** (milestone-scoped only). `get_milestone {id}` for its
    `Must not foreclose` list and `get_product_slice` for the cited `LB`s, then
-   check the proposed Requirements against them. A Requirement that forecloses
+   check the proposed Requirements against them. Also check body length and
+   shape against CONVENTIONS.md "Requirement text: keep it tight": a body over
+   ~200 words, several obligations in one, implementation detail (paths, SQL,
+   function names) or provenance/history is a non-blocking question asking
+   producer to split or cut it (blocking only when over ~500 words). Don't write
+   the replacement text yourself. A Requirement that forecloses
    a protected `Later` capability is a **blocking numbered question**, not a
    nitpick. Also check scope both ways: a Requirement citing a capability
    outside this milestone's `Delivers` (over scope), or a `Delivers` capability

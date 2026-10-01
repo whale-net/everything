@@ -176,6 +176,53 @@ overruled `SB-` id (each with a non-blocking `SR-<N>.<n>` opened alongside:
 `SB-` id under the same id with text `Sustained: <the Requirement change
 producer must make>`.
 
+## Requirement text: keep it tight
+
+A Requirement body is the testable obligation and nothing else; agents receive
+every body in a slice, so each extra sentence is paid for on every read. Target
+**under ~100 words** (hard ceiling ~200); a body that needs more is several
+Requirements. `amend_requirement` *replaces* the body: write the new text, never
+a "previous text said..." layer on top of the old one.
+
+- **One obligation per FR/NFR.** A chain of `Given...; given...; given...` or a
+  body with several semicolon-joined behaviors is N Requirements: split it.
+  Name = the outcome, one line.
+- **Outcome, not mechanism.** Cut file paths, `file:line`, SQL/table/column
+  names, function/param/test names, Bazel labels, transaction/lock ordering and
+  issue numbers; those are `architect`'s and `planner`'s. Say what is observable
+  (`returns 409 with a distinct error and writes nothing`), not how.
+- **No provenance or history.** No `Source: Q-...`, open-question ids,
+  "the human extended this at review", "earlier draft", "previous text",
+  "today/currently". The DesignSession's events are the record; if a decision's
+  *why* must outlive the session, put it on an LB decision or `record_note`.
+- **No cross-reference webs.** Don't cite other entities by 8-hex id or restate
+  their content; the parent Feature and `summary_line` carry the link. One
+  citation only where the obligation depends on that entity.
+- **No planning leakage.** "Handle FR", milepebble/milestone mechanics, "the
+  planner slices this into tasks" belong on the delivery axis, not in a body.
+- **No rationale, severity or implementer guidance.** Cut "why this matters",
+  "FOR THE IMPLEMENTER", test inventories and edge-case catalogues; keep only
+  edge cases that change the pass/fail check, one clause each.
+- **UI: behavior, not layout.** State what the persona can do and see; leave
+  group names, styling, copy and ordering to the wireframe/design artifact.
+- **NFRs** are a measurable bound plus how it is checked, not a design essay.
+
+Given/when/then is for an FR that isn't obviously falsifiable, and is one
+sentence per clause. Prefer a tight FR over a complete-sounding one: an edge
+case worth a paragraph is its own Requirement.
+
+Example. Bad (5.7k chars in the wild): paragraphs headed `SEVERITY`, `SITES`
+and `TEST INVENTORY`, Go file:line citations, "the previous text said...".
+Good:
+
+> Given an entity E, when a caller amends it sending a placement field, then
+> the amend is refused if and only if the value differs from E's current
+> placement; an equal value is accepted. Refusal happens before any write.
+
+Before proposing or amending, self-check each body: one obligation? a
+pass/fail check a validator can run? would deleting any sentence change that
+check? If not, delete it.
+
 ## Milestone and delivery-axis tools
 
 Every write tool below is allow-listed to `{PersonaRequirementContributor,
