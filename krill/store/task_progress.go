@@ -18,6 +18,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 )
@@ -148,12 +149,166 @@ type ProductTaskProgressParams struct {
 // row come from the same latest-status-event derivation CurrentStatus
 // performs, via currentContainerStatusSQL.
 //
-// Scaffold-phase stub: returns ErrNotImplemented unconditionally. This
-// task's Implementation phase fills in the single statement this file's
-// doc comment describes -- `milestone_ref` left-joined to `task` on the
-// container row task.milestone_id names, grouped by (container, lane) so
-// one pass produces every container's whole breakdown including the
-// zero-task containers a LEFT JOIN keeps.
+// One statement, never one query per container: `milestone_ref` is left
+// joined to `task` on the container the task was scoped to, grouped by
+// (container, lane), so one pass produces every container's whole
+// breakdown -- including the zero-task containers the LEFT JOIN keeps.
+// A milestone's own join also reaches its milepebbles' tasks, which is
+// what makes its PerLane the whole cut's rather than its own slice.
+//
+// ErrMilestoneOutsideProduct for a container the product does not own, and
+// ErrNotFound (never an empty aggregate) for a product with no current
+// row, so a caller never reads "no tasks yet" where the truth is "no such
+// product" -- the same disambiguation SummarizeByProduct makes.
 func (s taskStore) SummarizeProductTaskProgress(ctx context.Context, params ProductTaskProgressParams) (ProductTaskProgress, error) {
-	return ProductTaskProgress{}, ErrNotImplemented
+	if params.Scope.RequiresContainer() {
+		owns, err := productOwnsContainer(ctx, s.pool, params.ScopeID, params.ProductID, params.Scope.ContainerID)
+		if err != nil {
+			return ProductTaskProgress{}, err
+		}
+		if !owns {
+			return ProductTaskProgress{}, ErrMilestoneOutsideProduct
+		}
+	}
+
+	// $1 is the "no status event is not started" seed currentContainerStatusSQL
+	// COALESCEs to; $2/$3 are scope and product, matching ListProductTasks'
+	// own argument order so one reader recognises both statements.
+	args := []any{string(MilestoneStatusNotStarted), params.ScopeID, params.ProductID}
+	containerFilter := ""
+	switch params.Scope.Kind {
+	case ProductTaskScopeIncomplete:
+		containerFilter = " AND c.kind <> 'backlog' AND " + incompleteContainerFilterSQL("c.id")
+	case ProductTaskScopeMilestone:
+		containerFilter = " AND (c.id = $4 OR c.parent_milestone_id = $4)"
+		args = append(args, params.Scope.ContainerID)
+	case ProductTaskScopeMilepebble:
+		containerFilter = " AND c.id = $4"
+		args = append(args, params.Scope.ContainerID)
+	default:
+		return ProductTaskProgress{}, fmt.Errorf("unknown product task scope kind %q", params.Scope.Kind)
+	}
+
+	containerStatusSQL := fmt.Sprintf(currentContainerStatusSQL, "c.id")
+	milestoneStatusSQL := fmt.Sprintf(currentContainerStatusSQL, "m.id")
+
+	// A milestone's partition spans the whole cut, so its join reaches the
+	// tasks scoped to any of its current milepebbles; a milepebble's own
+	// join reaches only the tasks scoped to it. Both arms are the same
+	// immutable container ids task.milestone_id names, so neither can
+	// drift from what ListProductTasks counts.
+	//
+	// Positions are ordered on but not selected: the query returns one row
+	// per (container, lane), and the order -- roadmap position, each
+	// milestone immediately followed by its own milepebbles -- is what the
+	// Go side folds consecutive rows of one container on.
+	query := `
+		SELECT c.id, c.kind, c.name, ` + containerStatusSQL + `,
+			m.id, m.name, ` + milestoneStatusSQL + `, task.current_lane,
+			COUNT(task.id),
+			COUNT(task.id) FILTER (WHERE task.cancelled_at IS NOT NULL)
+		FROM milestone_ref c
+		JOIN milestone_ref m ON m.id = COALESCE(c.parent_milestone_id, c.id) AND m.valid_to IS NULL AND m.scope_id = $2
+		LEFT JOIN task ON task.scope_id = $2 AND (
+			task.milestone_id = c.id
+			OR task.milestone_id IN (
+				SELECT child.id FROM milestone_ref child
+				WHERE child.parent_milestone_id = c.id AND child.valid_to IS NULL
+			)
+		)
+		WHERE c.valid_to IS NULL AND c.scope_id = $2 AND c.product_id = $3` + containerFilter + `
+		GROUP BY c.id, c.kind, c.name, c.position, c.parent_milestone_id, ` + containerStatusSQL + `,
+			m.id, m.name, m.position, ` + milestoneStatusSQL + `, task.current_lane
+		ORDER BY m.position ASC, m.id ASC, (c.parent_milestone_id IS NOT NULL) ASC, c.position ASC, c.id ASC`
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return ProductTaskProgress{}, fmt.Errorf("query product task progress: %w", err)
+	}
+	defer rows.Close()
+
+	out := ProductTaskProgress{ProductID: params.ProductID, Containers: []ContainerTaskProgress{}}
+	// rows arrive one per (container, lane), already in render order, so
+	// the current container's index is the tail of the slice.
+	for rows.Next() {
+		var (
+			row                            ContainerTaskProgress
+			containerID                    uuid.UUID
+			containerKind, containerName   string
+			containerStatus, milestoneName string
+			milestoneStatus                string
+			lane                           *string
+			laneCount, cancelledCount      int
+		)
+		if err := rows.Scan(
+			&containerID, &containerKind, &containerName, &containerStatus,
+			&row.Milestone.ID, &milestoneName, &milestoneStatus,
+			&lane, &laneCount, &cancelledCount,
+		); err != nil {
+			return ProductTaskProgress{}, fmt.Errorf("scan product task progress: %w", err)
+		}
+		row.Milestone.Name = milestoneName
+		row.Milestone.Status = MilestoneStatus(milestoneStatus)
+
+		if len(out.Containers) == 0 || containerRefOf(out.Containers[len(out.Containers)-1]) != containerID {
+			if containerKind == string(MilestoneKindMilepebble) {
+				row.Milepebble = &ProductTaskMilepebbleRef{
+					ID:     containerID,
+					Name:   containerName,
+					Status: MilestoneStatus(containerStatus),
+				}
+			}
+			out.Containers = append(out.Containers, row)
+		}
+		// A zero-task container's single LEFT JOIN row has no lane and no
+		// count; there is nothing to add to any lane for it.
+		if lane != nil && laneCount > 0 {
+			cur := &out.Containers[len(out.Containers)-1]
+			cur.Cancelled += cancelledCount
+			switch Lane(*lane) {
+			case LaneScaffold:
+				cur.PerLane.Scaffold += laneCount
+			case LaneImplementation:
+				cur.PerLane.Implementation += laneCount
+			case LaneTesting:
+				cur.PerLane.Testing += laneCount
+			case LaneValidation:
+				cur.PerLane.Validation += laneCount
+			case LaneDone:
+				cur.PerLane.Done += laneCount
+			default:
+				// task.current_lane is CHECK-constrained to the five lanes,
+				// so this is unreachable; failing beats a silent zero.
+				return ProductTaskProgress{}, fmt.Errorf("unknown task lane %q in container %s", *lane, containerID)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ProductTaskProgress{}, fmt.Errorf("query product task progress: %w", err)
+	}
+
+	if len(out.Containers) == 0 {
+		// No containers is ambiguous: a product whose every container is
+		// shipped, or no such product. Only the second is an error, and the
+		// common case never pays for the probe.
+		var exists bool
+		if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM product WHERE id = $1 AND valid_to IS NULL)`, params.ProductID).Scan(&exists); err != nil {
+			return ProductTaskProgress{}, fmt.Errorf("check current product exists: %w", err)
+		}
+		if !exists {
+			return ProductTaskProgress{}, fmt.Errorf("%w: product id %s", ErrNotFound, params.ProductID)
+		}
+	}
+	return out, nil
+}
+
+// containerRefOf is the id the row's own container carries -- the
+// milepebble's when the row is one, otherwise the milestone's own. Rows
+// arrive grouped by container, so it is how consecutive rows of the same
+// container are folded into one.
+func containerRefOf(p ContainerTaskProgress) uuid.UUID {
+	if p.Milepebble != nil {
+		return p.Milepebble.ID
+	}
+	return p.Milestone.ID
 }

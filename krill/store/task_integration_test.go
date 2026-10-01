@@ -1071,3 +1071,301 @@ func TestTaskStore_ListProductTasks_ContainerOutsideProduct(t *testing.T) {
 		assert.Empty(t, page.Items, "a refused scope yields no rows at all")
 	}
 }
+
+// summarizeIncomplete reads the whole per-container progress aggregate for
+// fx.productID's default (incomplete) scope.
+func summarizeIncomplete(t *testing.T, ctx context.Context, s *store.Store, scopeID, productID uuid.UUID) store.ProductTaskProgress {
+	t.Helper()
+	progress, err := s.Tasks().SummarizeProductTaskProgress(ctx, store.ProductTaskProgressParams{
+		ScopeID:   scopeID,
+		ProductID: productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+	})
+	require.NoError(t, err)
+	return progress
+}
+
+// containerRow finds the row for one container: the milepebble named by
+// milepebbleID when that is not uuid.Nil, else the milestone's own row.
+func containerRow(t *testing.T, progress store.ProductTaskProgress, milestoneID, milepebbleID uuid.UUID) store.ContainerTaskProgress {
+	t.Helper()
+	for _, row := range progress.Containers {
+		switch {
+		case milepebbleID != uuid.Nil:
+			if row.Milepebble != nil && row.Milepebble.ID == milepebbleID {
+				return row
+			}
+		case row.Milepebble == nil && row.Milestone.ID == milestoneID:
+			return row
+		}
+	}
+	t.Fatalf("container %s/%s is absent from the progress aggregate", milestoneID, milepebbleID)
+	return store.ContainerTaskProgress{}
+}
+
+func containerIDs(progress store.ProductTaskProgress) []uuid.UUID {
+	ids := make([]uuid.UUID, len(progress.Containers))
+	for i, row := range progress.Containers {
+		if row.Milepebble != nil {
+			ids[i] = row.Milepebble.ID
+		} else {
+			ids[i] = row.Milestone.ID
+		}
+	}
+	return ids
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_MilestoneRowIncludesItsMilepebbles
+// is FR 59f664ff's nesting rule: a milestone's counts are the whole cut's
+// -- its own direct tasks plus every one of its milepebbles' -- while the
+// milepebble reports its own slice, and one call returns both rather than
+// one read per container.
+func TestTaskStore_SummarizeProductTaskProgress_MilestoneRowIncludesItsMilepebbles(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// The cut milestone has no direct task (CreateTask refuses a milestone
+	// once it is cut), so its whole count comes from its milepebble.
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "on the milepebble", self)
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "also on the milepebble", self)
+	createProductTask(t, ctx, s, scopeID, fx.uncutID, "on the uncut milestone", self)
+	createProductTask(t, ctx, s, scopeID, fx.otherMilestoneID, "theirs", self)
+
+	progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+	assert.Equal(t, fx.productID, progress.ProductID)
+	assert.Equal(t, []uuid.UUID{fx.uncutID, fx.cutID, fx.pebbleID}, containerIDs(progress),
+		"roadmap order: M1, then M2 immediately followed by its own milepebble; another product's milestone is absent")
+
+	cutRow := containerRow(t, progress, fx.cutID, uuid.Nil)
+	assert.Equal(t, 2, cutRow.Total(),
+		"the milestone's total is the whole cut's, not just its own (empty) direct slice")
+
+	pebbleRow := containerRow(t, progress, fx.cutID, fx.pebbleID)
+	assert.Equal(t, 2, pebbleRow.Total(), "the milepebble reports its own slice")
+	require.NotNil(t, pebbleRow.Milepebble)
+	assert.Equal(t, "MP1", pebbleRow.Milepebble.Name)
+	assert.Equal(t, fx.cutID, pebbleRow.Milestone.ID, "a milepebble row also names its parent milestone")
+
+	assert.Equal(t, 1, containerRow(t, progress, fx.uncutID, uuid.Nil).Total())
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_PerLaneCountsPartitionTheTotal
+// is FR 59f664ff's arithmetic: every task lands in exactly one of the five
+// lane counts, they sum to the container's total, and Done IS the Done
+// lane's own count -- so the breakdown and the "N of M" figure rendered
+// from it cannot disagree.
+func TestTaskStore_SummarizeProductTaskProgress_PerLaneCountsPartitionTheTotal(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	for _, lane := range store.CanonicalLaneOrder {
+		createLaneTask(t, ctx, s, scopeID, fx.pebbleID, "in "+string(lane), lane, self)
+	}
+	createLaneTask(t, ctx, s, scopeID, fx.uncutID, "one more", store.LaneTesting, self)
+
+	progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+
+	pebbleRow := containerRow(t, progress, fx.cutID, fx.pebbleID)
+	assert.Equal(t, store.TaskLaneCounts{Scaffold: 1, Implementation: 1, Testing: 1, Validation: 1, Done: 1}, pebbleRow.PerLane)
+	assert.Equal(t, 5, pebbleRow.Total(), "one task per lane, and the total is their sum")
+	assert.Equal(t, 1, pebbleRow.Done(), "Done is the Done lane's own count")
+
+	uncutRow := containerRow(t, progress, fx.uncutID, uuid.Nil)
+	assert.Equal(t, store.TaskLaneCounts{Testing: 1}, uncutRow.PerLane)
+	assert.Equal(t, 1, uncutRow.Total())
+	assert.Equal(t, 0, uncutRow.Done())
+
+	for _, row := range progress.Containers {
+		sum := row.PerLane.Scaffold + row.PerLane.Implementation + row.PerLane.Testing +
+			row.PerLane.Validation + row.PerLane.Done
+		assert.Equal(t, row.Total(), sum, "per-lane counts partition the total for container %s", row.Milestone.Name)
+	}
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_EmptyContainerReportsZeroTotal
+// is FR 59f664ff's zero-task case: a milestone with nothing on it is still
+// a row, carrying a zero total -- which the surfaces render as "No tasks
+// yet", never "0 of 0" -- rather than being dropped from the listing.
+func TestTaskStore_SummarizeProductTaskProgress_EmptyContainerReportsZeroTotal(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	empty, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M3", "nothing on it yet", nil, self, self)
+	require.NoError(t, err)
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "some work", self)
+
+	progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+	require.Contains(t, containerIDs(progress), empty.ID, "a container with no tasks is still reported")
+
+	row := containerRow(t, progress, empty.ID, uuid.Nil)
+	assert.Equal(t, 0, row.Total())
+	assert.Equal(t, 0, row.Done())
+	assert.Equal(t, store.TaskLaneCounts{}, row.PerLane)
+	assert.Equal(t, 0, row.Cancelled)
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_CancelledCountsInTotalNotDone
+// is the CancelledTaskCounting rule against real rows: a cancelled task
+// counts in its container's total and in the lane it was left in, is
+// reported in Cancelled, and is never counted as Done -- while the five
+// per-lane counts still sum to the total.
+func TestTaskStore_SummarizeProductTaskProgress_CancelledCountsInTotalNotDone(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	cancelled := createLaneTask(t, ctx, s, scopeID, fx.uncutID, "cancelled in testing", store.LaneTesting, self)
+	cancelTask(t, ctx, s, scopeID, cancelled.ID, self)
+	createLaneTask(t, ctx, s, scopeID, fx.uncutID, "still testing", store.LaneTesting, self)
+
+	progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+	row := containerRow(t, progress, fx.uncutID, uuid.Nil)
+
+	assert.Equal(t, store.TaskLaneCounts{Testing: 2}, row.PerLane,
+		"the cancelled task stays in the lane it was left in")
+	assert.Equal(t, 2, row.Total(), "a cancelled task counts in the total: the container was given that work")
+	assert.Equal(t, 0, row.Done(), "cancelled is never Done")
+	assert.Equal(t, 1, row.Cancelled)
+	assert.Equal(t, row.Total(), row.PerLane.Total(), "the partition still sums to the total with a cancelled task in it")
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_AgreesWithTheProductTaskRead is
+// FR 59f664ff's cross-read agreement: both reads select containers by the
+// same predicate, so each container's progress total equals the number of
+// task rows ListProductTasks returns for that same container.
+func TestTaskStore_SummarizeProductTaskProgress_AgreesWithTheProductTaskRead(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "pebble one", self)
+	createLaneTask(t, ctx, s, scopeID, fx.pebbleID, "pebble two", store.LaneDone, self)
+	createProductTask(t, ctx, s, scopeID, fx.uncutID, "uncut", self)
+	createProductTask(t, ctx, s, scopeID, fx.otherMilestoneID, "theirs", self)
+
+	progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+
+	countFor := func(scope store.ProductTaskScope) int {
+		page, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+			ScopeID: scopeID, ProductID: fx.productID, Scope: scope,
+		})
+		require.NoError(t, err)
+		return len(page.Items)
+	}
+
+	for _, row := range progress.Containers {
+		var scope store.ProductTaskScope
+		if row.Milepebble != nil {
+			scope = store.ProductTaskScope{Kind: store.ProductTaskScopeMilepebble, ContainerID: row.Milepebble.ID}
+		} else {
+			scope = store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: row.Milestone.ID}
+		}
+		assert.Equal(t, countFor(scope), row.Total(),
+			"container %s: the progress total and the task read's row count must agree",
+			row.Milestone.Name)
+	}
+
+	// There is deliberately no whole-product sum to compare: a milestone's
+	// row covers its milepebbles' tasks, so summing every row would count
+	// those twice. Agreement is per container, which is what the loop above
+	// checks -- a caller renders one progress bar per row, never a product
+	// total derived from overlapping rows.
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_ContainerOutsideProduct is
+// FR 59f664ff's refusal: a container of another product is refused with the
+// same distinct error the product task read uses, never answered as an
+// empty aggregate that would read as "this product has no milestones".
+func TestTaskStore_SummarizeProductTaskProgress_ContainerOutsideProduct(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	otherPebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, fx.otherMilestoneID, "MP-theirs", "theirs", nil, self, self)
+	require.NoError(t, err)
+
+	for _, scope := range []store.ProductTaskScope{
+		{Kind: store.ProductTaskScopeMilestone, ContainerID: fx.otherMilestoneID},
+		{Kind: store.ProductTaskScopeMilepebble, ContainerID: otherPebble.ID},
+		{Kind: store.ProductTaskScopeMilestone, ContainerID: uuid.New()},
+	} {
+		progress, err := s.Tasks().SummarizeProductTaskProgress(ctx, store.ProductTaskProgressParams{
+			ScopeID: scopeID, ProductID: fx.productID, Scope: scope,
+		})
+		require.ErrorIs(t, err, store.ErrMilestoneOutsideProduct, "scope %+v", scope)
+		assert.Empty(t, progress.Containers, "a refused scope yields no rows at all")
+	}
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_IncompletePredicate is the
+// scope half of the cross-read agreement: the default scope selects
+// containers by the same IsIncompleteContainerStatus rule the task read
+// uses -- shipped and abandoned drop out (row and all), partially complete
+// stays, and a milepebble is judged on its OWN status even when its
+// milestone is shipped.
+func TestTaskStore_SummarizeProductTaskProgress_IncompletePredicate(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// Shipped milestone with its own direct task (created before the cut)
+	// and a milepebble left in design underneath it.
+	shipped, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M3", "ships", nil, self, self)
+	require.NoError(t, err)
+	shippedDirect := createProductTask(t, ctx, s, scopeID, shipped.ID, "shipped milestone direct task", self)
+	shippedPebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, shipped.ID, "MP3", "still designing", nil, self, self)
+	require.NoError(t, err)
+	setContainerStatus(t, ctx, s, scopeID, shipped.ID, store.MilestoneStatusShipped, self)
+	setContainerStatus(t, ctx, s, scopeID, shippedPebble.ID, store.MilestoneStatusInDesign, self)
+	createProductTask(t, ctx, s, scopeID, shippedPebble.ID, "in-design milepebble task", self)
+
+	abandoned, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M4", "dropped", nil, self, self)
+	require.NoError(t, err)
+	setContainerStatus(t, ctx, s, scopeID, abandoned.ID, store.MilestoneStatusAbandoned, self)
+
+	partial, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M5", "half done", nil, self, self)
+	require.NoError(t, err)
+	setContainerStatus(t, ctx, s, scopeID, partial.ID, store.MilestoneStatusPartiallyComplete, self)
+	createProductTask(t, ctx, s, scopeID, partial.ID, "partially complete task", self)
+
+	progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+	ids := containerIDs(progress)
+
+	assert.Contains(t, ids, shippedPebble.ID,
+		"a shipped milestone's milepebble is judged on its OWN status, so it stays in scope")
+	assert.NotContains(t, ids, shipped.ID, "the shipped milestone itself leaves scope")
+	assert.NotContains(t, ids, abandoned.ID, "an abandoned container is not incomplete")
+	assert.Contains(t, ids, partial.ID, "partially complete counts as incomplete")
+
+	// A milepebble row still names its out-of-scope parent and that
+	// parent's own status, so a progress list can badge it.
+	pebbleRow := containerRow(t, progress, shipped.ID, shippedPebble.ID)
+	assert.Equal(t, store.MilestoneStatusShipped, pebbleRow.Milestone.Status)
+	require.NotNil(t, pebbleRow.Milepebble)
+	assert.Equal(t, store.MilestoneStatusInDesign, pebbleRow.Milepebble.Status)
+
+	assert.Equal(t, 1, containerRow(t, progress, partial.ID, uuid.Nil).Total())
+	assert.Equal(t, 1, pebbleRow.Total(), "the in-design milepebble counts its own task")
+
+	// The shipped milestone's direct task is counted by no in-scope row:
+	// its own milestone is out of scope, and the milepebble never covered
+	// it. The task read agrees -- that task is in neither listing.
+	assert.NotContains(t, rowTaskIDs(listIncomplete(t, ctx, s, scopeID, fx.productID)), shippedDirect.ID)
+}
