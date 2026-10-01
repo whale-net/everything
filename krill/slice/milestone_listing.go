@@ -329,3 +329,46 @@ func NewDeferralDTOs(deferrals []store.MilestoneDeferral) []DeferralDTO {
 	}
 	return out
 }
+
+// DeliveryView selects list_product_delivery's response shape.
+type DeliveryView string
+
+const (
+	// DeliveryViewFull is the default: the whole DeliveryListing.
+	DeliveryViewFull DeliveryView = ""
+	// DeliveryViewSummary returns a DeliverySummary: ids, names and statuses only.
+	DeliveryViewSummary DeliveryView = "summary"
+)
+
+// MilepebbleSummaryEntry is one milepebble in a MilestoneSummaryEntry.
+type MilepebbleSummaryEntry struct {
+	ID     uuid.UUID             `json:"id"`
+	Status store.MilestoneStatus `json:"status"`
+}
+
+// MilestoneSummaryEntry is one milestone in a DeliverySummary.
+type MilestoneSummaryEntry struct {
+	ID          uuid.UUID                `json:"id"`
+	Name        string                   `json:"name"`
+	Status      store.MilestoneStatus    `json:"status"`
+	Milepebbles []MilepebbleSummaryEntry `json:"milepebbles"`
+}
+
+// DeliverySummary is the compact view=summary projection of a DeliveryListing.
+type DeliverySummary struct {
+	Milestones []MilestoneSummaryEntry `json:"milestones"`
+}
+
+// Summary projects l to its compact DeliverySummary.
+func (l DeliveryListing) Summary() DeliverySummary {
+	out := DeliverySummary{Milestones: make([]MilestoneSummaryEntry, len(l.Milestones))}
+	for i, m := range l.Milestones {
+		e := MilestoneSummaryEntry{ID: m.ID, Name: m.Name, Status: m.Status,
+			Milepebbles: make([]MilepebbleSummaryEntry, len(m.Milepebbles))}
+		for j, mp := range m.Milepebbles {
+			e.Milepebbles[j] = MilepebbleSummaryEntry{ID: mp.ID, Status: mp.Status}
+		}
+		out.Milestones[i] = e
+	}
+	return out
+}

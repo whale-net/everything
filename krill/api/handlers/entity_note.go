@@ -103,3 +103,13 @@ func ListEntityNotesHandler(kind store.NoteEntityKind, scopes NoteEntityScopes, 
 		}
 	}
 }
+
+// EntityNoteFilter narrows ListEntityNotes. A zero value means no filtering
+// (every note, oldest first); once any field is set, or Limit > 0, results
+// are newest first.
+type EntityNoteFilter struct {
+	Kind       string // note kind, empty = any
+	Status     string // lifecycle status, empty = any
+	BodyPrefix string // case-sensitive body prefix, empty = any
+	Limit      int    // max notes returned, 0 = unlimited
+}
