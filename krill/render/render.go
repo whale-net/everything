@@ -131,6 +131,9 @@ type Files struct {
 	CurrentStateMD  string // <domain>/product/01-current-state.md
 	CapabilityMapMD string // <domain>/product/02-capability-map.md
 	RoadmapMD       string // <domain>/product/03-roadmap.md
+
+	// Stamp is the source revision/time every file above is stamped with.
+	Stamp SourceStamp
 }
 
 // FileMap returns f as a map from the path each file is written at,
@@ -187,11 +190,19 @@ func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID, opts 
 	revision := doc.Product.RevisionID.String()
 	name := doc.Product.Name
 
+	stamp := SourceStamp{Revision: revision}
+	if ss, ok := src.(StampSource); ok {
+		if stamp.Time, err = ss.ProductSourceTime(ctx, productID); err != nil {
+			return Files{}, fmt.Errorf("source time: %w", err)
+		}
+	}
+
 	return Files{
-		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals, notes, o.detail),
-		CurrentStateMD:  renderCurrentStateMD(name, revision),
-		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc, o.detail),
-		RoadmapMD:       renderRoadmapMD(name, revision, milestones, later),
+		ProductMD:       stampFile(renderProductMD(name, revision, doc, personas, nonGoals, notes, o.detail), stamp),
+		CurrentStateMD:  stampFile(renderCurrentStateMD(name, revision), stamp),
+		CapabilityMapMD: stampFile(renderCapabilityMapMD(name, revision, doc, o.detail), stamp),
+		RoadmapMD:       stampFile(renderRoadmapMD(name, revision, milestones, later), stamp),
+		Stamp:           stamp,
 	}, nil
 }
 
