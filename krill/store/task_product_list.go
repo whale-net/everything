@@ -251,16 +251,25 @@ var ErrMilestoneOutsideProduct = errors.New("krill/store: milestone does not bel
 // query: the same `ORDER BY created_at DESC, id DESC LIMIT 1` row
 // milestone_status.go's currentStatusTx picks, and the same
 // COALESCE-to-MilestoneStatusNotStarted "absence of history is not
-// started" rule. Kept as one constant so the row's own container status
+// started" rule. Kept as one shape so the row's own container status
 // and the milestone it hangs under can never drift apart in ordering or
 // in the absence case.
-const currentContainerStatusSQL = `
-	COALESCE((
-		SELECT mse.status FROM milestone_status_event mse
-		WHERE mse.milestone_id = %s
-		ORDER BY mse.created_at DESC, mse.id DESC
-		LIMIT 1
-	), $1)`
+//
+// The absent-history default is inlined as a literal rather than bound as
+// a parameter: it is a compile-time constant of MilestoneStatus's
+// enumeration, never caller input, and binding it would leave the
+// single-container scopes' query with a parameter nothing in it mentions
+// -- which Postgres refuses, since it cannot infer an unreferenced
+// parameter's type.
+func currentContainerStatusSQL(containerColumn string) string {
+	return fmt.Sprintf(`
+		COALESCE((
+			SELECT mse.status FROM milestone_status_event mse
+			WHERE mse.milestone_id = %s
+			ORDER BY mse.created_at DESC, mse.id DESC
+			LIMIT 1
+		), '%s')`, containerColumn, MilestoneStatusNotStarted)
+}
 
 // incompleteContainerFilterSQL renders the product-wide scope's
 // "still in scope" predicate against the named container column: its
@@ -272,7 +281,7 @@ func incompleteContainerFilterSQL(containerColumn string) string {
 	for i, status := range completeContainerStatuses {
 		quoted[i] = "'" + string(status) + "'"
 	}
-	return fmt.Sprintf(currentContainerStatusSQL, containerColumn) +
+	return currentContainerStatusSQL(containerColumn) +
 		" NOT IN (" + strings.Join(quoted, ", ") + ")"
 }
 
@@ -340,8 +349,8 @@ func (s taskStore) ListProductTasks(ctx context.Context, params ListProductTasks
 
 	query := `
 		SELECT task.id, task.title, task.created_at,
-			m.id, m.name, ` + fmt.Sprintf(currentContainerStatusSQL, "m.id") + `,
-			c.kind, c.id, c.name, ` + fmt.Sprintf(currentContainerStatusSQL, "c.id") + `,
+			m.id, m.name, ` + currentContainerStatusSQL("m.id") + `,
+			c.kind, c.id, c.name, ` + currentContainerStatusSQL("c.id") + `,
 			task.current_lane, task.current_escalation_id, esc.reason,
 			task.cancelled_at, task.attempt_count, task.lease_expires_at, task.current_claim_id,
 			m.position
@@ -474,16 +483,16 @@ func productTasksQuery(ctx context.Context, q txQuerier, params ListProductTasks
 		}
 	}
 
-	args := []any{string(MilestoneStatusNotStarted), params.ScopeID, params.ProductID}
+	args := []any{params.ScopeID, params.ProductID}
 	containerFilter := ""
 	switch params.Scope.Kind {
 	case ProductTaskScopeIncomplete:
 		containerFilter = " AND c.kind <> 'backlog' AND " + incompleteContainerFilterSQL("c.id")
 	case ProductTaskScopeMilestone:
-		containerFilter = " AND (c.id = $4 OR c.parent_milestone_id = $4)"
+		containerFilter = " AND (c.id = $3 OR c.parent_milestone_id = $3)"
 		args = append(args, params.Scope.ContainerID)
 	case ProductTaskScopeMilepebble:
-		containerFilter = " AND c.id = $4"
+		containerFilter = " AND c.id = $3"
 		args = append(args, params.Scope.ContainerID)
 	default:
 		return "", nil, fmt.Errorf("unknown product task scope kind %q", params.Scope.Kind)
@@ -508,10 +517,10 @@ func productTasksQuery(ctx context.Context, q txQuerier, params ListProductTasks
 
 	fromWhere := `
 		FROM task
-		JOIN milestone_ref c ON c.id = task.milestone_id AND c.valid_to IS NULL AND c.scope_id = $2
-		JOIN milestone_ref m ON m.id = COALESCE(c.parent_milestone_id, c.id) AND m.valid_to IS NULL AND m.scope_id = $2
+		JOIN milestone_ref c ON c.id = task.milestone_id AND c.valid_to IS NULL AND c.scope_id = $1
+		JOIN milestone_ref m ON m.id = COALESCE(c.parent_milestone_id, c.id) AND m.valid_to IS NULL AND m.scope_id = $1
 		LEFT JOIN task_escalation_event esc ON esc.id = task.current_escalation_id
-		WHERE task.scope_id = $2 AND m.product_id = $3` + containerFilter
+		WHERE task.scope_id = $1 AND m.product_id = $2` + containerFilter
 	return fromWhere, args, nil
 }
 
@@ -526,7 +535,9 @@ func productTasksQuery(ctx context.Context, q txQuerier, params ListProductTasks
 // rather than 0, for the same reason a failed list is an error rather than
 // an empty page.
 func (s taskStore) CountProductTasks(ctx context.Context, params ListProductTasksParams) (int, error) {
-	_ = ctx
-	_ = params
-	return 0, ErrNotImplemented
+	fromWhere, args, err := productTasksQuery(ctx, s.pool, params)
+	if err != nil {
+		return 0, err
+	}
+	return countConsoleRows(ctx, s.pool, fromWhere, args)
 }

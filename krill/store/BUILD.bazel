@@ -1040,7 +1040,10 @@ go_test(
     name = "task_product_list_test",
     srcs = ["task_product_list_test.go"],
     embed = [":store"],
-    deps = ["@com_github_stretchr_testify//assert"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
 # Pure unit tests for the amend placement guard (amend.go, FR b62ed47a):

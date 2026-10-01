@@ -578,3 +578,152 @@ func TestTaskNoteConsoleStore_ListOpenNotes_FilterSurvivesContinuation(t *testin
 	})
 	assert.NoError(t, err, "the same filter set must resume normally")
 }
+
+// ============================================================================
+// CountOpenNotes (FR c4ab6c68)
+// ============================================================================
+
+// walkOpenNotes drains every page of ListOpenNotes for params and returns
+// how many rows the unpaged list holds -- the figure CountOpenNotes has to
+// report for the same params.
+func walkOpenNotes(t *testing.T, ctx context.Context, s *store.Store, params store.ListOpenNotesParams) int {
+	t.Helper()
+	total, token := 0, ""
+	for {
+		params.Page = store.PageParams{PageSize: 2, ContinuationToken: token}
+		page, err := s.Tasks().ListOpenNotes(ctx, params)
+		require.NoError(t, err)
+		total += len(page.Items)
+		if page.NextToken == "" {
+			return total
+		}
+		token = page.NextToken
+	}
+}
+
+// TestTaskNoteConsoleStore_CountOpenNotes_MatchesList_AcrossFilters is FR
+// c4ab6c68's agreement criterion for the open-notes queue, across the two
+// target shapes the queue holds: a note on a task and a note on a spec
+// entity, filtered by product, by milestone, by both and by neither.
+//
+// The fixture is deliberately larger than a page, since the failure this
+// guards against is a count that answers with the page length.
+func TestTaskNoteConsoleStore_CountOpenNotes_MatchesList_AcrossFilters(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+
+	a := newNoteFilterWorld(t, ctx, s, scopeID, "A", self)
+	b := newNoteFilterWorld(t, ctx, s, scopeID, "B", self)
+
+	// Five task notes in A and one on each of two of A's spec entities, so
+	// the unfiltered read is eight rows against a two-row page; three task
+	// notes and an entity note in B, so a dropped predicate serves B's
+	// rows rather than merely duplicating A's.
+	for i := 0; i < 5; i++ {
+		recordOpenTaskNote(t, ctx, s, scopeID, a.taskID, fmt.Sprintf("a task note %d", i), self)
+	}
+	recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindProduct, a.productID, "a product note", self)
+	recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindRequirement, a.requirementID, "a requirement note", self)
+	for i := 0; i < 3; i++ {
+		recordOpenTaskNote(t, ctx, s, scopeID, b.taskID, fmt.Sprintf("b task note %d", i), self)
+	}
+	recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindFeature, b.featureID, "a feature note", self)
+
+	for name, filter := range map[string]store.ConsoleFilter{
+		"unfiltered":     {},
+		"product_a":      {ProductID: &a.productID},
+		"product_b":      {ProductID: &b.productID},
+		"milestone_a":    {MilestoneID: &a.milestoneID},
+		"product_a_pair": {ProductID: &a.productID, MilestoneID: &a.milestoneID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			params := store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: filter}
+			count, err := s.Tasks().CountOpenNotes(ctx, params)
+			require.NoError(t, err)
+			assert.Equal(t, walkOpenNotes(t, ctx, s, params), count,
+				"the count and the list it describes must agree for the same filters")
+		})
+	}
+
+	// And the unfiltered figure is a total, not a page: eleven rows
+	// (7 in A, 4 in B) against a two-row page.
+	count, err := s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	assert.Equal(t, 11, count)
+	page, err := s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID: scopeID, Page: store.PageParams{PageSize: 2},
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 2)
+	assert.NotEqual(t, len(page.Items), count)
+}
+
+// TestTaskNoteConsoleStore_CountOpenNotes_PerProductFiguresDoNotSum is the
+// caveat CountOpenNotes' own doc comment states, pinned by a test: an
+// open note on a spec entity is attributed to a product only while that
+// entity is current. Void the entity and the note keeps its scope-wide
+// row but belongs to no product, so the two per-product counts sum to less
+// than the scope-wide one -- a UI must show the product's own figure and
+// never derive the scope-wide one from it.
+func TestTaskNoteConsoleStore_CountOpenNotes_PerProductFiguresDoNotSum(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+
+	a := newNoteFilterWorld(t, ctx, s, scopeID, "A", self)
+	b := newNoteFilterWorld(t, ctx, s, scopeID, "B", self)
+
+	recordOpenTaskNote(t, ctx, s, scopeID, a.taskID, "in A", self)
+	onBRequirement := recordEntityNote(t, ctx, s, scopeID, store.NoteEntityKindRequirement, b.requirementID, "on B's requirement", self)
+	recordOpenTaskNote(t, ctx, s, scopeID, b.taskID, "in B", self)
+
+	countA, err := s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID: scopeID, ConsoleFilter: store.ConsoleFilter{ProductID: &a.productID},
+	})
+	require.NoError(t, err)
+	countB, err := s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID: scopeID, ConsoleFilter: store.ConsoleFilter{ProductID: &b.productID},
+	})
+	require.NoError(t, err)
+	scopeWide, err := s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	require.Equal(t, scopeWide, countA+countB, "while every noted entity is current, the per-product counts do sum")
+
+	// Void B's requirement: the note is still open and still in the scope,
+	// but it now resolves to no product at all.
+	require.NoError(t, s.Void().VoidRequirement(ctx, scopeID, b.requirementID, nil, self, self))
+
+	countA, err = s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID: scopeID, ConsoleFilter: store.ConsoleFilter{ProductID: &a.productID},
+	})
+	require.NoError(t, err)
+	countB, err = s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{
+		ScopeID: scopeID, ConsoleFilter: store.ConsoleFilter{ProductID: &b.productID},
+	})
+	require.NoError(t, err)
+	scopeWide, err = s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID})
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, scopeWide, "the open note survives its entity's void in the scope-wide count")
+	assert.Equal(t, 1, countA)
+	assert.Equal(t, 1, countB, "a note on a since-voided entity belongs to no product")
+	assert.Less(t, countA+countB, scopeWide,
+		"per-product open-notes counts are not additive -- which is why the UI shows the current product's figure and never sums siblings for a scope-wide one")
+
+	// The list agrees with the count on the same rows, so the caveat is a
+	// property of the shared predicate rather than of one of the two
+	// reads.
+	page, err := s.Tasks().ListOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	require.Len(t, page.Items, scopeWide)
+	var found bool
+	for _, row := range page.Items {
+		if row.NoteID == onBRequirement.ID {
+			found = true
+		}
+	}
+	assert.True(t, found, "the note on the voided entity is still an open note, listed scope-wide")
+}

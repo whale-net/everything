@@ -14,7 +14,10 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // OverviewRecentEscalationWindow is how far back the Overview's
@@ -79,7 +82,65 @@ type ConsoleOverviewCounts struct {
 // 0 -- a console that could not count a queue must not render it as an
 // empty one, which is indistinguishable from a genuinely idle queue.
 func (s taskStore) CountConsoleOverview(ctx context.Context, params ConsoleOverviewParams) (ConsoleOverviewCounts, error) {
-	_ = ctx
-	_ = params
-	return ConsoleOverviewCounts{}, ErrNotImplemented
+	now := params.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	// Each queue's guard runs before any figure is counted, so a narrowing
+	// that crosses a scope or product boundary refuses the whole Overview
+	// rather than half of it. The three sub-line counts reuse their own
+	// queue's params, so they are covered by the same four calls.
+	for _, q := range []struct {
+		scopeID uuid.UUID
+		filter  ConsoleFilter
+	}{
+		{params.Escalated.ScopeID, params.Escalated.ConsoleFilter},
+		{params.Claimed.ScopeID, params.Claimed.ConsoleFilter},
+		{params.Cancelled.ScopeID, params.Cancelled.ConsoleFilter},
+		{params.Notes.ScopeID, params.Notes.ConsoleFilter},
+	} {
+		if err := s.guardConsoleFilter(ctx, q.scopeID, q.filter); err != nil {
+			return ConsoleOverviewCounts{}, err
+		}
+	}
+	if params.Escalated.Reason != nil && !validEscalationReasons[*params.Escalated.Reason] {
+		return ConsoleOverviewCounts{}, fmt.Errorf("%w: %q", ErrUnknownEscalationReason, *params.Escalated.Reason)
+	}
+
+	escalatedSQL, escalatedArgs := escalatedTasksQuery(params.Escalated)
+	recentSQL, recentArgs := escalatedTasksQuerySince(params.Escalated, now.Add(-OverviewRecentEscalationWindow))
+	claimedSQL, claimedArgs := claimedTasksQuery(params.Claimed)
+	expiringSQL, expiringArgs := claimedTasksQueryExpiringBefore(params.Claimed, now.Add(OverviewLeaseExpiryWindow))
+	cancelledSQL, cancelledArgs := cancelledTasksQuery(params.Cancelled)
+	notesSQL, notesArgs := openNotesQuery(params.Notes)
+	scopeNotesSQL, scopeNotesArgs := openNotesQueryOfKind(params.Notes, NoteKindScopeNote)
+
+	// Seven COUNT(*)s, each over the very clause the matching list pages
+	// -- or, for the three sub-lines, that clause with one conjunct added.
+	// The first failure returns its error and no partial figure: an
+	// Overview that could not count something says so rather than
+	// rendering it as empty.
+	var counts ConsoleOverviewCounts
+	for _, figure := range []struct {
+		label string
+		sql   string
+		args  []any
+		dst   *int
+	}{
+		{"escalated", escalatedSQL, escalatedArgs, &counts.Escalated},
+		{"escalated recently", recentSQL, recentArgs, &counts.EscalatedRecently},
+		{"claimed", claimedSQL, claimedArgs, &counts.Claimed},
+		{"claims expiring soon", expiringSQL, expiringArgs, &counts.ClaimsExpiringSoon},
+		{"cancelled", cancelledSQL, cancelledArgs, &counts.Cancelled},
+		{"open notes", notesSQL, notesArgs, &counts.OpenNotes},
+		{"open scope-notes", scopeNotesSQL, scopeNotesArgs, &counts.OpenScopeNotes},
+	} {
+		n, err := countConsoleRows(ctx, s.pool, figure.sql, figure.args)
+		if err != nil {
+			return ConsoleOverviewCounts{}, fmt.Errorf("count %s: %w", figure.label, err)
+		}
+		*figure.dst = n
+	}
+	return counts, nil
 }

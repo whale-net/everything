@@ -558,6 +558,19 @@ func claimedTasksQueryExpiringBefore(params ListClaimedTasksParams, before time.
 	return fromWhere + fmt.Sprintf(` AND task.lease_expires_at <= $%d`, len(args)), args
 }
 
+// countConsoleRows runs COUNT(*) over one of this file's shared
+// FROM/JOIN/WHERE clauses and returns the row count, or the query's own
+// error. Every count read in this package goes through it, so "a failed
+// count is an error, never a 0" is one implementation rather than a
+// promise each read repeats.
+func countConsoleRows(ctx context.Context, q txQuerier, fromWhere string, args []any) (int, error) {
+	var n int
+	if err := q.QueryRow(ctx, "SELECT COUNT(*)"+fromWhere, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count console rows: %w", err)
+	}
+	return n, nil
+}
+
 // CountClaimedTasks returns how many rows the unpaged ListClaimedTasks
 // would hold for params -- the queue's full size, never the current
 // page's length and never a figure bounded by params.Page, which this
@@ -568,9 +581,11 @@ func claimedTasksQueryExpiringBefore(params ListClaimedTasksParams, before time.
 // claims are in the queue. A failed query returns its error, never 0:
 // a queue that could not be counted must not render as an empty one.
 func (s taskStore) CountClaimedTasks(ctx context.Context, params ListClaimedTasksParams) (int, error) {
-	_ = ctx
-	_ = params
-	return 0, ErrNotImplemented
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return 0, err
+	}
+	fromWhere, args := claimedTasksQuery(params)
+	return countConsoleRows(ctx, s.pool, fromWhere, args)
 }
 
 // cancelledTasksQuery is CountCancelledTasks' and ListCancelledTasks'
@@ -594,9 +609,11 @@ func cancelledTasksQuery(params ListCancelledTasksParams) (string, []any) {
 // Shares cancelledTasksQuery with its list, and returns a failed count
 // as its error rather than as 0.
 func (s taskStore) CountCancelledTasks(ctx context.Context, params ListCancelledTasksParams) (int, error) {
-	_ = ctx
-	_ = params
-	return 0, ErrNotImplemented
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return 0, err
+	}
+	fromWhere, args := cancelledTasksQuery(params)
+	return countConsoleRows(ctx, s.pool, fromWhere, args)
 }
 
 // escalatedTasksQuery is CountEscalatedTasks' and ListEscalatedTasks'
@@ -638,7 +655,12 @@ func escalatedTasksQuerySince(params ListEscalatedTasksParams, since time.Time) 
 // Shares escalatedTasksQuery with its list, and returns a failed count
 // as its error rather than as 0.
 func (s taskStore) CountEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (int, error) {
-	_ = ctx
-	_ = params
-	return 0, ErrNotImplemented
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return 0, err
+	}
+	if params.Reason != nil && !validEscalationReasons[*params.Reason] {
+		return 0, fmt.Errorf("%w: %q", ErrUnknownEscalationReason, *params.Reason)
+	}
+	fromWhere, args := escalatedTasksQuery(params)
+	return countConsoleRows(ctx, s.pool, fromWhere, args)
 }

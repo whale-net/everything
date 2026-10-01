@@ -24,6 +24,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1506,4 +1507,160 @@ func TestTaskStore_SummarizeProductTaskProgress_SingleContainerScopes(t *testing
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown product task scope kind")
 	})
+}
+
+// ============================================================================
+// CountProductTasks (task_product_list.go, FR c4ab6c68)
+// ============================================================================
+
+// walkProductTasks drains every page of ListProductTasks for params and
+// returns how many rows the unpaged list holds -- the "Y" that
+// CountProductTasks has to report for the same params.
+func walkProductTasks(t *testing.T, ctx context.Context, s *store.Store, params store.ListProductTasksParams) int {
+	t.Helper()
+	total, token := 0, ""
+	for {
+		params.Page = store.PageParams{PageSize: 2, ContinuationToken: token}
+		page, err := s.Tasks().ListProductTasks(ctx, params)
+		require.NoError(t, err)
+		total += len(page.Items)
+		if page.NextToken == "" {
+			return total
+		}
+		token = page.NextToken
+	}
+}
+
+// TestTaskStore_CountProductTasks_MatchesList_AcrossScopesAndFilters is FR
+// c4ab6c68's agreement criterion for the product task read: over each of
+// the three container scopes and each optional filter, the total behind
+// "Showing X of Y tasks" equals the rows the unpaged list holds. The
+// fixture carries more rows than one page, so a count that answered with
+// the page length would fail rather than pass.
+func TestTaskStore_CountProductTasks_MatchesList_AcrossScopesAndFilters(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	for i := 0; i < 4; i++ {
+		createProductTask(t, ctx, s, scopeID, fx.uncutID, fmt.Sprintf("uncut %d", i), self)
+	}
+	// fx.cutID has its milepebble already cut, so CreateTask refuses a
+	// task against it (task.go's NFR7); a second uncut milestone of the
+	// same product carries the rows the milestone-scoped cases need.
+	secondUncut, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M3", "a second uncut", nil, self, self)
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		createProductTask(t, ctx, s, scopeID, secondUncut.ID, fmt.Sprintf("second %d", i), self)
+	}
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "under the milepebble", self)
+	// A task in another product: it must be in no figure below.
+	createProductTask(t, ctx, s, scopeID, fx.otherMilestoneID, "theirs", self)
+	// One lane-filtered row in a lane no other task occupies.
+	createLaneTask(t, ctx, s, scopeID, fx.uncutID, "in testing", store.LaneTesting, self)
+	// And one stuck row (cancelled), so only_stuck is not the whole set.
+	cancelTask(t, ctx, s, scopeID, createProductTask(t, ctx, s, scopeID, secondUncut.ID, "cancelled", self).ID, self)
+	// A shipped milestone's tasks leave the product-wide incomplete scope.
+	setContainerStatus(t, ctx, s, scopeID, fx.otherMilestoneID, store.MilestoneStatusShipped, self)
+
+	testingLane := store.LaneTesting
+	for name, params := range map[string]store.ListProductTasksParams{
+		"incomplete": {ScopeID: scopeID, ProductID: fx.productID, Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete}},
+		"milestone":  {ScopeID: scopeID, ProductID: fx.productID, Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: secondUncut.ID}},
+		"milepebble": {ScopeID: scopeID, ProductID: fx.productID, Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeMilepebble, ContainerID: fx.pebbleID}},
+		"lane":       {ScopeID: scopeID, ProductID: fx.productID, Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete}, Lane: &testingLane},
+		"only_stuck": {ScopeID: scopeID, ProductID: fx.productID, Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete}, OnlyStuck: true},
+		"milestone_lane": {
+			ScopeID: scopeID, ProductID: fx.productID,
+			Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: fx.uncutID},
+			Lane:  &testingLane,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			count, err := s.Tasks().CountProductTasks(ctx, params)
+			require.NoError(t, err)
+			assert.Equal(t, walkProductTasks(t, ctx, s, params), count,
+				"the count and the list it describes must agree for the same filters")
+		})
+	}
+
+	// And the figure is a total, not a page: ten rows (4 on the uncut
+	// milestone, 4 on the second -- one of them cancelled -- 1 under the
+	// milepebble, 1 in another lane) against a two-row page, with the
+	// other product's now-shipped task in neither.
+	total, err := s.Tasks().CountProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID: scopeID, ProductID: fx.productID,
+		Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 10, total)
+	page, err := s.Tasks().ListProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID: scopeID, ProductID: fx.productID,
+		Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		Page:  store.PageParams{PageSize: 2},
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 2)
+	assert.NotEqual(t, len(page.Items), total, "the total behind 'Showing X of Y' must never be the page length")
+}
+
+// TestTaskStore_CountProductTasks_ContainerOutsideProduct is the count
+// read's half of the same LB1 refusal the list makes: a container outside
+// the product is refused, not answered as a total of zero -- a zero would
+// read as "this milestone has no work" for a milestone the caller simply
+// named wrongly.
+func TestTaskStore_CountProductTasks_ContainerOutsideProduct(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+	createProductTask(t, ctx, s, scopeID, fx.otherMilestoneID, "theirs", self)
+	// A milepebble of the other product, created before its own task
+	// since CreateTask refuses a milestone once it is cut.
+	otherPebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, fx.otherMilestoneID, "MP-theirs", "theirs", nil, self, self)
+	require.NoError(t, err)
+
+	for _, scope := range []store.ProductTaskScope{
+		{Kind: store.ProductTaskScopeMilestone, ContainerID: fx.otherMilestoneID},
+		{Kind: store.ProductTaskScopeMilepebble, ContainerID: otherPebble.ID},
+		{Kind: store.ProductTaskScopeMilepebble, ContainerID: uuid.New()},
+	} {
+		count, err := s.Tasks().CountProductTasks(ctx, store.ListProductTasksParams{
+			ScopeID: scopeID, ProductID: fx.productID, Scope: scope,
+		})
+		assert.ErrorIs(t, err, store.ErrMilestoneOutsideProduct, "scope %+v", scope)
+		assert.Zero(t, count, "a refused scope yields no figure at all")
+	}
+}
+
+// TestTaskStore_CountProductTasks_FailedQueryIsAnError is FR c4ab6c68's
+// fail-don't-degrade rule on this read: a count that cannot be computed
+// returns its error, so no console renders a failed total as "0 tasks".
+func TestTaskStore_CountProductTasks_FailedQueryIsAnError(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+	createProductTask(t, ctx, s, scopeID, fx.uncutID, "ours", self)
+
+	params := store.ListProductTasksParams{
+		ScopeID: scopeID, ProductID: fx.productID,
+		Scope: store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+	}
+	count, err := s.Tasks().CountProductTasks(ctx, params)
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "the fixture must hold a row, or a later failure proves nothing")
+
+	_, err = db.Pool.Exec(ctx, `ALTER TABLE task RENAME TO task_moved`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `ALTER TABLE task_moved RENAME TO task`)
+	})
+
+	_, err = s.Tasks().CountProductTasks(ctx, params)
+	require.Error(t, err, "a count that could not run must fail, never answer 0")
 }

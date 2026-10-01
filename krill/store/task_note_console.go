@@ -271,7 +271,9 @@ func openNotesQueryOfKind(params ListOpenNotesParams, kind NoteKind) (string, []
 // exactly that product's number and never presents it, or a sum of
 // siblings, as the scope-wide figure.
 func (s taskStore) CountOpenNotes(ctx context.Context, params ListOpenNotesParams) (int, error) {
-	_ = ctx
-	_ = params
-	return 0, ErrNotImplemented
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return 0, err
+	}
+	fromWhere, args := openNotesQuery(params)
+	return countConsoleRows(ctx, s.pool, fromWhere, args)
 }

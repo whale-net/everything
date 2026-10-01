@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // allMilestoneStatuses is the full fixed set of MilestoneStatus values --
@@ -62,10 +63,17 @@ func TestIsIncompleteContainerStatus(t *testing.T) {
 func TestIncompleteContainerFilterSQL_MatchesTheGoPredicate(t *testing.T) {
 	sql := incompleteContainerFilterSQL("c.id")
 
+	// Only the NOT IN list is the exclusion set. The rest of the
+	// predicate legitimately names other statuses -- the COALESCE default
+	// for a container with no status history is 'not started' -- so a
+	// search over the whole clause would read that default as an
+	// exclusion.
+	_, notIn, found := strings.Cut(sql, "NOT IN (")
+	require.True(t, found, "the predicate must exclude the complete statuses by a NOT IN list")
+	notIn = strings.TrimSuffix(strings.TrimSpace(notIn), ")")
+
 	for _, status := range allMilestoneStatuses {
-		// The rendered predicate excludes exactly the complete statuses,
-		// which is the negation IsIncompleteContainerStatus answers.
-		excluded := strings.Contains(sql, "'"+string(status)+"'")
+		excluded := strings.Contains(notIn, "'"+string(status)+"'")
 		assert.Equal(t, !IsIncompleteContainerStatus(status), excluded,
 			"status %q: the SQL NOT IN list and the Go predicate disagree", status)
 	}

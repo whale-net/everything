@@ -215,6 +215,47 @@ states it plainly: "this is the exact set later M5 tasks must not widen
 again" — a seventh value would need a new migration and a new load-bearing
 decision, never an in-place edit to this CHECK.
 
+## The count reads (FR c4ab6c68)
+
+`store.Page` carries only items and a next token, so every number the
+console shows next to a queue needs its own read. Each one
+(`CountClaimedTasks`, `CountCancelledTasks`, `CountEscalatedTasks`,
+`CountOpenNotes`, `CountProductTasks`, and `CountConsoleOverview` for the
+Overview's seven figures) is a `COUNT(*)` over the **same
+FROM/JOIN/WHERE its list pages**, not a second predicate:
+
+- **One builder per queue.** `claimedTasksQuery`,
+  `cancelledTasksQuery`, `escalatedTasksQuery` and `openNotesQuery` return
+  the clause and its bound args; the list appends the keyset half and
+  `LIMIT`, the count wraps the same clause in `SELECT COUNT(*)`. The two
+  cannot drift, because there is only one copy of the rule. Paging lives
+  entirely on the list's side — a count is of the whole filtered set by
+  construction.
+- **The count takes the list's own params type verbatim** — including its
+  `ConsoleFilter` narrowing, the escalated read's `reason`, and
+  `CountProductTasks`' scope/lane/only-stuck — and ignores `params.Page`
+  entirely. At both surfaces the count endpoint and the count MCP tool
+  parse their query string through the *list's* parser, so a filter added
+  for the list is added for the count by construction. A count narrowed
+  differently from the list printed beside it would answer a question
+  nobody asked, which is the whole failure this design rules out.
+- **A failed count is an error, never `0`.** Every count read returns its
+  query's error. A console that rendered a failed count as zero would be
+  indistinguishable from a genuinely idle queue.
+- **`CountConsoleOverview` composes the same clauses**, three of them
+  narrowed by one extra conjunct each (`escalatedTasksQuerySince`,
+  `claimedTasksQueryExpiringBefore`, `openNotesQueryOfKind`) rather than
+  as separately-written queries. It guards each queue's narrowing up
+  front, so a filter outside the scope refuses the whole Overview rather
+  than half of it, and the first failing figure fails the read rather than
+  leaving a partial one.
+- **Per-product open-notes counts are not additive.** An open note on a
+  spec entity is attributed to a product only while that entity is
+  current; once it is voided the note has no live product and is counted
+  scope-wide and under no product. A console therefore shows the current
+  product's own figure and never derives a scope-wide total by summing
+  per-product ones.
+
 ## Known defect: `ListClaimedTasks` (FR4) is an unimplemented stub
 
 `store.TaskStore.ListClaimedTasks` (`krill/store/task_console.go`) was
