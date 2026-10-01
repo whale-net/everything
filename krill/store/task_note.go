@@ -35,7 +35,7 @@ import (
 
 // NoteKind is the fixed enumeration of `task_note.kind` values (FR11),
 // defined in exactly this one place in Go and mirrored exactly by
-// 015_work_axis.up.sql's `CHECK (kind IN ('scope-note', 'comment'))` --
+// 015_work_axis.up.sql's `CHECK (kind IN ('scope-note', 'comment'))` (widened by 036_note_kind_cheap_expensive_later) --
 // the two sets must be kept in lockstep by hand; widening this set is a new
 // migration's CHECK edit paired with a new named constant here, never a
 // bare string at a call site and never an edit to migration 015's CHECK in
@@ -54,6 +54,11 @@ const (
 	// general-purpose free-form note kind every note that is not
 	// scope-discovery falls under.
 	NoteKindComment NoteKind = "comment"
+
+	// NoteKindCheapExpensiveLater records a Feature's "Stays cheap /
+	// expensive later" statement; the rendered capability map shows it under
+	// that capability. Only meaningful against a feature entity.
+	NoteKindCheapExpensiveLater NoteKind = "cheap-expensive-later"
 )
 
 // validNoteKinds is the set validateNoteKind checks against -- the Go-layer
@@ -62,6 +67,8 @@ const (
 var validNoteKinds = map[NoteKind]bool{
 	NoteKindScopeNote: true,
 	NoteKindComment:   true,
+
+	NoteKindCheapExpensiveLater: true,
 }
 
 // ErrUnknownNoteKind is RecordNote's named, loud rejection of a Kind outside
