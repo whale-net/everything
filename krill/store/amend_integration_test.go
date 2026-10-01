@@ -1039,3 +1039,58 @@ func TestAmendMilepebble_RevisesNameAndOutcome_LeavesBudgetHistoryAndDeliveryUnt
 	_, err = s.Amend().AmendMilepebble(ctx, milestone.ID, "nope", nil)
 	require.ErrorIs(t, err, store.ErrNotFound, "a milestone id is not a milepebble")
 }
+
+// TestDeferralCapability_ResolvesCurrentCnAtReadTime proves the cited
+// capability's Cn is read live, never stored on the deferral, and that a
+// deferral without a capability is unchanged.
+func TestDeferralCapability_ResolvesCurrentCnAtReadTime(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	acting := store.Subject{Iss: "test", Sub: "operator", Kind: store.SubjectKindHuman}
+	milestone := newAmendTestMilestone(t, ctx, s, db, scopeID)
+	product, err := s.Products().Create(ctx, scopeID, "Capability Product", "")
+	require.NoError(t, err)
+	fs, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "Caps", nil)
+	require.NoError(t, err)
+	feature, err := s.Features().Create(ctx, scopeID, fs.ID, "Cited capability", nil)
+	require.NoError(t, err)
+
+	cited, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "cites a capability", "M2", &feature.ID, acting, acting)
+	require.NoError(t, err)
+	plain, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "cites nothing", "M2", nil, acting, acting)
+	require.NoError(t, err)
+
+	read := func() map[uuid.UUID]store.MilestoneDeferral {
+		ds, err := s.MilestoneAuthoring().ListDeferrals(ctx, milestone.ID)
+		require.NoError(t, err)
+		out := map[uuid.UUID]store.MilestoneDeferral{}
+		for _, d := range ds {
+			out[d.ID] = d
+		}
+		return out
+	}
+
+	got := read()
+	require.NotNil(t, got[cited.ID].CapabilityDisplayNumber)
+	assert.Equal(t, feature.DisplayNumber, *got[cited.ID].CapabilityDisplayNumber)
+	assert.Nil(t, got[plain.ID].CapabilityID)
+	assert.Nil(t, got[plain.ID].CapabilityDisplayNumber, "a deferral with no capability-id behaves as before")
+
+	_, err = db.Pool.Exec(ctx, `UPDATE feature SET display_number = 99 WHERE id = $1 AND valid_to IS NULL`, feature.ID)
+	require.NoError(t, err)
+	got = read()
+	require.NotNil(t, got[cited.ID].CapabilityDisplayNumber)
+	assert.Equal(t, 99, *got[cited.ID].CapabilityDisplayNumber, "renumbering the capability changes what the deferral reads")
+
+	// An amend with no capability-id keeps the citation.
+	amended, err := s.Amend().AmendDeferral(ctx, cited.ID, "reworded", "M2", nil)
+	require.NoError(t, err)
+	require.NotNil(t, amended.CapabilityID)
+	assert.Equal(t, feature.ID, *amended.CapabilityID)
+
+	// An unknown capability is refused.
+	bogus := uuid.New()
+	_, err = s.MilestoneAuthoring().AddDeferral(ctx, scopeID, milestone.ID, "bad", "M2", &bogus, acting, acting)
+	require.Error(t, err)
+}
