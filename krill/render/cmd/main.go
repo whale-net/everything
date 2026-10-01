@@ -91,7 +91,23 @@ func run() error {
 		return fmt.Errorf("render %q: %w", *product, err)
 	}
 
-	_, _ = *check, *force // wired in the Implementation lane
+	read := func(rel string) (string, bool) {
+		b, err := os.ReadFile(filepath.Join(*out, rel))
+		return string(b), err == nil
+	}
+	if *check {
+		stale := render.Stale(files, read)
+		if len(stale) > 0 {
+			return fmt.Errorf("committed docs are stale; differing files:\n  %s", strings.Join(stale, "\n  "))
+		}
+		fmt.Println("committed docs match a fresh render")
+		return nil
+	}
+	if !*force {
+		if err := render.CheckNotNewer(files, read); err != nil {
+			return fmt.Errorf("%w (use --force to overwrite)", err)
+		}
+	}
 
 	for rel, content := range files.FileMap() {
 		path := filepath.Join(*out, rel)

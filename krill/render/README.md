@@ -350,3 +350,20 @@ filesystem writes. Nothing in the package can reach a Create, Update, or
 Delete. The empirical proof is still `render_integration_test.go`'s
 read-only-role test, which renders against a pool with
 `default_transaction_read_only` forced on.
+
+## Source stamp, staleness check, and overwrite guard
+
+Every rendered file carries a second comment line under its header,
+`<!-- krill-source: revision=<product revision> time=<RFC3339> -->`: the
+Product's SCD2 revision and the latest change time across its spec
+entities (Product, FeatureSets, Features, Requirements, decisions,
+personas, non-goals). Unlike the render timestamp it is identical for
+identical data.
+
+- **Check:** `bazel run //krill/render/cmd:render -- --product krill --out krill/ --check`
+  writes nothing, exits non-zero naming each file that differs from a fresh
+  render of live data (ignoring the render timestamp), and exits zero when
+  all match.
+- **Overwrite guard:** a normal render is refused if any committed file's
+  source stamp is newer than the live data being rendered (e.g. rendering
+  from an older database); pass `--force` to override.

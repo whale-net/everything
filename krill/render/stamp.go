@@ -61,8 +61,3 @@ func stampFile(content string, s SourceStamp) string {
 // ErrNewerCommittedSource is returned by CheckNotNewer when committed docs
 // were rendered from newer source data than the data being rendered now.
 var ErrNewerCommittedSource = errors.New("committed docs carry a newer source stamp than the data being rendered")
-
-// Stale returns the relative paths (sorted) whose committed content under
-// dir differs from files, ignoring the render timestamp. Implemented in
-// check.go.
-var _ = Stale
