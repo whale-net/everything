@@ -41,9 +41,11 @@ type Product struct {
 	ScopeID    uuid.UUID
 	Name       string
 	Vision     string
-	Position   int
-	ValidFrom  time.Time
-	ValidTo    *time.Time
+	// CurrentState is the markdown current-state survey; nil when none stored.
+	CurrentState *string
+	Position     int
+	ValidFrom    time.Time
+	ValidTo      *time.Time
 }
 
 // FeatureSet is one row of `feature_set` (migration 002) -- a grouping of

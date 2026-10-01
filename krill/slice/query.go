@@ -554,10 +554,11 @@ func filterFeaturesExistedAsOf(features []store.Feature, asOf time.Time) []store
 
 func toProductEntity(p store.Product) ProductEntity {
 	return ProductEntity{
-		EntityRef: EntityRef{ID: p.ID, RevisionID: p.RevisionID},
-		Name:      p.Name,
-		Vision:    p.Vision,
-		Position:  p.Position,
+		EntityRef:    EntityRef{ID: p.ID, RevisionID: p.RevisionID},
+		Name:         p.Name,
+		Vision:       p.Vision,
+		CurrentState: p.CurrentState,
+		Position:     p.Position,
 	}
 }
 

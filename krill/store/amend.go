@@ -175,10 +175,10 @@ func (s amendStore) AmendProduct(ctx context.Context, id uuid.UUID, name, vision
 	return supersede(ctx, s.pool, "product", productColumns, scanProduct, id,
 		func(ctx context.Context, q txQuerier, current Product) (Product, error) {
 			amended, err := scanProduct(q.QueryRow(ctx, `
-				INSERT INTO product (id, scope_id, name, vision, position)
-				VALUES ($1, $2, $3, $4, $5)
+				INSERT INTO product (id, scope_id, name, vision, current_state, position)
+				VALUES ($1, $2, $3, $4, $5, $6)
 				RETURNING `+productColumns,
-				current.ID, current.ScopeID, name, vision, current.Position))
+				current.ID, current.ScopeID, name, vision, current.CurrentState, current.Position))
 			return amended, errNameConflict("product", "insert amended product", err)
 		})
 }
