@@ -1,0 +1,30 @@
+<!-- wf: name="milestone-detail" title="Milestone detail" -->
+<div class="space-y-4">
+  <div class="breadcrumbs text-sm"><ul><li><a href="#/home">krill</a></li><li><a href="#/milestones">Milestones</a></li><li>M5 Escalation console</li></ul></div>
+  <p class="wf-note">Primary object: milestone. Primary action: open its tasks. Replaces the delivery breakdown block; shipped vs unshipped become two tables, ids become chips.</p>
+  <div class="flex flex-wrap items-center gap-3"><h1 class="text-2xl font-semibold">M5 Escalation console</h1><span class="badge badge-warning">in progress</span><div class="flex-1"></div><a class="btn btn-primary" href="#/tasks">Open tasks</a><a class="btn btn-ghost" href="#/board">Board</a></div>
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+    <section class="min-w-0 space-y-4">
+      <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2"><h2 class="card-title">Outcome</h2><p>An operator can see every claimed, escalated and cancelled task and intervene without leaving the console.</p></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body gap-3"><h2 class="card-title">Milepebbles</h2>
+        <ul class="divide-y divide-base-300">
+          <li class="py-2 flex items-center gap-3"><a class="link font-medium flex-1" href="#/tasks">Console views</a><span class="badge badge-success">shipped</span><progress class="progress progress-success w-24" value="4" max="4"></progress></li>
+          <li class="py-2 flex items-center gap-3"><a class="link font-medium flex-1" href="#/tasks">Interventions</a><span class="badge badge-warning badge-soft">partially complete</span><progress class="progress progress-warning w-24" value="2" max="5"></progress></li>
+        </ul></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body gap-3"><h2 class="card-title">Delivery</h2>
+        <div role="alert" class="alert alert-warning"><span>Status and breakdown disagree: this container reads partially complete, but nothing in its breakdown is outstanding.</span></div>
+        <div class="overflow-x-auto"><table class="table table-sm"><thead><tr><th>Item</th><th>Kind</th><th>Shipment</th><th>Id</th></tr></thead><tbody>
+          <tr><td>C12 Escalation console</td><td>Feature</td><td><span class="badge badge-success badge-soft badge-sm">shipped</span></td><td><span class="badge badge-ghost font-mono badge-sm">85a8b33c</span></td></tr>
+          <tr><td>FR9 Single-event escalation at cap</td><td>Requirement</td><td><span class="badge badge-success badge-soft badge-sm">shipped</span></td><td><span class="badge badge-ghost font-mono badge-sm">4398c532</span></td></tr>
+          <tr><td>FR11 Cancel from console</td><td>Requirement</td><td><span class="badge badge-ghost badge-sm">no shipment record</span></td><td><span class="badge badge-ghost font-mono badge-sm">c1d20e07</span></td></tr>
+        </tbody></table></div></div></div>
+    </section>
+    <aside class="space-y-4"><div class="card bg-base-100 border border-base-300"><dl class="card-body gap-3 text-sm">
+      <div><dt class="text-base-content/70">Status</dt><dd><span class="badge badge-warning">in progress</span></dd></div>
+      <div><dt class="text-base-content/70">FR budget</dt><dd>12</dd></div>
+      <div><dt class="text-base-content/70">Tasks</dt><dd>6 of 9 done</dd></div>
+      <div><dt class="text-base-content/70">Status history</dt><dd><a class="link" href="#/milestone-detail">4 changes</a></dd></div>
+      <div><dt class="text-base-content/70">Id</dt><dd><button class="badge badge-ghost font-mono">9be41a60</button></dd></div>
+    </dl></div></aside>
+  </div>
+</div>

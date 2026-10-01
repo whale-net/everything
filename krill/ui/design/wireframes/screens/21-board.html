@@ -1,0 +1,35 @@
+<!-- wf: name="board" title="Board" -->
+<div class="space-y-4">
+  <p class="wf-note">Primary object: lane. Primary action: open a task. Columns scroll horizontally below lg instead of a fixed five-column grid. Read-only: no drag and drop.</p>
+  <div class="flex flex-wrap items-center gap-3">
+    <h1 class="text-2xl font-semibold">Board</h1>
+    <div class="join">
+      <a class="join-item btn btn-sm" href="#/tasks">List</a>
+      <a class="join-item btn btn-sm btn-active">Board</a>
+    </div>
+    <select class="select select-bordered" aria-label="Milestone"><option>M5 Escalation console</option></select>
+  </div>
+  <div class="flex gap-3 overflow-x-auto pb-2">
+    <div class="w-72 shrink-0 space-y-2">
+      <h2 class="font-semibold flex items-center gap-2">Scaffold <span class="badge badge-ghost">1</span></h2>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Note lifecycle migration</a><div class="flex gap-1"><span class="badge badge-warning badge-soft badge-sm">manual</span></div><span class="text-sm text-base-content/70">0 of 3 attempts</span></div></div>
+    </div>
+    <div class="w-72 shrink-0 space-y-2">
+      <h2 class="font-semibold flex items-center gap-2">Implementation <span class="badge badge-ghost">2</span></h2>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Wire claim guard into release handler</a><div class="flex gap-1"><span class="badge badge-error badge-soft badge-sm">escalated</span></div><span class="text-sm text-base-content/70">3 of 3 attempts</span></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Requeue resets counters</a><div class="flex gap-1"><span class="badge badge-info badge-soft badge-sm">claimed</span></div><span class="text-sm text-base-content/70">1 of 3 attempts. Lease in 14 min</span></div></div>
+    </div>
+    <div class="w-72 shrink-0 space-y-2">
+      <h2 class="font-semibold flex items-center gap-2">Testing <span class="badge badge-ghost">2</span></h2>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Paginate ListClaimedTasks</a><div class="flex gap-1"><span class="badge badge-warning badge-soft badge-sm">lease expired</span></div><span class="text-sm text-base-content/70">2 of 3 attempts</span></div></div>
+    </div>
+    <div class="w-72 shrink-0 space-y-2">
+      <h2 class="font-semibold flex items-center gap-2">Validation <span class="badge badge-ghost">1</span></h2>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Open-notes console view</a><span class="text-sm text-base-content/70">0 of 3 attempts</span></div></div>
+    </div>
+    <div class="w-72 shrink-0 space-y-2">
+      <h2 class="font-semibold flex items-center gap-2">Done <span class="badge badge-success">3</span></h2>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-3 gap-1"><a class="link font-medium" href="#/task-detail">Claimed console view</a></div></div>
+    </div>
+  </div>
+</div>

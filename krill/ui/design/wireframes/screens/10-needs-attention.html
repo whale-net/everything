@@ -1,0 +1,49 @@
+<!-- wf: name="needs-attention" title="Needs attention" -->
+<div class="space-y-4">
+  <p class="wf-note">Primary object: escalated task. Primary action: requeue (in place). Replaces the four /ops pages: tabs are the queues; URL carries the tab.</p>
+  <div class="flex flex-wrap items-center gap-3">
+    <h1 class="text-2xl font-semibold">Needs attention</h1>
+    <div class="flex-1"></div>
+    <span class="text-sm text-base-content/70" title="2026-09-30 14:02:11 UTC">Updated 8 seconds ago</span>
+  </div>
+  <div role="tablist" class="tabs tabs-border">
+    <a role="tab" class="tab tab-active">Escalated <span class="badge badge-error badge-sm ml-2">3</span></a>
+    <a role="tab" class="tab">Claimed <span class="badge badge-ghost badge-sm ml-2">7</span></a>
+    <a role="tab" class="tab">Cancelled <span class="badge badge-ghost badge-sm ml-2">2</span></a>
+    <a role="tab" class="tab">Open notes <span class="badge badge-ghost badge-sm ml-2">12</span></a>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    <select class="select select-bordered" aria-label="Milestone"><option>All milestones</option><option>M5 Escalation console</option></select>
+    <select class="select select-bordered" aria-label="Reason"><option>Any reason</option><option>thrash cap</option><option>attempt cap</option><option>manual</option></select>
+  </div>
+  <div class="card bg-base-100 border border-base-300 overflow-x-auto">
+    <table class="table table-zebra">
+      <thead><tr><th>Task</th><th>Milestone</th><th>Lane</th><th>Reason</th><th class="text-right">Attempts</th><th>Escalated</th><th class="text-right">Actions</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><a class="link font-medium" href="#/task-detail">Wire claim guard into release handler</a><div class="text-sm text-base-content/70">by worker-3 for alex</div></td>
+          <td>M5</td><td><span class="badge badge-ghost">Implementation</span></td>
+          <td><span class="badge badge-error badge-soft">thrash cap</span></td>
+          <td class="text-right">3 of 3</td><td title="2026-09-30 13:50 UTC">12 min ago</td>
+          <td class="text-right whitespace-nowrap"><button class="btn btn-sm btn-primary">Requeue</button> <button class="btn btn-sm btn-ghost">Release</button> <button class="btn btn-sm btn-ghost text-error">Cancel</button></td>
+        </tr>
+        <tr>
+          <td><a class="link font-medium" href="#/task-detail">Paginate ListClaimedTasks</a><div class="text-sm text-base-content/70">by worker-1 for alex</div></td>
+          <td>M5</td><td><span class="badge badge-ghost">Testing</span></td>
+          <td><span class="badge badge-error badge-soft">attempt cap</span></td>
+          <td class="text-right">3 of 3</td><td title="2026-09-30 13:02 UTC">1 h ago</td>
+          <td class="text-right whitespace-nowrap"><button class="btn btn-sm btn-primary">Requeue</button> <button class="btn btn-sm btn-ghost">Release</button> <button class="btn btn-sm btn-ghost text-error">Cancel</button></td>
+        </tr>
+        <tr>
+          <td><a class="link font-medium" href="#/task-detail">Backfill note lifecycle migration</a><div class="text-sm text-base-content/70">by alex</div></td>
+          <td>M4</td><td><span class="badge badge-ghost">Scaffold</span></td>
+          <td><span class="badge badge-warning badge-soft">manual</span></td>
+          <td class="text-right">1 of 3</td><td title="2026-09-30 11:10 UTC">3 h ago</td>
+          <td class="text-right whitespace-nowrap"><button class="btn btn-sm btn-primary">Requeue</button> <button class="btn btn-sm btn-ghost">Release</button> <button class="btn btn-sm btn-ghost text-error">Cancel</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="flex items-center justify-between"><span class="text-sm text-base-content/70">3 escalated tasks</span><div class="join"><button class="join-item btn btn-sm" disabled>Previous</button><button class="join-item btn btn-sm" disabled>Next</button></div></div>
+  <p class="wf-note">Requeue and release act in place with a toast ("Task requeued"; undo not offered). Cancel asks inline first: "Cancel 'Paginate ListClaimedTasks'? It moves to Cancelled and cannot be claimed again." (hx-confirm, no separate page). The optional reason field becomes a small popover on the action, not a text input in every row.</p>
+</div>

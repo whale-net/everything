@@ -1,0 +1,32 @@
+<!-- wf: name="tasks" title="Tasks" -->
+<div class="space-y-4">
+  <p class="wf-note">Primary object: task. Primary action: open a task. Today's per-container list becomes one product-wide table with a milestone filter (defaults to the milestone in flight).</p>
+  <div class="flex flex-wrap items-center gap-3">
+    <h1 class="text-2xl font-semibold">Tasks</h1>
+    <div class="join">
+      <a class="join-item btn btn-sm btn-active">List</a>
+      <a class="join-item btn btn-sm" href="#/board">Board</a>
+    </div>
+    <div class="flex-1"></div>
+    <span class="text-sm text-base-content/70" title="2026-09-30 14:02:11 UTC">Updated 8 seconds ago</span>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    <select class="select select-bordered" aria-label="Milestone"><option>M5 Escalation console</option><option>All milestones</option></select>
+    <select class="select select-bordered" aria-label="Milepebble"><option>All milepebbles</option><option>Interventions</option><option>Console views</option></select>
+    <select class="select select-bordered" aria-label="Lane"><option>Any lane</option><option>Scaffold</option><option>Implementation</option><option>Testing</option><option>Validation</option><option>Done</option></select>
+    <label class="label cursor-pointer gap-2"><input type="checkbox" class="checkbox"/><span>Only stuck</span></label>
+  </div>
+  <div class="card bg-base-100 border border-base-300 overflow-x-auto">
+    <table class="table table-zebra">
+      <thead class="sticky top-0 bg-base-100"><tr><th>Task</th><th>Milepebble</th><th>Lane</th><th>State</th><th class="text-right">Attempts</th><th>Lease</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td><a class="link font-medium" href="#/task-detail">Wire claim guard into release handler</a></td><td>Interventions</td><td><span class="badge badge-ghost">Implementation</span></td><td><span class="badge badge-error badge-soft">escalated</span></td><td class="text-right">3 of 3</td><td>none</td></tr>
+        <tr class="hover"><td><a class="link font-medium" href="#/task-detail">Cancel moves task to dead letter</a></td><td>Interventions</td><td><span class="badge badge-ghost">Testing</span></td><td><span class="badge badge-info badge-soft">claimed</span></td><td class="text-right">1 of 3</td><td>in 14 min</td></tr>
+        <tr class="hover"><td><a class="link font-medium" href="#/task-detail">Paginate ListClaimedTasks</a></td><td>Console views</td><td><span class="badge badge-ghost">Testing</span></td><td><span class="badge badge-warning badge-soft">lease expired</span></td><td class="text-right">2 of 3</td><td>expired 3 h ago</td></tr>
+        <tr class="hover"><td><a class="link font-medium" href="#/task-detail">Open-notes console view</a></td><td>Console views</td><td><span class="badge badge-ghost">Validation</span></td><td><span class="badge badge-neutral">ready</span></td><td class="text-right">0 of 3</td><td>none</td></tr>
+        <tr class="hover"><td><a class="link font-medium" href="#/task-detail">Claimed console view</a></td><td>Console views</td><td><span class="badge badge-success">Done</span></td><td></td><td class="text-right">1 of 3</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="flex items-center justify-between"><span class="text-sm text-base-content/70">Showing 5 of 9 tasks</span><div class="join"><button class="join-item btn btn-sm" disabled>Previous</button><button class="join-item btn btn-sm">Next</button></div></div>
+</div>

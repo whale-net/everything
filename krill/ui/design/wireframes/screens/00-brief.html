@@ -1,0 +1,43 @@
+<!-- wf: name="brief" title="Brief" -->
+<div class="max-w-3xl space-y-4">
+  <h1 class="text-2xl font-semibold">krill UI facelift: brief</h1>
+  <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2">
+    <h2 class="card-title">Audience and jobs</h2>
+    <p><b>Who:</b> operators and engineers running agent swarms against a product spec. Developer-grade density is fine; IDs are allowed but secondary.</p>
+    <ol class="list-decimal pl-5 space-y-1">
+      <li>See what is stuck or escalated and act on it (release, requeue, cancel).</li>
+      <li>Follow a milestone: what shipped, what is left, which tasks are in which lane.</li>
+      <li>Review a design session: revisions, open questions, answer the blocking ones.</li>
+    </ol>
+    <p><b>Five-second answer on landing:</b> "Is anything stuck, and which milestone is in flight?"</p>
+  </div></div>
+  <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2">
+    <h2 class="card-title">Object tree and verbs</h2>
+    <ul class="space-y-1">
+      <li><b>Product</b> (switch) → <b>Milestone</b> (amend status, view breakdown) → <b>Milepebble</b> → <b>Task</b> (release, requeue, escalate, cancel)</li>
+      <li><b>Task</b> facets: dependencies, notes, attempts and claim, spec slice</li>
+      <li><b>Product</b> → <b>Design session</b> (open, answer questions, follow up) → revision events</li>
+      <li><b>Product</b> → <b>Spec</b>: feature sets, features, requirements, decisions, personas, non-goals (read-only)</li>
+      <li><b>Admin</b>: static bearer credentials for MCP clients (mint, revoke)</li>
+    </ul>
+  </div></div>
+  <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2">
+    <h2 class="card-title">Archetype: workspace</h2>
+    <p>Six areas and a four-level object tree. Sidebar groups follow the tree; the product switcher replaces typing a product id. Detail pages get a properties rail.</p>
+    <p class="wf-note">First proof of the proposed workspace shell. Note that app-exemplars.md still lists krill as off-stack; it is already on templ + htmxui.</p>
+  </div></div>
+  <div class="card bg-base-100 border border-base-300"><div class="card-body gap-2">
+    <h2 class="card-title">What changes versus today</h2>
+    <ul class="list-disc pl-5 space-y-1">
+      <li>Landing pages become "at a glance" instead of link-and-blurb lists.</li>
+      <li>Task and ops lists become real tables; lanes, states and verdicts are badges.</li>
+      <li>Board scrolls horizontally on narrow screens instead of a fixed 5-column grid.</li>
+      <li>Task detail gets a properties rail; raw spec JSON moves behind a disclosure.</li>
+      <li>Cancel confirmation moves from a separate page to an in-row confirm.</li>
+      <li>UUIDs become copy chips; timestamps become relative with the exact time on hover.</li>
+      <li>Design sessions open from the product switcher, never a typed product id.</li>
+    </ul>
+    <p class="wf-note">Open: today's ops queues are scoped by delivery (milestone/milepebble). The sidebar shows them product-wide; confirm the read API supports a product-level scope or keep a milestone filter.</p>
+  </div></div>
+  <p><a class="btn btn-primary" href="#/home">Start at overview</a></p>
+</div>
