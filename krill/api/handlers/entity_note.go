@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -60,7 +62,7 @@ type ListEntityNotesResponse struct {
 
 // ListEntityNotes resolves (kind, id)'s scope and returns every note
 // recorded against it. Shared by ListEntityNotesHandler and the MCP tool.
-func ListEntityNotes(ctx context.Context, scopes NoteEntityScopes, tasks store.TaskStore, kind store.NoteEntityKind, id uuid.UUID) (ListEntityNotesResponse, error) {
+func ListEntityNotes(ctx context.Context, scopes NoteEntityScopes, tasks store.TaskStore, kind store.NoteEntityKind, id uuid.UUID, filter EntityNoteFilter) (ListEntityNotesResponse, error) {
 	scopeID, err := scopes.ScopeOf(ctx, kind, id)
 	if err != nil {
 		return ListEntityNotesResponse{}, err
@@ -69,6 +71,7 @@ func ListEntityNotes(ctx context.Context, scopes NoteEntityScopes, tasks store.T
 	if err != nil {
 		return ListEntityNotesResponse{}, err
 	}
+	notes = filter.apply(notes)
 	resp := ListEntityNotesResponse{
 		EntityKind: string(kind),
 		EntityID:   id.String(),
@@ -90,7 +93,7 @@ func ListEntityNotesHandler(kind store.NoteEntityKind, scopes NoteEntityScopes, 
 			return
 		}
 
-		resp, err := ListEntityNotes(r.Context(), scopes, tasks, kind, id)
+		resp, err := ListEntityNotes(r.Context(), scopes, tasks, kind, id, entityNoteFilterFromQuery(r))
 		switch {
 		case err == nil:
 			writeJSON(w, http.StatusOK, resp)
@@ -102,4 +105,52 @@ func ListEntityNotesHandler(kind store.NoteEntityKind, scopes NoteEntityScopes, 
 			writeJSONError(w, http.StatusInternalServerError, "internal error")
 		}
 	}
+}
+
+// EntityNoteFilter narrows ListEntityNotes. A zero value means no filtering
+// (every note, oldest first); once any field is set, or Limit > 0, results
+// are newest first.
+type EntityNoteFilter struct {
+	Kind       string // note kind, empty = any
+	Status     string // lifecycle status, empty = any
+	BodyPrefix string // case-sensitive body prefix, empty = any
+	Limit      int    // max notes returned, 0 = unlimited
+}
+
+func (f EntityNoteFilter) active() bool {
+	return f.Kind != "" || f.Status != "" || f.BodyPrefix != "" || f.Limit > 0
+}
+
+// apply filters notes (given oldest first) and, when any filter is active,
+// returns them newest first capped at Limit.
+func (f EntityNoteFilter) apply(notes []store.Note) []store.Note {
+	if !f.active() {
+		return notes
+	}
+	out := make([]store.Note, 0, len(notes))
+	for i := len(notes) - 1; i >= 0; i-- {
+		n := notes[i]
+		if f.Kind != "" && string(n.Kind) != f.Kind {
+			continue
+		}
+		if f.Status != "" && string(n.CurrentStatus) != f.Status {
+			continue
+		}
+		if f.BodyPrefix != "" && !strings.HasPrefix(n.Body, f.BodyPrefix) {
+			continue
+		}
+		out = append(out, n)
+		if f.Limit > 0 && len(out) == f.Limit {
+			break
+		}
+	}
+	return out
+}
+
+// entityNoteFilterFromQuery reads kind, status, body_prefix and limit; a
+// non-numeric limit is ignored.
+func entityNoteFilterFromQuery(r *http.Request) EntityNoteFilter {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	return EntityNoteFilter{Kind: q.Get("kind"), Status: q.Get("status"), BodyPrefix: q.Get("body_prefix"), Limit: limit}
 }
