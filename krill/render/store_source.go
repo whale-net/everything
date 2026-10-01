@@ -65,3 +65,9 @@ func (s *StoreSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []
 func (s *StoreSource) ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error) {
 	return s.store.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindProduct, productID)
 }
+
+// ListFeatureNotes is a read of `task_note` narrowed to one Feature (the
+// optional FeatureNoteSource capability), and nothing else.
+func (s *StoreSource) ListFeatureNotes(ctx context.Context, scopeID, featureID uuid.UUID) ([]store.Note, error) {
+	return s.store.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindFeature, featureID)
+}

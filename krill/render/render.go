@@ -141,6 +141,13 @@ func (f Files) FileMap() map[string]string {
 // milestone refs, which are keyed (scope, product, name) rather than by
 // product alone (see migration 004's comment on why: two different
 // products under the same scope may each have their own "M1").
+// FeatureNoteSource is an optional Source capability: the notes recorded
+// against a Feature, oldest first. A Source that lacks it renders the
+// capability map without 'cheap-expensive-later' statements.
+type FeatureNoteSource interface {
+	ListFeatureNotes(ctx context.Context, scopeID, featureID uuid.UUID) ([]store.Note, error)
+}
+
 func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID, opts ...Option) (Files, error) {
 	var o options
 	for _, opt := range opts {
@@ -171,13 +178,28 @@ func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID, opts 
 		return Files{}, fmt.Errorf("list product notes: %w", err)
 	}
 
+	cheapExpensive := map[uuid.UUID][]string{}
+	if fns, ok := src.(FeatureNoteSource); ok {
+		for _, f := range doc.Features {
+			fnotes, err := fns.ListFeatureNotes(ctx, scopeID, f.ID)
+			if err != nil {
+				return Files{}, fmt.Errorf("list feature notes: %w", err)
+			}
+			for _, n := range fnotes {
+				if n.Kind == store.NoteKindCheapExpensiveLater && n.CurrentStatus != store.NoteLifecycleStatus("closed") {
+					cheapExpensive[f.ID] = append(cheapExpensive[f.ID], strings.TrimSpace(n.Body))
+				}
+			}
+		}
+	}
+
 	revision := doc.Product.RevisionID.String()
 	name := doc.Product.Name
 
 	return Files{
 		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals, notes, o.detail),
 		CurrentStateMD:  renderCurrentStateMD(name, revision),
-		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc, o.detail),
+		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc, o.detail, cheapExpensive),
 		RoadmapMD:       renderRoadmapMD(name, revision, milestones),
 	}, nil
 }
@@ -241,7 +263,7 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 	b.WriteString("| Roadmap | [`product/03-roadmap.md`](product/03-roadmap.md) |\n\n")
 
 	if !detail {
-		b.WriteString("_Headlines only: persona, decision, non-goal, and note bodies are not rendered here. Read them from krill (`get_product_slice`, `list_personas`, `list_non_goals`, `list_entity_notes`), or re-render with detail._\n\n")
+		b.WriteString("_Product notes are headlines only here. Read them from krill (`list_entity_notes`), or re-render with detail._\n\n")
 	}
 
 	b.WriteString("## Vision\n\n")
@@ -255,11 +277,7 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		b.WriteString("**")
 		if p.Description != nil && strings.TrimSpace(*p.Description) != "" {
 			b.WriteString(" — ")
-			if detail {
-				b.WriteString(strings.TrimSpace(*p.Description))
-			} else {
-				b.WriteString(firstSentence(*p.Description))
-			}
+			b.WriteString(strings.TrimSpace(*p.Description))
 		}
 		b.WriteString("\n")
 	}
@@ -268,18 +286,11 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 	b.WriteString("## Load-bearing decisions\n\n")
 	for _, d := range doc.Decisions {
 		title := cleanDecisionTitle(d.Name)
-		if !detail {
-			b.WriteString(fmt.Sprintf("- **LB%d** — %s\n", d.DisplayNumber, title))
-			continue
-		}
 		b.WriteString(fmt.Sprintf("### LB%d — %s\n\n", d.DisplayNumber, title))
 		if d.Body != nil && strings.TrimSpace(*d.Body) != "" {
 			b.WriteString(strings.TrimSpace(*d.Body))
 			b.WriteString("\n\n")
 		}
-	}
-	if !detail {
-		b.WriteString("\n")
 	}
 
 	b.WriteString("## Non-goals\n\n")
@@ -288,14 +299,14 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		if ng.Kind != store.NonGoalKindPermanent {
 			continue
 		}
-		writeNonGoalBullet(&b, ng, detail)
+		writeNonGoalBullet(&b, ng)
 	}
 	b.WriteString("\n**Explicitly *not* non-goals — deferred, not foreclosed:**\n\n")
 	for _, ng := range nonGoals {
 		if ng.Kind != store.NonGoalKindDeferred {
 			continue
 		}
-		writeNonGoalBullet(&b, ng, detail)
+		writeNonGoalBullet(&b, ng)
 	}
 
 	b.WriteString("\n")
@@ -367,11 +378,11 @@ func demoteHeadings(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-func writeNonGoalBullet(b *strings.Builder, ng store.NonGoal, detail bool) {
+func writeNonGoalBullet(b *strings.Builder, ng store.NonGoal) {
 	b.WriteString("- **")
 	b.WriteString(ng.Name)
 	b.WriteString(".**")
-	if detail && ng.Body != nil && strings.TrimSpace(*ng.Body) != "" {
+	if ng.Body != nil && strings.TrimSpace(*ng.Body) != "" {
 		b.WriteString(" ")
 		b.WriteString(strings.TrimSpace(*ng.Body))
 	}
@@ -484,7 +495,7 @@ func requirementCitations(doc slice.Document) map[uuid.UUID]string {
 	return out
 }
 
-func renderCapabilityMapMD(name, revision string, doc slice.Document, detail bool) string {
+func renderCapabilityMapMD(name, revision string, doc slice.Document, detail bool, cheapExpensive map[uuid.UUID][]string) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Capability map\n\n")
@@ -533,10 +544,12 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document, detail boo
 					}
 				}
 				b.WriteString(fmt.Sprintf("- **C%d** — %s (%d FR, %d NFR)\n", f.DisplayNumber, cleanFeatureTitle(f.Name), nFR, nNFR))
+				writeCheapExpensive(&b, cheapExpensive[f.ID])
 				continue
 			}
 			if len(reqs) == 0 {
 				b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
+				writeCheapExpensive(&b, cheapExpensive[f.ID])
 				continue
 			}
 			// A Feature with Requirements gets a heading, so each
@@ -544,6 +557,7 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document, detail boo
 			// than indented into a list -- indenting would rewrite the
 			// body, and a body is a record, not formatting.
 			b.WriteString(fmt.Sprintf("### C%d — %s\n\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
+			writeCheapExpensive(&b, cheapExpensive[f.ID])
 			for _, rq := range reqs {
 				writeRequirement(&b, rq, citations[rq.ID])
 			}
@@ -552,6 +566,17 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document, detail boo
 	}
 
 	return b.String()
+}
+
+// writeCheapExpensive emits a Feature's recorded 'Stays cheap/expensive
+// later' statements, in a form that is a block under a heading and an
+// indented continuation under a list bullet.
+func writeCheapExpensive(b *strings.Builder, bodies []string) {
+	for _, body := range bodies {
+		b.WriteString("  - **Stays cheap / expensive later:** ")
+		b.WriteString(strings.ReplaceAll(body, "\n", "\n    "))
+		b.WriteString("\n")
+	}
 }
 
 // writeRequirement emits one Requirement under a bold label, not a
