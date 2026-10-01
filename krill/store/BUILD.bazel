@@ -981,14 +981,17 @@ go_test(
 )
 
 # Pure unit tests for paging.go's ResolvePageSize, the scope-bound
-# Encode/DecodeContinuationToken pair, and the filter-bound
-# Encode/DecodeFilteredContinuationToken pair: the default/clamp rule, a
-# token round trip, a cross-scope token's ErrTokenScopeMismatch, a malformed
-# token's ErrInvalidContinuationToken, the canonical encoding of a filter set
-# (stable key order, type-tagged and absent-vs-zero values), a filter-bound
-# token's round trip and ErrTokenFilterMismatch, and the unfiltered token's
-# byte-for-byte back-compat shape. No database needed -- part of
-# `bazel test //...` (no "manual"/"integration" tag).
+# Encode/DecodeContinuationToken pair, the filter-bound Encode/
+# DecodeFilteredContinuationToken pair, and FilterSet's canonical encoding
+# and builder semantics: the default/clamp rule, a token round trip, a
+# cross-scope token's ErrTokenScopeMismatch, a malformed token's
+# ErrInvalidContinuationToken, the three refusals being distinct from each
+# other, the canonical encoding of a filter set (lexicographic key order,
+# type-tagged values, absent vs explicit zero, value escaping), the builders
+# copying rather than mutating their receiver, a filter-bound token's round
+# trip and ErrTokenFilterMismatch with the cursor withheld, and the
+# unfiltered token's byte-for-byte back-compat shape. No database needed --
+# part of `bazel test //...` (no "manual"/"integration" tag).
 go_test(
     name = "paging_test",
     srcs = ["paging_test.go"],
