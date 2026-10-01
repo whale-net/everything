@@ -101,6 +101,39 @@ func RegisterSetFRBudget(reg *server.Registry, sessions store.SessionStore, mile
 	})
 }
 
+// setMilestoneNotesInput is set_milestone_notes's argument schema.
+type setMilestoneNotesInput struct {
+	krillSessionInput
+	MilestoneID string `json:"milestone_id" jsonschema:"The milestone or milepebble surrogate id, as a UUID string."`
+	Notes       string `json:"notes" jsonschema:"Markdown design rationale; replaces any existing notes verbatim. Empty clears them."`
+}
+
+// RegisterSetMilestoneNotes registers set_milestone_notes: replaces a
+// milestone's markdown notes via store.MilestoneAuthoringStore.SetMilestoneNotes.
+func RegisterSetMilestoneNotes(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "set_milestone_notes",
+		Description: "Replace a milestone's or milepebble's markdown design notes (rationale), rendered under its roadmap entry.",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in setMilestoneNotesInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		milestoneID, err := uuid.Parse(in.MilestoneID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("milestone_id: invalid or missing UUID")
+		}
+
+		if err := milestones.SetMilestoneNotes(ctx, milestoneID, in.Notes, sess.Acting, sess.OnBehalfOf); err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: milestoneID.String()}, nil
+	})
+}
+
 // addDeliversInput is add_delivers's argument schema (LB6). Pass
 // `entity_ids` to deliver a whole slice in one call -- a milestone's
 // scope routinely spans more than one FeatureSet, and the delivery axis
@@ -605,6 +638,7 @@ func RegisterListProductDelivery(reg *server.Registry, products store.ProductSto
 func RegisterMilestoneAll(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore, products store.ProductStore, querier productDeliveryQuerier) {
 	RegisterCreateMilestone(reg, sessions, milestones)
 	RegisterSetFRBudget(reg, sessions, milestones)
+	RegisterSetMilestoneNotes(reg, sessions, milestones)
 	RegisterAddDelivers(reg, sessions, milestones)
 	RegisterAddMustNotForeclose(reg, sessions, milestones)
 	RegisterAddDeferral(reg, sessions, milestones)

@@ -618,6 +618,7 @@ type milestoneEntry struct {
 	Delivers         []string
 	MustNotForeclose []string
 	Deferrals        []store.MilestoneDeferral
+	Notes            string // markdown design notes, rendered verbatim; empty emits nothing
 	ShipsAlongside   []store.MilestoneShipsAlongside
 }
 
@@ -710,6 +711,7 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			Delivers:         prefixEach("C", delivers),
 			MustNotForeclose: prefixEach("LB", mustNot),
 			Deferrals:        deferrals,
+			Notes:            derefString(ref.Notes),
 			ShipsAlongside:   ships,
 		})
 	}
@@ -803,11 +805,25 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry, later [
 		if m.FRBudget != nil {
 			b.WriteString(fmt.Sprintf("- FR budget: %d\n", *m.FRBudget))
 		}
+		if m.Notes != "" {
+			b.WriteString("\n")
+			b.WriteString(m.Notes)
+			if !strings.HasSuffix(m.Notes, "\n") {
+				b.WriteString("\n")
+			}
+		}
 		b.WriteString("\n")
 	}
 
 	renderLaterCoverageMD(&b, later)
 	return b.String()
+}
+
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // laterEntry is one Later capability (a Feature no milestone or milepebble

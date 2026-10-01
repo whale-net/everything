@@ -251,6 +251,10 @@ type MilestoneRef struct {
 	// CreateMilestone/SetOutcome sets it.
 	Outcome *string
 
+	// Notes is the milestone's markdown design rationale, NULL until
+	// set; carried forward across amends and stored verbatim.
+	Notes *string
+
 	// FRBudget is the milestone's FR budget (FR2), NULL until
 	// CreateMilestone/SetFRBudget sets it.
 	FRBudget *int

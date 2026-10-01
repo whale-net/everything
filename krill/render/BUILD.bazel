@@ -42,6 +42,7 @@ go_test(
         "dangling_reference_test.go",
         "fake_source_test.go",
         "render_test.go",
+        "milestone_notes_test.go",
         "stamp_test.go",
         "roadmap_fixture_test.go",
     ],
