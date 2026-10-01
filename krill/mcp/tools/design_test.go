@@ -450,6 +450,78 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 		assert.Equal(t, asMap(t, expected), res.StructuredContent)
 	})
 
+	// ── FR d0a63ffb: the product-wide aggregate read over MCP, byte- ────────
+	// ── identical to its HTTP twin, and honest about a missing product ─────
+
+	t.Run("list_product_design_sessions is byte-identical to its HTTP twin (LB7)", func(t *testing.T) {
+		cs, err := connectMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "list_product_design_sessions",
+			Arguments: map[string]string{"product_id": product.ID.String()},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", textOf(res))
+
+		// Drive the real HTTP handler directly, the same construction
+		// routes.go wires -- not a hand re-derivation of the aggregate.
+		mux := http.NewServeMux()
+		mux.Handle("GET /products/{id}/design-sessions", handlers.ListProductDesignSessionsHandler(entities.DesignSessions()))
+		req := httptest.NewRequest(http.MethodGet, "/products/"+product.ID.String()+"/design-sessions", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "unexpected HTTP status: %s", rec.Body.String())
+
+		var expected handlers.ProductDesignSessionsSummaryWire
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &expected))
+
+		assert.Equal(t, asMap(t, expected), res.StructuredContent, "the MCP tool's response must be byte-identical to the HTTP handler's for the same product (LB7) -- no second projection")
+
+		// Non-vacuous: the session opened above is really in there, with
+		// the draft stage and the one blocking question the
+		// append_revision_event round opened.
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, product.ID.String(), structured["product_id"])
+		sessions, ok := structured["sessions"].([]any)
+		require.True(t, ok)
+		require.Len(t, sessions, 1, "the product has exactly the one session opened above")
+		row, ok := sessions[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, designSessionID, row["id"])
+		assert.Equal(t, string(store.StageInDraft), row["stage"], "the only revision event on this session is a draft, so the derived stage is in_draft")
+		assert.Equal(t, float64(1), row["open_blocking_questions"], "q1 was opened blocking by the append round above")
+		assert.Equal(t, float64(0), row["open_non_blocking_questions"])
+		assert.Equal(t, float64(1), structured["open_blocking_question_count"])
+		assert.Equal(t, float64(1), structured["sessions_holding_open_blocking"])
+	})
+
+	t.Run("list_product_design_sessions on an unknown product is a tool error, not an empty listing", func(t *testing.T) {
+		cs, err := connectMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "list_product_design_sessions",
+			Arguments: map[string]string{"product_id": uuid.New().String()},
+		})
+		require.NoError(t, err, "a rejected read is a tool error, not a protocol error")
+		assert.True(t, res.IsError, "an unknown product must not read as 'no sessions yet'")
+	})
+
+	t.Run("list_product_design_sessions rejects a non-UUID product_id", func(t *testing.T) {
+		cs, err := connectMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "list_product_design_sessions",
+			Arguments: map[string]string{"product_id": "not-a-uuid"},
+		})
+		require.NoError(t, err)
+		require.True(t, res.IsError)
+		assert.Contains(t, textOf(res), "invalid or missing UUID")
+	})
+
 	// ── criterion 5: LB7 shape identity -- get_design_session_slice's ───────
 	// ── output is byte-identical to GET /design-sessions/{id}/slice's ───────
 
