@@ -999,6 +999,26 @@ go_test(
     ],
 )
 
+# Pure unit tests for the observed-state guard's shared comparison
+# (task_observed_state.go): a nil expected id is unguarded, a supplied id on
+# a task holding none is the mismatch rather than a legality refusal, and
+# ErrObservedStateMismatch matches none of the legality refusals. The four
+# verbs' real-Postgres coverage of the same guard lives in their own
+# *_integration_test.go targets, which are deliberately outside
+# `bazel test //krill/store:all`; this target is what keeps the guard's own
+# rules asserted on every ordinary run. `package store`, since
+# checkObservedClaim/checkObservedEscalation are unexported.
+go_test(
+    name = "observed_state_test",
+    srcs = ["task_observed_state_test.go"],
+    embed = [":store"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Pure unit tests for the amend placement guard (amend.go, FR b62ed47a):
 # Refuse comparing each submitted field against the entity's own current
 # placement -- omitted, echoed, changed, empty-string, and no-column-for-it
