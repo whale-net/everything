@@ -583,3 +583,19 @@ func TestTaskNoteStore_AmendNote_AppendsSupersedingRow_OldRowRetained(t *testing
 	})
 	require.Error(t, err, "cross-scope amend is refused")
 }
+
+// The cheap-expensive-later kind persists (the DB CHECK admits it, 036).
+func TestTaskNoteStore_RecordNote_CheapExpensiveLaterKind_Persisted(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+	taskID, _ := seedTaskNoteWorld(t, ctx, s, scopeID, self)
+
+	note, err := s.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID: scopeID, TaskID: &taskID,
+		Kind: store.NoteKindCheapExpensiveLater, Body: "cheap now", Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.NoteKindCheapExpensiveLater, note.Kind)
+}

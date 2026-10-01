@@ -107,7 +107,9 @@ check:
    bazel run //krill/render/cmd:render -- --product krill --out <dir> \
      --database-url "postgres://<reader-user>:<password>@localhost:5433/krill_<env>?sslmode=require"
    ```
-   The capability map is headlines only by default (a `Cn` line with its
+   PRODUCT.md always carries full persona, decision, and non-goal bodies, and
+   the capability map shows each Feature's `cheap-expensive-later` note where
+   recorded. The capability map is headlines only by default (a `Cn` line with its
    FR/NFR counts); read Requirement bodies via krill's `get_feature_slice`
    MCP tool, or pass `--detail` to render them in full.
 4. Diff `<dir>` against the committed files before deciding whether to
