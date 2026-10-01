@@ -41,9 +41,11 @@ concurrently against a different task's worktree.
    phase criteria. `task.current_lane` tells you which phase you're
    executing — don't assume it matches what you expected to be dispatched
    for.
-3. Call `heartbeat_task {krill_session_id, task_id, claim_id}` at least
-   every 10 minutes (the lease is 15) — a stale lease gets reclaimed out
-   from under you. Always end with `complete_task` or `abandon_task`.
+3. `heartbeat_task {krill_session_id, task_id, claim_id}` is best-effort:
+   call it when you happen to be between long steps. A lapsed lease only
+   matters if another session claims the task or a reclaim sweep runs;
+   otherwise `complete_task` still succeeds. Always end with
+   `complete_task` or `abandon_task`.
 4. **Execute phase work:**
    - **Scaffold:** skeleton targets/interfaces/protos/migrations, `bazel
      build` sanity check, commit `scaffold: ...\n\nkrill task: <task_id>`,

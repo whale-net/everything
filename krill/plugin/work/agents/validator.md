@@ -26,8 +26,8 @@ expired, call `init_session {}` yourself and use that id. Inspect code and run `
 1. **Claim it:** `claim_task {krill_session_id, task_id}` → the task's full
    `work.Payload` (title, body with the acceptance criteria,
    `current_claim.claim_id` — save it — `notes[]`). Check nothing until this
-   succeeds; if it's refused, report the exact error and stop. Heartbeat at
-   least every 10 minutes during long runs, and always end with
+   succeeds; if it's refused, report the exact error and stop. Heartbeat
+   between long steps if convenient (best-effort), and always end with
    `complete_task` or `abandon_task`.
 2. Check each acceptance criterion in `task.body` against the actual repo
    state — inspect code, run `bazel build`/`bazel test` where relevant.

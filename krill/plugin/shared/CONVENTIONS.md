@@ -413,7 +413,9 @@ same order:
 
 1. `init_session {}` (or reuse a still-valid id).
 2. `claim_task` **before** the first edit; stop if it's refused.
-3. `heartbeat_task` at least every 10 minutes (the lease is 15).
+3. `heartbeat_task` best-effort between long steps (the lease is 15 min,
+   but `complete_task` doesn't check expiry — only a competing claim or a
+   reclaim sweep takes the task away).
 4. End with `complete_task` (pass/fail) or `abandon_task`; never let a claim
    lapse.
 5. Put `krill task: <task-id>` at the end of each commit message.

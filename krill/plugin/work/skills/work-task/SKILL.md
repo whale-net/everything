@@ -41,9 +41,9 @@ loop".
    the exact error and stop — don't do the work anyway.
 4. **Do the lane's work** per `task.current_lane` and `task.body`, following
    `agents/worker.md` (Scaffold / Implementation / Testing) or
-   `agents/validator.md` (Validation, read-only). Call `heartbeat_task
-   {krill_session_id, task_id, claim_id}` at least every 10 minutes — the
-   lease is 15, and a lapsed one is reclaimed out from under you.
+   `agents/validator.md` (Validation, read-only). `heartbeat_task
+   {krill_session_id, task_id, claim_id}` is best-effort between long steps;
+   a lapsed lease only matters if another session claims the task.
 5. **Close the claim.** `complete_task {krill_session_id, task_id,
    claim_id, verdict: "pass" | "fail", summary}` when the lane's work is
    finished — krill moves the lane itself. If blocked with no verdict to
