@@ -39,6 +39,9 @@ Cross-cutting documentation for the Bazel build system, release pipeline, and in
 
 - [skills/architecture-scd2/SKILL.md](skills/architecture-scd2/SKILL.md) — Canonical, harness-neutral SCD2 (`valid_from`/`valid_to`) convention: write path, current-value/point-in-time query patterns, worked examples. Symlinked into `.claude/skills/architecture-scd2` for Claude Code; `AGENTS.md` § SCD2 keeps only the short, always-loaded naming/carve-out rules
 - [skills/doc-splitting/SKILL.md](skills/doc-splitting/SKILL.md) — Full doc-splitting mechanics: file-type-specific guidance (planning docs, cross-referenced reference docs, code modules, persona docs) and worked examples. Symlinked into `.claude/skills/doc-splitting` for Claude Code; `AGENTS.md` § Size Limits & Splitting keeps only the short, always-loaded threshold and numbered rules
+- [skills/design-htmx-ui/SKILL.md](skills/design-htmx-ui/SKILL.md) — Cross-app UI design rules for the htmx apps: process (subject → objects → archetype → plan → build → critique), sidebar-workspace vs. top-nav-console layouts, page anatomy, the "real page" quality floor, htmx interaction rules, confirmation ladder, copy. Symlinked into `.claude/skills/design-htmx-ui`; color semantics stay owned by `manmanv2/ui/DESIGN_SYSTEM.md`
+  - [skills/design-htmx-ui/references/workspace-shell.md](skills/design-htmx-ui/references/workspace-shell.md) — Proposed sidebar workspace layout (daisyUI drawer + properties rail) reference markup
+  - [skills/design-htmx-ui/references/app-exemplars.md](skills/design-htmx-ui/references/app-exemplars.md) — Per-app scorecard: patterns to copy (with file paths) and anti-patterns to avoid
 
 ## Implementation Plans & Feature Docs
 
