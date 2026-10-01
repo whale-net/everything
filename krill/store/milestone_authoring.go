@@ -82,6 +82,14 @@ type MilestoneAuthoringStore interface {
 	// ordered by Position.
 	ListDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]MilestoneDeferral, error)
 
+	// AddShipsAlongside records one item of non-capability work that ships
+	// with milestoneID (migration 032). Append-only.
+	AddShipsAlongside(ctx context.Context, scopeID, milestoneID uuid.UUID, body string, acting, onBehalfOf Subject) (MilestoneShipsAlongside, error)
+
+	// ListShipsAlongside returns milestoneID's Ships alongside rows,
+	// ordered by Position.
+	ListShipsAlongside(ctx context.Context, milestoneID uuid.UUID) ([]MilestoneShipsAlongside, error)
+
 	// GetMilestone returns id's MilestoneRef (authoring fields included)
 	// plus its Delivers/Must-not-foreclose association lists and its
 	// deferrals, or ErrNotFound.
@@ -812,4 +820,92 @@ func (s milestoneAuthoringStore) AddDiscoveredScope(ctx context.Context, scopeID
 		return DiscoveredScopeResult{}, fmt.Errorf("commit: %w", err)
 	}
 	return result, nil
+}
+
+const milestoneShipsAlongsideColumns = `id, scope_id, milestone_id, body, position, ` +
+	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
+	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
+
+func scanMilestoneShipsAlongside(row pgx.Row) (MilestoneShipsAlongside, error) {
+	var d MilestoneShipsAlongside
+	var actingKind, onBehalfOfKind string
+	err := row.Scan(
+		&d.ID, &d.ScopeID, &d.MilestoneID, &d.Body, &d.Position,
+		&d.CreatedByActing.Iss, &d.CreatedByActing.Sub, &actingKind,
+		&d.CreatedByOnBehalfOf.Iss, &d.CreatedByOnBehalfOf.Sub, &onBehalfOfKind,
+		&d.CreatedAt,
+	)
+	if err != nil {
+		return MilestoneShipsAlongside{}, err
+	}
+	d.CreatedByActing.Kind = SubjectKind(actingKind)
+	d.CreatedByOnBehalfOf.Kind = SubjectKind(onBehalfOfKind)
+	return d, nil
+}
+
+func (s milestoneAuthoringStore) AddShipsAlongside(ctx context.Context, scopeID, milestoneID uuid.UUID, body string, acting, onBehalfOf Subject) (MilestoneShipsAlongside, error) {
+	if body == "" {
+		return MilestoneShipsAlongside{}, fmt.Errorf("body: required")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return MilestoneShipsAlongside{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	exists, err := currentRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
+	if err != nil {
+		return MilestoneShipsAlongside{}, err
+	}
+	if !exists {
+		return MilestoneShipsAlongside{}, errParentNotFound("milestone_ref", milestoneID)
+	}
+
+	position, err := nextSiblingPosition(ctx, tx, "milestone_ships_alongside", "milestone_id", milestoneID, scopeID)
+	if err != nil {
+		return MilestoneShipsAlongside{}, err
+	}
+
+	row, err := scanMilestoneShipsAlongside(tx.QueryRow(ctx, `
+		INSERT INTO milestone_ships_alongside (
+			scope_id, milestone_id, body, position,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING `+milestoneShipsAlongsideColumns,
+		scopeID, milestoneID, body, position,
+		acting.Iss, acting.Sub, string(acting.Kind),
+		onBehalfOf.Iss, onBehalfOf.Sub, string(onBehalfOf.Kind)))
+	if err != nil {
+		return MilestoneShipsAlongside{}, fmt.Errorf("insert milestone_ships_alongside: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MilestoneShipsAlongside{}, fmt.Errorf("commit: %w", err)
+	}
+	return row, nil
+}
+
+func (s milestoneAuthoringStore) ListShipsAlongside(ctx context.Context, milestoneID uuid.UUID) ([]MilestoneShipsAlongside, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+milestoneShipsAlongsideColumns+`
+		FROM milestone_ships_alongside
+		WHERE milestone_id = $1
+		ORDER BY position
+	`, milestoneID)
+	if err != nil {
+		return nil, fmt.Errorf("list milestone_ships_alongside: %w", err)
+	}
+	defer rows.Close()
+
+	var out []MilestoneShipsAlongside
+	for rows.Next() {
+		d, err := scanMilestoneShipsAlongside(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan milestone_ships_alongside: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
