@@ -81,6 +81,7 @@ read) unless noted otherwise.
 | `GET /products/{id}/backlog` | Returns a product's backlog bucket: its `milestone_ref` id (usable as `POST /delivery/move`'s `to`) plus its contents as typed entities. Creating the bucket on a product's first read, so the id is nameable before anything has been moved in. Never gated. |
 | `POST /milestones/{id}/abandon` | Marks a milestone or milepebble abandoned, sweeping its not-yet-shipped scope into the backlog bucket in one transaction; cascades to every live milepebble when the target is a milestone (FR6, issue #2688). Not reversible — there is no un-abandon endpoint. Gated. |
 | `GET /products/{id}/delivery` | Returns every milestone and milepebble under a product, filtered by status (FR11, issue #2689) — an empty filter means "all". Never gated. |
+| `GET /products/{id}/task-progress` | Returns a product's per-container task progress in one read: for every milestone and milepebble in scope (`?scope=incomplete` by default, or `milestone`/`milepebble` with `container_id`), the total task count, the count in each of the five lanes, the Done count, and the cancelled count (FR 59f664ff). A milestone's counts include its milepebbles' tasks; a container with no tasks reports `total: 0` with `has_tasks: false`. Cancelled tasks count in the total and in the lane they were left in, never in `done`. Never gated. |
 
 The MCP surface below mirrors every endpoint above one-to-one (same
 persona/session rules as the design-session tools) — see "Design-session
@@ -146,6 +147,7 @@ all — ungated reads).
 | `get_task` | read | `work.Assembler.Assemble` (FR4, FR10) | any resolved persona | `/mcp/work`, `/mcp/design` |
 | `list_tasks` | read | `TaskStore.ListTasksByMilestone` (issue #2941) | any resolved persona | `/mcp/work`, `/mcp/design` |
 | `list_product_tasks` | read | `TaskStore.ListProductTasks` (FR cfcd1104) -- one paged, filterable list of a product's tasks over its incomplete milestones, one milestone, or one milepebble | any resolved persona | `/mcp/work` |
+| `get_product_task_progress` | read | `TaskStore.SummarizeProductTaskProgress` (FR 59f664ff) -- one read of a product's per-container task totals, per-lane counts and Done counts, so "N of M tasks done" never costs a read per container | any resolved persona | `/mcp/work` |
 | `claim_task` | write | `TaskStore.ClaimTask` (FR3, FR5) | Agent | `/mcp/work` |
 | `heartbeat_task` | write | `TaskStore.Heartbeat` (FR6) | Agent | `/mcp/work` |
 | `complete_task` | write | `TaskStore.CompleteTask` (FR8) | Agent | `/mcp/work` |

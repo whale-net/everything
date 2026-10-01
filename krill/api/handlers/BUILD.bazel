@@ -98,6 +98,7 @@ go_library(
         "task_list.go",
         "task_note.go",
         "task_product_list.go",
+        "task_progress.go",
         "task_note_amend.go",
         "task_note_lifecycle.go",
         "task_payload.go",

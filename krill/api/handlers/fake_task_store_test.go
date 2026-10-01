@@ -110,6 +110,11 @@ type fakeTaskStore struct {
 	listProductTasksResult    store.Page[store.ProductTaskRow]
 	gotListProductTasksParams store.ListProductTasksParams
 
+	// The product-wide per-container task-progress read (FR 59f664ff).
+	summarizeProductTaskProgressErr       error
+	summarizeProductTaskProgressResult    store.ProductTaskProgress
+	gotSummarizeProductTaskProgressParams store.ProductTaskProgressParams
+
 	listClaimedTasksErr       error
 	listClaimedTasksResult    store.Page[store.ClaimedTaskRow]
 	gotListClaimedTasksParams store.ListClaimedTasksParams
@@ -340,6 +345,14 @@ func (f *fakeTaskStore) ListProductTasks(ctx context.Context, params store.ListP
 		return store.Page[store.ProductTaskRow]{}, f.listProductTasksErr
 	}
 	return f.listProductTasksResult, nil
+}
+
+func (f *fakeTaskStore) SummarizeProductTaskProgress(ctx context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	f.gotSummarizeProductTaskProgressParams = params
+	if f.summarizeProductTaskProgressErr != nil {
+		return store.ProductTaskProgress{}, f.summarizeProductTaskProgressErr
+	}
+	return f.summarizeProductTaskProgressResult, nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

@@ -107,6 +107,14 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string, ide
 	// The per-container read above stays unchanged.
 	mux.HandleFunc("GET /products/{id}/tasks", handlers.ListProductTasksHandler(entities.Tasks(), entities.Products()))
 
+	// The product-wide per-container task-progress read (FR 59f664ff):
+	// one call returning every in-scope milestone and milepebble's task
+	// total, per-lane counts and Done count -- the "N of M tasks done"
+	// figures the Overview, the milestones list and each Board swimlane
+	// header render, without one count query per container. Same ungated
+	// mount and same scope vocabulary as the paged task read above.
+	mux.HandleFunc("GET /products/{id}/task-progress", handlers.GetProductTaskProgressHandler(entities.Tasks(), entities.Products()))
+
 	// milestone_status_event (issue #2685, FR8/FR9/FR12) serves both a
 	// MilestoneKindMilestone and a MilestoneKindMilepebble row -- both are
 	// `milestone_ref` rows, so one route pair covers both without a

@@ -252,6 +252,17 @@ type TaskStore interface {
 	// ErrMilestoneOutsideProduct rather than an empty page (LB1).
 	ListProductTasks(ctx context.Context, params ListProductTasksParams) (Page[ProductTaskRow], error)
 
+	// SummarizeProductTaskProgress returns one product's whole
+	// per-container task-progress aggregate in one read: for every
+	// milestone and milepebble in scope, its task count, its per-lane
+	// counts, and its Done count (task_progress.go, FR 59f664ff). It is
+	// the N+1-free replacement for a caller counting tasks per container
+	// to render "N of M tasks done", and shares the product task read's
+	// own scope selection -- so the two reads always cover the same
+	// containers. See that file for the one definition of how cancelled
+	// tasks count.
+	SummarizeProductTaskProgress(ctx context.Context, params ProductTaskProgressParams) (ProductTaskProgress, error)
+
 	// ClaimTask is FR3/FR5's race-safe claim (task_claim.go, issue #2722):
 	// a single transaction that row-locks the `task` (SELECT ... FOR
 	// UPDATE), checks claimability (unclaimed or lease-expired,
