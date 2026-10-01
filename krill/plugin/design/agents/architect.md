@@ -28,7 +28,9 @@ On an amendment, start from the product's recorded current-state baseline,
 re-survey only what the amendment touches, and record that you reconciled it
 even if nothing load-bearing or ordering-related changed.
 
-**2. Load-bearing decisions.** From the `Next`/`Later` capabilities ask *what
+**2. Load-bearing decisions.** (`Next`/`Later` here mean a capability no early
+milestone delivers, read from the roadmap's `Delivers`; they are not FeatureSet
+names.) From the `Next`/`Later` capabilities ask *what
 would an early milestone have to do differently for this to be cheap later?*
 Keep only what's expensive to reverse, numbered `LB1..LBn` (aim for 3-8), each
 with three clauses:

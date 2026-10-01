@@ -1,6 +1,6 @@
 ---
 name: work-task
-description: Work one krill Task directly in this session — claim it, do the work, complete it. Use whenever the user asks to do, pick up, continue, or fix something that is (or should be) a krill Task — a task id, a milestone/milepebble's open task, a krill-hosted domain's backlog item — or when about to change code in a krill-hosted domain (krill, whagent_net, friendly_computing_machine) with no task claimed. The krill Task lane only moves through claim_task/complete_task, so work done without them leaves the task unclaimed and its lane stale. For a whole milestone run unattended, use /krill-work:implement instead.
+description: Work one existing krill Task directly in this session — claim it, do the work, complete it. Use only when the user names a krill Task (a task id) or a milestone/milepebble whose open task to pick up. The krill Task lane only moves through claim_task/complete_task, so a task's work done without them leaves it unclaimed and its lane stale. Not for ad-hoc edits that have no krill Task (docs, prompts, one-off fixes) — just do those normally. For a whole milestone run unattended, use /krill-work:implement instead.
 ---
 
 # work-task
@@ -16,7 +16,6 @@ loop".
 ```
 /krill-work:work-task <task-id>
 /krill-work:work-task <milestone-or-milepebble-id>   # pick the next ready task
-/krill-work:work-task "<what you're about to do>"     # no task exists yet
 ```
 
 ## Steps
@@ -28,13 +27,8 @@ loop".
    - Milestone/milepebble id given: `list_tasks {milestone_id}`, then
      `get_task` on each candidate. Take the oldest whose dependencies are all
      `Done`, with no live claim and `current_lane` ≠ `Done`.
-   - Free-text only: `get_scope {}` → `list_products {scope_id}`; if the
-     touched domain is krill-hosted, look for a matching open task via
-     `list_tasks` over its in-flight milestone/milepebble. If none exists,
-     say so and let the user choose between `/krill-work:plan` and a
-     `create_task` under the right milestone — don't start the work
-     untracked. A domain that isn't krill-hosted has nothing to claim;
-     proceed normally.
+   - No id given: ask for one. This skill doesn't create tasks or track
+     ad-hoc work; a request with no krill Task isn't its job.
 3. **Claim before editing anything.** `claim_task {krill_session_id,
    task_id}`; save `current_claim.claim_id`. If the claim is refused
    (unresolved dependency, live claim held elsewhere, attempt cap), report
