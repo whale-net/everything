@@ -245,7 +245,7 @@ func TestMilestoneAuthoringStore_AddDeferral_EmptyDestination_Rejected(t *testin
 	ref, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
 
-	_, err = s.MilestoneAuthoring().AddDeferral(ctx, scopeID, ref.ID, "cut for M1", "", self, self)
+	_, err = s.MilestoneAuthoring().AddDeferral(ctx, scopeID, ref.ID, "cut for M1", "", nil, self, self)
 	require.Error(t, err, "an empty destination must be rejected -- FR1 requires every deferred entry to cite where it went")
 
 	var count int
@@ -269,7 +269,7 @@ func TestMilestoneAuthoringStore_AddDeferral_RecordsSubjectPair(t *testing.T) {
 	ref, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, acting, onBehalfOf)
 	require.NoError(t, err)
 
-	deferral, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, ref.ID, "milepebble breakdown", "M4", acting, onBehalfOf)
+	deferral, err := s.MilestoneAuthoring().AddDeferral(ctx, scopeID, ref.ID, "milepebble breakdown", "M4", nil, acting, onBehalfOf)
 	require.NoError(t, err)
 	assert.Equal(t, acting, deferral.CreatedByActing)
 	assert.NotEmpty(t, deferral.CreatedByActing.Sub)

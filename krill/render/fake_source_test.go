@@ -30,6 +30,8 @@ type fakeSource struct {
 	// Deferrals maps a MilestoneRef.ID to the milestone_deferral rows
 	// ListMilestoneDeferrals should return for it.
 	Deferrals map[uuid.UUID][]store.MilestoneDeferral
+	// ShipsAlongside maps a MilestoneRef.ID to its Ships alongside rows.
+	ShipsAlongside map[uuid.UUID][]store.MilestoneShipsAlongside
 	// Statuses is what ListMilestoneStatuses returns wholesale. Leave nil
 	// to model a Source that reports no status history at all.
 	Statuses map[uuid.UUID]store.MilestoneStatus
@@ -39,6 +41,8 @@ type fakeSource struct {
 	StatusCalls [][]uuid.UUID
 	// Notes is what ListProductNotes returns.
 	Notes []store.Note
+	// Protects is what ListActiveProtects filters by feature id.
+	Protects []store.LBProtectsFeature
 }
 
 var _ render.Source = (*fakeSource)(nil)
@@ -67,6 +71,10 @@ func (f *fakeSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uui
 	return f.Deferrals[milestoneID], nil
 }
 
+func (f *fakeSource) ListMilestoneShipsAlongside(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneShipsAlongside, error) {
+	return f.ShipsAlongside[milestoneID], nil
+}
+
 func (f *fakeSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]store.MilestoneStatus, error) {
 	f.StatusCalls = append(f.StatusCalls, milestoneIDs)
 	return f.Statuses, nil
@@ -74,4 +82,18 @@ func (f *fakeSource) ListMilestoneStatuses(ctx context.Context, milestoneIDs []u
 
 func (f *fakeSource) ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error) {
 	return f.Notes, nil
+}
+
+func (f *fakeSource) ListActiveProtects(ctx context.Context, featureIDs []uuid.UUID) ([]store.LBProtectsFeature, error) {
+	want := map[uuid.UUID]bool{}
+	for _, id := range featureIDs {
+		want[id] = true
+	}
+	var out []store.LBProtectsFeature
+	for _, e := range f.Protects {
+		if want[e.FeatureID] {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }

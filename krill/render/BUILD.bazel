@@ -12,7 +12,9 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "render",
     srcs = [
+        "check.go",
         "render.go",
+        "stamp.go",
         "store_source.go",
     ],
     importpath = "github.com/whale-net/everything/krill/render",
@@ -41,6 +43,7 @@ go_test(
         "fake_source_test.go",
         "render_test.go",
         "milestone_notes_test.go",
+        "stamp_test.go",
         "roadmap_fixture_test.go",
     ],
     deps = [

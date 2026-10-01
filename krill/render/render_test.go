@@ -326,6 +326,34 @@ func TestRender_OutcomeFRBudgetAndDeferralsRenderFromMilestoneRows(t *testing.T)
 	assert.Contains(t, files.RoadmapMD, "FR budget: 12")
 }
 
+// TestRender_ShipsAlongsideRendersPerMilestoneAndOmittedWhenEmpty: a
+// milestone with Ships alongside rows gets a labelled line in order; a
+// milestone with none gets no such line.
+func TestRender_ShipsAlongsideRendersPerMilestoneAndOmittedWhenEmpty(t *testing.T) {
+	ctx := context.Background()
+	productID := uuid.New()
+	scopeID := uuid.New()
+	product := &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "Widgets", Vision: "v"}
+
+	withID, withoutID := uuid.New(), uuid.New()
+	src := &fakeSource{
+		Doc: slice.Document{SchemaVersion: slice.SchemaVersion, Product: product},
+		MilestoneRefs: []store.MilestoneRef{
+			{ID: withID, Name: "M1", Kind: store.MilestoneKindMilestone},
+			{ID: withoutID, Name: "M2", Kind: store.MilestoneKindMilestone},
+		},
+		ShipsAlongside: map[uuid.UUID][]store.MilestoneShipsAlongside{
+			withID: {{Body: "migration runbook"}, {Body: "dashboard tweak"}},
+		},
+	}
+
+	files, err := render.Render(ctx, src, scopeID, productID, render.WithDetail())
+	require.NoError(t, err)
+
+	assert.Contains(t, files.RoadmapMD, "- Ships alongside: migration runbook; dashboard tweak\n")
+	assert.Equal(t, 1, strings.Count(files.RoadmapMD, "Ships alongside:"), "a milestone with no rows must render no block")
+}
+
 // TestRender_MilepebbleRefsExcludedFromRoadmap is issue #2684's Testing
 // section item 7: with a real kind="milepebble" MilestoneRef present
 // alongside a kind="milestone" one (migration 011's own new row shape),
@@ -391,7 +419,7 @@ func TestRender_BacklogRefsExcludedFromRoadmap(t *testing.T) {
 
 	f1 := newFeature("F1", 1)
 	f1.FeatureSetID = fsID
-	f2 := newFeature("F2 (backlogged)", 2)
+	f2 := newFeature("F2 (parked)", 2)
 	f2.FeatureSetID = fsID
 
 	milestoneID := uuid.New()

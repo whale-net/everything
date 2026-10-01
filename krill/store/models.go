@@ -313,6 +313,14 @@ type MilestoneDeferral struct {
 	Position    int       `json:"position"`
 	CreatedAt   time.Time `json:"created_at"`
 
+	// CapabilityID optionally cites a Feature by id (migration 031); its
+	// current Cn is resolved at read time, never stored.
+	CapabilityID *uuid.UUID `json:"capability_id"`
+
+	// CapabilityDisplayNumber is the cited Feature's current Cn, filled by
+	// ListDeferrals at read time; nil when no capability is cited.
+	CapabilityDisplayNumber *int `json:"capability_cn,omitempty"`
+
 	// ValidFrom/ValidTo are the SCD2 pair (migration 024). ValidTo nil
 	// marks the current revision -- the only one any read returns.
 	ValidFrom time.Time  `json:"valid_from"`
@@ -322,6 +330,21 @@ type MilestoneDeferral struct {
 	// every write path onto this table is AddDeferral or AmendDeferral, and
 	// both always have a real caller session. An amend carries the original
 	// pair forward rather than recording the amender's.
+	CreatedByActing     Subject `json:"created_by_acting"`
+	CreatedByOnBehalfOf Subject `json:"created_by_on_behalf_of"`
+}
+
+// MilestoneShipsAlongside is one row of `milestone_ships_alongside`
+// (migration 032) -- one item of work that ships with a milestone but is
+// not a capability. Plain append-only row, not SCD2.
+type MilestoneShipsAlongside struct {
+	ID          uuid.UUID `json:"id"`
+	ScopeID     uuid.UUID `json:"scope_id"`
+	MilestoneID uuid.UUID `json:"milestone_id"`
+	Body        string    `json:"body"`
+	Position    int       `json:"position"`
+	CreatedAt   time.Time `json:"created_at"`
+
 	CreatedByActing     Subject `json:"created_by_acting"`
 	CreatedByOnBehalfOf Subject `json:"created_by_on_behalf_of"`
 }
@@ -340,6 +363,18 @@ type EntityMilestone struct {
 	MilestoneID uuid.UUID
 	Relation    MilestoneRelation
 	CreatedAt   time.Time
+}
+
+// LBProtectsFeature is one active row of `lb_protects_feature` (migration
+// 033): a load-bearing decision protecting a Feature. An association, not a
+// parent -- the decision stays single-parent under its FeatureSet. Withdrawn
+// rows are retained in the table but never surface here.
+type LBProtectsFeature struct {
+	ID         uuid.UUID
+	ScopeID    uuid.UUID
+	DecisionID uuid.UUID
+	FeatureID  uuid.UUID
+	CreatedAt  time.Time
 }
 
 // MilestoneStatus discriminates `milestone_status_event.status` (migration

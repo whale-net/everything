@@ -232,6 +232,7 @@ type addDeferralInput struct {
 	MilestoneID string `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
 	Body        string `json:"body" jsonschema:"What was deferred."`
 	Destination string `json:"destination" jsonschema:"Where the deferred item went, e.g. a future milestone or issue -- required for every deferral."`
+	CapabilityID string `json:"capability_id,omitempty" jsonschema:"Optional Feature (capability) id this deferral concerns; its current Cn is resolved at read time."`
 }
 
 // RegisterAddDeferral registers add_deferral (FR1): records a deferral
@@ -256,11 +257,50 @@ func RegisterAddDeferral(reg *server.Registry, sessions store.SessionStore, mile
 			return nil, zero, fmt.Errorf("destination: required")
 		}
 
-		deferral, err := milestones.AddDeferral(ctx, sess.ScopeID, milestoneID, in.Body, in.Destination, sess.Acting, sess.OnBehalfOf)
+		capabilityID, err := handlers.ParseOptionalUUID("capability_id", in.CapabilityID)
+		if err != nil {
+			return nil, zero, err
+		}
+		deferral, err := milestones.AddDeferral(ctx, sess.ScopeID, milestoneID, in.Body, in.Destination, capabilityID, sess.Acting, sess.OnBehalfOf)
 		if err != nil {
 			return nil, zero, err
 		}
 		return nil, handlers.IDResponse{ID: deferral.ID.String()}, nil
+	})
+}
+
+// addShipsAlongsideInput is add_ships_alongside's argument schema.
+type addShipsAlongsideInput struct {
+	krillSessionInput
+	MilestoneID string `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
+	Body        string `json:"body" jsonschema:"The work that ships alongside the milestone but is not a capability."`
+}
+
+// RegisterAddShipsAlongside registers add_ships_alongside: records an
+// item of non-capability work shipping with a milestone.
+func RegisterAddShipsAlongside(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "add_ships_alongside",
+		Description: "Record work that ships alongside a milestone but is not a capability.",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addShipsAlongsideInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+		milestoneID, err := uuid.Parse(in.MilestoneID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("milestone_id: invalid or missing UUID")
+		}
+		if in.Body == "" {
+			return nil, zero, fmt.Errorf("body: required")
+		}
+		row, err := milestones.AddShipsAlongside(ctx, sess.ScopeID, milestoneID, in.Body, sess.Acting, sess.OnBehalfOf)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: row.ID.String()}, nil
 	})
 }
 
@@ -290,7 +330,13 @@ func RegisterGetMilestone(reg *server.Registry, milestones store.MilestoneAuthor
 		if err != nil {
 			return nil, zero, err
 		}
-		return nil, handlers.NewMilestoneResponse(ref, delivers, mustNotForeclose, deferrals), nil
+		resp := handlers.NewMilestoneResponse(ref, delivers, mustNotForeclose, deferrals)
+		ships, err := milestones.ListShipsAlongside(ctx, id)
+		if err != nil {
+			return nil, zero, err
+		}
+		resp.ShipsAlongside = handlers.NewShipsAlongsideDTOs(ships)
+		return nil, resp, nil
 	})
 }
 
@@ -596,6 +642,7 @@ func RegisterMilestoneAll(reg *server.Registry, sessions store.SessionStore, mil
 	RegisterAddDelivers(reg, sessions, milestones)
 	RegisterAddMustNotForeclose(reg, sessions, milestones)
 	RegisterAddDeferral(reg, sessions, milestones)
+	RegisterAddShipsAlongside(reg, sessions, milestones)
 	RegisterGetMilestone(reg, milestones)
 	RegisterCreateMilepebble(reg, sessions, milestones)
 	RegisterAddMilepebbleScope(reg, sessions, milestones)

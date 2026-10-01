@@ -37,6 +37,7 @@ go_library(
         "delivery_shipment.go",
         "design_session.go",
         "errors.go",
+        "lb_protects.go",
         "feature.go",
         "featureset.go",
         "history.go",
@@ -62,6 +63,7 @@ go_library(
         "scope.go",
         "session.go",
         "slice.go",
+        "source_stamp.go",
         "store.go",
         "task.go",
         "task_abandon.go",
@@ -570,6 +572,39 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["milestone_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres coverage for LBProtectsStore (migration 033). Not part of
+# `bazel test //...`.
+#
+#   bazel test //krill/store:lb_protects_integration_test --test_output=all
+go_test(
+    name = "lb_protects_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "lb_protects_integration_test.go",
+        "milestone_integration_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",

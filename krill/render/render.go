@@ -82,6 +82,10 @@ type Source interface {
 	// `Deliberately deferred:` line is reconstructed from.
 	ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error)
 
+	// ListMilestoneShipsAlongside returns milestoneID's Ships alongside
+	// rows (migration 032) -- non-capability work shipping with it.
+	ListMilestoneShipsAlongside(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneShipsAlongside, error)
+
 	// ListMilestoneStatuses returns each id's *current* delivery status --
 	// the latest `milestone_status_event` row per id, batched, because a
 	// whole-product roadmap renders every milestone in one pass and a
@@ -102,6 +106,11 @@ type Source interface {
 	// targets are not in the document. Only the Product's own notes for
 	// now: notes on a Feature or Requirement are a separate read.
 	ListProductNotes(ctx context.Context, scopeID, productID uuid.UUID) ([]store.Note, error)
+
+	// ListActiveProtects returns every active (non-withdrawn) LB-protects-
+	// Feature edge whose feature is in featureIDs -- the recorded data the
+	// roadmap's Later coverage section is built from.
+	ListActiveProtects(ctx context.Context, featureIDs []uuid.UUID) ([]store.LBProtectsFeature, error)
 }
 
 // GeneratedMarker is the exact sentence NFR3's AGENTS.md carve-out and
@@ -122,6 +131,9 @@ type Files struct {
 	CurrentStateMD  string // <domain>/product/01-current-state.md
 	CapabilityMapMD string // <domain>/product/02-capability-map.md
 	RoadmapMD       string // <domain>/product/03-roadmap.md
+
+	// Stamp is the source revision/time every file above is stamped with.
+	Stamp SourceStamp
 }
 
 // FileMap returns f as a map from the path each file is written at,
@@ -170,15 +182,27 @@ func Render(ctx context.Context, src Source, scopeID, productID uuid.UUID, opts 
 	if err != nil {
 		return Files{}, fmt.Errorf("list product notes: %w", err)
 	}
+	later, err := renderLaterCoverage(ctx, src, scopeID, productID, doc)
+	if err != nil {
+		return Files{}, fmt.Errorf("assemble later coverage: %w", err)
+	}
 
 	revision := doc.Product.RevisionID.String()
 	name := doc.Product.Name
 
+	stamp := SourceStamp{Revision: revision}
+	if ss, ok := src.(StampSource); ok {
+		if stamp.Time, err = ss.ProductSourceTime(ctx, productID); err != nil {
+			return Files{}, fmt.Errorf("source time: %w", err)
+		}
+	}
+
 	return Files{
-		ProductMD:       renderProductMD(name, revision, doc, personas, nonGoals, notes, o.detail),
-		CurrentStateMD:  renderCurrentStateMD(name, revision),
-		CapabilityMapMD: renderCapabilityMapMD(name, revision, doc, o.detail),
-		RoadmapMD:       renderRoadmapMD(name, revision, milestones),
+		ProductMD:       stampFile(renderProductMD(name, revision, doc, personas, nonGoals, notes, o.detail), stamp),
+		CurrentStateMD:  stampFile(renderCurrentStateMD(name, revision), stamp),
+		CapabilityMapMD: stampFile(renderCapabilityMapMD(name, revision, doc, o.detail), stamp),
+		RoadmapMD:       stampFile(renderRoadmapMD(name, revision, milestones, later), stamp),
+		Stamp:           stamp,
 	}, nil
 }
 
@@ -595,6 +619,7 @@ type milestoneEntry struct {
 	MustNotForeclose []string
 	Deferrals        []store.MilestoneDeferral
 	Notes            string // markdown design notes, rendered verbatim; empty emits nothing
+	ShipsAlongside   []store.MilestoneShipsAlongside
 }
 
 // milestoneNumRe extracts the numeric suffix of a bare "M<n>" identifier.
@@ -668,6 +693,11 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			return nil, fmt.Errorf("list deferrals for milestone %s: %w", ref.Name, err)
 		}
 
+		ships, err := src.ListMilestoneShipsAlongside(ctx, ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list ships alongside for milestone %s: %w", ref.Name, err)
+		}
+
 		num := 0
 		if m := milestoneNumRe.FindStringSubmatch(ref.Name); m != nil {
 			num, _ = strconv.Atoi(m[1])
@@ -682,6 +712,7 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 			MustNotForeclose: prefixEach("LB", mustNot),
 			Deferrals:        deferrals,
 			Notes:            derefString(ref.Notes),
+			ShipsAlongside:   ships,
 		})
 	}
 
@@ -713,7 +744,7 @@ func prefixEach(prefix string, nums []int) []string {
 	return out
 }
 
-func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string {
+func renderRoadmapMD(name, revision string, milestones []milestoneEntry, later []laterEntry) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Roadmap\n\n")
@@ -752,9 +783,22 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 		if len(m.Deferrals) > 0 {
 			items := make([]string, len(m.Deferrals))
 			for i, d := range m.Deferrals {
-				items[i] = fmt.Sprintf("%s (→ %s)", d.Body, d.Destination)
+				body := d.Body
+				if d.CapabilityDisplayNumber != nil {
+					body = fmt.Sprintf("%s [C%d]", body, *d.CapabilityDisplayNumber)
+				}
+				items[i] = fmt.Sprintf("%s (→ %s)", body, d.Destination)
 			}
 			b.WriteString("- Deliberately deferred: ")
+			b.WriteString(strings.Join(items, "; "))
+			b.WriteString("\n")
+		}
+		if len(m.ShipsAlongside) > 0 {
+			items := make([]string, len(m.ShipsAlongside))
+			for i, s := range m.ShipsAlongside {
+				items[i] = s.Body
+			}
+			b.WriteString("- Ships alongside: ")
 			b.WriteString(strings.Join(items, "; "))
 			b.WriteString("\n")
 		}
@@ -771,6 +815,7 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 		b.WriteString("\n")
 	}
 
+	renderLaterCoverageMD(&b, later)
 	return b.String()
 }
 
@@ -779,4 +824,92 @@ func derefString(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+// laterEntry is one Later capability (a Feature no milestone or milepebble
+// delivers) with the decisions recorded as protecting it. Protectors is
+// empty for an uncovered capability.
+type laterEntry struct {
+	Capability string // "C<n>"
+	Name       string
+	Protectors []string // "LB<n>"
+}
+
+// renderLaterCoverage lists every Feature with no active delivers edge from
+// a milestone or milepebble, with its protecting decisions read from recorded
+// lb_protects_feature edges (never inferred).
+func renderLaterCoverage(ctx context.Context, src Source, scopeID, productID uuid.UUID, doc slice.Document) ([]laterEntry, error) {
+	refs, err := src.ListMilestoneRefs(ctx, scopeID, productID)
+	if err != nil {
+		return nil, fmt.Errorf("list milestone refs: %w", err)
+	}
+	delivered := map[uuid.UUID]bool{}
+	for _, ref := range refs {
+		if ref.Kind == store.MilestoneKindBacklog {
+			continue
+		}
+		assocs, err := src.ListMilestoneAssociations(ctx, ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list associations for milestone %s: %w", ref.Name, err)
+		}
+		for _, a := range assocs {
+			if a.Relation != store.MilestoneRelationMustNotForeclose {
+				delivered[a.EntityID] = true
+			}
+		}
+	}
+
+	var laterIDs []uuid.UUID
+	var later []slice.FeatureEntity
+	for _, f := range doc.Features {
+		if !delivered[f.ID] {
+			later = append(later, f)
+			laterIDs = append(laterIDs, f.ID)
+		}
+	}
+	if len(later) == 0 {
+		return nil, nil
+	}
+
+	edges, err := src.ListActiveProtects(ctx, laterIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list active protects: %w", err)
+	}
+	decisionNumbers := make(map[uuid.UUID]int, len(doc.Decisions))
+	for _, d := range doc.Decisions {
+		decisionNumbers[d.ID] = d.DisplayNumber
+	}
+	protectors := map[uuid.UUID][]int{}
+	for _, e := range edges {
+		if n, ok := decisionNumbers[e.DecisionID]; ok {
+			protectors[e.FeatureID] = append(protectors[e.FeatureID], n)
+		}
+	}
+
+	sort.Slice(later, func(i, j int) bool { return later[i].DisplayNumber < later[j].DisplayNumber })
+	out := make([]laterEntry, len(later))
+	for i, f := range later {
+		nums := protectors[f.ID]
+		sort.Ints(nums)
+		out[i] = laterEntry{Capability: fmt.Sprintf("C%d", f.DisplayNumber), Name: f.Name, Protectors: prefixEach("LB", nums)}
+	}
+	return out, nil
+}
+
+func renderLaterCoverageMD(b *strings.Builder, later []laterEntry) {
+	if len(later) == 0 {
+		return
+	}
+	b.WriteString("## Later coverage\n\n")
+	b.WriteString("_Capabilities no milestone delivers, with the load-bearing decisions recorded as protecting them (krill `lb_protects_feature` edges). A capability with none is uncovered._\n\n")
+	for _, e := range later {
+		b.WriteString(fmt.Sprintf("- %s — %s: ", e.Capability, e.Name))
+		if len(e.Protectors) == 0 {
+			b.WriteString("uncovered\n")
+		} else {
+			b.WriteString(strings.Join(e.Protectors, ", "))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
 }
