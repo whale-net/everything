@@ -980,13 +980,15 @@ go_test(
     ],
 )
 
-# Pure unit tests for paging.go's ResolvePageSize and Encode/
-# DecodeContinuationToken (issue #2869, NFR6; issue #2873's FR10 "paging
-# default/max/clamp" and "cross-scope token rejected" Testing items): the
-# default/clamp rule, a token round trip, a cross-scope token's
-# ErrTokenScopeMismatch, and a malformed token's ErrInvalidContinuationToken.
-# No database needed -- part of `bazel test //...` (no "manual"/
-# "integration" tag).
+# Pure unit tests for paging.go's ResolvePageSize, the scope-bound
+# Encode/DecodeContinuationToken pair, and the filter-bound
+# Encode/DecodeFilteredContinuationToken pair: the default/clamp rule, a
+# token round trip, a cross-scope token's ErrTokenScopeMismatch, a malformed
+# token's ErrInvalidContinuationToken, the canonical encoding of a filter set
+# (stable key order, type-tagged and absent-vs-zero values), a filter-bound
+# token's round trip and ErrTokenFilterMismatch, and the unfiltered token's
+# byte-for-byte back-compat shape. No database needed -- part of
+# `bazel test //...` (no "manual"/"integration" tag).
 go_test(
     name = "paging_test",
     srcs = ["paging_test.go"],
