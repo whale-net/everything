@@ -310,3 +310,22 @@ func (q *Querier) buildMilepebbleListingEntry(ctx context.Context, mp store.Mile
 
 	return entry, nil
 }
+
+// DeferralDTO is the wire shape of one milestone deferral on every read
+// surface (get_milestone, list_product_delivery, and their HTTP twins).
+// ID is the handle amend_deferral takes.
+type DeferralDTO struct {
+	ID          string `json:"id"`
+	Body        string `json:"body"`
+	Destination string `json:"destination"`
+}
+
+// NewDeferralDTOs converts store rows to DeferralDTOs, never nil so the
+// JSON field is always an array.
+func NewDeferralDTOs(deferrals []store.MilestoneDeferral) []DeferralDTO {
+	out := make([]DeferralDTO, len(deferrals))
+	for i, d := range deferrals {
+		out[i] = DeferralDTO{ID: d.ID.String(), Body: d.Body, Destination: d.Destination}
+	}
+	return out
+}
