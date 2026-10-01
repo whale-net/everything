@@ -121,8 +121,8 @@ Workspace rules:
 
 Console rules:
 
-- Section pages get a page header. Detail pages get breadcrumbs (in Shell's
-  `Banner` slot) instead of a hero.
+- Section pages get a page header. Detail pages add breadcrumbs (in Shell's
+  `Banner` slot) above the page header.
 - Highlight the active nav item.
 - Sub-sections of an object are tabs or a sub-nav, never a row of identical
   buttons inside a card.
@@ -276,9 +276,11 @@ is split as follows.
 - No per-app palette, typeface or identity reinvention. Every app uses the
   shared themes and daisyUI's font stack, and changing those is a cross-app
   decision.
-- An app's identity is its brand mark plus **one signature element**, such
-  as manmanv2's gradient hero or whagent_net's chat composer.
-- Not every page gets a hero. Most pages here are working surfaces.
+- An app's identity is its brand mark plus **one signature element** that
+  does real work, such as whagent_net's chat composer. Decoration doesn't
+  count as a signature.
+- No hero banners. Most pages here are working surfaces, and a plain page
+  header (title, status, primary action) is the header.
 
 **Generated-UI tells, decided:**
 
@@ -287,11 +289,12 @@ is split as follows.
     table headers),
   - `→` appended to link or button text,
   - meta strings joined with `·` (use labeled fields or badges),
-  - gradients as decoration beyond an app's one signature,
+  - decorative gradients, including gradient hero banners,
   - identical cards for every item.
 - **Allowed with a reason:** `font-mono` for actual machine values (IDs,
   addresses, hashes, code), never as a style for labels.
-- **Legacy:** manmanv2's uppercase table headers. Fix them when you touch the
+- **Legacy:** manmanv2's uppercase table headers and gradient hero headers
+  (`HeroHeader`). Replace them with plain page headers when you touch the
   page.
 
 ## Review checklist

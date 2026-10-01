@@ -24,11 +24,12 @@ design changes, update its entry here.
 
 ## Per-app notes
 
-- **manmanv2** is the strongest visual design. It has a clear hero, status
+- **manmanv2** is the strongest visual design. It has clear status
   badges, large targets, in-place updates and live data. Its problems are
   conceptual: run the "model the objects" step before adding screens. Page
   bodies still mix raw Tailwind `dark:` pairs with daisyUI. Migrate a page
-  when you touch it (`DESIGN_SYSTEM.md` migration checklist).
+  when you touch it (`DESIGN_SYSTEM.md` migration checklist). Its gradient hero
+  headers are legacy: don't copy them.
 - **app_registry** has clean, consistent semantic daisyUI and a good
   dashboard. It is developer-facing on purpose (IDs and raw state are fine
   there). Watch for alert overuse (alerts are for persistent conditions, not
