@@ -96,6 +96,12 @@ func (s *Store) Recut() RecutStore {
 	return recutStore{pool: s.pool}
 }
 
+// Withdrawal returns the WithdrawalStore implementation -- withdrawing wrong
+// entity_milestone delivery edges (migration 029).
+func (s *Store) Withdrawal() WithdrawalStore {
+	return withdrawalStore{pool: s.pool}
+}
+
 // Abandon returns the AbandonStore implementation -- the composed abandon
 // verb (migration 012/013/014's tables, issue #2688, FR6) that appends an
 // `abandoned` MilestoneStatusEvent and sweeps a container's not-yet-shipped

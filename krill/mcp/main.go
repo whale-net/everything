@@ -216,6 +216,8 @@ func run() error {
 	// POST /{kind}/{id}/void routes, with the kind as an argument rather
 	// than a path segment.
 	tools.RegisterVoidAll(designReg, sessions, entities.Void())
+	// withdraw_delivers/withdraw_must_not_foreclose: correct a wrong delivery edge.
+	tools.RegisterWithdrawAll(designReg, sessions, entities.Withdrawal())
 	// resolve_non_goal: settles a `deferred` Non-Goal by promote or retire
 	// (FR d0021a0f), plus list_non_goal_promotions, its audit read. The MCP
 	// twin of POST /non-goals/{id}/resolve, with the outcome as an argument

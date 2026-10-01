@@ -86,7 +86,8 @@ func RegisterVoidEntity(reg *server.Registry, sessions store.SessionStore, voids
 			"reuse, and its display number is retired and never reissued -- a create reusing the name gets a fresh number, so an " +
 			"already-rendered Cn/LBn citation can never silently repoint. Refuses, writing nothing, on a delivered or shipped entity " +
 			"(amend it instead) and on an entity with a live child (void the children first). Use list_void_events to audit past voids. " +
-			"There is no void_milestone: a milestone's delivery axis is append-only and its authoring fields are amendable.",
+			"There is no void_milestone: a milestone's authoring fields are amendable, and a wrong delivery edge is corrected with " +
+			"withdraw_delivers / withdraw_must_not_foreclose, not by voiding the entity.",
 	}, voidPersonas, func(ctx context.Context, _ *mcp.CallToolRequest, in voidEntityInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
