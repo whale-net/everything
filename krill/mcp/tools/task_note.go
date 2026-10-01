@@ -39,7 +39,7 @@ type recordNoteInput struct {
 	TaskID     *string `json:"task_id,omitempty" jsonschema:"The task this note targets, as a UUID string -- set this OR entity_kind+entity_id, never both, never neither."`
 	EntityKind *string `json:"entity_kind,omitempty" jsonschema:"The spec-axis entity kind this note targets: one of product, feature_set, feature, requirement, load_bearing_decision. Set together with entity_id, never with task_id."`
 	EntityID   *string `json:"entity_id,omitempty" jsonschema:"The spec-axis entity's surrogate id, as a UUID string. Set together with entity_kind, never with task_id."`
-	Kind       string  `json:"kind" jsonschema:"The note's kind -- one of the fixed enumeration: scope-note (models GitHub's source:scope-note convention) or comment."`
+	Kind       string  `json:"kind" jsonschema:"The note's kind -- one of the fixed enumeration: scope-note (models GitHub's source:scope-note convention), comment, or cheap-expensive-later (a Feature's 'Stays cheap/expensive later' statement; record against entity_kind=feature)."`
 	Body       string  `json:"body" jsonschema:"The note's free-form text body."`
 }
 
