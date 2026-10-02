@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/a-h/templ"
 
@@ -79,8 +82,9 @@ func (app *App) handleActivityLiveSSE(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("INFO: live activity stream opened: %d topics", len(topics))
 
+	cache := &activityRenderCache{}
 	fragment := templadapter.Adapt(func(req *http.Request, topic string) templ.Component {
-		return activityLiveFragment{r: req, cancel: cancel, app: app}
+		return activityLiveFragment{r: req, cancel: cancel, app: app, cache: cache}
 	})
 
 	htmxsse.Handler(app.sseHub, topics, fragment)(w, r)
@@ -104,6 +108,19 @@ type activityLiveFragment struct {
 	r      *http.Request
 	cancel context.CancelFunc
 	app    *App
+	cache  *activityRenderCache
+}
+
+// activityRenderTTL bounds how long a rendered region is reused across
+// deliveries on one stream.
+const activityRenderTTL = 2 * time.Second
+
+// activityRenderCache lets the per-topic baseline burst on connect (and
+// bursts of events) share one render, since the region ignores the topic.
+type activityRenderCache struct {
+	mu       sync.Mutex
+	html     []byte
+	renderAt time.Time
 }
 
 // Render implements templ.Component. Mirrors deploymentRowFragment.Render's
@@ -119,6 +136,17 @@ func (f activityLiveFragment) Render(ctx context.Context, w io.Writer) error {
 		return err
 	}
 
-	data := f.app.buildActivityPageData(grpcCtx, f.r)
-	return pages.ActivityLiveContentInner(data).Render(ctx, w)
+	c := f.cache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.html == nil || time.Since(c.renderAt) > activityRenderTTL {
+		data := f.app.buildActivityPageData(grpcCtx, f.r)
+		var buf bytes.Buffer
+		if err := pages.ActivityLiveContentInner(data).Render(ctx, &buf); err != nil {
+			return err
+		}
+		c.html, c.renderAt = buf.Bytes(), time.Now()
+	}
+	_, err = w.Write(c.html)
+	return err
 }
