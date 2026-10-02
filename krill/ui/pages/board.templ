@@ -291,7 +291,7 @@ templ boardFreshness(at string) {
 // element that scrolls sideways, and each lane is as wide as its five
 // fixed-minimum columns need, so the page itself never does.
 templ ProductBoard(d ProductBoardPage) {
-	<section id={ ProductTasksAnchor } data-krill="product-tasks" data-krill-view="Board" data-krill="product-board">
+	<section id={ ProductTasksAnchor } data-krill="product-tasks" data-krill-view="Board">
 		<div class="flex flex-wrap items-center gap-3">
 			<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
 			<p class="text-sm text-base-content/70">
