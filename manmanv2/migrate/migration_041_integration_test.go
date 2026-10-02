@@ -62,8 +62,8 @@ func TestMigration041_AppliesOnTopOfFullHistoryAndDefaultsExistingRows(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 46 {
-		t.Fatalf("expected the latest migration source version to be 46, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 47 {
+		t.Fatalf("expected the latest migration source version to be 47, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	// Apply every migration up through 040, seed a servers row *before* 041

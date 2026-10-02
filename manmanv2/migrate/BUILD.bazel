@@ -324,6 +324,30 @@ go_test(
     ],
 )
 
+# Run: bazel test //manmanv2/migrate:migration_047_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_047_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["migration_047_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 # Release metadata for migration job
 release_app(
     name = "control-migration",
