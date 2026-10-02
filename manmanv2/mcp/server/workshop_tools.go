@@ -225,7 +225,7 @@ func (w *workshop) installHandler(ctx context.Context, req *mcp.CallToolRequest)
 }
 
 // fingerprint ignores progress so a running download doesn't invalidate a preview.
-func fingerprint(i *manmanpb.WorkshopInstallation) string {
+func installationFingerprint(i *manmanpb.WorkshopInstallation) string {
 	return fmt.Sprintf("%d:%d:%d:%s", i.InstallationId, i.SgcId, i.AddonId, i.Status)
 }
 
@@ -238,7 +238,7 @@ func (w *workshop) previewInstallation(ctx context.Context, id int64, effect str
 		return nil, "", fmt.Errorf("installation %d not found", id)
 	}
 	i := resp.Installation
-	return map[string]any{"effect": effect, "installation": toInstallationOut(i)}, fingerprint(i), nil
+	return map[string]any{"effect": effect, "installation": toInstallationOut(i)}, installationFingerprint(i), nil
 }
 
 func toolErrFor(what string, id int64, err error) error { return backendErr(what, id, err) }
@@ -323,7 +323,7 @@ func (w *workshop) reinstallGated() GatedTool {
 			if cur == nil {
 				return map[string]any{"effect": "no existing installation; installs the addon"}, "none", nil
 			}
-			return map[string]any{"effect": "discards downloaded content and re-downloads", "installation": toInstallationOut(cur)}, fingerprint(cur), nil
+			return map[string]any{"effect": "discards downloaded content and re-downloads", "installation": toInstallationOut(cur)}, installationFingerprint(cur), nil
 		},
 		Apply: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			a, err := parseWorkshopArgs(raw)
