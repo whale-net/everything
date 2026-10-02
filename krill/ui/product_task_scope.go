@@ -111,6 +111,11 @@ const (
 	// productTaskScopeNoContainers is a single-container scope over a
 	// product that has no container of that kind to select.
 	productTaskScopeNoContainers
+	// productTaskScopeNoMilepebbles is milepebble mode pointed at a
+	// milestone of a product that HAS milestones, none of them cut. It is
+	// its own outcome because the control's milestone select is exactly
+	// what would let the operator pick a cut one.
+	productTaskScopeNoMilepebbles
 	// productTaskScopeUnreadable is a delivery-listing read that failed.
 	productTaskScopeUnreadable
 )
@@ -123,6 +128,8 @@ func (p productTaskScopeProblem) String() string {
 		return "no such milestone or milepebble in this product"
 	case productTaskScopeNoContainers:
 		return "this product has no milestone or milepebble to scope to"
+	case productTaskScopeNoMilepebbles:
+		return "that milestone has no milepebbles cut"
 	case productTaskScopeUnreadable:
 		return "the delivery listing could not be read"
 	}
@@ -368,11 +375,22 @@ func (app *App) resolveProductTaskScope(ctx context.Context, productID uuid.UUID
 // case the first milepebble of that milestone is selected -- the same
 // no-id rule the milestone mode applies, one level down.
 //
-// A named parent is membership-checked like any other id. A named
-// milepebble that belongs to a DIFFERENT milestone than the named parent
-// is refused rather than read: the two selects disagree, and answering
-// with either one's tasks would show rows the URL did not unambiguously
-// ask for.
+// A named parent is membership-checked like any other id, and so is the
+// named milepebble -- an id the product does not own, or one that is not a
+// milepebble, is still a not-found.
+//
+// A milepebble this product DOES own but that hangs under a different
+// milestone than the named parent is not a refusal: it is the pair the
+// control's own milestone change necessarily submits. The form is a plain
+// GET over two selects, and a select cannot be emptied by choosing
+// something else in it, so changing the Milestone select sends the PREVIOUS
+// milepebble alongside the new milestone every time. Refusing that pair
+// breaks the one interaction the `milestone` parameter exists to enable --
+// and over htmx, which does not swap on a 4xx, it breaks silently, leaving
+// the operator clicking a control that appears to do nothing. So the named
+// milestone wins: it is the more specific statement of what the operator is
+// looking at, and the no-id rule this mode already applies settles the
+// milepebble one level down.
 func resolveMilepebbleScope(out resolvedProductTaskScope, listing slice.DeliveryListing, parsed productTaskScope) (resolvedProductTaskScope, productTaskScopeProblem) {
 	parent, problem := resolveMilepebbleParent(listing, parsed.MilestoneID)
 	if problem != productTaskScopeOK {
@@ -391,35 +409,64 @@ func resolveMilepebbleScope(out resolvedProductTaskScope, listing slice.Delivery
 		// Neither: the no-id default, the highest-position milestone that
 		// has a milepebble at all.
 		parentID := firstContainerOfKind(listing, store.ProductTaskScopeMilepebble)
+		if parentID != uuid.Nil {
+			parent, problem = milestoneOfMilepebble(listing, parentID)
+			if problem != productTaskScopeOK {
+				return out, problem
+			}
+			break
+		}
+		// Nothing anywhere is cut. The product may still have milestones,
+		// and then the highest-position one is what this mode should mark
+		// and offer from -- the container step below reports the emptiness.
+		parentID = firstContainerOfKind(listing, store.ProductTaskScopeMilestone)
 		if parentID == uuid.Nil {
+			// The product genuinely has nothing to scope to.
 			return out, productTaskScopeNoContainers
 		}
-		parent, problem = milestoneOfMilepebble(listing, parentID)
+		parent, problem = resolveMilepebbleParent(listing, parentID)
 		if problem != productTaskScopeOK {
 			return out, problem
 		}
 	}
 	out.Milestone = parent
 
-	id := parsed.ContainerID
-	if id == uuid.Nil {
-		// The named milestone's own first milepebble, which is the only
-		// thing this mode can sensibly show before one is chosen.
-		if len(parent.Milepebbles) == 0 {
-			return out, productTaskScopeNoContainers
+	// The container is settled in two steps. The named one is checked
+	// against the product's own listing first, so an id the product does
+	// not own is a not-found no matter what the parent says -- and only
+	// then is the pair's disagreement considered.
+	if parsed.ContainerID != uuid.Nil {
+		named, found := resolveTaskContainer(listing, parsed.ContainerID)
+		if !found || named.Kind != string(store.MilestoneKindMilepebble) {
+			return out, productTaskScopeNotFound
 		}
-		id = parent.Milepebbles[0].ID
+		if isMilepebbleOf(named.ID, parent) {
+			out.Store.ContainerID = named.ID
+			out.Container = named
+			return out, productTaskScopeOK
+		}
+		// The pair disagrees -- this product's own milepebble, but not the
+		// named milestone's. Fall through to the named milestone's first.
 	}
 
-	container, found := resolveTaskContainer(listing, id)
-	if !found || container.Kind != string(store.MilestoneKindMilepebble) {
-		return out, productTaskScopeNotFound
+	if len(parent.Milepebbles) == 0 {
+		// A named milestone of a real product that simply has nothing cut
+		// under it. Distinct from the product having no milestones at all:
+		// here the operator has named a real milestone, and the milestone
+		// select -- which lets them pick a cut one -- has to stay.
+		return out, productTaskScopeNoMilepebbles
 	}
-	if !isMilepebbleOf(container.ID, parent) {
-		return out, productTaskScopeNotFound
+	// The named milestone's own first milepebble, which is the only thing
+	// this mode can sensibly show before one is chosen -- and which the
+	// listing that built the parent vouches for.
+	chosen := parent.Milepebbles[0]
+	out.Store.ContainerID = chosen.ID
+	out.Container = taskContainer{
+		ID:     chosen.ID,
+		Name:   chosen.Name,
+		Kind:   string(store.MilestoneKindMilepebble),
+		Status: chosen.Status,
 	}
-	out.Store.ContainerID = id
-	out.Container = container
 	return out, productTaskScopeOK
 }
 

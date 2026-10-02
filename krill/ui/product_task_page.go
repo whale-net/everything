@@ -54,13 +54,13 @@ func (app *App) serveProductTaskRegion(w http.ResponseWriter, r *http.Request, v
 
 	scope, problem := parseProductTaskScope(r.URL.Query())
 	if problem != productTaskScopeOK {
-		app.renderProductTaskScopeProblem(w, r, product, view, problem)
+		app.renderProductTaskScopeProblem(w, r, product, view, resolvedProductTaskScope{}, problem)
 		return
 	}
 
 	resolved, problem := app.resolveProductTaskScope(r.Context(), product.ID, scope)
 	if problem != productTaskScopeOK {
-		app.renderProductTaskScopeProblem(w, r, product, view, problem)
+		app.renderProductTaskScopeProblem(w, r, product, view, resolved, problem)
 		return
 	}
 
@@ -181,6 +181,17 @@ func productTaskMilepebbleOptionsOf(scope resolvedProductTaskScope) []pages.Prod
 	return out
 }
 
+// productTaskNoMilepebblesLabel is the scope in prose for a milepebble
+// scope whose milestone has nothing cut under it. It names the milestone
+// the operator chose rather than the mode, because the mode's own claim --
+// "one milepebble" -- is what could not be honoured.
+func productTaskNoMilepebblesLabel(scope resolvedProductTaskScope) string {
+	if scope.Milestone.Name == "" {
+		return "No milepebbles here"
+	}
+	return "No milepebbles under " + scope.Milestone.Name
+}
+
 // outOfScopeSuffix marks a container the product-wide all-incomplete scope
 // would not have included, judged by the store's own predicate rather than
 // a UI copy of it. FR 7191dba1 still lets the operator pick such a
@@ -246,10 +257,13 @@ func (app *App) renderProductTaskRegion(w http.ResponseWriter, r *http.Request, 
 //
 // A container outside the product is a 404, never another product's rows
 // and never an empty page that would read as "this milestone has no work".
-// A product with no container of the requested kind is not a failure at
-// all -- it is an ordinary empty result, so it renders the region with
-// nothing in it rather than an error.
-func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Request, product store.Product, view string, problem productTaskScopeProblem) {
+// The two empty outcomes are not failures at all -- they are ordinary
+// answers, so each renders the region with nothing in it rather than an
+// error. They are kept apart because their controls differ: a product with
+// no milestones has nothing to put in a select, while a product whose
+// milestones are simply not cut still has a milestone select, and that
+// select is how the operator picks a cut one.
+func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Request, product store.Product, view string, resolved resolvedProductTaskScope, problem productTaskScopeProblem) {
 	if problem == productTaskScopeNoContainers {
 		// The modes are still offered even with nothing to scope to: the
 		// operator's way out of this page is the control, not a back link,
@@ -265,6 +279,25 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 				Path:  r.URL.Path,
 				Modes: productTaskScopeModes(""),
 			},
+		}, http.StatusOK)
+		return
+	}
+
+	if problem == productTaskScopeNoMilepebbles {
+		// Milepebble mode over a milestone with nothing cut under it. The
+		// product does have milestones, and the milestone select -- which
+		// is how the operator picks a cut one -- is exactly what must not
+		// disappear here. So the control is built from the resolved scope,
+		// which carries the product's milestones and the one named.
+		app.renderProductTaskRegion(w, r, view, pages.ProductTaskRegion{
+			Product:    productHeaderOf(product),
+			View:       view,
+			Path:       r.URL.Path,
+			ScopeLabel: productTaskNoMilepebblesLabel(resolved),
+			Empty:      true,
+			Lane:       productTaskLaneOf(resolved),
+			OnlyStuck:  resolved.Parsed.OnlyStuck,
+			Scope:      productTaskScopeControlOf(r.URL.Path, resolved),
 		}, http.StatusOK)
 		return
 	}

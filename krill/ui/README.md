@@ -642,7 +642,7 @@ and the selected ids:
 | Milestone | `scope=milestone&container_id=<id>` | a milestone select |
 | Milepebble | `scope=milepebble&milestone=<id>&container_id=<id>` | a milestone select **and** a select of that milestone's milepebbles |
 
-Three rules the control exists to keep:
+The rules the control exists to keep:
 
 - **A no-id mode picks the product's highest-position container**, which
   is the listing's *last* entry (`slice.ListProductDelivery` returns
@@ -653,9 +653,24 @@ Three rules the control exists to keep:
   the milestone submits `milestone`, a UI-only parameter that never
   reaches the store. A milepebble id alone cannot say which options the
   second select should offer, which is why the parent is in the URL at all.
-  A named milepebble that is not under the named milestone is a 404 —
-  the two selects disagree, and neither answer would be what the URL asked
-  for.
+  A named milepebble this product does not own is still a 404 — the
+  membership check is independent of the parent. A named milepebble the
+  product *does* own but that hangs under a **different** milestone
+  resolves to the named milestone's first milepebble instead: that
+  disagreeing pair is exactly what the control's own milestone change
+  necessarily submits, because the form is a plain GET over two selects
+  and a select cannot be emptied by choosing something else in it. Refusing
+  it would 404 the one interaction `milestone` exists to enable, and htmx
+  does not swap on a 4xx, so it would break silently. The named milestone
+  is the more specific statement of intent; the no-id rule settles the
+  milepebble one level down.
+- **Two empty outcomes, kept apart.** A product with no milestones at all
+  (`productTaskScopeNoContainers`) renders the modes and no select — there
+  is nothing to put in one. Milepebble mode over a milestone that simply
+  has nothing cut under it (`productTaskScopeNoMilepebbles`) keeps the
+  milestone select and the named mode marked, because that select is
+  exactly how the operator picks a cut one. Answering the second with the
+  first is what used to leave the page with no way back to a usable scope.
 - **Incomplete applies to the product-wide mode only.** It is judged per
   container by `store.IsIncompleteContainerStatus`, the same predicate the
   store's own query runs. A shipped or abandoned milestone is *excluded*
