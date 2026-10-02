@@ -31,6 +31,14 @@ var (
 	tileOtherProduct = uuid.MustParse("66666666-0000-0000-0000-000000000002")
 )
 
+// tileMilestoneA and tileMilestoneB are two containers of tileProduct, so
+// "across all its milestones" is a property the fixture can fail rather than
+// a phrase: a read narrowed to one of them drops rows.
+var (
+	tileMilestoneA = uuid.MustParse("77777777-0000-0000-0000-00000000000a")
+	tileMilestoneB = uuid.MustParse("77777777-0000-0000-0000-00000000000b")
+)
+
 // tileNow is the instant the fixture's clock is held at, and therefore the
 // moment both windows are measured from and forward to.
 var tileNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
@@ -51,6 +59,7 @@ const (
 type tileRow struct {
 	queue         tileQueue
 	product       uuid.UUID
+	milestone     uuid.UUID
 	escalatedAt   time.Time
 	leaseExpiring time.Time
 	isScopeNote   bool
@@ -77,6 +86,12 @@ type tileFixtureTasks struct {
 	gotParams []store.ConsoleOverviewParams
 }
 
+// rowsFor is the fixture store's one narrowing: a row belongs to the queue
+// asked for and to the product, and when a milestone is named, to that
+// milestone. Rows of the fixture's own product are deliberately spread over
+// two milestones, so a read narrowed to one of them answers fewer rows than
+// one narrowed to the product -- which is the whole point of "across all
+// its milestones" being testable.
 func (f *tileFixtureTasks) rowsFor(queue tileQueue, filter store.ConsoleFilter) []tileRow {
 	var out []tileRow
 	for _, row := range f.rows {
@@ -86,9 +101,7 @@ func (f *tileFixtureTasks) rowsFor(queue tileQueue, filter store.ConsoleFilter) 
 		if filter.ProductID != nil && *filter.ProductID != row.product {
 			continue
 		}
-		if filter.MilestoneID != nil {
-			// No fixture row names a milestone, so any milestone narrowing
-			// returns nothing rather than everything.
+		if filter.MilestoneID != nil && *filter.MilestoneID != row.milestone {
 			continue
 		}
 		out = append(out, row)
@@ -228,31 +241,38 @@ func overviewTileSection(t *testing.T, body, label string) string {
 // The three queues are separate slices because a row belongs to exactly
 // one of them: the store's three queries join different tables, so a
 // single blended row set would make the fixture claim a note is a claim.
+//
+// Each queue's rows are split across tileMilestoneA and tileMilestoneB
+// with none left over, so a read narrowed to either milestone answers
+// strictly fewer rows than a read narrowed to the product. Every figure
+// asserted below therefore fails if a milestone filter sneaks in.
 func busyTileRows() []tileRow {
 	return []tileRow{
 		// Escalated: two inside the one-hour window, one well outside it.
-		{queue: queueEscalated, product: tileProduct, escalatedAt: tileNow.Add(-5 * time.Minute)},
-		{queue: queueEscalated, product: tileProduct, escalatedAt: tileNow.Add(-30 * time.Minute)},
-		{queue: queueEscalated, product: tileProduct, escalatedAt: tileNow.Add(-4 * time.Hour)},
+		{queue: queueEscalated, product: tileProduct, milestone: tileMilestoneA, escalatedAt: tileNow.Add(-5 * time.Minute)},
+		{queue: queueEscalated, product: tileProduct, milestone: tileMilestoneB, escalatedAt: tileNow.Add(-30 * time.Minute)},
+		{queue: queueEscalated, product: tileProduct, milestone: tileMilestoneA, escalatedAt: tileNow.Add(-4 * time.Hour)},
 		// Claimed: one lapsing inside the ten-minute window, one well
 		// outside it.
-		{queue: queueClaimed, product: tileProduct, leaseExpiring: tileNow.Add(2 * time.Minute)},
-		{queue: queueClaimed, product: tileProduct, leaseExpiring: tileNow.Add(3 * time.Hour)},
+		{queue: queueClaimed, product: tileProduct, milestone: tileMilestoneB, leaseExpiring: tileNow.Add(2 * time.Minute)},
+		{queue: queueClaimed, product: tileProduct, milestone: tileMilestoneA, leaseExpiring: tileNow.Add(3 * time.Hour)},
 		// Open notes: two scope notes and one of another kind.
-		{queue: queueNotes, product: tileProduct, isScopeNote: true},
-		{queue: queueNotes, product: tileProduct, isScopeNote: true},
-		{queue: queueNotes, product: tileProduct},
-		// Another product's rows: one escalation and one scope note, so
-		// a dropped product narrowing raises two of the figures above.
-		{queue: queueEscalated, product: tileOtherProduct, escalatedAt: tileNow.Add(-time.Minute)},
-		{queue: queueNotes, product: tileOtherProduct, isScopeNote: true},
+		{queue: queueNotes, product: tileProduct, milestone: tileMilestoneA, isScopeNote: true},
+		{queue: queueNotes, product: tileProduct, milestone: tileMilestoneB, isScopeNote: true},
+		{queue: queueNotes, product: tileProduct, milestone: tileMilestoneA},
+		// Another product's rows, spread over its own two milestones: an
+		// escalation, a claim and a scope note, so a dropped product
+		// narrowing raises every figure above.
+		{queue: queueEscalated, product: tileOtherProduct, milestone: tileMilestoneA, escalatedAt: tileNow.Add(-time.Minute)},
+		{queue: queueClaimed, product: tileOtherProduct, milestone: tileMilestoneA, leaseExpiring: tileNow.Add(time.Minute)},
+		{queue: queueNotes, product: tileOtherProduct, milestone: tileMilestoneA, isScopeNote: true},
 	}
 }
 
 func busyTileFixture() *tileFixtureTasks {
 	return &tileFixtureTasks{
-		scopeID:         chromeScopeID,
-		rows:            busyTileRows(),
+		scopeID:        chromeScopeID,
+		rows:           busyTileRows(),
 		escalatedCount: 3,
 	}
 }
@@ -260,7 +280,7 @@ func busyTileFixture() *tileFixtureTasks {
 func tileDesignFixture() *tileFixtureDesignSessions {
 	return &tileFixtureDesignSessions{
 		summary: store.ProductDesignSessionsSummary{
-			OpenBlockingQuestionCount:    5,
+			OpenBlockingQuestionCount:   5,
 			SessionsHoldingOpenBlocking: 2,
 		},
 	}
@@ -290,6 +310,52 @@ func TestStatTilesShowEachFigureAndItsSubLine(t *testing.T) {
 				t.Errorf("sub-line does not read %q; tile: %s", want.sub, tile)
 			}
 		})
+	}
+}
+
+// TestEscalatedTileShowsHowManyAreNewInTheLastHour pins the sub-line the
+// other three tiles have and this one was missing: of the fixture's three
+// escalations, two were raised inside the one-hour window and one four
+// hours ago. The FR names this sub-line for the Escalated tile by name, so
+// a tile that renders a bare figure has dropped a required line.
+//
+// The count beside it is the badge's own 3. That the two numbers differ is
+// the point: a sub-line repeating its figure would be satisfied by any
+// implementation that ignores the window, and this one is not.
+func TestEscalatedTileShowsHowManyAreNewInTheLastHour(t *testing.T) {
+	body := fetchOverviewBody(t, tileFixtureMux(t, busyTileFixture(), tileDesignFixture()))
+
+	tile := overviewTileSection(t, body, "Escalated")
+	if !strings.Contains(tile, "2 new in the last hour") {
+		t.Errorf("the Escalated tile does not carry its %q sub-line; tile: %s", "2 new in the last hour", tile)
+	}
+	// And the window is doing the work: 2 of the 3, not all 3 and not 0.
+	if strings.Contains(tile, "3 new in the last hour") {
+		t.Errorf("the sub-line counts every escalation rather than the recent ones; tile: %s", tile)
+	}
+}
+
+// TestEveryTileCarriesTheSubLineTheFRNames is the whole set in one place:
+// each of the four tiles carries the exact sub-line FR c0baeb2d names for
+// it. Written as a table over literals so a tile that renders no sub-line
+// element at all fails here rather than being read past.
+func TestEveryTileCarriesTheSubLineTheFRNames(t *testing.T) {
+	body := fetchOverviewBody(t, tileFixtureMux(t, busyTileFixture(), tileDesignFixture()))
+
+	for _, want := range []struct{ label, sub string }{
+		{"Escalated", "2 new in the last hour"},
+		{"Claimed", "1 lease expires within 10 min"},
+		{"Open notes", "2 scope notes"},
+		{"Blocking questions", "in 2 design sessions"},
+	} {
+		tile := overviewTileSection(t, body, want.label)
+		if !strings.Contains(tile, `data-krill="overview-stat-sub"`) {
+			t.Errorf("tile %q rendered no sub-line element at all; tile: %s", want.label, tile)
+			continue
+		}
+		if !strings.Contains(tile, want.sub) {
+			t.Errorf("tile %q does not carry the sub-line %q; tile: %s", want.label, want.sub, tile)
+		}
 	}
 }
 
@@ -366,9 +432,117 @@ func TestStatTilesCoverTheProductAcrossItsMilestones(t *testing.T) {
 	}
 }
 
-// TestStatTilesLinkToWhatTheyCount pins each destination: the three
-// console queues' own views, and the design-sessions list for this product
-// rather than the typed-id design root.
+// TestStatTileFiguresSpanEveryMilestoneOfTheProduct is the figures half of
+// the same requirement, which the params assertions above cannot reach on
+// their own: the fixture spreads each queue's rows across tileMilestoneA
+// and tileMilestoneB, so an Overview that counted only one container would
+// render 2 escalations and 1 claim instead of 3 and 2. Read the way the
+// operator reads it -- the numbers on the page.
+func TestStatTileFiguresSpanEveryMilestoneOfTheProduct(t *testing.T) {
+	body := fetchOverviewBody(t, tileFixtureMux(t, busyTileFixture(), tileDesignFixture()))
+
+	for _, want := range []struct{ label, count string }{
+		{"Claimed", "2"},
+		{"Open notes", "3"},
+	} {
+		tile := overviewTileSection(t, body, want.label)
+		if !strings.Contains(tile, ">"+want.count+"<") {
+			t.Errorf("tile %q does not count rows from both of the product's milestones (want %s); tile: %s", want.label, want.count, tile)
+		}
+	}
+}
+
+// TestAFailedReadCostsOnlyItsOwnTilesIsPerTile pins the seam the Overview
+// isolation work (task 2ade8e08) depends on: the tiles are four
+// independently-addressable regions, not one figure that is either all
+// there or all gone. Each case breaks exactly one read and shows the tiles
+// that read it lose their figures while the tiles fed by the other reads
+// keep theirs.
+//
+// This is not a claim about how the page as a whole degrades -- that is the
+// isolation task's FR to settle. It is the narrower thing this task owes
+// it: that the seam exists to be used, rather than each tile's figures
+// arriving welded into a single struct whose only failure mode is losing
+// all of them.
+func TestAFailedReadCostsOnlyItsOwnTilesIsPerTile(t *testing.T) {
+	t.Run("the badge's count fails", func(t *testing.T) {
+		tasks := busyTileFixture()
+		tasks.escalatedErr = store.ErrNotFound
+		body := fetchOverviewBody(t, tileFixtureMux(t, tasks, tileDesignFixture()))
+
+		assertTileFailed(t, body, "Escalated")
+		for _, label := range []string{"Claimed", "Open notes", "Blocking questions"} {
+			assertTileKeptItsFigure(t, body, label)
+		}
+	})
+
+	t.Run("the console read fails", func(t *testing.T) {
+		tasks := busyTileFixture()
+		tasks.overviewErr = store.ErrNotFound
+		body := fetchOverviewBody(t, tileFixtureMux(t, tasks, tileDesignFixture()))
+
+		// The console read answers two tiles, so both of them -- and only
+		// those two -- lose their figures.
+		assertTileFailed(t, body, "Claimed")
+		assertTileFailed(t, body, "Open notes")
+		assertTileKeptItsFigure(t, body, "Escalated")
+		assertTileKeptItsFigure(t, body, "Blocking questions")
+	})
+
+	t.Run("the design read fails", func(t *testing.T) {
+		design := tileDesignFixture()
+		design.err = store.ErrNotFound
+		body := fetchOverviewBody(t, tileFixtureMux(t, busyTileFixture(), design))
+
+		assertTileFailed(t, body, "Blocking questions")
+		for _, label := range []string{"Escalated", "Claimed", "Open notes"} {
+			assertTileKeptItsFigure(t, body, label)
+		}
+	})
+}
+
+// assertTileFailed pins the two halves of a tile whose read failed: a
+// message in place of the figure, and no figure at all. The second half is
+// the one that matters -- "Escalated could not be read" beside a 0 is an
+// unreadable number wearing an idle one's clothes.
+func assertTileFailed(t *testing.T, body, label string) {
+	t.Helper()
+	tile := overviewTileSection(t, body, label)
+	if !strings.Contains(tile, `data-krill="overview-stat-error"`) {
+		t.Errorf("tile %q should show that its read failed; tile: %s", label, tile)
+	}
+	if strings.Contains(tile, `data-krill="overview-stat-count"`) {
+		t.Errorf("tile %q rendered a figure for a read that failed; tile: %s", label, tile)
+	}
+	if strings.Contains(tile, ">0<") {
+		t.Errorf("tile %q rendered an unreadable count as a zero; tile: %s", label, tile)
+	}
+	if !strings.Contains(tile, "could not be read") {
+		t.Errorf("tile %q should say which figure is missing; tile: %s", label, tile)
+	}
+}
+
+// assertTileKeptItsFigure pins that a tile fed by a read that still worked
+// kept both its number and its sub-line.
+func assertTileKeptItsFigure(t *testing.T, body, label string) {
+	t.Helper()
+	tile := overviewTileSection(t, body, label)
+	if strings.Contains(tile, `data-krill="overview-stat-error"`) {
+		t.Errorf("tile %q failed because an unrelated read failed; tile: %s", label, tile)
+	}
+	if !strings.Contains(tile, `data-krill="overview-stat-count"`) {
+		t.Errorf("tile %q lost its figure to an unrelated read's failure; tile: %s", label, tile)
+	}
+}
+
+// TestStatTilesLinkToWhatTheyCount pins each destination as a literal URL.
+//
+// The hrefs are written out rather than built from the constants the code
+// under test uses (escalatedTabHref, opsClaimedPath, designProductSessionsPath
+// and the product's own id). A test that reuses the code's own path builder
+// agrees with any change to it -- including a change that sends every tile
+// to the same wrong place -- so the destination is spelled here and checked
+// as a reader would check it: against the address bar.
 func TestStatTilesLinkToWhatTheyCount(t *testing.T) {
 	body := fetchOverviewBody(t, tileFixtureMux(t, busyTileFixture(), tileDesignFixture()))
 
@@ -376,10 +550,14 @@ func TestStatTilesLinkToWhatTheyCount(t *testing.T) {
 		label string
 		href  string
 	}{
-		{"Escalated", escalatedTabHref},
-		{"Claimed", opsClaimedPath},
-		{"Open notes", opsNotesPath},
-		{"Blocking questions", designProductSessionsPath(tileProduct)},
+		// The Needs attention console queues the three console tiles count.
+		{"Escalated", "/ops/escalated"},
+		{"Claimed", "/ops/claimed"},
+		{"Open notes", "/ops/notes"},
+		// Design sessions for tileProduct, spelled with its literal id --
+		// not /design/go, and not a bare /design the operator would have to
+		// pick a product out of.
+		{"Blocking questions", "/design/products/66666666-0000-0000-0000-000000000001/design-sessions"},
 	} {
 		t.Run(want.label, func(t *testing.T) {
 			tile := overviewTileSection(t, body, want.label)
@@ -388,10 +566,23 @@ func TestStatTilesLinkToWhatTheyCount(t *testing.T) {
 			}
 		})
 	}
+}
 
+// TestTheBlockingQuestionsTileLinksToThisProductsSessions is the same
+// destination with the product id varied, so the href is shown to be built
+// from the product on screen rather than from whichever one the code
+// happened to close over. Under tileOtherProduct the same tile must point
+// at that product's list.
+func TestTheBlockingQuestionsTileLinksToThisProductsSessions(t *testing.T) {
+	body := fetchOverviewBody(t, tileFixtureMux(t, busyTileFixture(), tileDesignFixture()))
 	tile := overviewTileSection(t, body, "Blocking questions")
-	if strings.Contains(tile, "/design?") || strings.Contains(tile, "product_id") {
-		t.Errorf("the blocking-questions tile links somewhere other than the product's session list; tile: %s", tile)
+
+	if strings.Contains(tile, `href="/design/go"`) || strings.Contains(tile, `href="/design"`) ||
+		strings.Contains(tile, "product_id") {
+		t.Errorf("the tile links to the typed-id design root instead of the product's session list; tile: %s", tile)
+	}
+	if strings.Contains(tile, tileOtherProduct.String()) {
+		t.Errorf("the tile links at another product's sessions; tile: %s", tile)
 	}
 }
 
@@ -460,78 +651,6 @@ func TestStatTilesRenderZeroAsARealZero(t *testing.T) {
 	}
 }
 
-// TestAFailedConsoleReadCostsOnlyItsOwnTiles pins that one failed read
-// takes down the figures it answered and no others -- the seam the
-// per-region error work needs -- and that a queue that could not be
-// counted never renders as an empty one.
-func TestAFailedConsoleReadCostsOnlyItsOwnTiles(t *testing.T) {
-	tasks := busyTileFixture()
-	tasks.overviewErr = store.ErrNotFound
-	body := fetchOverviewBody(t, tileFixtureMux(t, tasks, tileDesignFixture()))
-
-	for _, label := range []string{"Claimed", "Open notes"} {
-		tile := overviewTileSection(t, body, label)
-		if !strings.Contains(tile, `data-krill="overview-stat-error"`) {
-			t.Errorf("tile %q should report that its read failed; tile: %s", label, tile)
-		}
-		if strings.Contains(tile, ">0<") {
-			t.Errorf("tile %q rendered an unreadable count as a zero; tile: %s", label, tile)
-		}
-	}
-
-	// The escalated figure came from the badge's own read and the
-	// blocking figure from the design summary; neither was affected.
-	escalated := overviewTileSection(t, body, "Escalated")
-	if !strings.Contains(escalated, ">3<") {
-		t.Errorf("the escalated tile lost its figure to an unrelated read's failure; tile: %s", escalated)
-	}
-	blocking := overviewTileSection(t, body, "Blocking questions")
-	if !strings.Contains(blocking, ">5<") {
-		t.Errorf("the blocking-questions tile lost its figure to an unrelated read's failure; tile: %s", blocking)
-	}
-}
-
-// TestAFailedDesignReadFailsOnlyItsOwnTile is the same seam on the other
-// read: a design store that is down must not cost the console figures.
-func TestAFailedDesignReadFailsOnlyItsOwnTile(t *testing.T) {
-	design := tileDesignFixture()
-	design.err = store.ErrNotFound
-	body := fetchOverviewBody(t, tileFixtureMux(t, busyTileFixture(), design))
-
-	tile := overviewTileSection(t, body, "Blocking questions")
-	if !strings.Contains(tile, `data-krill="overview-stat-error"`) {
-		t.Errorf("the blocking-questions tile should report the failed read; tile: %s", tile)
-	}
-	if strings.Contains(tile, ">0<") {
-		t.Errorf("an unreadable question count rendered as a zero; tile: %s", tile)
-	}
-	for _, label := range []string{"Escalated", "Claimed", "Open notes"} {
-		if other := overviewTileSection(t, body, label); strings.Contains(other, `data-krill="overview-stat-error"`) {
-			t.Errorf("tile %q failed because the design store did; tile: %s", label, other)
-		}
-	}
-}
-
-// TestAnUnreadableEscalatedCountFailsOnlyItsOwnTile is the badge's own
-// failure reaching the tile. The chrome already renders no badge for an
-// unreadable count; the tile must not resolve that ambiguity into a 0.
-func TestAnUnreadableEscalatedCountFailsOnlyItsOwnTile(t *testing.T) {
-	tasks := busyTileFixture()
-	tasks.escalatedErr = store.ErrNotFound
-	body := fetchOverviewBody(t, tileFixtureMux(t, tasks, tileDesignFixture()))
-
-	tile := overviewTileSection(t, body, "Escalated")
-	if !strings.Contains(tile, `data-krill="overview-stat-error"`) {
-		t.Errorf("the escalated tile should report the failed read; tile: %s", tile)
-	}
-	if strings.Contains(tile, ">0<") {
-		t.Errorf("an unreadable escalated count rendered as a zero; tile: %s", tile)
-	}
-	if other := overviewTileSection(t, body, "Claimed"); !strings.Contains(other, ">2<") {
-		t.Errorf("the claimed figure should survive an unrelated read's failure; tile: %s", other)
-	}
-}
-
 // TestSubLineGrammarIsSingularAtOne pins the plural rule at its boundary.
 // "1 leases expire" beside a figure of 1 is the kind of small wrongness
 // that makes an operator doubt the number next to it.
@@ -553,5 +672,89 @@ func TestSubLineGrammarIsSingularAtOne(t *testing.T) {
 		if tc.got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
 		}
+	}
+}
+
+// ── the shell's other console-read fakes ────────────────────────────────────
+
+// TestShellConsoleReadFakesAnswerWithZeroFigures pins what the shell's other
+// test fakes do with the read this work added, so a future change to the
+// tile code cannot quietly turn their silent zero into a panic or a
+// fabricated figure.
+//
+// "Honest" is the whole claim, and it cuts both ways. These fakes are not
+// the tile tests' evidence -- those run against tileFixtureTasks, which
+// derives every figure from rows. They are here so that the nav walk, the
+// header cases and the product-scope cases can render a page that includes
+// the tiles without inventing work for their assertions. What they must not
+// do is answer a figure the page then renders as though it were real: a
+// fabricated non-zero would put a number on those pages that no store ever
+// produced, and every assertion made against them would inherit it.
+func TestShellConsoleReadFakesAnswerWithZeroFigures(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		read func() (store.ConsoleOverviewCounts, error)
+	}{
+		{"the chrome's counter", func() (store.ConsoleOverviewCounts, error) {
+			return chromeTaskCounter{}.CountConsoleOverview(context.Background(), store.ConsoleOverviewParams{})
+		}},
+		{"the nav walk's store", func() (store.ConsoleOverviewCounts, error) {
+			return (&navTasks{}).CountConsoleOverview(context.Background(), store.ConsoleOverviewParams{})
+		}},
+		{"the product-scope store", func() (store.ConsoleOverviewCounts, error) {
+			return productScopeTasks{}.CountConsoleOverview(context.Background(), store.ConsoleOverviewParams{})
+		}},
+		{"the Overview header's counter", func() (store.ConsoleOverviewCounts, error) {
+			return (&overviewCounter{}).CountConsoleOverview(context.Background(), store.ConsoleOverviewParams{})
+		}},
+	} {
+		got, err := tc.read()
+		if err != nil {
+			t.Errorf("%s fails the console read outright; an idle deployment reads cleanly: %v", tc.name, err)
+			continue
+		}
+		if got != (store.ConsoleOverviewCounts{}) {
+			t.Errorf("%s answers the console read with %+v; an idle deployment's answer is every figure zero, and a non-zero here would be a figure no test set up", tc.name, got)
+		}
+	}
+}
+
+// TestShellFakesRenderTheOverviewAsAnIdleDeployment is the other half: the
+// zero these fakes answer with reaches the page as four zero tiles rather
+// than as four errors or no strip at all. An honest idle answer and an
+// unreadable one must not look the same to whatever assertion reads those
+// pages, or "renders as zero" is really "renders as broken".
+func TestShellFakesRenderTheOverviewAsAnIdleDeployment(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(t *testing.T) *http.ServeMux
+	}{
+		{"the chrome's counter", func(t *testing.T) *http.ServeMux {
+			app := newTestApp(t)
+			app.spec = &fakeSpecReader{products: []store.Product{{ID: tileProduct, Name: "krill"}}}
+			app.credentials = &fakeCredentials{}
+			mux := http.NewServeMux()
+			app.mountShellRoutes(mux)
+			return mux
+		}},
+		{"the product-scope store", func(t *testing.T) *http.ServeMux {
+			return productScopeMux(t, store.Product{ID: tileProduct, Name: "krill"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fetchOverviewBody(t, tc.build(t))
+			if got := strings.Count(body, `data-krill="overview-stat"`); got != 4 {
+				t.Fatalf("rendered %d stat tiles, want 4: %s", got, body)
+			}
+			for _, label := range []string{"Escalated", "Claimed", "Open notes", "Blocking questions"} {
+				tile := overviewTileSection(t, body, label)
+				if strings.Contains(tile, `data-krill="overview-stat-error"`) {
+					t.Errorf("tile %q rendered a failure although the fake answered cleanly; tile: %s", label, tile)
+				}
+				if !strings.Contains(tile, ">0<") {
+					t.Errorf("tile %q does not render the idle figure it was answered with; tile: %s", label, tile)
+				}
+			}
+		})
 	}
 }
