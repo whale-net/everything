@@ -3,10 +3,10 @@ package pages
 // The Overview page body: the shell's home, answering "is anything stuck,
 // which milestone is in flight" (FR c3e1c276).
 //
-// It is the page frame. The four stat tiles, the in-flight milestones
-// panel and the Needs-attention panel each render their own slot below;
-// the header here has to stand on its own, because it is the part that
-// must answer both questions in the first glance.
+// It is the page frame plus the Needs-attention panel. The four stat tiles
+// and the in-flight milestones panel render their own slots below; the
+// header here has to stand on its own, because it is the part that must
+// answer both questions in the first glance.
 
 import (
 	"strconv"
@@ -48,6 +48,13 @@ type OverviewPage struct {
 	// action is then absent and the header says nothing about escalation
 	// at all -- "nothing is escalated" would be a second unverified claim.
 	EscalatedReadable bool
+
+	// EscalatedError is set in place of the count whenever it is not
+	// readable, and renders where the action would have been. Silence is
+	// not the alternative: an absent action beside an absent sentence
+	// reads as "nothing needs you", which is the one answer this count
+	// was unable to give (FR ede7cee6).
+	EscalatedError string
 
 	// EscalatedHref is the Escalated tab of Needs attention.
 	EscalatedHref string
@@ -109,8 +116,11 @@ templ overviewStatTile(tile OverviewStatTile) {
 	<a href={ templ.URL(tile.Href) } class="stat" data-krill="overview-stat">
 		<div class="stat-title">{ tile.Label }</div>
 		if tile.Err != "" {
-			<div class="stat-value text-base font-medium text-base-content/70" data-krill="overview-stat-error">
-				{ tile.Err }
+			// An htmxui.Alert rather than a styled figure: a queue that
+			// could not be counted must not occupy the same slot, with the
+			// same weight, as one that was counted and came back empty.
+			<div data-krill="overview-stat-error">
+				@htmxui.Alert(htmxui.AlertError, tile.Err, nil)
 			</div>
 		} else {
 			<div class={ "stat-value", tile.ValueClass } data-krill="overview-stat-count">{ tile.Count }</div>
@@ -245,6 +255,29 @@ type OverviewEscalation struct {
 	EscalatedAtExact string
 }
 
+// NeedsAttentionMax is how many escalated tasks the panel lists. The FR's
+// "at most the 5 most recently escalated" bounds what an operator skims
+// before following See all, so the read asks the store for exactly this
+// many rather than fetching a default page and truncating it.
+const NeedsAttentionMax = 5
+
+// OverviewEscalation is one escalated task in the Needs-attention panel:
+// why it escalated, what it is, and when. EscalatedAtExact carries the
+// same instant as the relative EscalatedAt so hovering can surface the
+// precise time, which the relative figure alone cannot answer.
+type OverviewEscalation struct {
+	TaskID string
+	Title  string
+	Href   string
+
+	// Reason is the store's wire value; the badge renders its human
+	// wording through components.EscalationReasonLabel.
+	Reason string
+
+	EscalatedAt      string
+	EscalatedAtExact string
+}
+
 // inFlightBadges renders one badge per in-flight container, through the
 // same statusBadge the delivery page uses so the colours match every
 // other status badge in the shell.
@@ -342,7 +375,11 @@ templ Overview(page OverviewPage) {
 					}
 				</div>
 			</div>
-			if page.EscalatedReadable && page.Escalated > 0 {
+			if page.EscalatedError != "" {
+				<div data-krill="overview-escalated-error">
+					@htmxui.Alert(htmxui.AlertError, page.EscalatedError, nil)
+				</div>
+			} else if page.EscalatedReadable && page.Escalated > 0 {
 				<a href={ templ.URL(page.EscalatedHref) } class="btn btn-primary btn-sm"
 				   data-krill="overview-primary-action">
 					Review { page.Escalated } escalated { overviewTaskWord(page.Escalated) }
@@ -357,11 +394,14 @@ templ Overview(page OverviewPage) {
 			@overviewStatTiles(page.StatTiles)
 		}
 		<div class="grid gap-6 lg:grid-cols-2">
+			@NeedsAttentionPanel(page)
 			<div class="card bg-base-100 border border-base-300" data-krill="overview-in-flight-panel">
 				<div class="card-body">
 					<h2 class="card-title">Milestones in flight</h2>
 					if page.InFlightPanel.Error != "" {
-						@htmxui.Alert(htmxui.AlertError, page.InFlightPanel.Error, nil)
+						<div data-krill="overview-in-flight-panel-error">
+							@htmxui.Alert(htmxui.AlertError, page.InFlightPanel.Error, nil)
+						</div>
 					} else if len(page.InFlightPanel.Rows) == 0 {
 						@htmxui.EmptyState("Nothing is in flight",
 							"No milestone is in design or in progress.",

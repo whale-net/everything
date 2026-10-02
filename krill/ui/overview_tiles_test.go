@@ -134,6 +134,14 @@ func (f *tileFixtureTasks) SummarizeProductTaskProgress(context.Context, store.P
 	return store.ProductTaskProgress{}, nil
 }
 
+// ListEscalatedTasks is the Needs-attention panel's read. It answers with
+// no rows for the same reason as above: these cases are about the tiles,
+// and a fabricated escalation would put a panel row on the page that no
+// tile assertion could account for.
+func (f *tileFixtureTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{}, nil
+}
+
 func (f *tileFixtureTasks) CountConsoleOverview(_ context.Context, p store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
 	f.gotParams = append(f.gotParams, p)
 	if f.overviewErr != nil {

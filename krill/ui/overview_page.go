@@ -86,6 +86,11 @@ func (app *App) renderOverview(w http.ResponseWriter, r *http.Request, product s
 // buildOverview assembles the Overview's view model from the reads the
 // page makes beyond the escalated count it is handed: the product's
 // containers in flight, and its most recently escalated tasks.
+//
+// Every region below is independent. Each read writes its own field and
+// none returns early, so one region's failure can neither suppress another
+// region's answer nor let it render its empty state: a failed read is
+// never a confident claim about a different read.
 func (app *App) buildOverview(r *http.Request, product store.Product, badge navBadge) pages.OverviewPage {
 	page := pages.OverviewPage{
 		Product:           productHeaderOf(product),
@@ -94,14 +99,21 @@ func (app *App) buildOverview(r *http.Request, product store.Product, badge navB
 		EscalatedHref:     escalatedTabHref,
 		StatTiles:         app.overviewStatTiles(r, product.ID, badge),
 	}
+	if !badge.readable {
+		// The header's action slot is a region of its own, and an
+		// unreadable count leaves it with nothing to say. Silence there
+		// is the same false claim as "nothing is escalated", so it says
+		// what it could not read instead.
+		page.EscalatedError = "How many tasks are escalated could not be read. See the logs."
+	}
 
 	listing, err := app.spec.Delivery(r.Context(), product.ID, inFlightStatuses)
 	if err != nil {
 		logger.Error("overview in-flight read failed", "product", product.ID.String(), "error", err)
 		// The header says what could not be read rather than claiming no
-		// milestone is in flight, but it does not stop the panel: the two
-		// read different stores and share no state, so one failing must
-		// not cost the operator the other's answer.
+		// milestone is in flight, but it does not stop the other regions:
+		// they read different stores and share no state, so one failing
+		// must not cost the operator the others' answers.
 		page.InFlightError = "Which milestones are in flight could not be read. See the logs."
 	} else {
 		page.InFlight = inFlightOf(listing)
@@ -112,16 +124,14 @@ func (app *App) buildOverview(r *http.Request, product store.Product, badge navB
 	// The attention panel is a second region rather than part of the
 	// header: its read failing must not cost the operator the in-flight
 	// answer the header just rendered, and its success must not be
-	// reported alongside an in-flight failure. So the in-flight panel is
-	// already assigned above and this branch returns a page that carries
-	// everything the reads that did succeed established.
+	// reported alongside an in-flight failure.
 	escalated, err := app.needsAttentionRows(r.Context(), product.ID, time.Now())
 	if err != nil {
 		logger.Error("overview needs-attention read failed", "product", product.ID.String(), "error", err)
 		page.NeedsAttentionError = "Which tasks are escalated could not be read. See the logs."
-		return page
+	} else {
+		page.NeedsAttention = escalated
 	}
-	page.NeedsAttention = escalated
 	return page
 }
 

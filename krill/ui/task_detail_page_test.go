@@ -72,6 +72,13 @@ func (fakeDetailStore) CountConsoleOverview(context.Context, store.ConsoleOvervi
 	return store.ConsoleOverviewCounts{}, nil
 }
 
+// ListEscalatedTasks is the read the Overview's Needs-attention panel
+// makes. It answers with no rows so the panel renders its empty state:
+// these fixtures' subject is the task detail, not the panel's rows.
+func (fakeDetailStore) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{}, nil
+}
+
 func (f *fakeDetailStore) GetTaskByID(_ context.Context, id uuid.UUID) (store.Task, error) {
 	if f.getErr != nil {
 		return store.Task{}, f.getErr
