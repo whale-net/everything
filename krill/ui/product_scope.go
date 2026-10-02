@@ -29,6 +29,27 @@ import (
 // URL never consults it.
 const lastViewedProductCookie = "krill_last_viewed_product"
 
+// currentProductKey carries the product this request resolved, so chrome
+// assembled further down (the sidebar's Product switcher, the shell's
+// nav) names the same product the page's own reads did. Only a resolver
+// ever sets it: a component that guessed the current product from the
+// cookie would disagree with the page the moment the two diverged.
+type currentProductKey struct{}
+
+// withCurrentProduct returns a request carrying p as the resolved
+// current product.
+func withCurrentProduct(r *http.Request, p store.Product) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), currentProductKey{}, p))
+}
+
+// currentProduct is the product a resolver resolved for this request, if
+// one did. ok is false on a request that never resolved one -- a page
+// outside the product area, or one whose resolution failed.
+func currentProduct(ctx context.Context) (store.Product, bool) {
+	p, ok := ctx.Value(currentProductKey{}).(store.Product)
+	return p, ok
+}
+
 // resolveProductFromPath resolves the {pid} segment of a product-scoped
 // URL and confirms it is one of the products in this deployment's sole
 // scope.
@@ -37,12 +58,12 @@ const lastViewedProductCookie = "krill_last_viewed_product"
 // an in-shell 404 rather than a bare http.Error: a link an operator
 // followed has to land inside the shell they can navigate back out of.
 // ok=false means the response has already been written.
-func (app *App) resolveProductFromPath(w http.ResponseWriter, r *http.Request) (store.Product, bool) {
+func (app *App) resolveProductFromPath(w http.ResponseWriter, r *http.Request) (*http.Request, store.Product, bool) {
 	pid, err := uuid.Parse(r.PathValue("pid"))
 	if err != nil {
 		renderProductScopeStatus(w, r, http.StatusNotFound, "Product not found",
 			"That link does not name a product.")
-		return store.Product{}, false
+		return r, store.Product{}, false
 	}
 
 	products, err := app.scopeProducts(r.Context())
@@ -50,18 +71,18 @@ func (app *App) resolveProductFromPath(w http.ResponseWriter, r *http.Request) (
 		logger.Error("product scope read failed", "error", err)
 		renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not load the product",
 			"The product list could not be read. See the logs.")
-		return store.Product{}, false
+		return r, store.Product{}, false
 	}
 
 	for _, p := range products {
 		if p.ID == pid {
-			return p, true
+			return withCurrentProduct(r, p), p, true
 		}
 	}
 
 	renderProductScopeStatus(w, r, http.StatusNotFound, "Product not found",
 		"No product in your scope matches that id.")
-	return store.Product{}, false
+	return r, store.Product{}, false
 }
 
 // resolveProductForUnprefixed resolves the product for a URL that does
@@ -105,20 +126,20 @@ func (app *App) resolveProductForUnprefixed(r *http.Request) (store.Product, err
 // product is not a broken deployment, and "no products yet" is what an
 // operator needs to read there. It is 200, not 404, because the URL they
 // followed resolved fine -- there is simply nothing behind it yet.
-func (app *App) resolveUnprefixedProduct(w http.ResponseWriter, r *http.Request) (store.Product, bool) {
+func (app *App) resolveUnprefixedProduct(w http.ResponseWriter, r *http.Request) (*http.Request, store.Product, bool) {
 	product, err := app.resolveProductForUnprefixed(r)
 	if err != nil {
 		logger.Error("product list read failed", "error", err)
 		renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not load the product",
 			"The product list could not be read. See the logs.")
-		return store.Product{}, false
+		return r, store.Product{}, false
 	}
 	if product.ID == uuid.Nil {
 		renderShell(w, r, "No products in this scope", r.URL.Path, pages.NoProductsInScope())
-		return store.Product{}, false
+		return r, store.Product{}, false
 	}
 	setLastViewedProductCookie(w, product.ID)
-	return product, true
+	return withCurrentProduct(r, product), product, true
 }
 
 // rememberUnprefixedProduct resolves the current product purely to record
@@ -128,16 +149,17 @@ func (app *App) resolveUnprefixedProduct(w http.ResponseWriter, r *http.Request)
 // scope holds no product, and a read failure must not take a page down
 // whose body was already serviceable. A zero Product means there was
 // nothing to remember.
-func (app *App) rememberUnprefixedProduct(w http.ResponseWriter, r *http.Request) store.Product {
+func (app *App) rememberUnprefixedProduct(w http.ResponseWriter, r *http.Request) (*http.Request, store.Product) {
 	product, err := app.resolveProductForUnprefixed(r)
 	if err != nil {
 		logger.Warn("could not resolve the current product for the last-viewed cookie", "path", r.URL.Path, "error", err)
-		return store.Product{}
+		return r, store.Product{}
 	}
-	if product.ID != uuid.Nil {
-		setLastViewedProductCookie(w, product.ID)
+	if product.ID == uuid.Nil {
+		return r, store.Product{}
 	}
-	return product
+	setLastViewedProductCookie(w, product.ID)
+	return withCurrentProduct(r, product), product
 }
 
 // setLastViewedProductCookie records the product a page just resolved,

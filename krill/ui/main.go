@@ -557,6 +557,13 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// Milestone detail ids hang beneath the milestones prefix, so a copied
 	// link to one resolves its product before the id is even looked at.
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}", app.readerRoute(app.handleProductPlaceholder))
+
+	// The sidebar's Product switcher (FR c4bd4bf8). A reader route: it
+	// reads the scope, records the pick as the last-viewed product, and
+	// 302s to the same area's list page under it. It sits outside the
+	// product prefixes because it names no product of its own -- it is
+	// the hop between two.
+	mux.HandleFunc("GET "+productSwitchPath, app.readerRoute(app.handleProductSwitch))
 }
 
 // operatorRoute is the wrapper every signed-in-operator route in this
