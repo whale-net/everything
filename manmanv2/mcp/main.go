@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
@@ -45,6 +47,16 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("oidc verifier: %w", err)
 	}
 
+	dbURL := os.Getenv("PG_DATABASE_URL")
+	if dbURL == "" {
+		return errors.New("PG_DATABASE_URL is required: write-tool idempotency records are persisted")
+	}
+	db, err := sql.Open("pgx", dbURL)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
 	apiAddr := os.Getenv("CONTROL_API_URL")
 	if apiAddr == "" {
 		return errors.New("CONTROL_API_URL is required")
@@ -56,7 +68,7 @@ func run(logger *slog.Logger) error {
 	defer conn.Close()
 
 	reg := server.NewRegistry(append([]server.Tool{server.WhoamiTool, server.ConnectAddressTool}, server.ReadTools...)...)
-	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")})
+	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}, server.SQLIdempotencyStore{DB: db})
 	apiClient := manmanpb.NewManManAPIClient(conn.GetConnection())
 	server.AddReadTools(srv, apiClient)
 	server.AddConnectAddressTool(srv, apiClient)

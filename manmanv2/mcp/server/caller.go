@@ -8,6 +8,7 @@ import (
 
 // Caller is the verified identity behind one MCP request.
 type Caller struct {
+	// Issuer is the verified token's iss claim; with Subject it identifies the caller.
 	Issuer  string
 	Subject string
 	Roles   []string
