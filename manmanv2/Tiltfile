@@ -174,6 +174,11 @@ APPS = {
         'bazel_target': '//manmanv2/ui:manmanv2-ui_image_load',
         'image_name': 'manmanv2-manmanv2-ui',
     },
+    'mcp': {
+        'enabled_env': 'ENABLE_MANMANV2_MCP',
+        'bazel_target': '//manmanv2/mcp:mcp_image_load',
+        'image_name': 'manmanv2-mcp',
+    },
 }
 
 # ===========================
@@ -584,6 +589,87 @@ spec:
         labels=['manmanv2-control-plane']
     )
     print("🌐 UI forwarded to http://localhost:8080")
+
+# MCP server (opt-in: requires a real OIDC issuer, there is no unauthenticated mode)
+# Set ENABLE_MANMANV2_MCP=true plus MCP_OIDC_ISSUER / MCP_OIDC_CLIENT_ID (Keycloak realm).
+# The control API runs with GRPC_AUTH_MODE=none locally, so the forwarded token is
+# accepted but not verified there; point CONTROL_API_URL at an OIDC-enabled API to test that.
+if get_env_bool('ENABLE_MANMANV2_MCP', default='false'):
+    mcp_oidc_issuer = os.environ.get('MCP_OIDC_ISSUER', '')
+    mcp_oidc_client_id = os.environ.get('MCP_OIDC_CLIENT_ID', '')
+    if not mcp_oidc_issuer or not mcp_oidc_client_id:
+        fail("ENABLE_MANMANV2_MCP=true requires MCP_OIDC_ISSUER and MCP_OIDC_CLIENT_ID")
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: manmanv2-mcp
+  namespace: {namespace}
+spec:
+  selector:
+    app: manmanv2-mcp
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manmanv2-mcp
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: manmanv2-mcp
+  template:
+    metadata:
+      labels:
+        app: manmanv2-mcp
+    spec:
+      containers:
+      - name: mcp
+        image: manmanv2-mcp
+        ports:
+        - containerPort: 8081
+          name: http
+        env:
+        - name: PORT
+          value: "8081"
+        - name: OIDC_ISSUER
+          value: "{oidc_issuer}"
+        - name: OIDC_CLIENT_ID
+          value: "{oidc_client_id}"
+        - name: MCP_RESOURCE_METADATA_URL
+          value: "{resource_metadata_url}"
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: CONTROL_API_URL
+          value: "{control_api_url}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        oidc_issuer=mcp_oidc_issuer,
+        oidc_client_id=mcp_oidc_client_id,
+        resource_metadata_url=os.environ.get('MCP_RESOURCE_METADATA_URL', ''),
+        pg_database_url=pg_database_url,
+        control_api_url=os.environ.get('MCP_CONTROL_API_URL', 'manmanv2-api.{}.svc.cluster.local:50051'.format(namespace)),
+        otel_endpoint=otel_endpoint,
+    )))
+
+    mcp_deps = ['manmanv2-api']
+    if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
+        mcp_deps.append('manmanv2-migration')
+
+    k8s_resource(
+        'manmanv2-mcp',
+        resource_deps=mcp_deps,
+        port_forwards=['8081:8081'],
+        labels=['manmanv2-control-plane']
+    )
+    print("MCP forwarded to http://localhost:8081 (streamable HTTP)")
 
 # ===========================
 # Access Information
