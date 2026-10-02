@@ -49,7 +49,8 @@ document.documentElement.setAttribute('data-theme',t);})();
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
 <style>%s</style>
 <style>%s</style>
-<script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS, leaseCountdownScript)
+<script>%s</script>
+<script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS, relativeAgeScript, leaseCountdownScript)
 }
 
 // leaseCountdownScript rewrites every board card's lease <time> into the
@@ -118,6 +119,40 @@ const markdownCSS = `
 .krill-md :where(a) { text-decoration: underline; }
 .krill-md :where(h1, h2, h3, h4, h5, h6) { font-weight: 700; margin: 0.5em 0 0.25em; }
 `
+
+// relativeAgeScript upgrades every [data-krill-updated-at] element's text to
+// "Updated N ago", read off the absolute RFC3339 instant the server put in
+// the attribute (NFR 7b497d92).
+//
+// It lives in the document head, never in a fragment: the regions htmx swaps
+// carry the instant and nothing else, so a relative string rendered by the
+// server would be as old as the response and there would be nothing inside
+// the region to say so. Deriving it here also means one implementation for
+// every page rather than one per view, and it re-runs after each swap so a
+// Refresh's new instant is picked up without a reload.
+//
+// It degrades to the instant the server rendered, which is why that text is
+// the element's server-side content rather than an empty node: with
+// JavaScript off the operator still sees when the page was read.
+const relativeAgeScript = `
+(function(){
+function ago(then){
+var s=Math.max(0,Math.round((Date.now()-then)/1000));
+if(s<60){return s+' second'+(s===1?'':'s');}
+var m=Math.round(s/60); if(m<60){return m+' minute'+(m===1?'':'s');}
+var h=Math.round(m/60); if(h<24){return h+' hour'+(h===1?'':'s');}
+var d=Math.round(h/24); return d+' day'+(d===1?'':'s');
+}
+function upgrade(root){
+var nodes=(root||document).querySelectorAll('[data-krill-updated-at]');
+for(var i=0;i<nodes.length;i++){
+var t=Date.parse(nodes[i].getAttribute('data-krill-updated-at'));
+if(!isNaN(t)){nodes[i].textContent='Updated '+ago(t)+' ago';}
+}
+}
+document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
+document.body&&document.body.addEventListener('htmx:afterSwap',function(e){upgrade(e.target);});
+})();`
 
 // renderShell writes one signed-in page: the workspace chrome plus body,
 // at HTTP 200.

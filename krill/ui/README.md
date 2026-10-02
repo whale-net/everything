@@ -696,6 +696,49 @@ because htmx does not swap on a non-2xx. The last-viewed-product cookie is
 written only for a real page view — a scope change is a swap inside a page
 the operator is already on, not a navigation.
 
+The region renders the scope it resolved to, the total behind it, and its
+own answer: the Tasks view's table of rows, an empty state naming the active
+filters, or an inline failure.
+
+**The rows are the read's order, never a re-sort.** The store's keyset
+sort (milestone position descending, then id, then creation, then id) is
+what a continuation token is bound to; a table that ordered its rows any
+other way would leave the next page starting from a row this one did not
+end on. `productTaskRowsOf` passes `page.Rows` straight through.
+
+**A cut milestone aggregates.** `store.ProductTaskScopeMilestone` already
+means the milestone *and* its milepebbles, so both kinds of row arrive
+together; each names the milepebble it came from in its own column, and a
+task scoped to the milestone directly leaves that cell empty rather than
+inventing one. The empty state is therefore reachable only when the read
+returned nothing — never while a cut milestone still has tasks, which is
+what the pre-redesign list used to show.
+
+**Lane and state are the shared badges**, through `TaskLaneBadge` /
+`TaskBadges`, so the table cannot drift from the board or the detail. The
+table issues no write: no form but the scope control's plain GET, no
+`hx-post`/`hx-put`/`hx-delete`, and no lane move.
+
+**Claim identity is all-or-nothing.** `data-krill-claim-id` and
+`data-krill-lease-expires-at` are set together or not at all, and the
+claimed / lease-expired badge follows the same rule: a claim whose expiry
+the read did not report cannot be judged live or lapsed, so calling it
+"Claimed" would contradict the claim id the row does or does not carry.
+
+**Freshness is an instant, not a sentence.** The region renders
+`data-krill-updated-at` with the read's absolute RFC3339 value and nothing
+derived from it; `relativeAgeScript` (templ_render.go, in the document
+head) turns it into "Updated N ago" and re-runs on `htmx:afterSwap`. A
+server-rendered relative string would be as old as the response and nothing
+inside the region would reveal it. Without JavaScript the operator sees the
+instant, which is why that is the element's server-side content.
+
+**The row's detail link is product-scoped**: `/products/{pid}/tasks/{tid}`,
+not the per-container form. This table is not scoped to a container, so the
+per-container link would name the wrong milestone for every row but one.
+That route resolves the task's own container and checks it against the
+product's listing; the per-container detail URL keeps serving alongside it.
+
 The **Board** view (`product_board_page.go`, `pages/board.templ`) renders
 one swimlane per milestone that has tasks (FR cf000440): five counted
 columns per lane, a horizontal scroller inside the board rather than a grid
@@ -733,6 +776,7 @@ same one the list and the detail use, over the same derivation the Tasks
 table makes — so a lapsed lease reads `lease-expired` on every view and
 never `claimed`. Claim identity is all-or-nothing: a row carrying a claim
 id without a lease expiry would claim a lease the read did not report.
+
 <!-- END product-task-scope section -->
 
 <!-- BEGIN task-detail section (task 9599fc1f) -->

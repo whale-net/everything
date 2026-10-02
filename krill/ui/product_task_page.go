@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/pages"
 )
@@ -74,6 +76,11 @@ func (app *App) serveProductTaskRegion(w http.ResponseWriter, r *http.Request, v
 	}
 
 	region := productTaskRegionOf(r, product, view, resolved)
+	// The read instant is taken once, here, and is the only clock the
+	// region consults: a lease judged against a second, later time.Now()
+	// would let two rows of one page disagree about whether the same
+	// instant is in the past.
+	readAt := time.Now()
 	page, err := app.readProductTasks(r.Context(), product.ID, resolved)
 	if err != nil {
 		// A failed read is a 500 the operator can act on, and an empty
@@ -85,8 +92,80 @@ func (app *App) serveProductTaskRegion(w http.ResponseWriter, r *http.Request, v
 		return
 	}
 	region.Total = page.Total
+	region.Rows = productTaskRowsOf(product.ID, page.Rows, readAt)
+	region.UpdatedAt = readAt.UTC().Format(time.RFC3339)
 	region.Empty = len(page.Rows) == 0
 	app.renderProductTaskView(w, r, product, region, resolved, page.Rows, http.StatusOK)
+}
+
+// productTaskRowsOf is the read's page as the table's rows.
+//
+// The order is the read's own, passed straight through: the store's sort is
+// what a continuation token is bound to, so re-ordering here would leave the
+// next page starting from a row this page did not end on. A milepebble's
+// task keeps its PARENT milestone in the Milestone cell and names its own
+// in the next one -- which is the aggregation FR f41a352d asks for: a cut
+// milestone's tasks appear under the milestone, each naming the milepebble
+// they came from, rather than behind a link the operator has to follow.
+//
+// now is the read instant, so a lapsed lease reads as lapsed against the
+// same moment every other row on the page was judged by.
+func productTaskRowsOf(productID uuid.UUID, rows []store.ProductTaskRow, now time.Time) []pages.ProductTaskRow {
+	out := make([]pages.ProductTaskRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, pages.ProductTaskRow{
+			ID:         row.TaskID.String(),
+			Title:      row.Title,
+			DetailPath: productTaskDetailPath(productID, row.TaskID),
+			Milestone:  row.Milestone.Name,
+			Lane:       string(row.CurrentLane),
+			Attempts:   taskAttemptsOf(row.AttemptCount, row.AttemptCap),
+			Badges:     productTaskBadgesOf(row, now),
+		})
+		if row.Milepebble != nil {
+			out[len(out)-1].Milepebble = row.Milepebble.Name
+		}
+		// The two are set together or not at all: store.ProductTaskRow
+		// guarantees ClaimID and LeaseExpiresAt name the same open claim, and
+		// a row carrying one without the other would claim a lease it does
+		// not have -- or hide a claim it does.
+		if row.ClaimID != nil && row.LeaseExpiresAt != nil {
+			out[len(out)-1].ClaimID = row.ClaimID.String()
+			out[len(out)-1].LeaseExpiresAt = row.LeaseExpiresAt.UTC().Format(time.RFC3339)
+		}
+	}
+	return out
+}
+
+// productTaskBadgesOf is the same state derivation the per-container list
+// makes, over the product read's own row. It is a separate function rather
+// than a converted TaskSummary because the product row reports its state
+// differently -- as the derived TaskState, not as an escalation id -- and
+// wrapping it to reuse taskStateBadges would mean inventing the uuid that
+// derivation tests for.
+func productTaskBadgesOf(row store.ProductTaskRow, now time.Time) []pages.TaskBadge {
+	var badges []pages.TaskBadge
+	// Both halves, or neither -- the same rule the row's data attributes
+	// use, and for the same reason: a claim whose expiry the read did not
+	// report cannot be judged live or lapsed, so calling it "Claimed" would
+	// contradict the claim id the row does or does not carry.
+	if row.ClaimID != nil && row.LeaseExpiresAt != nil {
+		if !row.LeaseExpiresAt.After(now) {
+			badges = append(badges, pages.TaskBadge{Key: "lease-expired", Label: "Lease expired"})
+		} else {
+			badges = append(badges, pages.TaskBadge{Key: "claimed", Label: "Claimed"})
+		}
+	}
+	if row.AttemptCount >= row.AttemptCap {
+		badges = append(badges, pages.TaskBadge{Key: "capped", Label: "Capped"})
+	}
+	if row.State == store.TaskStateEscalated {
+		badges = append(badges, pages.TaskBadge{Key: "escalated", Label: "Escalated"})
+	}
+	if row.CancelledAt != nil {
+		badges = append(badges, pages.TaskBadge{Key: "cancelled", Label: "Cancelled"})
+	}
+	return badges
 }
 
 // productTaskRegionOf assembles the region's view model from the resolved
@@ -94,12 +173,13 @@ func (app *App) serveProductTaskRegion(w http.ResponseWriter, r *http.Request, v
 // disagree with the scope the read was built from.
 func productTaskRegionOf(r *http.Request, product store.Product, view string, scope resolvedProductTaskScope) pages.ProductTaskRegion {
 	region := pages.ProductTaskRegion{
-		Product:    productHeaderOf(product),
-		View:       view,
-		Path:       r.URL.Path,
-		ScopeLabel: productTaskScopeLabelOf(scope),
-		OnlyStuck:  scope.Parsed.OnlyStuck,
-		Scope:      productTaskScopeControlOf(r.URL.Path, scope),
+		Product:     productHeaderOf(product),
+		View:        view,
+		Path:        r.URL.Path,
+		RefreshPath: r.URL.RequestURI(),
+		ScopeLabel:  productTaskScopeLabelOf(scope),
+		OnlyStuck:   scope.Parsed.OnlyStuck,
+		Scope:       productTaskScopeControlOf(r.URL.Path, scope),
 	}
 	if scope.Parsed.Lane != nil {
 		region.Lane = string(*scope.Parsed.Lane)

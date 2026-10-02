@@ -7,11 +7,11 @@ import "github.com/whale-net/everything/libs/go/htmxui"
 // only the shape and the rendering, and the shared scope control lives
 // beside it in product_task_scope.templ.
 //
-// It is deliberately the smallest honest region the read layer can serve:
-// the scope the URL resolved to, the total behind it, and a sentence when
-// there is nothing to list. The rows and the board's columns are the later
-// pages' work -- so what renders today says what it read and names what it
-// is scoped to, rather than pretending to be a table with no rows.
+// Rows arrive in the store read's own order and are rendered in it: the
+// read's sort (milestone position descending, then id, then creation, then
+// id) is the one order every consumer of the pagination token agrees on, so
+// re-sorting here would put the table's rows in an order no continuation
+// token can resume.
 
 // ProductTasksAnchor is the DOM id of the region's content: the id the
 // scope control's and Refresh's hx-target points at, and the root id of the
@@ -44,6 +44,49 @@ type ProductTaskContainerOption struct {
 	OutOfScopeSuffix string
 }
 
+// ProductTaskRow is one task in the Tasks table (FR f41a352d).
+//
+// ClaimID and LeaseExpiresAt are the identity the READ observed, kept on
+// the row as data attributes so a later write can be claim-guarded against
+// a claim that has since changed. They are set together or not at all --
+// store.ProductTaskRow guarantees the two agree.
+type ProductTaskRow struct {
+	// ID is the task's own id, the row's data-krill-task-id.
+	ID string
+
+	// Title links to the task's detail. DetailPath is the PRODUCT-scoped
+	// detail URL, not the per-container one: this table is not scoped to a
+	// container, so a row in it may belong to any milestone under the
+	// product, and a link that named a container would name the wrong one
+	// for every row but one.
+	Title      string
+	DetailPath string
+
+	// Milestone is the row's own milestone name. A milepebble's task
+	// carries its PARENT milestone here, because that is the container the
+	// operator chose a scope by.
+	Milestone string
+
+	// Milepebble is the row's own milepebble's name, empty for a task
+	// scoped to a milestone directly (an uncut milestone has none).
+	Milepebble string
+
+	// Lane and Badges render through the shared TaskLaneBadge /
+	// TaskStateBadge components, so this table cannot drift from the board
+	// or the detail on either value's colour.
+	Lane   string
+	Badges []TaskBadge
+
+	// Attempts is the count against the cap, e.g. "2 of 3".
+	Attempts string
+
+	// ClaimID and LeaseExpiresAt are what the read observed. Empty
+	// LeaseExpiresAt means the row holds no claim, which is what keeps the
+	// cell from claiming a lease it does not have.
+	ClaimID        string
+	LeaseExpiresAt string
+}
+
 // ProductTaskRegion is the Tasks/Board region's view model.
 type ProductTaskRegion struct {
 	// Product is the banner for the product the URL named.
@@ -55,6 +98,11 @@ type ProductTaskRegion struct {
 
 	// Path is this region's own URL, so the swap control can re-request it.
 	Path string
+
+	// RefreshPath is Path plus this request's own query, so a manual
+	// Refresh re-reads the scope and filters the URL currently names rather
+	// than silently resetting them to the product-wide default.
+	RefreshPath string
 
 	// Scope is the control both views share. It is the same value on the
 	// Tasks page and the Board page for the same URL, because both build
@@ -75,9 +123,23 @@ type ProductTaskRegion struct {
 	// footer will read beside the rows it has not rendered yet.
 	Total int
 
+	// Rows are the page's tasks, in the read's own order. A cut milestone's
+	// tasks are already aggregated by the read (ProductTaskScopeMilestone
+	// means the milestone AND its milepebbles), so every row here names the
+	// milepebble it came from rather than the table hiding a milestone's
+	// work behind a link.
+	Rows []ProductTaskRow
+
 	// Empty is set when the scope resolved and holds no tasks, so the region
 	// says so instead of reading as a page that failed.
 	Empty bool
+
+	// UpdatedAt is the read instant as an absolute RFC3339 string. It is
+	// what the region renders and what the relative "Updated N ago" text is
+	// derived from client-side: the server never emits a now-derived string
+	// inside a fragment htmx may re-swap, because that string would go stale
+	// the moment it is written and the region gives no way to notice.
+	UpdatedAt string
 
 	// Error is a read failure in the operator's words, empty on success.
 	// Distinct from Empty: one is an answer, the other is a failure.
@@ -85,8 +147,8 @@ type ProductTaskRegion struct {
 }
 
 // ProductTasks renders the product-wide Tasks/Board region: the scope it
-// resolved to, the shared scope control, the total behind it, and -- while
-// the rows are still to come -- an honest sentence saying so.
+// resolved to, the shared scope control, the total behind it, and the
+// region's own answer -- a table of rows, an empty state, or a failure.
 //
 // The control is inside the region, not beside it, so the hx-get that
 // changes the scope swaps both the answer and the control that produced it
@@ -94,11 +156,24 @@ type ProductTaskRegion struct {
 // the ones the new URL resolved to, never the ones the old URL did.
 templ ProductTasks(d ProductTaskRegion) {
 	<section id={ ProductTasksAnchor } data-krill="product-tasks" data-krill-view={ d.View }>
-		<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
-		<p class="mt-1 text-sm text-base-content/70">
-			Scoped to
-			<span data-krill="scope-label">{ d.ScopeLabel }</span>
-		</p>
+		<div class="flex flex-wrap items-start justify-between gap-4">
+			<div>
+				<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
+				<p class="mt-1 text-sm text-base-content/70">
+					Scoped to
+					<span data-krill="scope-label">{ d.ScopeLabel }</span>
+				</p>
+			</div>
+			<div class="flex items-center gap-3">
+				@ProductTasksFreshness(d.UpdatedAt)
+				<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
+					hx-get={ templ.URL(d.RefreshPath) }
+					hx-target={ "#" + ProductTasksAnchor }
+					hx-swap="outerHTML">
+					Refresh
+				</button>
+			</div>
+		</div>
 		@ProductTaskScopeForm(d.Scope)
 		<p class="mt-2 text-sm text-base-content/70">
 			<span data-krill="task-count">{ itoa(d.Total) }</span>
@@ -125,11 +200,68 @@ templ ProductTasks(d ProductTaskRegion) {
 				)
 			</div>
 		} else {
-			<p class="mt-3 text-sm text-base-content/70" data-krill="product-tasks-pending">
-				The task rows for this scope are not rendered yet.
-			</p>
+			@ProductTaskTable(d.Rows)
 		}
 	</section>
+}
+
+// ProductTaskTable is the Tasks view's rows, in the order the read returned
+// them.
+//
+// The whole table is one horizontal-scroll container rather than a fixed
+// grid, so a narrow viewport scrolls the table and not the page -- the same
+// rule the Board follows for its five columns.
+templ ProductTaskTable(rows []ProductTaskRow) {
+	<div class="mt-3 overflow-x-auto">
+		<table class="table table-zebra" data-krill="task-table">
+			<thead class="sticky top-0 bg-base-100">
+				<tr>
+					<th>Task</th>
+					<th>Milestone</th>
+					<th>Milepebble</th>
+					<th>Lane</th>
+					<th>State</th>
+					<th class="text-right">Attempts</th>
+					<th>Lease</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, t := range rows {
+					<tr class="hover" data-krill="task-row"
+						data-krill-task-id={ t.ID }
+						data-krill-claim-id={ t.ClaimID }
+						data-krill-lease-expires-at={ t.LeaseExpiresAt }>
+						<td>
+							<a href={ templ.URL(t.DetailPath) } class="link font-medium" data-krill="task-title">{ t.Title }</a>
+						</td>
+						<td data-krill="task-milestone">{ t.Milestone }</td>
+						<td data-krill="task-milepebble">{ t.Milepebble }</td>
+						<td>@TaskLaneBadge(t.Lane)</td>
+						<td>@TaskBadges(t.Badges)</td>
+						<td class="text-right" data-krill="task-attempts">{ t.Attempts }</td>
+						<td data-krill="task-lease">{ t.LeaseExpiresAt }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// ProductTasksFreshness is the region's single "Updated N ago" element
+// (NFR 7b497d92).
+//
+// The markup carries the read instant and nothing else: the relative text
+// is derived in the browser by the shell's own upgrade script, which lives
+// in the document head rather than in this fragment. A server-rendered "8
+// seconds ago" would be wrong the moment htmx swapped the region in, and
+// nothing inside the region would ever reveal it -- the fragment carries no
+// clock of its own. The absolute instant stays in the title attribute, so
+// the exact read time survives whether or not the script ran.
+templ ProductTasksFreshness(updatedAt string) {
+	<span class="text-sm text-base-content/70" data-krill="updated-at"
+		data-krill-updated-at={ updatedAt } title={ updatedAt }>
+		Updated { updatedAt }
+	</span>
 }
 
 // ProductTasksInlineError is the fragment an htmx caller gets when the

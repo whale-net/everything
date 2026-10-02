@@ -106,6 +106,29 @@ type recordingProductTasks struct {
 	rows  []store.ProductTaskRow
 	total int
 	err   error
+
+	// tasks backs the detail route's own reads. Nil for the table cases,
+	// which never reach a task detail.
+	tasks map[uuid.UUID]store.Task
+}
+
+func (s *recordingProductTasks) GetTaskByID(_ context.Context, id uuid.UUID) (store.Task, error) {
+	if t, ok := s.tasks[id]; ok {
+		return t, nil
+	}
+	return store.Task{}, store.ErrNotFound
+}
+
+func (s *recordingProductTasks) ListDependencies(context.Context, uuid.UUID, uuid.UUID) ([]store.TaskDependency, error) {
+	return nil, nil
+}
+
+func (s *recordingProductTasks) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([]store.Note, error) {
+	return nil, nil
+}
+
+func (s *recordingProductTasks) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
+	return store.Claim{}, store.ErrNotFound
 }
 
 func (s *recordingProductTasks) ListProductTasks(_ context.Context, params store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
