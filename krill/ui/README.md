@@ -352,6 +352,11 @@ discarded on the way back in, so writing it from a page that did not
 itself check scope costs nothing. A cookie naming product B can never
 override a prefixed URL for product A.
 
+A page that serves both modes writes the cookie only on the full-page
+render: an htmx fragment swap is not a page view, and setting the cookie
+on one would make the last-viewed product depend on which pane the
+operator happened to page.
+
 Both resolve against `app.spec.Products`, which lists the deployment's
 sole scope — a browser cannot pick a scope. Adding a product-scoped page
 means registering `productPathPrefix + <suffix>` in `mountShellRoutes`
