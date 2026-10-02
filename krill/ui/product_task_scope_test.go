@@ -48,6 +48,11 @@ var (
 	productTaskMilepebble       = uuid.MustParse("99999999-9999-9999-9999-999999999999")
 	productTaskNewestMilepebble = uuid.MustParse("99998888-8888-8888-8888-888888888888")
 
+	// productTaskShippedMilestone is outside the product-wide all-incomplete
+	// scope by its own status, and is the fixture for the rule that it is
+	// still offered and still readable when picked explicitly.
+	productTaskShippedMilestone = uuid.MustParse("dddd5555-5555-5555-5555-555555555555")
+
 	// productTaskOtherProduct is a second product, whose milestone is the
 	// id a cross-product link would carry.
 	productTaskOtherProduct   = uuid.MustParse("aaaa1111-1111-1111-1111-111111111111")
@@ -78,6 +83,12 @@ func productTaskListing() slice.DeliveryListing {
 			},
 		},
 	}
+}
+
+// emptyDeliveryListing is a product with no containers at all, which is
+// what makes every mode an ordinary empty result rather than a 404.
+func emptyDeliveryListing() slice.DeliveryListing {
+	return slice.DeliveryListing{}
 }
 
 // recordingProductTasks records every ListProductTasks / CountProductTasks

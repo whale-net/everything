@@ -1,0 +1,553 @@
+// Wire-driven coverage for the shared Tasks/Board scope control
+// (FR 7191dba1): the three modes and which one is marked, the selects each
+// mode reveals, the URL-carried state that makes a shared link show the
+// same scope, and the rule that a container is only ever chosen from a
+// select rather than typed.
+//
+// Every case mounts the real registrations through productTaskMux rather
+// than calling a handler directly, because "which routes serve this" and
+// "what the shell renders around it" are part of what is being pinned.
+package main
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/whale-net/everything/krill/slice"
+	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
+)
+
+// scopeControlOf fetches the Tasks page and returns its body, so a case
+// can read what the control actually rendered rather than what it meant to.
+func scopeControlOf(t *testing.T, listingQuery string) string {
+	t.Helper()
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+	rec := fetch(t, mux, productTaskTasksURL(listingQuery))
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	return rec.Body.String()
+}
+
+// optionIndex is where an option carrying this container id appears in the
+// body, or -1. A select's options are the only place a container id should
+// appear now that the control is real, so this doubles as "the id is
+// offered as a choice".
+func optionIndex(body, id string) int {
+	return strings.Index(body, `<option value="`+id+`"`)
+}
+
+// selectedOption is the value of the option a browser would show chosen in
+// a select, read back the way a browser reads it: the selected attribute,
+// or the first option when none carries one.
+func selectedOption(t *testing.T, body, selectMarker string) string {
+	t.Helper()
+	at := strings.Index(body, selectMarker)
+	require.NotEqual(t, -1, at, "no %s in the rendered control: %s", selectMarker, body)
+	rest := body[at:]
+	end := strings.Index(rest, "</select>")
+	require.NotEqual(t, -1, end, "the select never closes: %s", body)
+	options := rest[:end]
+
+	const open = `<option value="`
+	start := 0
+	if sel := strings.Index(options, " selected"); sel != -1 {
+		start = strings.LastIndex(options[:sel], open)
+		require.NotEqual(t, -1, start, "a selected option with no value: %s", options)
+	}
+	if start == 0 {
+		start = strings.Index(options, open)
+		require.NotEqual(t, -1, start, "the select has no options: %s", options)
+	}
+	close := strings.Index(options[start+len(open):], `"`)
+	require.NotEqual(t, -1, close, "an option value never closes: %s", options)
+	return options[start+len(open) : start+len(open)+close]
+}
+
+// optionTextOf is the rendered text of the option whose <option value="..."
+// starts at index at -- what the operator actually reads in the select.
+func optionTextOf(body string, at int) string {
+	open := strings.Index(body[at:], ">") + 1
+	close := strings.Index(body[at:], "</option>")
+	return body[at+open : at+close]
+}
+
+// TestScopeControlDefaultsToAllIncomplete: a URL with no query is the
+// product-wide all-incomplete scope, that mode is the marked one, and the
+// control reveals no container select -- the mode names no container, so
+// there is nothing to choose.
+func TestScopeControlDefaultsToAllIncomplete(t *testing.T) {
+	for _, query := range []string{"", "scope=incomplete"} {
+		t.Run(query, func(t *testing.T) {
+			body := scopeControlOf(t, query)
+
+			assert.Equal(t, "incomplete", checkedRadioValue(t, body),
+				"the default mode is the one marked as chosen")
+			assert.Contains(t, body, `value="milestone"`, "all three modes are offered")
+			assert.Contains(t, body, `value="milepebble"`)
+			assert.NotContains(t, body, `data-krill="scope-milestone-select"`, "the product-wide mode names no container")
+			assert.NotContains(t, body, `data-krill="scope-milepebble-select"`)
+			assert.Contains(t, body, "All incomplete milestones")
+		})
+	}
+}
+
+// TestScopeControlMilestoneModeSelectsTheHighestPosition: ?scope=milestone
+// with no id picks the product's highest-position milestone (FR 7191dba1:
+// "the first milestone in the Milestones table order (highest position)"),
+// and that is both what the read is scoped to and what the control shows
+// as chosen -- so the operator sees the default rather than having to
+// infer it from the rows.
+func TestScopeControlMilestoneModeSelectsTheHighestPosition(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+
+	rec := fetch(t, mux, productTaskTasksURL("scope=milestone"))
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	body := rec.Body.String()
+	assert.Equal(t, "milestone", checkedRadioValue(t, body), "the milestone mode is the one marked as chosen")
+	assert.Equal(t, productTaskNewestMilestone.String(),
+		selectedOption(t, body, `data-krill="scope-milestone-select"`),
+		"the no-id default is the one the control shows selected")
+	// The milestone select submits the same container parameter the store
+	// read was scoped with, so submitting it back is a no-op round trip.
+	assert.Contains(t, body, `name="container_id" class="select select-sm" data-krill="scope-milestone-select"`)
+	assert.NotContains(t, body, `data-krill="scope-milepebble-select"`,
+		"milestone mode names one container, not a pair")
+}
+
+// TestScopeControlMilepebbleModeRevealsOnlyThatMilestonesMilepebbles is
+// FR 7191dba1's second reveal: "?scope=milepebble&milestone=<id> reveals
+// only that milestone's milepebbles".
+//
+// The milestone parameter matters because a milepebble id alone cannot say
+// which options the second select should offer. Without it the control
+// would render an empty list and mark nothing chosen, which is the bug
+// this case exists to keep fixed.
+func TestScopeControlMilepebbleModeRevealsOnlyThatMilestonesMilepebbles(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		query          string
+		wantMilestone  string
+		wantMilepebble string
+	}{
+		{
+			name:           "a named milestone with no milepebble chosen takes its first",
+			query:          "scope=milepebble&milestone=" + productTaskMilestone.String(),
+			wantMilestone:  productTaskMilestone.String(),
+			wantMilepebble: productTaskMilepebble.String(),
+		},
+		{
+			// Deliberately NOT the highest-position milepebble: deriving the
+			// parent has to follow the milepebble the URL named, so this case
+			// fails if the parent falls back to the no-id default instead --
+			// which is exactly the bug this mode had when the resolved scope
+			// carried no parent at all.
+			name:           "a named milepebble with no milestone named derives its parent",
+			query:          "scope=milepebble&container_id=" + productTaskMilepebble.String(),
+			wantMilestone:  productTaskMilestone.String(),
+			wantMilepebble: productTaskMilepebble.String(),
+		},
+		{
+			name:           "neither named falls back to the highest-position milestone with one",
+			query:          "scope=milepebble",
+			wantMilestone:  productTaskNewestMilestone.String(),
+			wantMilepebble: productTaskNewestMilepebble.String(),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := scopeControlOf(t, tc.query)
+
+			assert.Equal(t, "milepebble", checkedRadioValue(t, body), "the milepebble mode is the one marked as chosen")
+			assert.Equal(t, tc.wantMilestone,
+				selectedOption(t, body, `data-krill="scope-milestone-select"`),
+				"the milestone select marks the milestone the options come from")
+			assert.Equal(t, tc.wantMilepebble,
+				selectedOption(t, body, `data-krill="scope-milepebble-select"`))
+
+			// Only the named milestone's own children are on offer.
+			options := body[strings.Index(body, `data-krill="scope-milepebble-select"`):]
+			options = options[:strings.Index(options, "</select>")]
+			if tc.wantMilestone == productTaskMilestone.String() {
+				assert.Contains(t, options, productTaskMilepebble.String())
+				assert.NotContains(t, options, productTaskNewestMilepebble.String(),
+					"another milestone's milepebble is not on offer")
+			} else {
+				assert.Contains(t, options, productTaskNewestMilepebble.String())
+				assert.NotContains(t, options, productTaskMilepebble.String())
+			}
+
+			// The two selects submit different parameters, because only the
+			// milepebble is the read's container.
+			assert.Contains(t, body, `name="milestone" class="select select-sm" data-krill="scope-milestone-select"`)
+			assert.Contains(t, body, `name="container_id" class="select select-sm" data-krill="scope-milepebble-select"`)
+		})
+	}
+}
+
+// TestScopeControlMilepebbleModeRefusesADisagreeingPair: naming a
+// milepebble that is NOT under the named milestone is refused rather than
+// read. The two selects disagree, and answering with either one's tasks
+// would show rows the URL did not unambiguously ask for.
+func TestScopeControlMilepebbleModeRefusesADisagreeingPair(t *testing.T) {
+	tasks := &recordingProductTasks{rows: nil, total: 1}
+	mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+	rec := fetch(t, mux, productTaskTasksURL("scope=milepebble&milestone="+
+		productTaskMilestone.String()+"&container_id="+productTaskNewestMilepebble.String()))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Empty(t, tasks.listed, "the store must never be asked for a scope the URL contradicts")
+}
+
+// TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble: the
+// parent parameter names a milestone. Handed a milepebble id it is not
+// found as a milestone of this product, which is the same refusal as any
+// other id the product does not own under that kind.
+func TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble(t *testing.T) {
+	tasks := &recordingProductTasks{}
+	mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+	rec := fetch(t, mux, productTaskTasksURL("scope=milepebble&milestone="+productTaskMilepebble.String()))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Empty(t, tasks.listed)
+}
+
+// TestScopeControlShipsAMilepebbleModeOnEveryView: the control is one
+// component both views render, and the two views build it from the same
+// resolved scope -- so the same URL marks the same mode and the same
+// option on the Tasks page and on the Board page.
+func TestScopeControlShipsAMilepebbleModeOnEveryView(t *testing.T) {
+	query := "scope=milepebble&milestone=" + productTaskMilestone.String()
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+
+	tasksRec := fetch(t, mux, productTaskTasksURL(query))
+	boardRec := fetch(t, mux, "/products/"+productTaskProduct.String()+"/board?"+query)
+
+	for _, pair := range []struct {
+		view string
+		body string
+		code int
+	}{
+		{view: "Tasks", body: tasksRec.Body.String(), code: tasksRec.Code},
+		{view: "Board", body: boardRec.Body.String(), code: boardRec.Code},
+	} {
+		t.Run(pair.view, func(t *testing.T) {
+			require.Equal(t, http.StatusOK, pair.code, "body: %s", pair.body)
+			body := pair.body
+			// Both views carry the control and the marked mode; the view
+			// name is the only thing that differs between them.
+			assert.Contains(t, body, `data-krill="scope-control"`)
+			assert.Equal(t, "milepebble", checkedRadioValue(t, body), "the milepebble mode is the one marked as chosen")
+			assert.Equal(t, productTaskMilepebble.String(),
+				selectedOption(t, body, `data-krill="scope-milepebble-select"`))
+			assert.Contains(t, body, `data-krill-view="`+pair.view+`"`)
+		})
+	}
+}
+
+// TestScopeControlURLCarriesTheWholeScope is FR 7191dba1's "the URL
+// carries the mode and the selected ids, so a reload or a shared link
+// shows the same scope".
+//
+// It is checked the way an operator would: by reading the control's own
+// form, taking the fields it renders, and asking the server what that
+// query resolves to. A control whose selects carry the wrong parameter
+// names would resolve to something else here.
+func TestScopeControlURLCarriesTheWholeScope(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  store.ProductTaskScope
+	}{
+		{
+			name:  "the default, with no query at all",
+			query: "",
+			want:  store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+		},
+		{
+			name:  "a milestone the select offers",
+			query: "scope=milestone&container_id=" + productTaskMilestone.String(),
+			want:  store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: productTaskMilestone},
+		},
+		{
+			name:  "a milepebble under the milestone the select offers",
+			query: "scope=milepebble&milestone=" + productTaskMilestone.String() + "&container_id=" + productTaskMilepebble.String(),
+			want:  store.ProductTaskScope{Kind: store.ProductTaskScopeMilepebble, ContainerID: productTaskMilepebble},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tasks := &recordingProductTasks{total: 2}
+			mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+			// Read the control as rendered...
+			first := fetch(t, mux, productTaskTasksURL(tc.query))
+			require.Equal(t, http.StatusOK, first.Code, "body: %s", first.Body.String())
+			body := first.Body.String()
+
+			// ...and replay exactly what its form would submit.
+			require.Contains(t, body, `method="get"`)
+			replay := scopeFormQueryOf(t, body)
+			second := fetch(t, mux, productTaskTasksURL(replay))
+
+			require.Equal(t, http.StatusOK, second.Code, "body: %s", second.Body.String())
+			require.Len(t, tasks.listed, 2)
+			assert.Equal(t, tc.want, tasks.listed[1].Scope,
+				"submitting the rendered control must resolve to the scope the operator was looking at")
+		})
+	}
+}
+
+// scopeFormQueryOf is the query string the rendered control's own form
+// would submit: the action's path is the Tasks URL, and the fields are
+// whatever the control rendered. Built from the markup rather than
+// hard-coded, so a select that submits the wrong parameter shows up as a
+// failed round trip instead of passing.
+func scopeFormQueryOf(t *testing.T, body string) string {
+	t.Helper()
+	form := body[strings.Index(body, `data-krill="scope-control"`):]
+	form = form[:strings.Index(form, "</form>")]
+
+	var q strings.Builder
+	appendField := func(name, value string) {
+		if q.Len() > 0 {
+			q.WriteByte('&')
+		}
+		q.WriteString(name + "=" + value)
+	}
+
+	// The checked radio is the mode; the selected option of each select is
+	// that select's value.
+	appendField("scope", checkedRadioValue(t, form))
+	for _, marker := range []string{`data-krill="scope-milestone-select"`, `data-krill="scope-milepebble-select"`} {
+		at := strings.Index(form, marker)
+		if at == -1 {
+			continue
+		}
+		selectTag := form[strings.LastIndex(form[:at], "<select"):at]
+		name := selectTag[strings.Index(selectTag, `name="`)+len(`name="`):]
+		name = name[:strings.Index(name, `"`)]
+		appendField(name, selectedOption(t, form, marker))
+	}
+	return q.String()
+}
+
+// checkedRadioValue is the value of the checked scope radio in a form's
+// markup -- the mode the control would submit.
+func checkedRadioValue(t *testing.T, form string) string {
+	t.Helper()
+	const value = `value="`
+	for rest := form; ; {
+		at := strings.Index(rest, `type="radio"`)
+		require.NotEqual(t, -1, at, "the control offers no modes: %s", form)
+		tag := rest[at:]
+		tag = tag[:strings.Index(tag, ">")]
+		rest = rest[at+1:]
+		if !strings.Contains(tag, " checked") {
+			continue
+		}
+		start := strings.Index(tag, value)
+		require.NotEqual(t, -1, start, "a mode radio with no value: %s", tag)
+		return tag[start+len(value) : start+len(value)+strings.Index(tag[start+len(value):], `"`)]
+	}
+}
+
+// TestScopeControlNeverAsksTheOperatorToTypeAnID is FR 7191dba1's "No
+// field asks the operator to type an id" and the design rule behind it:
+// humans pick, they never type. Every container is chosen from a select
+// built from the product's own delivery listing.
+//
+// The check is on the rendered markup rather than on a count of inputs,
+// because what matters is the KIND: a select's value is a legitimate
+// id-shaped string that the browser submits without the operator typing
+// it, while a text input is exactly what must not exist.
+func TestScopeControlNeverAsksTheOperatorToTypeAnID(t *testing.T) {
+	for _, query := range []string{
+		"",
+		"scope=milestone",
+		"scope=milestone&container_id=" + productTaskMilestone.String(),
+		"scope=milepebble&milestone=" + productTaskMilestone.String(),
+	} {
+		t.Run(query, func(t *testing.T) {
+			body := scopeControlOf(t, query)
+			control := body[strings.Index(body, `data-krill="scope-control"`):]
+			control = control[:strings.Index(control, "</form>")]
+
+			for _, forbidden := range []string{`type="text"`, `type="search"`, `type="number"`} {
+				assert.NotContains(t, control, forbidden,
+					"the scope control must not ask the operator to type a value")
+			}
+			// Every id the control carries is an option's value or a radio's
+			// value -- never an input's typed content.
+			assert.NotContains(t, control, "placeholder")
+			assert.Contains(t, control, `type="radio"`, "the modes are a choice, and the choices are offered")
+			if strings.Contains(control, `name="container_id"`) || strings.Contains(control, `name="milestone"`) {
+				assert.Contains(t, control, "<select", "a container is chosen from a select")
+			}
+		})
+	}
+}
+
+// TestScopeControlIsAPlainGetFormWithHtmxOnTop is the mechanism half of
+// FR 7191dba1: "A plain GET form is the mechanism; no JavaScript is
+// required for it to work", with the in-place swap layered on top.
+//
+// It is asserted in both halves because either alone is not enough: an
+// hx-get with no form works only with JavaScript, and a form with no
+// hx-get reloads the whole page instead of swapping in place.
+func TestScopeControlIsAPlainGetFormWithHtmxOnTop(t *testing.T) {
+	body := scopeControlOf(t, "scope=milepebble&milestone="+productTaskMilestone.String())
+
+	assert.Contains(t, body, `<form method="get"`, "a plain GET form is the mechanism")
+	assert.Contains(t, body, `action="`+productTaskTasksURL("")+`"`,
+		"the form submits to this very path, so a no-JS submit lands on the same scope")
+	assert.Contains(t, body, `hx-get="`+productTaskTasksURL("")+`"`,
+		"the in-place swap asks for the same URL the form would")
+	assert.Contains(t, body, `hx-target="#`+pages.ProductTasksAnchor+`"`,
+		"the swap replaces the region, so the answer and the control that produced it move together")
+	assert.Contains(t, body, `hx-swap="outerHTML"`)
+	assert.Contains(t, body, `hx-push-url="true"`,
+		"the URL follows the scope, so a reload and a shared link show the same one")
+}
+
+// TestScopeControlChangeSwapsInPlace drives the half of the mechanism that
+// the other cases only read in the markup: the request the control's hx-get
+// makes, answered with the fragment that replaces the region.
+//
+// It matters because htmx does not swap on a non-2xx. A scope change that
+// answered 404 would leave the operator clicking a control that appears to
+// do nothing.
+func TestScopeControlChangeSwapsInPlace(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{total: 5}, productTaskListing(), nil)
+
+	rec := htmxGet(mux, productTaskTasksURL("scope=milepebble&milestone="+productTaskMilestone.String()))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, `id="`+pages.ProductTasksAnchor+`"`,
+		"the fragment keeps the region's own id, or the swap deletes its own target")
+	assert.Equal(t, productTaskMilepebble.String(),
+		selectedOption(t, body, `data-krill="scope-milepebble-select"`))
+	assert.Contains(t, body, ">5<", "the swapped region carries the new count")
+}
+
+// TestScopeControlCarriesTheSiblingFilters: changing the scope must not
+// silently drop the lane and only-stuck filters the operator set. They
+// ride along as hidden fields, so a scope change keeps the read the same
+// width apart from its container.
+func TestScopeControlCarriesTheSiblingFilters(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{name: "a lane filter", query: "scope=milestone&container_id=" + productTaskMilestone.String() + "&lane=Testing"},
+		{name: "only stuck", query: "scope=milestone&container_id=" + productTaskMilestone.String() + "&only_stuck=true"},
+		{name: "both", query: "scope=milestone&container_id=" + productTaskMilestone.String() + "&lane=Testing&only_stuck=true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := scopeControlOf(t, tc.query)
+			control := body[strings.Index(body, `data-krill="scope-control"`):]
+			control = control[:strings.Index(control, "</form>")]
+
+			if strings.Contains(tc.query, "lane=") {
+				assert.Contains(t, control, `name="lane" value="Testing"`)
+			}
+			if strings.Contains(tc.query, "only_stuck") {
+				assert.Contains(t, control, `name="only_stuck" value="true"`)
+			}
+		})
+	}
+}
+
+// TestScopeControlLeavesACleanProductWithSomethingToChooseFrom: a product
+// with no milestones has nothing to put in a select, so the control offers
+// the modes without rendering a select an operator cannot use. The empty
+// state still names the condition -- the modes staying is what lets the
+// operator leave.
+func TestScopeControlLeavesACleanProductWithSomethingToChooseFrom(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{}, emptyDeliveryListing(), nil)
+
+	rec := fetch(t, mux, productTaskTasksURL("scope=milestone"))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, `data-krill="scope-control"`, "the modes stay, so the operator has a way out")
+	assert.Contains(t, body, `data-krill="product-tasks-empty"`)
+	assert.NotContains(t, body, `data-krill="scope-milestone-select"`,
+		"an empty select would be a control that cannot be used")
+}
+
+// TestScopeControlKeepsAShippedMilestoneOfferedButMarked is FR 7191dba1's
+// status rule, on the control: a shipped milestone is outside the
+// product-wide all-incomplete scope, but picking it explicitly still shows
+// its tasks.
+//
+// The exclusion itself is the store's query, pinned in //krill/store. What
+// the console owns is the consequence: the milestone must still be in the
+// select (dropping it would make "whatever its status" unreachable), and it
+// must SAY it is outside the default scope, so an operator who finds a
+// shipped milestone in the list is not reading it as a contradiction.
+func TestScopeControlKeepsAShippedMilestoneOfferedButMarked(t *testing.T) {
+	listing := productTaskListing()
+	listing.Milestones = append(listing.Milestones, slice.MilestoneListingEntry{
+		ID:     productTaskShippedMilestone,
+		Name:   "Shipped milestone",
+		Status: store.MilestoneStatusShipped,
+	})
+	tasks := &recordingProductTasks{total: 2}
+	mux := productTaskMux(t, tasks, listing, nil)
+
+	rec := fetch(t, mux, productTaskTasksURL("scope=milestone"))
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	body := rec.Body.String()
+
+	at := optionIndex(body, productTaskShippedMilestone.String())
+	require.NotEqual(t, -1, at, "a shipped milestone stays in the select: %s", body)
+	option := optionTextOf(body, at)
+	assert.Contains(t, option, "outside the all-incomplete scope",
+		"the option says why it is here rather than in the default scope")
+
+	// Picking it explicitly reads it, whatever its status.
+	require.Len(t, tasks.listed, 1)
+	assert.Equal(t, store.ProductTaskScope{
+		Kind:        store.ProductTaskScopeMilestone,
+		ContainerID: productTaskShippedMilestone,
+	}, tasks.listed[0].Scope)
+}
+
+// TestScopeControlDoesNotMarkIncompleteMilestonesOutOfScope: the marking
+// is for containers the default scope EXCLUDES. Marking everything would
+// be noise that trains the operator to ignore the one that matters.
+func TestScopeControlDoesNotMarkIncompleteMilestonesOutOfScope(t *testing.T) {
+	body := scopeControlOf(t, "scope=milestone")
+
+	for _, m := range []uuid.UUID{productTaskNewestMilestone, productTaskMilestone} {
+		at := optionIndex(body, m.String())
+		require.NotEqual(t, -1, at, "every milestone is offered: %s", body)
+		option := optionTextOf(body, at)
+		assert.NotContains(t, option, "outside the all-incomplete scope",
+			"an in-progress milestone is in the default scope")
+	}
+}
+
+// TestScopeControlDoesNotRecordAProductOnASwap: the last-viewed cookie
+// answers "where does my next un-prefixed page land", and a scope change
+// is a swap inside a page the operator is already on -- not a navigation.
+// Writing it on every hx-get would rewrite it repeatedly for a
+// navigation nobody made.
+func TestScopeControlDoesNotRecordAProductOnASwap(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{}, productTaskListing(), nil)
+
+	page := fetch(t, mux, productTaskTasksURL(""))
+	swap := htmxGet(mux, productTaskTasksURL("scope=milestone"))
+
+	assert.Contains(t, page.Header().Get("Set-Cookie"), lastViewedProductCookie,
+		"a real page view records the product")
+	assert.NotContains(t, swap.Header().Get("Set-Cookie"), lastViewedProductCookie,
+		"an in-place swap is not a page view")
+}

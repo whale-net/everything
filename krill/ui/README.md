@@ -608,6 +608,8 @@ page's own.
 
 ## Task views
 
+There are two generations of task view, and both serve.
+
 `/spec/products/{id}/milestones/{mid}/tasks` (task_page.go,
 `pages/tasks.templ`) is the read-only task list for a milestone or
 milepebble, linked from each delivery-page row (which also links the
@@ -618,6 +620,71 @@ tasks. `taskStateBadges` derives the live / lease-expired / capped /
 escalated / cancelled badges that the board and detail views reuse; rows
 carry the observed claim id and lease expiry as `data-krill-*` attributes so
 a later write can be claim-guarded.
+
+<!-- BEGIN product-task-scope section (task 18e3f591) -->
+### Product-wide Tasks and Board
+
+`/products/{pid}/tasks` and `/products/{pid}/board`
+(product_task_page.go, product_task_scope.go) are two views of **one
+scope**, served by one handler with the view's own name. They sit on the
+product-wide paged read (`store.ListProductTasks` /
+`CountProductTasks`), which is why the query parameter names are the same
+ones krill api's `GET /products/{id}/tasks` reads: one filter set has one
+spelling, so the link an operator copies is the request the api answers.
+
+**The scope control** (`pages/product_task_scope.templ`, one component
+rendered identically by both views) is a plain GET form carrying the mode
+and the selected ids:
+
+| Mode | URL | What the control reveals |
+|------|-----|-------------------------|
+| All incomplete milestones (default) | `scope=incomplete` | nothing — the mode names no container |
+| Milestone | `scope=milestone&container_id=<id>` | a milestone select |
+| Milepebble | `scope=milepebble&milestone=<id>&container_id=<id>` | a milestone select **and** a select of that milestone's milepebbles |
+
+Three rules the control exists to keep:
+
+- **A no-id mode picks the product's highest-position container**, which
+  is the listing's *last* entry (`slice.ListProductDelivery` returns
+  position-ASCENDING). The store's own read and the board's swimlane order
+  take the highest position first, so the console does too.
+- **The two selects in milepebble mode submit different parameters.** Only
+  the milepebble is the read's container, so only it is `container_id`;
+  the milestone submits `milestone`, a UI-only parameter that never
+  reaches the store. A milepebble id alone cannot say which options the
+  second select should offer, which is why the parent is in the URL at all.
+  A named milepebble that is not under the named milestone is a 404 —
+  the two selects disagree, and neither answer would be what the URL asked
+  for.
+- **Incomplete applies to the product-wide mode only.** It is judged per
+  container by `store.IsIncompleteContainerStatus`, the same predicate the
+  store's own query runs. A shipped or abandoned milestone is *excluded*
+  from that mode and *offered* (marked "outside the all-incomplete scope")
+  in the selects, because picking one explicitly shows its tasks whatever
+  its status.
+
+The form works with JavaScript off; htmx is layered on top
+(`hx-get` onto the same path, `hx-target` the region's own anchor,
+`hx-swap="outerHTML"`, `hx-push-url="true"`, `hx-trigger="change, submit"`).
+The control lives *inside* the region, so a swap moves the answer and the
+control that produced it together — the marked mode and selected option
+are always the ones the new URL resolved to. The `lane` and `only_stuck`
+filters ride along as hidden fields, so changing the scope does not
+silently drop them. **No field asks the operator to type an id**: every
+container is chosen from a select built from the product's own delivery
+listing.
+
+Failures split by request mode, as everywhere else here: a full page gets
+the in-shell status page (404 for a container outside the product, 400 for
+a malformed one), an htmx request gets a 200 carrying the sentence inline,
+because htmx does not swap on a non-2xx. The last-viewed-product cookie is
+written only for a real page view — a scope change is a swap inside a page
+the operator is already on, not a navigation.
+
+What the region renders today is the scope it resolved to, the total behind
+it, and an honest sentence that the rows are not rendered yet. The rows
+and the board's columns are later phases.
+<!-- END product-task-scope section -->
 
 <!-- BEGIN task-detail section (task 9599fc1f) -->
 ### Task detail
