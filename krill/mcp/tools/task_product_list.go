@@ -47,64 +47,108 @@ func RegisterListProductTasks(reg *server.Registry, tasks store.TaskStore, produ
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listProductTasksInput) (*mcp.CallToolResult, handlers.ListProductTasksResponse, error) {
 		var zero handlers.ListProductTasksResponse
 
-		productID, err := uuid.Parse(in.ProductID)
-		if err != nil {
-			return nil, zero, fmt.Errorf("product_id: invalid or missing UUID")
-		}
-
-		scope := store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete}
-		if in.Scope != "" {
-			scope.Kind = store.ProductTaskScopeKind(in.Scope)
-		}
-		if !validProductTaskScopeKind(scope.Kind) {
-			return nil, zero, fmt.Errorf("scope: must be one of incomplete, milestone, milepebble")
-		}
-		if scope.RequiresContainer() {
-			scope.ContainerID, err = uuid.Parse(in.ContainerID)
-			if err != nil {
-				return nil, zero, fmt.Errorf("container_id: required for scope %q; invalid or missing UUID", in.Scope)
-			}
-		}
-
-		var lane *store.Lane
-		if in.Lane != "" {
-			var parsed store.Lane
-			for _, candidate := range store.CanonicalLaneOrder {
-				if string(candidate) == in.Lane {
-					parsed = candidate
-					break
-				}
-			}
-			if parsed == "" {
-				return nil, zero, fmt.Errorf("lane: must be one of Scaffold, Implementation, Testing, Validation, Done")
-			}
-			lane = &parsed
-		}
-
-		// The store scopes every row by scope_id, which is resolved from
-		// the product row itself rather than from a session -- the same
-		// LB2 parentage the HTTP surface's handler resolves.
-		product, err := products.GetCurrentByID(ctx, productID)
+		params, err := parseListProductTasksInput(ctx, in, products)
 		if err != nil {
 			return nil, zero, err
 		}
 
-		page, err := tasks.ListProductTasks(ctx, store.ListProductTasksParams{
-			ScopeID:   product.ScopeID,
-			ProductID: productID,
-			Scope:     scope,
-			Lane:      lane,
-			OnlyStuck: in.OnlyStuck,
-			Page: store.PageParams{
-				PageSize:          in.PageSize,
-				ContinuationToken: in.PageToken,
-			},
-		})
+		page, err := tasks.ListProductTasks(ctx, params)
 		if err != nil {
 			return nil, zero, err
 		}
 		return nil, handlers.NewListProductTasksResponse(page), nil
 	})
+}
+
+// RegisterCountProductTasks registers count_product_tasks (FR c4ab6c68):
+// how many tasks list_product_tasks would return unpaged for the same
+// product, scope and filters -- the "Y" in "Showing X of Y tasks".
+// Mirrors GET /products/{id}/tasks/count (LB7).
+func RegisterCountProductTasks(reg *server.Registry, tasks store.TaskStore, products store.ProductStore) {
+	server.RegisterRead(reg, &mcp.Tool{
+		Name:        "count_product_tasks",
+		Description: "Count a product's tasks over the same scope and filters list_product_tasks takes: the total behind \"Showing X of Y tasks\", never a page's length. page_size and page_token are accepted for parity with list_product_tasks and ignored.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listProductTasksInput) (*mcp.CallToolResult, handlers.ConsoleCountWire, error) {
+		var zero handlers.ConsoleCountWire
+
+		params, err := parseListProductTasksInput(ctx, in, products)
+		if err != nil {
+			return nil, zero, err
+		}
+		// The shared parser reads the paging pair so the two tools accept
+		// the same arguments; a count is of the whole filtered set, so it
+		// drops the page here rather than trusting the store to ignore it.
+		// The same rule the four console count tools apply.
+		params.Page = store.PageParams{}
+
+		count, err := tasks.CountProductTasks(ctx, params)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.ConsoleCountWire{Count: count}, nil
+	})
+}
+
+// parseListProductTasksInput is the one reader list_product_tasks and
+// count_product_tasks share, so the page and the total printed beside it
+// are always built from the same product, scope, container, lane and
+// only-stuck filters. The scope/Lane/OnlyStuck/page_size/page_token
+// fields it reads are identical for both; the count simply lets the store
+// ignore the paging pair.
+func parseListProductTasksInput(ctx context.Context, in listProductTasksInput, products store.ProductStore) (store.ListProductTasksParams, error) {
+	productID, err := uuid.Parse(in.ProductID)
+	if err != nil {
+		return store.ListProductTasksParams{}, fmt.Errorf("product_id: invalid or missing UUID")
+	}
+
+	scope := store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete}
+	if in.Scope != "" {
+		scope.Kind = store.ProductTaskScopeKind(in.Scope)
+	}
+	if !validProductTaskScopeKind(scope.Kind) {
+		return store.ListProductTasksParams{}, fmt.Errorf("scope: must be one of incomplete, milestone, milepebble")
+	}
+	if scope.RequiresContainer() {
+		scope.ContainerID, err = uuid.Parse(in.ContainerID)
+		if err != nil {
+			return store.ListProductTasksParams{}, fmt.Errorf("container_id: required for scope %q; invalid or missing UUID", in.Scope)
+		}
+	}
+
+	var lane *store.Lane
+	if in.Lane != "" {
+		var parsed store.Lane
+		for _, candidate := range store.CanonicalLaneOrder {
+			if string(candidate) == in.Lane {
+				parsed = candidate
+				break
+			}
+		}
+		if parsed == "" {
+			return store.ListProductTasksParams{}, fmt.Errorf("lane: must be one of Scaffold, Implementation, Testing, Validation, Done")
+		}
+		lane = &parsed
+	}
+
+	// The store scopes every row by scope_id, which is resolved from
+	// the product row itself rather than from a session -- the same
+	// LB2 parentage the HTTP surface's handler resolves.
+	product, err := products.GetCurrentByID(ctx, productID)
+	if err != nil {
+		return store.ListProductTasksParams{}, err
+	}
+
+	return store.ListProductTasksParams{
+		ScopeID:   product.ScopeID,
+		ProductID: productID,
+		Scope:     scope,
+		Lane:      lane,
+		OnlyStuck: in.OnlyStuck,
+		Page: store.PageParams{
+			PageSize:          in.PageSize,
+			ContinuationToken: in.PageToken,
+		},
+	}, nil
 }
 
 func validProductTaskScopeKind(kind store.ProductTaskScopeKind) bool {

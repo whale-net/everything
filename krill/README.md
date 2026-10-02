@@ -191,13 +191,22 @@ is enforced only on the MCP side (`/mcp/ops`, below), never on HTTP.
 | `GET /console/escalated` | Returns every escalated task in a scope (FR5) — reason, triggering counter/cap (`null` for manual), the held lane, summary counts (attempt count, failing-verdict count, note count), and the most recent verdict where knowable — never the task's full attempt/verdict/note history inline. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
 | `GET /console/cancelled` | Returns every cancelled task in a scope (FR10) — title, delivery reference, and the cancellation's own acting/on-behalf-of subjects and timestamp. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
 | `GET /console/notes` | Returns every note still at status `noted` in a scope (FR12), across both target shapes (a task, or a spec-axis entity) — never a note that has been carried over, deferred, or closed. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
+| `GET /console/claimed/count` | The claimed queue's full size (FR c4ab6c68) — `{"count": N}`, the number of rows `GET /console/claimed` would return **unpaged** under the same query params, never the length of one page. Takes the same `scope_id`, `product_id`, `milestone_id` (and accepts and ignores the paging pair) as its list. A count the store cannot compute is a 500, never a `0`. Never gated. |
+| `GET /console/escalated/count` | The escalation queue's full size, as above — also takes `reason`. Never gated. |
+| `GET /console/cancelled/count` | The cancelled queue's full size, as above. Never gated. |
+| `GET /console/notes/count` | The open-notes queue's full size, as above. Per-product figures from this endpoint do **not** sum to the scope-wide one: an open note on a since-voided spec entity belongs to no product, so a console shows the current product's own figure and never derives a scope-wide total from per-product ones. Never gated. |
+| `GET /console/overview` | Every console Overview figure in one call (FR c4ab6c68) — the four queue sizes plus escalations recorded in the last hour, claims whose lease expires within 10 minutes, and open notes of kind `scope-note`. The same `scope_id`/`product_id`/`milestone_id`/`reason` narrowing as above, applied to all four queues at once. A figure the store cannot count fails the whole read rather than reporting that figure as `0`. Never gated. |
+| `GET /products/{id}/tasks/count` | The "Y" in "Showing X of Y tasks" (FR c4ab6c68) — the number of rows `GET /products/{id}/tasks` would return unpaged under the same `scope`/`container_id`/`lane`/`only_stuck` filters. A container outside the product is refused (404), never answered as `0`. Never gated. |
 
 All four `GET /console/...` queries share one paging contract (NFR6): a
 caller-supplied `page_size` (default 25, clamped to a max of 100) and an
 opaque `page_token` from the prior page's `next_token` — see
 `ARCHITECTURE.md`'s "console paging contract" section for the full
 keyset/continuation-token design, including why a token is rejected when
-resumed against a different scope than the one that issued it.
+resumed against a different scope than the one that issued it. The four
+`/console/*/count` endpoints and `/console/overview` take the same query
+string but ignore the paging pair entirely: a count is always of the whole
+filtered set, never of a page.
 
 The MCP surface below is a **separate, Swarm-Operator-only mount**,
 `/mcp/ops`, not `/mcp/design` — see "Operator MCP surface" below.
@@ -212,6 +221,19 @@ The MCP surface below is a **separate, Swarm-Operator-only mount**,
 | `list_escalated_tasks` | read | `TaskStore.ListEscalatedTasks` (FR5) |
 | `list_cancelled_tasks` | read | `TaskStore.ListCancelledTasks` (FR10) |
 | `list_open_notes` | read | `TaskStore.ListOpenNotes` (FR12) |
+| `count_claimed_tasks` | read | `TaskStore.CountClaimedTasks` (FR c4ab6c68) — takes the same `scope_id`/`product_id`/`milestone_id` as `list_claimed_tasks` |
+| `count_escalated_tasks` | read | `TaskStore.CountEscalatedTasks` — same filters as `list_escalated_tasks`, `reason` included |
+| `count_cancelled_tasks` | read | `TaskStore.CountCancelledTasks` — same filters as `list_cancelled_tasks` |
+| `count_open_notes` | read | `TaskStore.CountOpenNotes` — same filters as `list_open_notes`; per-product figures are not additive |
+| `console_overview_counts` | read | `TaskStore.CountConsoleOverview` — the four queue sizes and the three sub-line figures in one call |
+| `count_product_tasks` (on `/mcp/work`) | read | `TaskStore.CountProductTasks` — the "Y" in "Showing X of Y tasks" |
+
+Each `count_*` tool takes the **same filter set as the list tool it
+counts** — that pairing is the contract, not a convenience: a count
+narrowed differently from the list beside it would answer a question
+nobody asked. All of them accept `page_size`/`page_token` for parity and
+ignore them; a count is always of the whole filtered set, never of a page.
+A count the store cannot compute is a tool error, never a `0`.
 
 Every write tool above returns the same task payload document
 (`work.Payload`) its HTTP counterpart does; every read tool mirrors its

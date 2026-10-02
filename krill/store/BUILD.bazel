@@ -33,6 +33,7 @@ go_library(
         "active_edge.go",
         "amend.go",
         "void.go",
+        "console_overview.go",
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",
@@ -1039,7 +1040,35 @@ go_test(
     name = "task_product_list_test",
     srcs = ["task_product_list_test.go"],
     embed = [":store"],
-    deps = ["@com_github_stretchr_testify//assert"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Structural drift guard for the console count reads (FR c4ab6c68): every
+# Count* read must count over the same shared FROM/JOIN/WHERE clause its
+# list pages over, must spell no SQL of its own, and the Overview's figures
+# and sub-lines must be built from those same builders. Read back from the
+# package's own source (declared as `data`, mirroring
+# :active_edge_guard_test's technique) rather than from a database, so the
+# count/list agreement the agreement integration tests prove against real
+# Postgres cannot be quietly undone by a query of the count's own. The
+# queries' real behaviour is :task_console_integration_test,
+# :task_note_console_integration_test and :task_integration_test.
+go_test(
+    name = "console_count_clause_test",
+    srcs = ["console_count_clause_test.go"],
+    data = [
+        "console_overview.go",
+        "task_console.go",
+        "task_note_console.go",
+        "task_product_list.go",
+    ],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
 # Pure unit tests for the amend placement guard (amend.go, FR b62ed47a):

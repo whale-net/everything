@@ -320,6 +320,18 @@ func run() error {
 	// (RegisterOpsRead/the mount itself).
 	tools.RegisterListEscalatedTasks(opsReg, entities.Tasks())
 
+	// The console's counts (FR c4ab6c68): count_claimed_tasks,
+	// count_cancelled_tasks, count_escalated_tasks, count_open_notes and
+	// console_overview_counts -- each the twin of the queue's own list
+	// tool above, taking the same scope_id so a figure and the list it is
+	// printed beside can never take different filters. The same
+	// PersonaSwarmOperator-only posture (RegisterOpsRead/the mount itself).
+	tools.RegisterCountClaimedTasks(opsReg, entities.Tasks())
+	tools.RegisterCountCancelledTasks(opsReg, entities.Tasks())
+	tools.RegisterCountEscalatedTasks(opsReg, entities.Tasks())
+	tools.RegisterCountOpenNotes(opsReg, entities.Tasks())
+	tools.RegisterConsoleOverviewCounts(opsReg, entities.Tasks())
+
 	// tools.RegisterRequeueTask (issue #2876, FR6): requeue_task, the
 	// recover half of the recover-or-terminate pair cancel_task is the
 	// other half of, PersonaSwarmOperator only (RegisterOpsWrite/the

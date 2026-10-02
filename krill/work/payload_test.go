@@ -183,3 +183,29 @@ func TestAssemble_UnknownTaskID_NotFound(t *testing.T) {
 func (f *fakeTaskStore) AmendNote(ctx context.Context, params store.AmendNoteParams) (store.Note, error) {
 	return store.Note{}, nil
 }
+
+// The count reads (FR c4ab6c68) are unreachable through this payload fake
+// and panic via the nil embedded interface like every other method here.
+func (f *fakeTaskStore) CountClaimedTasks(ctx context.Context, params store.ListClaimedTasksParams) (int, error) {
+	panic("CountClaimedTasks is not used by the payload tests")
+}
+
+func (f *fakeTaskStore) CountCancelledTasks(ctx context.Context, params store.ListCancelledTasksParams) (int, error) {
+	panic("CountCancelledTasks is not used by the payload tests")
+}
+
+func (f *fakeTaskStore) CountEscalatedTasks(ctx context.Context, params store.ListEscalatedTasksParams) (int, error) {
+	panic("CountEscalatedTasks is not used by the payload tests")
+}
+
+func (f *fakeTaskStore) CountOpenNotes(ctx context.Context, params store.ListOpenNotesParams) (int, error) {
+	panic("CountOpenNotes is not used by the payload tests")
+}
+
+func (f *fakeTaskStore) CountProductTasks(ctx context.Context, params store.ListProductTasksParams) (int, error) {
+	panic("CountProductTasks is not used by the payload tests")
+}
+
+func (f *fakeTaskStore) CountConsoleOverview(ctx context.Context, params store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	panic("CountConsoleOverview is not used by the payload tests")
+}

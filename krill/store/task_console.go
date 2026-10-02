@@ -112,21 +112,14 @@ func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasks
 		cursor = &c
 	}
 
-	args := []any{params.ScopeID}
+	fromWhere, args := claimedTasksQuery(params)
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
 			tc.session_id, tc.claimed_at,
 			tc.created_by_acting_iss, tc.created_by_acting_sub, tc.created_by_acting_kind,
 			tc.created_by_on_behalf_of_iss, tc.created_by_on_behalf_of_sub, tc.created_by_on_behalf_of_kind,
 			task.current_lane, task.lease_expires_at, task.attempt_count, task.current_claim_id
-		FROM task
-		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
-		JOIN task_claim tc ON tc.id = task.current_claim_id
-		WHERE task.scope_id = $1 AND task.current_claim_id IS NOT NULL
-	`
-	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
-	query += filterSQL
-	args = append(args, filterArgs...)
+	` + fromWhere
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {
@@ -255,20 +248,13 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 		cursor = &c
 	}
 
-	args := []any{params.ScopeID}
+	fromWhere, args := cancelledTasksQuery(params)
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
 			ev.created_by_acting_iss, ev.created_by_acting_sub, ev.created_by_acting_kind,
 			ev.created_by_on_behalf_of_iss, ev.created_by_on_behalf_of_sub, ev.created_by_on_behalf_of_kind,
 			ev.created_at
-		FROM task
-		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
-		JOIN task_intervention_event ev ON ev.task_id = task.id AND ev.action = 'cancel'
-		WHERE task.scope_id = $1 AND task.cancelled_at IS NOT NULL
-	`
-	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
-	query += filterSQL
-	args = append(args, filterArgs...)
+	` + fromWhere
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {
@@ -456,7 +442,7 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 		cursor = &c
 	}
 
-	args := []any{params.ScopeID}
+	fromWhere, args := escalatedTasksQuery(params)
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
 			task.current_escalation_id,
@@ -465,18 +451,7 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 			ev.created_by_on_behalf_of_iss, ev.created_by_on_behalf_of_sub, ev.created_by_on_behalf_of_kind,
 			task.current_lane, task.attempt_count, task.thrash_count,
 			(SELECT COUNT(*) FROM task_note WHERE task_note.task_id = task.id)
-		FROM task
-		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
-		JOIN task_escalation_event ev ON ev.id = task.current_escalation_id
-		WHERE task.scope_id = $1 AND task.current_escalation_id IS NOT NULL
-	`
-	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
-	query += filterSQL
-	args = append(args, filterArgs...)
-	if params.Reason != nil {
-		query += fmt.Sprintf("\n\t\t\tAND ev.reason = $%d", len(args)+1)
-		args = append(args, string(*params.Reason))
-	}
+	` + fromWhere
 	if cursor != nil {
 		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
 		if err != nil {
@@ -544,4 +519,148 @@ func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedT
 		})
 	}
 	return page, nil
+}
+
+// This file's second half is the count half of the same three queues
+// (FR c4ab6c68): every number the console shows next to a queue -- the
+// queue's own size, and the two Overview sub-line figures -- comes from a
+// read that takes the same params type as the list it describes. Each
+// queue's FROM/JOIN/WHERE therefore lives in one builder shared by both,
+// so a count cannot silently come to describe a different row set than the
+// list it is printed beside.
+
+// claimedTasksQuery returns the FROM/JOIN/WHERE clause behind both
+// ListClaimedTasks and CountClaimedTasks, plus the arguments it binds.
+// Paging is deliberately absent: a count is of the whole filtered set, so
+// the keyset clause and LIMIT stay with the list's own caller and can
+// never narrow what the count reports. The ConsoleFilter narrowing rides
+// in the same builder, so a count cannot describe a different row set
+// than the list printed beside it.
+func claimedTasksQuery(params ListClaimedTasksParams) (string, []any) {
+	fromWhere := `
+		FROM task
+		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
+		JOIN task_claim tc ON tc.id = task.current_claim_id
+		WHERE task.scope_id = $1 AND task.current_claim_id IS NOT NULL
+	`
+	args := []any{params.ScopeID}
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	return fromWhere + filterSQL, append(args, filterArgs...)
+}
+
+// claimedTasksQueryExpiringBefore is claimedTasksQuery narrowed to the
+// claims whose lease lapses at or before a deadline -- the Overview
+// sub-line "claims about to lapse", expressed as the same row set with
+// one more conjunct rather than as a query of its own.
+func claimedTasksQueryExpiringBefore(params ListClaimedTasksParams, before time.Time) (string, []any) {
+	fromWhere, args := claimedTasksQuery(params)
+	args = append(args, before)
+	return fromWhere + fmt.Sprintf(` AND task.lease_expires_at <= $%d`, len(args)), args
+}
+
+// countConsoleRows runs COUNT(*) over one of this file's shared
+// FROM/JOIN/WHERE clauses and returns the row count, or the query's own
+// error. Every count read in this package goes through it, so "a failed
+// count is an error, never a 0" is one implementation rather than a
+// promise each read repeats.
+func countConsoleRows(ctx context.Context, q txQuerier, fromWhere string, args []any) (int, error) {
+	var n int
+	if err := q.QueryRow(ctx, "SELECT COUNT(*)"+fromWhere, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count console rows: %w", err)
+	}
+	return n, nil
+}
+
+// CountClaimedTasks returns how many rows the unpaged ListClaimedTasks
+// would hold for params -- the queue's full size, never the current
+// page's length and never a figure bounded by params.Page, which this
+// read ignores entirely.
+//
+// It runs COUNT(*) over claimedTasksQuery, the exact FROM/JOIN/WHERE
+// ListClaimedTasks pages over, so the two cannot disagree about which
+// claims are in the queue. A failed query returns its error, never 0:
+// a queue that could not be counted must not render as an empty one.
+func (s taskStore) CountClaimedTasks(ctx context.Context, params ListClaimedTasksParams) (int, error) {
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return 0, err
+	}
+	fromWhere, args := claimedTasksQuery(params)
+	return countConsoleRows(ctx, s.pool, fromWhere, args)
+}
+
+// cancelledTasksQuery is CountCancelledTasks' and ListCancelledTasks'
+// shared FROM/JOIN/WHERE -- see claimedTasksQuery for why the two share
+// one builder, and for the ConsoleFilter narrowing it carries.
+func cancelledTasksQuery(params ListCancelledTasksParams) (string, []any) {
+	fromWhere := `
+		FROM task
+		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
+		JOIN task_intervention_event ev ON ev.task_id = task.id AND ev.action = 'cancel'
+		WHERE task.scope_id = $1 AND task.cancelled_at IS NOT NULL
+	`
+	args := []any{params.ScopeID}
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	return fromWhere + filterSQL, append(args, filterArgs...)
+}
+
+// CountCancelledTasks returns how many rows the unpaged
+// ListCancelledTasks would hold for params -- the dead-lettered queue's
+// full size, never the current page's length; params.Page is ignored.
+// Shares cancelledTasksQuery with its list, and returns a failed count
+// as its error rather than as 0.
+func (s taskStore) CountCancelledTasks(ctx context.Context, params ListCancelledTasksParams) (int, error) {
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return 0, err
+	}
+	fromWhere, args := cancelledTasksQuery(params)
+	return countConsoleRows(ctx, s.pool, fromWhere, args)
+}
+
+// escalatedTasksQuery is CountEscalatedTasks' and ListEscalatedTasks'
+// shared FROM/JOIN/WHERE -- see claimedTasksQuery for why the two share
+// one builder. It also carries both of this read's own narrowings, the
+// ConsoleFilter and the reason, so they intersect in one place and a
+// count cannot be filtered differently from the list beside it.
+func escalatedTasksQuery(params ListEscalatedTasksParams) (string, []any) {
+	fromWhere := `
+		FROM task
+		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
+		JOIN task_escalation_event ev ON ev.id = task.current_escalation_id
+		WHERE task.scope_id = $1 AND task.current_escalation_id IS NOT NULL
+	`
+	args := []any{params.ScopeID}
+	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)
+	fromWhere += filterSQL
+	args = append(args, filterArgs...)
+	if params.Reason != nil {
+		fromWhere += fmt.Sprintf("\n\t\t\tAND ev.reason = $%d", len(args)+1)
+		args = append(args, string(*params.Reason))
+	}
+	return fromWhere, args
+}
+
+// escalatedTasksQuerySince is escalatedTasksQuery narrowed to the
+// escalations recorded at or after an instant -- the Overview sub-line
+// "escalated in the last hour", one extra conjunct over the same rows
+// rather than a query of its own.
+func escalatedTasksQuerySince(params ListEscalatedTasksParams, since time.Time) (string, []any) {
+	fromWhere, args := escalatedTasksQuery(params)
+	args = append(args, since)
+	return fromWhere + fmt.Sprintf(` AND ev.created_at >= $%d`, len(args)), args
+}
+
+// CountEscalatedTasks returns how many rows the unpaged
+// ListEscalatedTasks would hold for params -- the escalation queue's
+// full size, never the current page's length; params.Page is ignored.
+// Shares escalatedTasksQuery with its list, and returns a failed count
+// as its error rather than as 0.
+func (s taskStore) CountEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (int, error) {
+	if err := s.guardConsoleFilter(ctx, params.ScopeID, params.ConsoleFilter); err != nil {
+		return 0, err
+	}
+	if params.Reason != nil && !validEscalationReasons[*params.Reason] {
+		return 0, fmt.Errorf("%w: %q", ErrUnknownEscalationReason, *params.Reason)
+	}
+	fromWhere, args := escalatedTasksQuery(params)
+	return countConsoleRows(ctx, s.pool, fromWhere, args)
 }

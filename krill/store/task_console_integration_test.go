@@ -39,6 +39,16 @@
 // cross-scope proofs as ListCancelledTasks above; and a row-size proof
 // that a long attempt/verdict/note history does not grow the row.
 //
+// The count reads (FR c4ab6c68): CountClaimedTasks/CountCancelledTasks/
+// CountEscalatedTasks agree with the list they describe for every filter
+// combination -- none, a product, a milestone, the pair, and the escalated
+// queue's own reason filter -- over row sets larger than one page, so a
+// count that answered with the page length would fail; CountConsoleOverview's
+// four headline figures equal the four per-queue counts for the same
+// params, its three sub-line figures narrow the same rows their queues
+// return, and it applies each queue's own filter; and a count whose query
+// cannot run is an error rather than a 0.
+//
 // Shares task_integration_test.go's test-store/test-scope/test-world/
 // subject helpers, task_dependency_integration_test.go's createTestTask
 // helper, task_claim_integration_test.go's claimTestSession helper, and
@@ -57,6 +67,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -1659,4 +1670,379 @@ func TestTaskStore_ConsoleQueueReads_BothFilters_Intersect(t *testing.T) {
 	require.Len(t, page.Items, 1, "a product filter and one of its milestones must intersect: the named milestone's rows and nothing else")
 	assert.Equal(t, onA.ID, page.Items[0].TaskID)
 	assert.NotEqual(t, onSibling.ID, page.Items[0].TaskID, "the product's un-named sibling milestone must not survive the pair")
+}
+
+// ============================================================================
+// The count reads (FR c4ab6c68): CountClaimedTasks, CountCancelledTasks,
+// CountEscalatedTasks, CountConsoleOverview
+// ============================================================================
+
+// countWorld is the fixture the count tests share: two products, one of
+// them holding a second milestone, and rows of every counted kind spread
+// across them so a product filter, a milestone filter and the pair both
+// name a different, non-empty subset.
+type countWorld struct {
+	productA   uuid.UUID
+	milestoneA uuid.UUID
+	siblingA   uuid.UUID
+	productB   uuid.UUID
+	milestoneB uuid.UUID
+}
+
+func newCountWorld(t *testing.T, ctx context.Context, s *store.Store, scopeID uuid.UUID, self store.Subject) countWorld {
+	t.Helper()
+	productA, milestoneA := consoleFilterTestProduct(t, ctx, s, scopeID, "countA", self)
+	siblingA := consoleFilterTestMilestone(t, ctx, s, scopeID, productA, "countA-sibling", self)
+	productB, milestoneB := consoleFilterTestProduct(t, ctx, s, scopeID, "countB", self)
+	return countWorld{productA, milestoneA, siblingA, productB, milestoneB}
+}
+
+// walkClaimed drains every page of ListClaimedTasks for params and returns
+// how many rows the unpaged list holds -- the number CountClaimedTasks has
+// to report for the same params.
+func walkClaimed(t *testing.T, ctx context.Context, s *store.Store, params store.ListClaimedTasksParams) int {
+	t.Helper()
+	total, token := 0, ""
+	for {
+		params.Page = store.PageParams{PageSize: 2, ContinuationToken: token}
+		page, err := s.Tasks().ListClaimedTasks(ctx, params)
+		require.NoError(t, err)
+		total += len(page.Items)
+		if page.NextToken == "" {
+			return total
+		}
+		token = page.NextToken
+	}
+}
+
+// TestTaskStore_CountClaimedTasks_MatchesList_AcrossFilters is FR
+// c4ab6c68's central criterion for the claimed queue: for every filter
+// combination -- none, a product, a milestone, and the pair -- the count
+// equals the number of rows the unpaged list would hold, and that number
+// is larger than a single page, so a count that quietly answered with the
+// page length would be caught here rather than in a console.
+func TestTaskStore_CountClaimedTasks_MatchesList_AcrossFilters(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newCountWorld(t, ctx, s, scopeID, self)
+
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneA, "a-1", self)
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneA, "a-2", self)
+	claimTestTask(t, ctx, s, db, scopeID, world.siblingA, "a-sibling", self)
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneB, "b-1", self)
+	// An unclaimed task in the same scope: it must be in neither figure.
+	createTestTask(t, ctx, s, scopeID, world.milestoneA, "unclaimed", self)
+
+	for name, filter := range map[string]store.ConsoleFilter{
+		"unfiltered":     {},
+		"product_a":      {ProductID: &world.productA},
+		"product_b":      {ProductID: &world.productB},
+		"milestone_a":    {MilestoneID: &world.milestoneA},
+		"product_a_pair": {ProductID: &world.productA, MilestoneID: &world.milestoneA},
+	} {
+		t.Run(name, func(t *testing.T) {
+			params := store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: filter}
+			count, err := s.Tasks().CountClaimedTasks(ctx, params)
+			require.NoError(t, err)
+			assert.Equal(t, walkClaimed(t, ctx, s, params), count,
+				"the count and the list it describes must agree for the same filters")
+		})
+	}
+
+	// And the count is a total, not a page: the unfiltered figure is
+	// strictly larger than the largest page the read will hand back.
+	params := store.ListClaimedTasksParams{ScopeID: scopeID}
+	count, err := s.Tasks().CountClaimedTasks(ctx, params)
+	require.NoError(t, err)
+	assert.Equal(t, 4, count)
+	page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID: scopeID, Page: store.PageParams{PageSize: 2},
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 2)
+	assert.NotEqual(t, len(page.Items), count, "a count of a queue larger than one page must never be the page length")
+}
+
+// TestTaskStore_CountCancelledTasks_MatchesList_AcrossFilters is the same
+// agreement proof for the cancelled queue, whose rows come from the
+// task_intervention_event join rather than the claim join -- a different
+// shared clause, and so its own agreement to establish.
+func TestTaskStore_CountCancelledTasks_MatchesList_AcrossFilters(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newCountWorld(t, ctx, s, scopeID, self)
+
+	cancelTestTask(t, ctx, s, scopeID, world.milestoneA, "a-1", self)
+	cancelTestTask(t, ctx, s, scopeID, world.siblingA, "a-sibling", self)
+	cancelTestTask(t, ctx, s, scopeID, world.milestoneB, "b-1", self)
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneA, "claimed-not-cancelled", self)
+
+	for name, filter := range map[string]store.ConsoleFilter{
+		"unfiltered":     {},
+		"product_a":      {ProductID: &world.productA},
+		"product_b":      {ProductID: &world.productB},
+		"milestone_a":    {MilestoneID: &world.milestoneA},
+		"product_a_pair": {ProductID: &world.productA, MilestoneID: &world.milestoneA},
+	} {
+		t.Run(name, func(t *testing.T) {
+			params := store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: filter}
+			count, err := s.Tasks().CountCancelledTasks(ctx, params)
+			require.NoError(t, err)
+
+			// Drain the list the same way: five rows across two products
+			// do not fit one two-row page.
+			total, token := 0, ""
+			for {
+				params.Page = store.PageParams{PageSize: 2, ContinuationToken: token}
+				page, err := s.Tasks().ListCancelledTasks(ctx, params)
+				require.NoError(t, err)
+				total += len(page.Items)
+				if page.NextToken == "" {
+					break
+				}
+				token = page.NextToken
+			}
+			assert.Equal(t, total, count)
+		})
+	}
+}
+
+// TestTaskStore_CountEscalatedTasks_MatchesList_AcrossFiltersAndReasons is
+// the agreement proof for the escalated queue across its two filters: the
+// ConsoleFilter and the reason, named alone, together, and not at all.
+func TestTaskStore_CountEscalatedTasks_MatchesList_AcrossFiltersAndReasons(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newCountWorld(t, ctx, s, scopeID, self)
+
+	escalateTestTask(t, ctx, s, scopeID, world.milestoneA, "manual in a", self)
+	escalateViaAttemptCapTask(t, ctx, s, db, scopeID, world.milestoneA, "attempt-capped in a", self)
+	escalateTestTask(t, ctx, s, scopeID, world.siblingA, "manual on a's sibling", self)
+	escalateTestTask(t, ctx, s, scopeID, world.milestoneB, "manual in b", self)
+
+	manual := store.EscalationReasonManual
+	attempt := store.EscalationReasonAttemptCap
+	for name, params := range map[string]store.ListEscalatedTasksParams{
+		"unfiltered":     {ScopeID: scopeID},
+		"product_a":      {ScopeID: scopeID, ConsoleFilter: store.ConsoleFilter{ProductID: &world.productA}},
+		"milestone_a":    {ScopeID: scopeID, ConsoleFilter: store.ConsoleFilter{MilestoneID: &world.milestoneA}},
+		"reason_manual":  {ScopeID: scopeID, Reason: &manual},
+		"filter_reason":  {ScopeID: scopeID, ConsoleFilter: store.ConsoleFilter{MilestoneID: &world.milestoneA}, Reason: &attempt},
+		"milestone_pair": {ScopeID: scopeID, ConsoleFilter: store.ConsoleFilter{ProductID: &world.productA, MilestoneID: &world.milestoneA}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			count, err := s.Tasks().CountEscalatedTasks(ctx, params)
+			require.NoError(t, err)
+
+			total, token := 0, ""
+			for {
+				params.Page = store.PageParams{PageSize: 1, ContinuationToken: token}
+				page, err := s.Tasks().ListEscalatedTasks(ctx, params)
+				require.NoError(t, err)
+				total += len(page.Items)
+				if page.NextToken == "" {
+					break
+				}
+				token = page.NextToken
+			}
+			assert.Equal(t, total, count)
+		})
+	}
+}
+
+// TestTaskStore_CountConsoleOverview_MatchesThePerQueueCounts is the
+// Overview's own coherence: its four headline figures are the same numbers
+// the four per-queue count reads return for the same params, so a console
+// taking the Overview alone and a console taking the individual counts
+// cannot show two different queue sizes.
+func TestTaskStore_CountConsoleOverview_MatchesThePerQueueCounts(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newCountWorld(t, ctx, s, scopeID, self)
+
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneA, "claimed in a", self)
+	claimedInB, _ := claimTestTask(t, ctx, s, db, scopeID, world.milestoneB, "claimed in b", self)
+	cancelTestTask(t, ctx, s, scopeID, world.milestoneA, "cancelled in a", self)
+	escalateTestTask(t, ctx, s, scopeID, world.milestoneB, "escalated in b", self)
+	// Both notes target a task, so the open-notes queue holds one of each
+	// kind and the scope-note sub-line has something to single out.
+	notedTask := createTestTask(t, ctx, s, scopeID, world.milestoneA, "the noted task", self)
+	_, err := s.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID: scopeID, TaskID: &notedTask.ID,
+		Kind: store.NoteKindScopeNote, Body: "a scope-note",
+		Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = s.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID: scopeID, TaskID: &claimedInB.ID,
+		Kind: store.NoteKindComment, Body: "a plain comment",
+		Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	counts, err := s.Tasks().CountConsoleOverview(ctx, store.ConsoleOverviewParams{
+		Escalated: store.ListEscalatedTasksParams{ScopeID: scopeID},
+		Claimed:   store.ListClaimedTasksParams{ScopeID: scopeID},
+		Cancelled: store.ListCancelledTasksParams{ScopeID: scopeID},
+		Notes:     store.ListOpenNotesParams{ScopeID: scopeID},
+	})
+	require.NoError(t, err)
+
+	claimed, err := s.Tasks().CountClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	cancelled, err := s.Tasks().CountCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	escalated, err := s.Tasks().CountEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	notes, err := s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID})
+	require.NoError(t, err)
+
+	assert.Equal(t, claimed, counts.Claimed)
+	assert.Equal(t, cancelled, counts.Cancelled)
+	assert.Equal(t, escalated, counts.Escalated)
+	assert.Equal(t, notes, counts.OpenNotes)
+	assert.Equal(t, 1, counts.OpenScopeNotes, "only the scope-note is a scope-note; the comment is not")
+}
+
+// TestTaskStore_CountConsoleOverview_SubLinesNarrowTheSameRows is the three
+// Overview sub-line figures: each is the queue it sits under with one
+// conjunct added, so it can never exceed that queue's total and never
+// counts a row the queue would not return.
+//
+// The windows are measured against ConsoleOverviewParams.Now rather than
+// the store's own clock, so the boundaries are exercised at a chosen
+// instant instead of by waiting.
+func TestTaskStore_CountConsoleOverview_SubLinesNarrowTheSameRows(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newCountWorld(t, ctx, s, scopeID, self)
+
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneA, "claimed in a", self)
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneB, "claimed in b", self)
+	escalateTestTask(t, ctx, s, scopeID, world.milestoneA, "escalated in a", self)
+
+	// A claim mints a DefaultLeaseDuration (15m) lease. A reference
+	// instant six minutes later puts the lease's expiry five minutes
+	// inside the ten-minute lookahead, so both claims are "expiring soon";
+	// an instant one minute later does not, and the same query says so.
+	params := store.ConsoleOverviewParams{
+		Escalated: store.ListEscalatedTasksParams{ScopeID: scopeID},
+		Claimed:   store.ListClaimedTasksParams{ScopeID: scopeID},
+		Cancelled: store.ListCancelledTasksParams{ScopeID: scopeID},
+		Notes:     store.ListOpenNotesParams{ScopeID: scopeID},
+		Now:       time.Now().Add(6 * time.Minute),
+	}
+
+	counts, err := s.Tasks().CountConsoleOverview(ctx, params)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, counts.EscalatedRecently, counts.Escalated)
+	assert.LessOrEqual(t, counts.ClaimsExpiringSoon, counts.Claimed)
+	assert.LessOrEqual(t, counts.OpenScopeNotes, counts.OpenNotes)
+	assert.Equal(t, 2, counts.Claimed)
+	assert.Equal(t, 2, counts.ClaimsExpiringSoon, "six minutes into a fifteen-minute lease, both claims are inside the ten-minute lookahead")
+	assert.Equal(t, 1, counts.Escalated)
+	assert.Equal(t, 1, counts.EscalatedRecently, "an escalation just recorded is within the last hour")
+
+	// The same two claims, measured a minute in: still inside their lease,
+	// but their expiry is now fourteen minutes out, past the lookahead.
+	params.Now = time.Now().Add(time.Minute)
+	counts, err = s.Tasks().CountConsoleOverview(ctx, params)
+	require.NoError(t, err)
+	assert.Equal(t, 2, counts.Claimed, "both claims are still open a minute in")
+	assert.Equal(t, 0, counts.ClaimsExpiringSoon, "a lease fourteen minutes out is not about to lapse")
+
+	// The figure is a deadline, not a window: a lease that has already
+	// lapsed is at or before any future deadline, so it stays in. That is
+	// deliberate -- a lapsed claim is the more urgent case, not the
+	// excluded one, and dropping it from the sub-line would hide exactly
+	// the rows the operator most needs to see.
+	params.Now = time.Now().Add(24 * time.Hour)
+	counts, err = s.Tasks().CountConsoleOverview(ctx, params)
+	require.NoError(t, err)
+	assert.Equal(t, 2, counts.Claimed)
+	assert.Equal(t, 2, counts.ClaimsExpiringSoon, "an already-lapsed lease is still at or before the deadline")
+	assert.Equal(t, 1, counts.Escalated)
+	assert.Equal(t, 0, counts.EscalatedRecently, "an escalation recorded a day ago is not escalated recently")
+}
+
+// TestTaskStore_CountConsoleOverview_AppliesEachQueuesFilter proves the
+// Overview narrows every queue by the ConsoleFilter its params carry, the
+// same way the per-queue counts do -- an Overview filtered to one product
+// must not leak the other product's rows through a queue whose params
+// happen to be left unfiltered.
+func TestTaskStore_CountConsoleOverview_AppliesEachQueuesFilter(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newCountWorld(t, ctx, s, scopeID, self)
+
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneA, "claimed in a", self)
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneB, "claimed in b", self)
+	cancelTestTask(t, ctx, s, scopeID, world.milestoneA, "cancelled in a", self)
+	cancelTestTask(t, ctx, s, scopeID, world.milestoneB, "cancelled in b", self)
+
+	filterA := store.ConsoleFilter{ProductID: &world.productA}
+	counts, err := s.Tasks().CountConsoleOverview(ctx, store.ConsoleOverviewParams{
+		Escalated: store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filterA},
+		Claimed:   store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: filterA},
+		Cancelled: store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: filterA},
+		Notes:     store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: filterA},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, counts.Claimed)
+	assert.Equal(t, 1, counts.Cancelled)
+}
+
+// TestTaskStore_CountReads_FailedQueryIsAnError is FR c4ab6c68's
+// fail-don't-degrade rule: a count read whose query cannot run returns
+// that error, never 0. A console that rendered a failed count as zero
+// would be indistinguishable from an idle queue, which is the failure this
+// rule exists to prevent.
+//
+// The query is made to fail by dropping the table the count reads: the
+// store's own SQL is unchanged, only the database under it.
+func TestTaskStore_CountReads_FailedQueryIsAnError(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newCountWorld(t, ctx, s, scopeID, self)
+	claimTestTask(t, ctx, s, db, scopeID, world.milestoneA, "claimed in a", self)
+	escalateTestTask(t, ctx, s, scopeID, world.milestoneA, "escalated in a", self)
+	cancelTestTask(t, ctx, s, scopeID, world.milestoneA, "cancelled in a", self)
+
+	// Sanity: every count works before the table goes away, so a failure
+	// afterwards is the dropped table and not a fixture that never had
+	// the rows in the first place.
+	claimed, err := s.Tasks().CountClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	require.Equal(t, 1, claimed)
+
+	_, err = db.Pool.Exec(ctx, `ALTER TABLE task_note RENAME TO task_note_moved`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `ALTER TABLE task_note_moved RENAME TO task_note`)
+	})
+
+	_, err = s.Tasks().CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID})
+	require.Error(t, err, "a count that could not run must fail, never answer 0")
+
+	_, err = s.Tasks().CountConsoleOverview(ctx, store.ConsoleOverviewParams{
+		Escalated: store.ListEscalatedTasksParams{ScopeID: scopeID},
+		Claimed:   store.ListClaimedTasksParams{ScopeID: scopeID},
+		Cancelled: store.ListCancelledTasksParams{ScopeID: scopeID},
+		Notes:     store.ListOpenNotesParams{ScopeID: scopeID},
+	})
+	require.Error(t, err, "an Overview that could not count one of its figures fails rather than reporting that figure as zero")
 }
