@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "admin",
+    srcs = ["admin.go"],
+    importpath = "github.com/whale-net/everything/manmanv2/mcp/admin",
+    visibility = ["//manmanv2/mcp:__subpackages__"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//manmanv2/mcp/server",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+go_test(
+    name = "admin_test",
+    srcs = glob(["*_test.go"]),
+    embed = [":admin"],
+    deps = [
+        "//manmanv2/mcp/server",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)

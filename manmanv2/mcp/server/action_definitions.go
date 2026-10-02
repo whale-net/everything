@@ -75,8 +75,8 @@ type parameterDef struct {
 	Options      []optionDef `json:"options,omitempty"`
 }
 
-// actionDef is the tool-facing shape of an Action definition.
-type actionDef struct {
+// actionDefView is the tool-facing shape of an Action definition.
+type actionDefView struct {
 	ActionID             int64          `json:"action_id,omitempty"`
 	DefinitionLevel      string         `json:"definition_level"`
 	EntityID             int64          `json:"entity_id"`
@@ -94,8 +94,8 @@ type actionDef struct {
 	Parameters           []parameterDef `json:"parameters"`
 }
 
-func toActionDef(a *manmanpb.ActionDefinition, fields []*manmanpb.ActionInputField) actionDef {
-	d := actionDef{
+func toActionDef(a *manmanpb.ActionDefinition, fields []*manmanpb.ActionInputField) actionDefView {
+	d := actionDefView{
 		ActionID: a.ActionId, DefinitionLevel: a.DefinitionLevel, EntityID: a.EntityId, Name: a.Name, Label: a.Label,
 		Description: a.Description, CommandTemplate: a.CommandTemplate, DisplayOrder: a.DisplayOrder, GroupName: a.GroupName,
 		ButtonStyle: a.ButtonStyle, Icon: a.Icon, RequiresConfirmation: a.RequiresConfirmation,
@@ -117,7 +117,7 @@ func toActionDef(a *manmanpb.ActionDefinition, fields []*manmanpb.ActionInputFie
 
 // toRequest flattens parameters into the API's field list; options are keyed
 // by their field's 0-based position.
-func (d actionDef) toRequest() (*manmanpb.ActionDefinition, []*manmanpb.ActionInputField, []*manmanpb.ActionInputOption) {
+func (d actionDefView) toRequest() (*manmanpb.ActionDefinition, []*manmanpb.ActionInputField, []*manmanpb.ActionInputOption) {
 	a := &manmanpb.ActionDefinition{
 		ActionId: d.ActionID, DefinitionLevel: d.DefinitionLevel, EntityId: d.EntityID, Name: d.Name, Label: d.Label,
 		Description: d.Description, CommandTemplate: d.CommandTemplate, DisplayOrder: d.DisplayOrder, GroupName: d.GroupName,
@@ -141,21 +141,21 @@ func (d actionDef) toRequest() (*manmanpb.ActionDefinition, []*manmanpb.ActionIn
 
 var errActionNotFound = func(id int64) error { return fmt.Errorf("action definition %d not found", id) }
 
-func fetchActionDefinition(ctx context.Context, api ActionDefinitionAPI, id int64) (actionDef, error) {
+func fetchActionDefinition(ctx context.Context, api ActionDefinitionAPI, id int64) (actionDefView, error) {
 	resp, err := api.GetActionDefinition(ctx, &manmanpb.GetActionDefinitionRequest{ActionId: id})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			return actionDef{}, errActionNotFound(id)
+			return actionDefView{}, errActionNotFound(id)
 		}
-		return actionDef{}, fmt.Errorf("get action definition: %w", err)
+		return actionDefView{}, fmt.Errorf("get action definition: %w", err)
 	}
 	if resp.GetAction() == nil {
-		return actionDef{}, errActionNotFound(id)
+		return actionDefView{}, errActionNotFound(id)
 	}
 	return toActionDef(resp.Action, resp.InputFields), nil
 }
 
-func fingerprintOf(v any) string {
+func actionFingerprintOf(v any) string {
 	b, _ := json.Marshal(v)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -167,7 +167,7 @@ type fieldChange struct {
 }
 
 // diffActionDefs lists each field whose value differs between cur and next.
-func diffActionDefs(cur, next actionDef) map[string]fieldChange {
+func diffActionDefs(cur, next actionDefView) map[string]fieldChange {
 	out := map[string]fieldChange{}
 	cv, nv := reflect.ValueOf(cur), reflect.ValueOf(next)
 	t := cv.Type()
@@ -181,8 +181,8 @@ func diffActionDefs(cur, next actionDef) map[string]fieldChange {
 	return out
 }
 
-// updateIn is a partial update: only provided fields change.
-type updateIn struct {
+// updateActionIn is a partial update: only provided fields change.
+type updateActionIn struct {
 	ActionID             int64           `json:"action_id"`
 	Label                *string         `json:"label"`
 	Description          *string         `json:"description"`
@@ -197,7 +197,7 @@ type updateIn struct {
 	Parameters           *[]parameterDef `json:"parameters"`
 }
 
-func (u updateIn) apply(cur actionDef) actionDef {
+func (u updateActionIn) apply(cur actionDefView) actionDefView {
 	n := cur
 	set := func(dst *string, src *string) {
 		if src != nil {
@@ -235,7 +235,7 @@ type listActionsIn struct {
 	SGCID    *int64 `json:"deployment_id,omitempty" jsonschema:"list definitions at deployment level"`
 }
 type listActionsOut struct {
-	Actions []actionDef `json:"actions"`
+	Actions []actionDefView `json:"actions"`
 }
 type getActionIn struct {
 	ActionID int64 `json:"action_id" jsonschema:"the Action definition id"`
@@ -249,14 +249,14 @@ func AddActionDefinitionTools(srv *mcp.Server, api ActionDefinitionAPI, gate *Ga
 			if err != nil {
 				return nil, listActionsOut{}, fmt.Errorf("list action definitions: %w", err)
 			}
-			out := listActionsOut{Actions: []actionDef{}}
+			out := listActionsOut{Actions: []actionDefView{}}
 			for _, a := range resp.Actions {
 				out.Actions = append(out.Actions, toActionDef(a, a.InputFields))
 			}
 			return nil, out, nil
 		})
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_action_definition", Description: "Get one Action definition with its command template and parameters."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in getActionIn) (*mcp.CallToolResult, actionDef, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getActionIn) (*mcp.CallToolResult, actionDefView, error) {
 			d, err := fetchActionDefinition(ctx, api, in.ActionID)
 			return nil, d, err
 		})
@@ -286,14 +286,14 @@ func AddActionDefinitionTools(srv *mcp.Server, api ActionDefinitionAPI, gate *Ga
 	update := GatedTool{
 		Name: "update_action_definition",
 		Preview: func(ctx context.Context, args json.RawMessage) (any, string, error) {
-			_, cur, next, err := planUpdate(ctx, api, args)
+			_, cur, next, err := planActionUpdate(ctx, api, args)
 			if err != nil {
 				return nil, "", err
 			}
-			return map[string]any{"effect": "updates this Action definition", "action_id": cur.ActionID, "changes": diffActionDefs(cur, next)}, fingerprintOf(cur), nil
+			return map[string]any{"effect": "updates this Action definition", "action_id": cur.ActionID, "changes": diffActionDefs(cur, next)}, actionFingerprintOf(cur), nil
 		},
 		Apply: func(ctx context.Context, args json.RawMessage) (any, error) {
-			_, _, next, err := planUpdate(ctx, api, args)
+			_, _, next, err := planActionUpdate(ctx, api, args)
 			if err != nil {
 				return nil, err
 			}
@@ -315,7 +315,7 @@ func AddActionDefinitionTools(srv *mcp.Server, api ActionDefinitionAPI, gate *Ga
 			if err != nil {
 				return nil, "", err
 			}
-			return map[string]any{"effect": "permanently deletes this Action definition", "definition": cur}, fingerprintOf(cur), nil
+			return map[string]any{"effect": "permanently deletes this Action definition", "definition": cur}, actionFingerprintOf(cur), nil
 		},
 		Apply: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var in getActionIn
@@ -355,8 +355,8 @@ func AddActionDefinitionTools(srv *mcp.Server, api ActionDefinitionAPI, gate *Ga
 	srv.AddTool(&mcp.Tool{Name: del.Name, Description: "Delete an Action definition. Without confirmation_token returns a preview and token; call again with the token to apply.", InputSchema: obj(idOnly, "action_id")}, gate.Handler(del))
 }
 
-func parseCreate(args json.RawMessage) (actionDef, error) {
-	var d actionDef
+func parseCreate(args json.RawMessage) (actionDefView, error) {
+	var d actionDefView
 	if err := json.Unmarshal(args, &d); err != nil {
 		return d, err
 	}
@@ -373,14 +373,14 @@ func parseCreate(args json.RawMessage) (actionDef, error) {
 	return d, nil
 }
 
-func planUpdate(ctx context.Context, api ActionDefinitionAPI, args json.RawMessage) (updateIn, actionDef, actionDef, error) {
-	var in updateIn
+func planActionUpdate(ctx context.Context, api ActionDefinitionAPI, args json.RawMessage) (updateActionIn, actionDefView, actionDefView, error) {
+	var in updateActionIn
 	if err := json.Unmarshal(args, &in); err != nil {
-		return in, actionDef{}, actionDef{}, err
+		return in, actionDefView{}, actionDefView{}, err
 	}
 	cur, err := fetchActionDefinition(ctx, api, in.ActionID)
 	if err != nil {
-		return in, actionDef{}, actionDef{}, err
+		return in, actionDefView{}, actionDefView{}, err
 	}
 	return in, cur, in.apply(cur), nil
 }
