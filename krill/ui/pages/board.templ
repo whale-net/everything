@@ -100,3 +100,252 @@ templ TaskBoard(page TaskBoardPage) {
 		}
 	</section>
 }
+
+// ── the product-wide Board (FR cf000440) ─────────────────────────────────────
+//
+// The board above is the legacy per-milestone view. What follows is the
+// Board view of the product-wide scope, which is the same region the
+// Tasks table serves seen as swimlanes: one per milestone that has tasks,
+// each with the same five columns the legacy board has.
+
+// BoardLane is one swimlane: the milestone (or, in the milepebble scope,
+// the milepebble) whose tasks the five columns partition.
+//
+// The lane key and the header's two figures come from different reads and
+// are kept apart on purpose. The header's Done and Total are the
+// per-container progress read's own figures, handed over whole -- the read
+// documents how a cancelled task counts (store.CancelledTaskCounting), and
+// a view that summed lanes again is how a progress figure comes to
+// disagree with the breakdown printed beside it.
+type BoardLane struct {
+	// ID is the container this lane is keyed by, and what Name links to.
+	ID   string
+	Name string
+
+	// DetailPath is the container's own page under the product's
+	// milestones prefix -- milestoneDetailHref, which serves a milepebble
+	// too because a milepebble is a milestone_ref row as well.
+	DetailPath string
+
+	// Status is the keyed container's OWN current status. A milepebble
+	// lane badged with its parent's status is a lane claiming to be
+	// something it is not.
+	Status string
+
+	// MilestoneName and MilestoneDetailPath name the parent milestone of a
+	// milepebble lane, which is the one case where the lane's container
+	// and the milestone whose progress the figures describe are two
+	// different things. Both are empty in the two milestone-keyed scopes.
+	MilestoneName       string
+	MilestoneDetailPath string
+
+	// Done and Total are the read's own Done() and Total() for this
+	// container, never a figure derived here.
+	Done  int
+	Total int
+
+	// Columns are exactly store.CanonicalLaneOrder's five lanes, in that
+	// order, each carrying its count -- zero counts included.
+	Columns []BoardColumn
+}
+
+// ProductBoardPage is the Board view model: the shared scope control, the
+// freshness element, and the swimlanes.
+//
+// It deliberately carries no write affordance of any kind. The board is
+// read-only (FR f41a352d): there is no lane move, no drag-and-drop, and
+// nothing here posts to krill.
+type ProductBoardPage struct {
+	Product ProductHeader
+
+	// View is "Board", so the region can mark itself as the board view of
+	// the scope rather than the task list of it.
+	View string
+
+	// Path is this region's own URL, which Refresh re-requests.
+	Path string
+
+	// Scope and ScopeLabel are the same control and the same resolved
+	// scope the Tasks view renders, read back from one resolved value
+	// rather than described twice.
+	Scope      ProductTaskScopeControl
+	ScopeLabel string
+
+	// Lane and OnlyStuck mirror the active filters, so the board's own
+	// prose can name them rather than reading as an unfiltered scope.
+	Lane      string
+	OnlyStuck bool
+
+	// UpdatedAt is the absolute instant of this render. The markup carries
+	// it verbatim and the client-side script rewrites the visible text to
+	// a relative form, so the page states a real time even with scripting
+	// off.
+	UpdatedAt string
+
+	// TasksPath is the Tasks view of this same scope and filter set -- the
+	// "Showing X of Y" line's way out when the board cannot fit them all.
+	TasksPath string
+
+	// Shown is how many tasks the board rendered and Total is the count
+	// read for the same filters. Equal, unless the read paged.
+	Shown int
+	Total int
+
+	// Empty is set when the scope resolved and no incomplete milestone has
+	// a task in it, so the board says so instead of reading as a page
+	// that failed. Distinct from Error.
+	Empty bool
+
+	// Error is a read failure in the operator's words, empty on success.
+	Error string
+
+	// Lanes are the swimlanes, in milestone position descending order.
+	Lanes []BoardLane
+}
+
+// boardColumnClasses fixes a column's width so the five columns cannot be
+// squeezed by the viewport: the lane is one flex row of five fixed-minimum
+// columns inside a horizontal scroller, which is what keeps the page
+// itself from scrolling sideways on a phone.
+const boardColumnClasses = "w-72 shrink-0 space-y-2"
+
+// boardLaneClasses lets a lane be as wide as its five columns and no
+// narrower than the scroller, so a wide screen does not leave the Done
+// column stranded short of the right edge.
+const boardLaneClasses = "space-y-2 w-max min-w-full"
+
+// boardLaneHeader renders one swimlane's header: the container's name
+// linking to its detail page, its own status badge, and the read's own
+// "N of M done".
+//
+// A milepebble lane names its parent too. The figures are the
+// milepebble's own, and saying which milestone they hang under is what
+// keeps that from reading as the parent milestone's progress.
+templ boardLaneHeader(lane BoardLane) {
+	<div class="flex flex-wrap items-center gap-2" data-krill="swimlane-header">
+		<h2 class="text-lg font-semibold flex items-center gap-2">
+			<a href={ templ.URL(lane.DetailPath) } class="link" data-krill="swimlane-name">{ lane.Name }</a>
+			@statusBadge(lane.Status)
+		</h2>
+		if lane.MilestoneName != "" {
+			<span class="text-sm text-base-content/70" data-krill="swimlane-parent">
+				under
+				<a href={ templ.URL(lane.MilestoneDetailPath) } class="link">{ lane.MilestoneName }</a>
+			</span>
+		}
+		<span class="text-sm font-normal text-base-content/70" data-krill="swimlane-progress">
+			{ strconv.Itoa(lane.Done) } of { strconv.Itoa(lane.Total) } done
+		</span>
+	</div>
+}
+
+// boardLaneColumns renders one swimlane's five columns, each headed by its
+// lane name and its count -- a zero included, so an empty lane is visibly
+// empty rather than absent.
+templ boardLaneColumns(columns []BoardColumn) {
+	<div class="flex gap-3" data-krill="swimlane-columns">
+		for _, col := range columns {
+			<div data-krill="board-column" data-krill-lane={ col.Lane } class={ boardColumnClasses }>
+				<h3 class="font-semibold flex items-center gap-2">
+					{ col.Lane }
+					@htmxui.Badge(strconv.Itoa(col.Count), htmxui.BadgeGhost, htmxui.BadgeSizeSM, false, templ.Attributes{
+						"data-krill": "column-count",
+					})
+				</h3>
+				<ul class="space-y-2">
+					for _, t := range col.Cards {
+						<li data-krill="board-card" data-krill-task-id={ t.ID }
+							data-krill-claim-id={ t.ClaimID }
+							data-krill-lease-expires-at={ t.LeaseExpiresAt }
+							class="card bg-base-100 border border-base-300">
+							<div class="card-body p-3 gap-1">
+								<a href={ templ.URL(t.DetailPath) } class="link font-medium" data-krill="task-title">{ t.Title }</a>
+							</div>
+						</li>
+					}
+				</ul>
+			</div>
+		}
+	</div>
+}
+
+// boardFreshness is the page's single "Updated N ago" element (NFR
+// 7b497d92): the absolute instant this render was read is in the markup,
+// and the client-side script rewrites the visible text relative to it.
+//
+// It lives here, in the page's own chrome, rather than inside a polled
+// fragment -- a fragment swapped out from under the element would reset
+// the countdown it was counting.
+templ boardFreshness(at string) {
+	<span class="text-sm text-base-content/70" data-krill="updated-at" data-krill-updated-at={ at } title={ at }>
+		Updated
+		<span data-krill="updated-instant">{ at }</span>
+	</span>
+}
+
+// ProductBoard renders the product-wide Board: the same region anchor and
+// the same scope control the Tasks view renders, then one swimlane per
+// milestone that has tasks.
+//
+// The scroller is the whole answer to a narrow viewport: it is the only
+// element that scrolls sideways, and each lane is as wide as its five
+// fixed-minimum columns need, so the page itself never does.
+templ ProductBoard(d ProductBoardPage) {
+	<section id={ ProductTasksAnchor } data-krill="product-tasks" data-krill-view="Board" data-krill="product-board">
+		<div class="flex flex-wrap items-center gap-3">
+			<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
+			<p class="text-sm text-base-content/70">
+				Scoped to
+				<span data-krill="scope-label">{ d.ScopeLabel }</span>
+				&mdash;
+				<span data-krill="task-count">{ strconv.Itoa(d.Total) }</span>
+				tasks in scope
+				if d.Lane != "" {
+					<span data-krill="lane-filter">in lane { d.Lane }</span>
+				}
+				if d.OnlyStuck {
+					<span data-krill="only-stuck">that are stuck</span>
+				}
+			</p>
+			<div class="flex-1"></div>
+			@boardFreshness(d.UpdatedAt)
+			<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
+				hx-get={ templ.URL(d.Path) }
+				hx-target={ "#" + ProductTasksAnchor }
+				hx-swap="outerHTML">
+				Refresh
+			</button>
+		</div>
+		@ProductTaskScopeForm(d.Scope)
+		if d.Error != "" {
+			<div class="mt-3" data-krill="product-tasks-error">
+				@htmxui.Alert(htmxui.AlertError, d.Error, templ.Attributes{
+					"data-krill": "product-tasks-error-alert",
+				})
+			</div>
+		} else if d.Empty {
+			<div class="mt-3" data-krill="product-board-empty">
+				@htmxui.EmptyState(
+					"No tasks to place on the board",
+					"No incomplete milestone has a task in this scope.",
+					"", "", templ.Attributes{},
+				)
+			</div>
+		} else {
+			if d.Shown < d.Total {
+				<p class="mt-2 text-sm text-base-content/70" data-krill="board-truncated">
+					Showing { strconv.Itoa(d.Shown) } of { strconv.Itoa(d.Total) }
+					<a href={ templ.URL(d.TasksPath) } class="link link-primary ml-1" data-krill="board-tasks-link">in the task list</a>
+				</p>
+			}
+			<div class="overflow-x-auto pb-2 mt-3 space-y-6" data-krill="board-scroll">
+				for _, lane := range d.Lanes {
+					<section data-krill="swimlane" data-krill-container-id={ lane.ID } class={ boardLaneClasses }>
+						@boardLaneHeader(lane)
+						@boardLaneColumns(lane.Columns)
+					</section>
+				}
+			</div>
+		}
+	</section>
+}
