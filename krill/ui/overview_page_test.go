@@ -35,6 +35,38 @@ import (
 // fixtures
 // ---------------------------------------------------------------------------
 
+// attentionRows splits the panel's rendered list into one string per <li>,
+// in the order they appear. Asserting against a whole row rather than the
+// list as a whole is what makes "this row's badge is this row's reason"
+// checkable: a scan of the whole list cannot tell a row carrying its own
+// reason from five rows each carrying the first one's.
+func attentionRows(body string) []string {
+	list := overviewRegion(body, "needs-attention-list")
+	if list == "" {
+		return nil
+	}
+	list, end := list, strings.Index(list, "</ul>")
+	if end < 0 {
+		return nil
+	}
+	list = list[:end]
+
+	var rows []string
+	for rest := list; ; {
+		i := strings.Index(rest, "<li")
+		if i < 0 {
+			return rows
+		}
+		rest = rest[i:]
+		j := strings.Index(rest, "</li>")
+		if j < 0 {
+			return rows
+		}
+		rows = append(rows, rest[:j])
+		rest = rest[j:]
+	}
+}
+
 // overviewProduct is the one product the Overview fixtures serve. It is a
 // literal rather than uuid.New() so the expected paths in the tables below
 // can be written out and read, and so a failure names the same ids every
@@ -1275,10 +1307,35 @@ var overviewEscalationAges = []time.Duration{
 	26 * time.Hour,
 }
 
+// overviewEscalationReasons cycles the store's whole reason vocabulary
+// across the seven rows, so the panel cannot satisfy its badge rule by
+// rendering one reason on every row: a fixture where all seven escalate
+// for the same reason would pass a panel that ignored each row's own.
+var overviewEscalationReasons = []store.EscalationReason{
+	store.EscalationReasonThrashCap,
+	store.EscalationReasonAttemptCap,
+	store.EscalationReasonManual,
+	store.EscalationReasonThrashCap,
+	store.EscalationReasonAttemptCap,
+	store.EscalationReasonManual,
+	store.EscalationReasonThrashCap,
+}
+
+// wantReasonLabels and wantReasonVariants are what each reason above must
+// render as -- the human wording and the colour class, both written out
+// rather than read back from the style function under test.
+var wantReasonLabels = []string{
+	"thrash cap", "attempt cap", "manual", "thrash cap", "attempt cap", "manual", "thrash cap",
+}
+
+var wantReasonVariants = []string{
+	"badge-error", "badge-error", "badge-warning", "badge-error", "badge-error", "badge-warning", "badge-error",
+}
+
 // escalatedFixtures builds n escalation rows, newest first, carrying the
-// titles and ages above. The ids and container are derived from the index
-// rather than random, so a failing href assertion names the same id every
-// run.
+// titles, ages and reasons above. The ids and container are derived from the
+// index rather than random, so a failing href assertion names the same id
+// every run.
 func escalatedFixtures(n int) []store.EscalatedTaskRow {
 	rows := make([]store.EscalatedTaskRow, 0, n)
 	for i := 0; i < n; i++ {
@@ -1288,7 +1345,7 @@ func escalatedFixtures(n int) []store.EscalatedTaskRow {
 			DeliveryRef: store.EscalatedTaskDeliveryRef{ID: overviewMilestone, Kind: store.MilestoneKindMilepebble, Title: "P1"},
 			EscalationID: uuid.MustParse(
 				fmt.Sprintf("77777777-7777-7777-7777-00000000000%d", i+1)),
-			Reason:      store.EscalationReasonThrashCap,
+			Reason:      overviewEscalationReasons[i],
 			Lane:        store.LaneTesting,
 			EscalatedAt: overviewNow.Add(-overviewEscalationAges[i]),
 		})
@@ -1487,8 +1544,27 @@ func TestNeedsAttentionFailedReadShowsAnErrorNotAnEmptyList(t *testing.T) {
 		if empty := overviewRegion(body, "needs-attention-empty"); empty != "" {
 			t.Errorf("GET %s: a failed read rendered the empty state, claiming nothing is escalated", path)
 		}
+		if rows := attentionRows(body); len(rows) != 0 {
+			t.Errorf("GET %s: a failed read rendered %d rows anyway", path, len(rows))
+		}
+		// The failure must not reach the page as a figure either. The count
+		// read is separate and still succeeded here, so the header keeps its
+		// "2" -- what must not appear is the panel standing in for that count
+		// with a fabricated one.
+		panel := collapsed(overviewRegion(body, "needs-attention-panel"))
+		if strings.Contains(panel, "0 escalated") || strings.Contains(panel, "Nothing needs attention") {
+			t.Errorf("GET %s: the failed panel rendered a count or empty message: %s", path, panel)
+		}
+		// No store text: the operator is told the read failed in the page's
+		// own words, not handed the store's error string.
+		if strings.Contains(panel, store.ErrNotFound.Error()) {
+			t.Errorf("GET %s: the panel leaked store text into the page: %s", path, panel)
+		}
 		if inFlight := overviewRegion(body, "overview-in-flight"); inFlight == "" {
 			t.Errorf("GET %s: the failed panel read cost the page its in-flight list", path)
+		}
+		if !strings.Contains(body, `data-krill="needs-attention-see-all"`) {
+			t.Errorf("GET %s: the failed read took the See all link with it", path)
 		}
 	}
 }
@@ -1558,5 +1634,178 @@ func TestEscalationReasonTableCoversEveryValidReason(t *testing.T) {
 	}
 	if v := components.EscalationReasonStyle("something-new").Variant; v != htmxui.BadgeNeutral {
 		t.Errorf("an unknown reason rendered as %q, want a neutral badge", v)
+	}
+}
+
+// TestNeedsAttentionEachRowCarriesItsOwnReason is the badge rule read per
+// row rather than per panel. The fixture escalates for a different reason
+// on each row, so a panel that rendered one reason on every row -- or that
+// reused the previous row's -- is caught here even though every individual
+// badge would look correct in isolation.
+//
+// The label and the colour class are both checked, because a badge whose
+// text is right and whose colour is wrong is the same defect as one whose
+// text is wrong: an operator scans for the reason, not reads it.
+func TestNeedsAttentionEachRowCarriesItsOwnReason(t *testing.T) {
+	mux, _ := attentionMux(t, 5)
+
+	rows := attentionRows(fetch(t, mux, overviewPaths()[0]).Body.String())
+	if len(rows) != 5 {
+		t.Fatalf("panel rendered %d rows, want 5: %q", len(rows), rows)
+	}
+
+	for i, row := range rows {
+		if want := wantReasonLabels[i]; !strings.Contains(collapsed(row), want) {
+			t.Errorf("row %d (%s): no %q badge; it shows another row's reason", i+1, overviewEscalationTitles[i], want)
+		}
+		if want := wantReasonVariants[i]; !strings.Contains(row, want) {
+			t.Errorf("row %d (%s): badge carries no %q class; the reason's colour is wrong",
+				i+1, overviewEscalationTitles[i], want)
+		}
+		if !strings.Contains(row, "badge-soft") {
+			t.Errorf("row %d (%s): badge is not soft; the wireframe's are", i+1, overviewEscalationTitles[i])
+		}
+		// A row must not carry a second reason's wording: two labels on one
+		// badge is the shape a template that renders both the raw wire value
+		// and the human one takes.
+		if n := strings.Count(row, `data-krill="needs-attention-reason"`); n != 1 {
+			t.Errorf("row %d carries %d reason badges, want exactly 1", i+1, n)
+		}
+	}
+}
+
+// TestNeedsAttentionRowsAreSelfContained pins the three facts a row
+// carries together as one row: its own title, its own link, and its own
+// exact instant. Checking each fact against the whole list cannot tell a
+// row whose href belongs to a different task, or whose hover instant is a
+// neighbour's -- the panel would still contain every expected string, just
+// not on the same row.
+func TestNeedsAttentionRowsAreSelfContained(t *testing.T) {
+	mux, _ := attentionMux(t, 5)
+
+	rows := attentionRows(fetch(t, mux, overviewPaths()[0]).Body.String())
+	if len(rows) != 5 {
+		t.Fatalf("panel rendered %d rows, want 5: %q", len(rows), rows)
+	}
+
+	for i, row := range rows {
+		if !strings.Contains(collapsed(row), overviewEscalationTitles[i]) {
+			t.Errorf("row %d carries no title %q; the titles are not in row order", i+1, overviewEscalationTitles[i])
+		}
+		wantHref := taskDetailPath(overviewProduct, overviewMilestone,
+			uuid.MustParse(fmt.Sprintf("66666666-6666-6666-6666-00000000000%d", i+1)))
+		if !strings.Contains(row, `href="`+wantHref+`"`) {
+			t.Errorf("row %d (%s) does not link to its own task detail %s",
+				i+1, overviewEscalationTitles[i], wantHref)
+		}
+		wantInstant := overviewNow.Add(-overviewEscalationAges[i]).Format(time.RFC3339)
+		if !strings.Contains(row, `title="`+wantInstant+`"`) {
+			t.Errorf("row %d (%s) carries no hover instant %q; it shows a neighbour's",
+				i+1, overviewEscalationTitles[i], wantInstant)
+		}
+		want := wantRelative[i]
+		if !strings.Contains(collapsed(row), want) {
+			t.Errorf("row %d (%s) renders no %q; its relative time belongs to another row",
+				i+1, overviewEscalationTitles[i], want)
+		}
+		// The instant and the wording derived from it ride one element, so
+		// hovering the time the operator actually reads is what surfaces
+		// the exact one. Split across two elements the hover would land on
+		// something that carries no title at all.
+		if !strings.Contains(collapsed(row), `title="`+wantInstant+`"> `+want+` </span>`) &&
+			!strings.Contains(collapsed(row), `title="`+wantInstant+`">`+want+`</span>`) {
+			t.Errorf("row %d (%s): %q and its relative wording are not on the same element: %s",
+				i+1, overviewEscalationTitles[i], wantInstant, row)
+		}
+	}
+}
+
+// TestNeedsAttentionSeeAllLinksToTheEscalatedTab is the panel's own
+// "See all", which the FR asks for separately from the header's primary
+// action: the panel is where an operator who has read five rows decides
+// they want the rest, so this is the link that has to work.
+//
+// Asserted against the same href constant the panel builds its link from
+// rather than a literal path, so this checks that the panel and the header
+// point one place without pinning which place that is -- the Escalated tab
+// moves when Needs attention ships, and the header's own test is what
+// pins the current path.
+func TestNeedsAttentionSeeAllLinksToTheEscalatedTab(t *testing.T) {
+	// Both panel shapes, because "See all" is the way out of the empty
+	// state too: an operator told nothing needs attention is still owed the
+	// list that says so.
+	for _, n := range []int{0, 5} {
+		mux, _ := attentionMux(t, n)
+
+		for _, path := range overviewPaths() {
+			body := fetch(t, mux, path).Body.String()
+			i := strings.Index(body, `data-krill="needs-attention-see-all"`)
+			if i < 0 {
+				t.Errorf("GET %s at N=%d: no See all link", path, n)
+				continue
+			}
+
+			tag := elementTag(body, "needs-attention-see-all")
+			if tag == "" {
+				t.Errorf("GET %s at N=%d: no See all link", path, n)
+				continue
+			}
+			if want := `href="` + escalatedTabHref + `"`; !strings.Contains(tag, want) {
+				t.Errorf("GET %s at N=%d: See all tag %q does not carry %s", path, n, tag, want)
+			}
+			// The label, not just the destination: a link an operator cannot
+			// read is not a way out of the panel.
+			if !strings.Contains(collapsed(body[i:]), "See all") {
+				t.Errorf("GET %s at N=%d: the See all link carries no readable label", path, n)
+			}
+		}
+	}
+}
+
+// TestNeedsAttentionFailedInFlightReadLeavesThePanelAlone is the coupling
+// case the per-region rule turns on: two regions, two reads, and one of
+// them failing.
+//
+// The header's in-flight read returning early is correct for the header --
+// it says what it could not read rather than claiming nothing is in flight.
+// But it must not cost the panel its own read: a product with seven
+// escalated tasks whose delivery listing failed to load would otherwise
+// render "Nothing needs attention" beside an inline error about something
+// else entirely. The empty state is a positive claim about the escalation
+// queue, and nothing checked it.
+func TestNeedsAttentionFailedInFlightReadLeavesThePanelAlone(t *testing.T) {
+	counter := &overviewCounter{
+		count: 7, readable: true,
+		escalated: escalatedFixtures(7),
+	}
+	mux := overviewMux(t, slice.DeliveryListing{}, store.ErrNotFound, counter)
+
+	for _, path := range overviewPaths() {
+		rec := fetch(t, mux, path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", path, rec.Code)
+		}
+		body := rec.Body.String()
+
+		// The header's own failure still renders as the header's failure.
+		if !strings.Contains(body, `data-krill="overview-in-flight-error"`) {
+			t.Errorf("GET %s: no inline error for the failed in-flight read", path)
+		}
+
+		// The panel is a separate region with a separate read, and its own
+		// read succeeded. It must render what it read.
+		rows := attentionRows(body)
+		if len(rows) != 5 {
+			t.Errorf("GET %s: panel rendered %d rows after the in-flight read failed, want the 5 it read",
+				path, len(rows))
+		}
+		if empty := overviewRegion(body, "needs-attention-empty"); empty != "" {
+			t.Errorf("GET %s: panel rendered its empty state after an unrelated read failed, "+
+				"claiming nothing is escalated when the panel's own read succeeded", path)
+		}
+		if errRegion := overviewRegion(body, "needs-attention-error"); errRegion != "" {
+			t.Errorf("GET %s: panel rendered an error though its own read succeeded: %s",
+				path, collapsed(errRegion))
+		}
 	}
 }
