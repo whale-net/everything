@@ -89,3 +89,11 @@ type chromeTaskCounter struct{ store.TaskStore }
 func (chromeTaskCounter) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
 	return 0, nil
 }
+
+// CountConsoleOverview is the Overview stat tiles' read. Every page here
+// renders the chrome, and the Overview home renders the tiles too, so this
+// fake owes it -- zero figures, which is a real answer for an idle
+// deployment rather than a gap that would nil-panic on a nil embed.
+func (chromeTaskCounter) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	return store.ConsoleOverviewCounts{}, nil
+}

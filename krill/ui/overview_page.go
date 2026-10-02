@@ -4,9 +4,9 @@
 //
 // It is served at two URLs, /products/{pid}/overview and the un-prefixed
 // "/", which resolves a product and then serves the same page. The frame
-// lives here; the stat tiles, the Needs-attention panel and the in-flight
-// panel are separate pages' own work and their slots render empty until
-// they land.
+// lives here; the stat tiles are built in overview_tiles.go, and the
+// Needs-attention panel and the in-flight panel are separate pages' own
+// work and their slots render empty until they land.
 package main
 
 import (
@@ -88,6 +88,7 @@ func (app *App) buildOverview(r *http.Request, product store.Product, badge navB
 		Escalated:         badge.count,
 		EscalatedReadable: badge.readable,
 		EscalatedHref:     escalatedTabHref,
+		StatTiles:         app.overviewStatTiles(r, product.ID, badge),
 	}
 
 	listing, err := app.spec.Delivery(r.Context(), product.ID, inFlightStatuses)
