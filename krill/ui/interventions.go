@@ -159,7 +159,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			// an internal URL into the page.
 			logger.Error("failed to issue an operator write", "error", err)
 			if isHtmxRequest(r) {
-				app.renderInterventionResults(w, r, returnTo, "the write could not be issued as the signed-in operator")
+				app.renderInterventionResults(w, r, returnTo, "the write could not be issued as the signed-in operator", "")
 				return
 			}
 			writeWriteError(w, err)
@@ -176,6 +176,10 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 				app.renderInterventionSuccess(w, r, action, card)
 				return
 			}
+			// A 303 has no body to carry the confirmation in, so the
+			// message rides a one-shot cookie that the landing page
+			// renders as a success alert.
+			flashSuccess(w, interventionSuccessMessage(action))
 			http.Redirect(w, r, returnTo, http.StatusSeeOther)
 			return
 		}
@@ -192,7 +196,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 				renderFragment(w, r, pages.CancelConfirmCard(card))
 				return
 			}
-			app.renderInterventionResults(w, r, returnTo, refusal)
+			app.renderInterventionResults(w, r, returnTo, refusal, "")
 			return
 		}
 		renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{
@@ -219,12 +223,37 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 // from, because cancel is the only verb whose hx-post originates on the
 // confirm card: its console-row control is a link, never a form.)
 func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request, action string, card pages.CancelConfirmData) {
+	message := interventionSuccessMessage(action)
 	if action == actionCancel {
+		// HX-Redirect is a full page load, so the target page is rendered
+		// from scratch and the toast host arrives with it. The message
+		// therefore takes the same no-JS path a plain form post does.
+		flashSuccess(w, message)
 		w.Header().Set("HX-Redirect", card.ReturnTo)
 		renderFragment(w, r, pages.CancelConfirmCard(card))
 		return
 	}
-	app.renderInterventionResults(w, r, card.ReturnTo, "")
+	app.renderInterventionResults(w, r, card.ReturnTo, "", message)
+}
+
+// interventionSuccessMessage is the confirmation a successful
+// intervention states. It is derived from the verb's own label rather
+// than declared per call site, so the four verbs cannot drift into four
+// differently-worded confirmations.
+func interventionSuccessMessage(action string) string {
+	label := strings.ToLower(actionLabel(action))
+	switch action {
+	case actionRelease:
+		return "Claim released."
+	case actionRequeue:
+		return "Task requeued; it is claimable again."
+	case actionEscalate:
+		return "Task escalated for attention."
+	case actionCancel:
+		return "Task cancelled."
+	default:
+		return "krill " + label + " applied."
+	}
 }
 
 // renderInterventionResults re-reads the console view the operator acted
@@ -237,7 +266,14 @@ func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request
 // longer has. The re-read is always page one -- an intervention's whole
 // effect is on the first page, and the POST carries no continuation token
 // to resume from.
-func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo, message string) {
+//
+// message and toast are separate because they answer to opposite
+// outcomes: a refusal rides inline in message (it must stay on the page
+// until read) while a success rides in toast (it is transient). Callers
+// pass at most one of the two -- a response that is both a success and a
+// refusal does not exist, and giving it a way to be both would put a
+// dismissible toast next to the record of its own opposite.
+func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo, message, toast string) {
 	ctx := r.Context()
 	if returnTo == opsEscalatedPath {
 		d, err := app.escalatedResults(ctx, store.PageParams{}, returnTo)
@@ -251,7 +287,7 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 		} else {
 			d.Error = message
 		}
-		renderFragment(w, r, pages.EscalatedResults(d))
+		renderFragment(w, r, withToast(toast, pages.EscalatedResults(d)))
 		return
 	}
 	d, err := app.claimedResults(ctx, store.PageParams{}, returnTo)
@@ -261,7 +297,7 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 	} else {
 		d.Error = message
 	}
-	renderFragment(w, r, pages.ClaimedResults(d))
+	renderFragment(w, r, withToast(toast, pages.ClaimedResults(d)))
 }
 
 // apiError mirrors api/handlers' jsonError: the single {"error": "..."} shape

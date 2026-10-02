@@ -283,7 +283,7 @@ func TestInterventionReReadFailureNeverLooksEmpty(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, opsClaimedPath, nil)
 	rec := httptest.NewRecorder()
-	app.renderInterventionResults(rec, req, opsClaimedPath, "")
+	app.renderInterventionResults(rec, req, opsClaimedPath, "", "")
 
 	out := rec.Body.String()
 	assert.NotContains(t, out, "No claimed tasks.",
