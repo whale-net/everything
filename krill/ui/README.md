@@ -389,7 +389,23 @@ rides inline in `message` (stays until read), a success in `toast`
 never looks away, which a 5-second self-dismiss cannot promise.
 
 **Empty means nothing, on both paths.** `withToast` returns the fragment
-unchanged for a blank message and `flashSuccess` sets no cookie.
+unchanged for a blank message and `flashSuccess` sets no cookie. A handler
+that already records its outcome where the operator is looking — the
+credential mint's one-time token block, the revoked row flipping to
+"revoked" — names no message and correctly shows no toast.
+
+**A redirect is the only thing that carries a flash**, so the design-session
+forms (`design_write.go`) name a message on the same cookie: both their
+success outcomes navigate (303 for no-JS, `HX-Redirect` for htmx) and
+neither has a body to state the outcome in.
+
+**The flash is only read by a full page load.** `withFlashSuccess` returns
+the body untouched for an htmx request: a fragment renders no document, so
+a prepended alert would be swapped into the middle of whatever target
+asked for it, and consuming the cookie there would leave nothing to show.
+For the same reason the cookie is expired only when one is actually
+present, so an ordinary page load does not carry a `Set-Cookie` clearing a
+cookie it never had.
 
 Installing the host on every page is the cutover task's job; this task
 builds the component and the mechanism only.

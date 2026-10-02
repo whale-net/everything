@@ -119,15 +119,18 @@ func flashSuccess(w http.ResponseWriter, message string) {
 // message it carried. An absent, unreadable, or empty cookie yields "",
 // which every caller renders as nothing.
 func takeFlashSuccess(r *http.Request, w http.ResponseWriter) string {
-	// Expire unconditionally, before knowing whether the cookie decoded:
-	// a message that fails to decode is still a message that was shown
-	// once and must not be shown again.
-	expireToastCookie(w)
-
 	c, err := r.Cookie(toastCookieName)
 	if err != nil {
 		return ""
 	}
+	// Expire once the cookie is known to exist, before knowing whether it
+	// decoded: a message that fails to decode was still shown once and
+	// must not be shown again. Expiring only when a cookie is actually
+	// present keeps an ordinary page load -- which is every request in
+	// the shell but the one that follows a post -- from carrying a
+	// Set-Cookie that clears a cookie it never had.
+	expireToastCookie(w)
+
 	decoded, err := base64.RawURLEncoding.DecodeString(c.Value)
 	if err != nil {
 		return ""
@@ -156,6 +159,13 @@ func expireToastCookie(w http.ResponseWriter) {
 // because it expires the cookie, which has to be a header on the very
 // response that displays the message.
 func withFlashSuccess(r *http.Request, w http.ResponseWriter, body templ.Component) templ.Component {
+	// A fragment request renders no document, so an alert prepended to it
+	// would be swapped into the middle of whatever target asked for it --
+	// and the flash would be consumed, leaving nothing to show. Leave the
+	// cookie for the page load that can actually display it.
+	if isHtmxRequest(r) {
+		return body
+	}
 	message := takeFlashSuccess(r, w)
 	if message == "" || body == nil {
 		return body
