@@ -70,5 +70,5 @@ func (app *App) handleTaskBoard(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, body)
 		return
 	}
-	renderShell(w, r, "Task board", specPath, body)
+	app.renderShell(w, r, "Task board", r.URL.Path, body)
 }

@@ -69,7 +69,7 @@ func (app *App) productSwitcherData(r *http.Request) *components.ProductSwitcher
 func (app *App) handleProductSwitch(w http.ResponseWriter, r *http.Request) {
 	productID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("product")))
 	if err != nil {
-		renderProductScopeStatus(w, r, http.StatusBadRequest, "Not a product",
+		app.renderProductScopeStatus(w, r, http.StatusBadRequest, "Not a product",
 			"That is not a product id.")
 		return
 	}
@@ -77,12 +77,12 @@ func (app *App) handleProductSwitch(w http.ResponseWriter, r *http.Request) {
 	products, err := app.scopeProducts(r.Context())
 	if err != nil {
 		logger.Error("product list read failed for the product switch", "error", err)
-		renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not switch product",
+		app.renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not switch product",
 			"The product list could not be read. See the logs.")
 		return
 	}
 	if !containsProduct(products, productID) {
-		renderProductScopeStatus(w, r, http.StatusNotFound, "Product not found",
+		app.renderProductScopeStatus(w, r, http.StatusNotFound, "Product not found",
 			"No product in your scope matches that id.")
 		return
 	}

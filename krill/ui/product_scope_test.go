@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 )
 
@@ -48,6 +49,14 @@ type productScopeTasks struct {
 
 func (productScopeTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
 	return store.Page[store.EscalatedTaskRow]{}, nil
+}
+
+// CountEscalatedTasks is the chrome's Needs-attention badge read, which
+// every shell page renders. It is separate from the List method above on
+// purpose: the badge's figure must never be capped at a page size, so the
+// store gives it a dedicated count read rather than reusing the list.
+func (productScopeTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
 }
 
 func (productScopeTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
@@ -266,19 +275,31 @@ func TestCredentialsPageStillRendersWithAnEmptyScope(t *testing.T) {
 // own route table grew an id input back.
 func TestNoShellPageAsksForATypedProductID(t *testing.T) {
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{},
-		products: []store.Product{{ID: uuid.New(), Name: "krill"}}}
+	pid := uuid.New()
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{
+		products: nil,
+		listing: slice.DeliveryListing{
+			Milestones: []slice.MilestoneListingEntry{{ID: navMilestoneID, Name: "Shipped shell"}},
+		},
+	}, products: []store.Product{{ID: pid, Name: "krill"}}}
+	// The console reads the walk visits, and the scope the chrome reads
+	// its Needs-attention badge under.
+	app.tasks = &navTasks{milestoneID: navMilestoneID}
+	app.scopes = chromeScopes{}
+	app.designSessions = navStubDesignSessions{}
+	app.revisionEvents = navStubRevisionEvents{}
+	app.credentials = &fakeCredentials{}
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
 
-	for _, a := range navAreas {
-		rec := fetch(t, mux, a.Path)
+	for _, path := range shellPagePaths(pid) {
+		rec := fetch(t, mux, path)
 		if rec.Code != http.StatusOK {
-			t.Errorf("GET %s: status = %d, want 200", a.Path, rec.Code)
+			t.Errorf("GET %s: status = %d, want 200", path, rec.Code)
 			continue
 		}
 		if body := rec.Body.String(); strings.Contains(body, `name="product_id"`) {
-			t.Errorf("GET %s asks the operator for a product id", a.Path)
+			t.Errorf("GET %s asks the operator for a product id", path)
 		}
 	}
 }
@@ -336,14 +357,60 @@ func TestCopiedMilestoneDetailLinkOpensOnTheProductItNames(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "product A") {
-		t.Errorf("copied milestone link opened on the cookie's product: %s", body)
+	body := rec.Body.String()
+	if !strings.Contains(body, "product A") {
+		t.Errorf("copied milestone link did not render the linked product: %s", body)
 	}
-	if body := rec.Body.String(); strings.Contains(body, "product B") {
-		t.Errorf("copied milestone link rendered the cookie's product too: %s", body)
+	// Scoped to the page body, not the whole document: the sidebar's
+	// Product select lists every product in scope by design, so the
+	// cookie's product appearing as an unselected option says nothing
+	// about which product the page resolved.
+	if page := placeholderRegion(body); strings.Contains(page, "product B") {
+		t.Errorf("copied milestone link rendered the cookie's product too: %s", page)
+	}
+	// The switcher marks the current product, so the cookie's product must
+	// be the one left unselected.
+	if strings.Contains(selectedOptionRegion(body), "product B") {
+		t.Errorf("the switcher selected the cookie's product on a prefixed URL: %s", body)
 	}
 	if got := lastViewedCookie(t, rec).Value; got != a.String() {
 		t.Errorf("last-viewed cookie = %s, want the linked product %s", got, a)
+	}
+}
+
+// placeholderRegion slices the product-placeholder body out of a page, so
+// an assertion about which product the page is about cannot be satisfied
+// by the name of a product the sidebar happens to offer.
+func placeholderRegion(body string) string {
+	start := strings.Index(body, `data-krill="product-placeholder"`)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(body[start:], "</section>")
+	if end < 0 {
+		return body[start:]
+	}
+	return body[start : start+end]
+}
+
+// selectedOptionRegion slices the switcher's selected option out of a page.
+func selectedOptionRegion(body string) string {
+	rest := body
+	for {
+		i := strings.Index(rest, "<option")
+		if i < 0 {
+			return ""
+		}
+		rest = rest[i:]
+		end := strings.Index(rest, "</option>")
+		if end < 0 {
+			return ""
+		}
+		option := rest[:end]
+		if strings.Contains(option, "selected") {
+			return option
+		}
+		rest = rest[end:]
 	}
 }
 
@@ -526,6 +593,7 @@ func TestUnprefixedPageSurvivesAFailedProductRead(t *testing.T) {
 		productsErr: errors.New("product list unavailable")}
 	app.scopes = productScopeScopes{scope: store.Scope{ID: uuid.New()}}
 	app.tasks = productScopeTasks{}
+	app.credentials = &fakeCredentials{}
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
 

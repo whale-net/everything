@@ -56,7 +56,7 @@ func (app *App) renderCredentials(w http.ResponseWriter, r *http.Request, d page
 		return
 	}
 	r, _ = app.rememberUnprefixedProduct(w, r)
-	renderShell(w, r, "Credentials", credentialsPath, pages.CredentialsPage(d))
+	app.renderShell(w, r, "Credentials", credentialsPath, pages.CredentialsPage(d))
 }
 
 // handleCredentials is the credentials page.

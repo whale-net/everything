@@ -61,7 +61,7 @@ func currentProduct(ctx context.Context) (store.Product, bool) {
 func (app *App) resolveProductFromPath(w http.ResponseWriter, r *http.Request) (*http.Request, store.Product, bool) {
 	pid, err := uuid.Parse(r.PathValue("pid"))
 	if err != nil {
-		renderProductScopeStatus(w, r, http.StatusNotFound, "Product not found",
+		app.renderProductScopeStatus(w, r, http.StatusNotFound, "Product not found",
 			"That link does not name a product.")
 		return r, store.Product{}, false
 	}
@@ -69,7 +69,7 @@ func (app *App) resolveProductFromPath(w http.ResponseWriter, r *http.Request) (
 	products, err := app.scopeProducts(r.Context())
 	if err != nil {
 		logger.Error("product scope read failed", "error", err)
-		renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not load the product",
+		app.renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not load the product",
 			"The product list could not be read. See the logs.")
 		return r, store.Product{}, false
 	}
@@ -80,7 +80,7 @@ func (app *App) resolveProductFromPath(w http.ResponseWriter, r *http.Request) (
 		}
 	}
 
-	renderProductScopeStatus(w, r, http.StatusNotFound, "Product not found",
+	app.renderProductScopeStatus(w, r, http.StatusNotFound, "Product not found",
 		"No product in your scope matches that id.")
 	return r, store.Product{}, false
 }
@@ -130,12 +130,12 @@ func (app *App) resolveUnprefixedProduct(w http.ResponseWriter, r *http.Request)
 	product, err := app.resolveProductForUnprefixed(r)
 	if err != nil {
 		logger.Error("product list read failed", "error", err)
-		renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not load the product",
+		app.renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not load the product",
 			"The product list could not be read. See the logs.")
 		return r, store.Product{}, false
 	}
 	if product.ID == uuid.Nil {
-		renderShell(w, r, "No products in this scope", r.URL.Path, pages.NoProductsInScope())
+		app.renderShell(w, r, "No products in this scope", r.URL.Path, pages.NoProductsInScope())
 		return r, store.Product{}, false
 	}
 	setLastViewedProductCookie(w, product.ID)
@@ -191,8 +191,8 @@ func (app *App) scopeProducts(ctx context.Context) ([]store.Product, error) {
 // the shell with an explicit status. The status lives at this seam rather
 // than in the component because templ components are body-writers with no
 // status concept -- the same seam spec_page.go's renderSpecStatus uses.
-func renderProductScopeStatus(w http.ResponseWriter, r *http.Request, status int, title, detail string) {
-	renderShellStatus(w, r, title, productsPath, pages.SpecStatus(pages.StatusPage{
+func (app *App) renderProductScopeStatus(w http.ResponseWriter, r *http.Request, status int, title, detail string) {
+	app.renderShellStatus(w, r, title, productsPath, pages.SpecStatus(pages.StatusPage{
 		Title:  title,
 		Detail: detail,
 	}), status)

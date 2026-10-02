@@ -139,8 +139,8 @@ func taskListPageOf(pid uuid.UUID, c taskContainer, tasks []store.TaskSummary, r
 }
 
 // taskNotFound renders the in-shell 404 for a container id outside the product.
-func taskNotFound(w http.ResponseWriter, r *http.Request, pid uuid.UUID) {
-	renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
+func (app *App) taskNotFound(w http.ResponseWriter, r *http.Request, pid uuid.UUID) {
+	app.renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
 		Title:    "Not found",
 		Detail:   "No milestone or milepebble with that id belongs to this product.",
 		BackHref: deliveryPath(pid),
@@ -151,13 +151,13 @@ func taskNotFound(w http.ResponseWriter, r *http.Request, pid uuid.UUID) {
 // resolveTaskRoute validates {id}/{mid} and resolves the container within
 // the product, writing the 400/404/500 page itself when it cannot.
 func (app *App) resolveTaskRoute(w http.ResponseWriter, r *http.Request) (uuid.UUID, taskContainer, bool) {
-	pid, ok := specProductID(w, r)
+	pid, ok := app.specProductID(w, r)
 	if !ok {
 		return uuid.Nil, taskContainer{}, false
 	}
 	mid, err := uuid.Parse(r.PathValue("mid"))
 	if err != nil {
-		renderSpecStatus(w, r, http.StatusBadRequest, pages.StatusPage{
+		app.renderSpecStatus(w, r, http.StatusBadRequest, pages.StatusPage{
 			Title:    "Bad milestone id",
 			Detail:   "The milestone id in the URL is not a UUID.",
 			BackHref: deliveryPath(pid),
@@ -167,12 +167,12 @@ func (app *App) resolveTaskRoute(w http.ResponseWriter, r *http.Request) (uuid.U
 	}
 	listing, err := app.spec.Delivery(r.Context(), pid, nil)
 	if err != nil {
-		renderSpecError(w, r, pages.TasksAnchor, err)
+		app.renderSpecError(w, r, pages.TasksAnchor, err)
 		return uuid.Nil, taskContainer{}, false
 	}
 	c, found := resolveTaskContainer(listing, mid)
 	if !found {
-		taskNotFound(w, r, pid)
+		app.taskNotFound(w, r, pid)
 		return uuid.Nil, taskContainer{}, false
 	}
 	return pid, c, true
@@ -199,5 +199,5 @@ func (app *App) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, body)
 		return
 	}
-	renderShell(w, r, "Tasks", specPath, body)
+	app.renderShell(w, r, "Tasks", r.URL.Path, body)
 }

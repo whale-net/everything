@@ -8,10 +8,10 @@ type AreaLink struct {
 	Blurb string
 }
 
-// AreaIndex is the shared link-and-blurb list the home page, the ops
-// root, and the spec landing all render. The three were three separate
-// near-identical html/template strings; they are one component now
-// because the difference between them was a heading, not a shape.
+// AreaIndex is the shared link-and-blurb list the ops root and the spec
+// landing both render. The two were near-identical html/template strings;
+// they are one component because the difference between them was a
+// heading, not a shape.
 templ AreaIndex(heading string, links []AreaLink) {
 	<section data-krill="area-index">
 		<h2 class="text-lg font-semibold">{ heading }</h2>

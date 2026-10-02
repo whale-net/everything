@@ -32,6 +32,13 @@ type fakeDetailStore struct {
 	claim    store.Claim
 }
 
+// CountEscalatedTasks is the chrome's Needs-attention badge read, which
+// every page this store's routes render carries -- including the 404, which
+// renders inside the same chrome.
+func (f *fakeDetailStore) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
+}
+
 func (f *fakeDetailStore) GetTaskByID(_ context.Context, id uuid.UUID) (store.Task, error) {
 	if f.getErr != nil {
 		return store.Task{}, f.getErr
@@ -79,7 +86,9 @@ func newDetailFixture(t *testing.T) *detailFixture {
 	f.spec = &fakeSliceSpec{fakeSpecReader: &fakeSpecReader{listing: slice.DeliveryListing{
 		Milestones: []slice.MilestoneListingEntry{{ID: f.mid, Name: "Plain"}},
 	}}}
-	app := &App{spec: f.spec, tasks: f.store}
+	// scopes is what the chrome reads for its Needs-attention badge on
+	// every page it renders.
+	app := &App{spec: f.spec, tasks: f.store, scopes: chromeScopes{}}
 	f.mux = http.NewServeMux()
 	f.mux.HandleFunc("GET /spec/products/{id}/milestones/{mid}/tasks/{tid}", app.handleTaskDetail)
 	return f

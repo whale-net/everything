@@ -26,7 +26,8 @@ import (
 //
 // spec is a fakeSpecReader so every un-prefixed page can resolve a product
 // (product_scope.go); it lists none, which is the empty-scope case these
-// nav tests are indifferent to.
+// nav tests are indifferent to. scopes and tasks are what the chrome reads
+// for its Needs-attention badge on every page it renders.
 func newTestApp(t *testing.T) *App {
 	t.Helper()
 	auth, err := htmxauth.NewAuthenticator(context.Background(), htmxauth.Config{
@@ -37,7 +38,13 @@ func newTestApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
-	return &App{auth: auth, devAuth: true, spec: &fakeSpecReader{}}
+	return &App{
+		auth:    auth,
+		devAuth: true,
+		spec:    &fakeSpecReader{},
+		scopes:  chromeScopes{},
+		tasks:   chromeTaskCounter{},
+	}
 }
 
 // newTestMux registers only the shell's own routes, mirroring
@@ -64,24 +71,35 @@ func mountSelfServeStubs(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /credentials/{id}", noop)
 }
 
-// requiredAreas is the nav contract spelled out as literals, deliberately
-// not derived from navAreas. Every other test in this file that iterates
-// navAreas is self-referential -- deleting an entry shrinks what it
-// checks and it passes anyway, which is exactly how an area can go
-// missing from the nav without a single test noticing. This table is the
-// one assertion that cannot be satisfied by shrinking the list it reads.
-var requiredAreas = []string{opsPath, designPath, specPath}
+// requiredAreas is the set of areas the shell's nav must reach, spelled
+// out as literals rather than derived from navGroupTable. A test that
+// iterates the production table passes even after an entry is deleted
+// from it -- which is how a whole area can go missing from the sidebar
+// without a single test noticing. This table is the one assertion that
+// cannot be satisfied by shrinking the list it reads.
+//
+// The hrefs are the ones each area serves today. An area whose redesigned
+// page has not shipped points at the existing page for that area, so this
+// is the shell's promise: every one of these is a real page.
+func requiredAreas(pid uuid.UUID) []string {
+	return []string{
+		opsPath,                        // Work: Needs attention
+		designProductSessionsPath(pid), // Design
+		productPath(pid),               // Spec: Capabilities
+		deliveryPath(pid),              // Delivery: Milestones
+		credentialsPath,                // Admin
+	}
+}
 
-// TestNavExposesRequiredAreas pins the three areas the shell exists to
-// expose: the ops console, the design-session browser, and the
-// spec+delivery browser, each linked from every page and each resolving.
+// TestNavExposesRequiredAreas pins that every required area is linked
+// from every shell page, and that the link the sidebar actually renders is
+// the one that resolves.
 func TestNavExposesRequiredAreas(t *testing.T) {
-	mux := newTestMux(t)
+	mux := navMux(t)
 
-	// Every shell page carries the full nav, so check all of them.
-	for _, path := range append([]string{"/"}, navPaths()...) {
+	for _, path := range shellPagePaths(navProductID) {
 		body := fetch(t, mux, path).Body.String()
-		for _, want := range requiredAreas {
+		for _, want := range requiredAreas(navProductID) {
 			if !strings.Contains(body, `href="`+want+`"`) {
 				t.Errorf("GET %s does not link to required area %s", path, want)
 			}
@@ -89,32 +107,30 @@ func TestNavExposesRequiredAreas(t *testing.T) {
 	}
 }
 
-// TestNavLinkResolves is the "every link resolves" half of the task's
-// testing criterion: each href the nav actually renders must return 200
-// and a page, so the shell can never show an operator a dead link.
-func TestNavLinkResolves(t *testing.T) {
-	mux := newTestMux(t)
-
-	home := fetch(t, mux, "/").Body.String()
-	for _, area := range navAreas {
-		href := `href="` + area.Path + `"`
-		if !strings.Contains(home, href) {
-			t.Errorf("home page does not link to %s (looked for %s)", area.Path, href)
-			continue
-		}
-		rec := fetch(t, mux, area.Path)
-		if rec.Code != http.StatusOK {
-			t.Errorf("GET %s = %d, want 200 (dead nav link)", area.Path, rec.Code)
-		}
+// shellPagePaths is every shell page, spelled out as literals rather than
+// derived from a production table, so a route dropped from the table
+// cannot shrink what this walks and pass.
+func shellPagePaths(pid uuid.UUID) []string {
+	return []string{
+		"/",
+		productHref(pid, overviewSuffix),
+		opsPath, opsClaimedPath, opsEscalatedPath, opsCancelledPath, opsNotesPath,
+		designPath, designProductSessionsPath(pid),
+		specPath, specProductsPath, productPath(pid), decisionsPath(pid),
+		personasPath(pid), nonGoalsPath(pid), deliveryPath(pid),
+		milestoneTasksPath(pid, navMilestoneID),
+		milestoneBoardPath(pid, navMilestoneID),
+		taskDetailPath(pid, navMilestoneID, uuid.New()),
+		credentialsPath,
 	}
 }
 
-// TestShellRendersOnEveryRoute asserts the chrome is present on each page
-// and that no route is a bare or empty body.
+// TestShellRendersOnEveryRoute asserts the workspace chrome is present on
+// each page and that no route is a bare or empty body.
 func TestShellRendersOnEveryRoute(t *testing.T) {
-	mux := newTestMux(t)
+	mux := navMux(t)
 
-	for _, path := range append([]string{"/"}, navPaths()...) {
+	for _, path := range shellPagePaths(navProductID) {
 		rec := fetch(t, mux, path)
 		body := rec.Body.String()
 
@@ -162,21 +178,32 @@ func userMenuRegion(body string) string {
 	return rest
 }
 
-// TestActiveLinkPerRoute is the per-route table: exactly one nav link is
-// marked on any area route, and none is marked on the home page (which is
-// not itself an area -- the brand link is the way back to it).
+// TestActiveLinkPerRoute is the per-route table over the grouped sidebar:
+// exactly one item is marked on a page that has one, and the home page
+// lights Overview.
 func TestActiveLinkPerRoute(t *testing.T) {
-	mux := newTestMux(t)
+	mux := navMux(t)
+	pid := navProductID
 
 	for _, tc := range []struct {
 		path       string
-		wantActive string // "" means no link should be marked
+		wantActive string // "" means no item should be marked
 	}{
-		{path: "/"},
-		{path: opsPath, wantActive: "Ops console"},
-		{path: designPath, wantActive: "Design sessions"},
-		{path: specPath, wantActive: "Spec & delivery"},
+		{path: "/", wantActive: "Overview"},
+		{path: productHref(pid, overviewSuffix), wantActive: "Overview"},
+		{path: opsPath, wantActive: "Needs attention"},
+		{path: opsClaimedPath, wantActive: "Needs attention"},
+		{path: designProductSessionsPath(pid), wantActive: "Design sessions"},
+		{path: productPath(pid), wantActive: "Capabilities"},
+		{path: decisionsPath(pid), wantActive: "Decisions"},
+		{path: deliveryPath(pid), wantActive: "Milestones"},
+		{path: milestoneTasksPath(pid, navMilestoneID), wantActive: "Tasks"},
+		{path: milestoneBoardPath(pid, navMilestoneID), wantActive: "Board"},
 		{path: credentialsPath, wantActive: "Credentials"},
+		// The two legacy area roots no sidebar item owns: both are static
+		// landings a later phase retires, and neither is a nav item's page.
+		{path: designPath},
+		{path: specPath},
 	} {
 		body := fetch(t, mux, tc.path).Body.String()
 
@@ -188,30 +215,6 @@ func TestActiveLinkPerRoute(t *testing.T) {
 			t.Errorf("GET %s marked %v active, want exactly [%s]", tc.path, marked, tc.wantActive)
 		case tc.wantActive != "" && marked[0] != tc.wantActive:
 			t.Errorf("GET %s marked %q active, want %q", tc.path, marked[0], tc.wantActive)
-		}
-	}
-}
-
-// TestNavIsActive pins the segment-boundary rule. The raw-prefix
-// implementation this replaced lit up an unrelated sibling that merely
-// shared a leading substring.
-func TestNavIsActive(t *testing.T) {
-	ops := areaByPath(t, opsPath)
-
-	for _, tc := range []struct {
-		path string
-		want bool
-	}{
-		{opsPath, true},              // the area root itself
-		{opsPath + "/claimed", true}, // a sub-page the area owns
-		{opsPath + "/a/b/c", true},   // a deeper sub-page
-		{opsPath + "archive", false}, // shares a prefix, is not under it
-		{"/", false},
-		{"/opsarchive/claimed", false},
-		{"/operations", false},
-	} {
-		if got := navIsActive(ops, tc.path); got != tc.want {
-			t.Errorf("navIsActive(%s, %q) = %v, want %v", ops.Path, tc.path, got, tc.want)
 		}
 	}
 }
@@ -239,6 +242,12 @@ var requiredNavGroups = []struct {
 	{title: "Admin", items: []string{"Credentials"}},
 }
 
+// navProductID is the one product this file's deployment holds. The
+// sidebar builds every product-scoped href from whatever product the page
+// resolved, so a test asserting on those hrefs has to know which one the
+// fixture serves.
+var navProductID = uuid.MustParse("33333333-3333-3333-3333-333333333333")
+
 // navMilestoneID is the one container the stub delivery listing below
 // holds. A milestone-scoped nav href has to name a container the product
 // actually has, or the task page correctly 404s and the test would be
@@ -253,16 +262,79 @@ var navMilestoneID = uuid.MustParse("22222222-2222-2222-2222-222222222222")
 func navMux(t *testing.T) *http.ServeMux {
 	t.Helper()
 	app := newTestApp(t)
-	app.spec = &fakeSpecReader{listing: slice.DeliveryListing{
-		Milestones: []slice.MilestoneListingEntry{{ID: navMilestoneID, Name: "Shipped shell"}},
-	}}
+	app.spec = &fakeSpecReader{
+		products: []store.Product{{ID: navProductID, Name: "krill"}},
+		listing: slice.DeliveryListing{
+			Milestones: []slice.MilestoneListingEntry{{ID: navMilestoneID, Name: "Shipped shell"}},
+		},
+	}
 	app.credentials = &fakeCredentials{}
-	app.tasks = &fakeTaskLister{}
+	app.tasks = &navTasks{milestoneID: navMilestoneID}
 	app.designSessions = navStubDesignSessions{}
 	app.revisionEvents = navStubRevisionEvents{}
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
 	return mux
+}
+
+// navTasks is the console-query surface the pages shellPagePaths walks
+// read: the four read views' lists, the chrome's escalated count, and one
+// milestone's tasks. Each answers empty, which is the honest reading of a
+// fixture whose subject is navigation rather than data -- and an empty
+// list renders, so the walk measures the routes rather than the stores.
+//
+// It embeds store.TaskStore so anything else the chrome or a view grows
+// nil-panics here instead of quietly answering from nowhere.
+type navTasks struct {
+	store.TaskStore
+
+	// milestoneID is the container task detail answers under, so the
+	// task-detail page in the walk renders rather than answering the
+	// in-shell 404 an id outside its milestone gets.
+	milestoneID uuid.UUID
+}
+
+func (*navTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
+	return store.Page[store.ClaimedTaskRow]{}, nil
+}
+
+func (*navTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{}, nil
+}
+
+func (*navTasks) ListCancelledTasks(context.Context, store.ListCancelledTasksParams) (store.Page[store.CancelledTaskRow], error) {
+	return store.Page[store.CancelledTaskRow]{}, nil
+}
+
+func (*navTasks) ListOpenNotes(context.Context, store.ListOpenNotesParams) (store.Page[store.OpenNoteRow], error) {
+	return store.Page[store.OpenNoteRow]{}, nil
+}
+
+func (*navTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (f *navTasks) ListTasksByMilestone(context.Context, uuid.UUID) ([]store.TaskSummary, error) {
+	return nil, nil
+}
+
+// GetTaskByID answers with a task for any id, so the task-detail page in
+// this walk renders its chrome rather than answering a 404 -- the point of
+// the walk is that every page mounts it.
+func (f *navTasks) GetTaskByID(_ context.Context, id uuid.UUID) (store.Task, error) {
+	return store.Task{ID: id, MilestoneID: f.milestoneID}, nil
+}
+
+func (*navTasks) ListDependencies(context.Context, uuid.UUID, uuid.UUID) ([]store.TaskDependency, error) {
+	return nil, nil
+}
+
+func (*navTasks) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([]store.Note, error) {
+	return nil, nil
+}
+
+func (*navTasks) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
+	return store.Claim{}, store.ErrNotFound
 }
 
 // navStubDesignSessions and navStubRevisionEvents are the minimum the
@@ -435,7 +507,7 @@ func TestWorkspaceNav_SiblingSpecTabsDoNotStack(t *testing.T) {
 // here.
 func TestWorkspaceNavHrefResolves(t *testing.T) {
 	mux := navMux(t)
-	pid := uuid.New()
+	pid := navProductID
 
 	for _, targets := range []navTargets{
 		{Product: pid}, // the chrome with no milestone in scope
@@ -554,18 +626,37 @@ func sidebarHrefsByLabel(groups []components.NavGroup) map[string]string {
 	return out
 }
 
-// TestWorkspaceShellDataIsNotMountedOnAnyRoute guards the additive
-// claim: nothing serves the drawer yet, so no route's rendering changed
-// when it landed. The shell becomes the chrome in the cutover task, and
-// this is the assertion that says the seam was not crossed early.
-func TestWorkspaceShellDataIsNotMountedOnAnyRoute(t *testing.T) {
+// TestWorkspaceShellIsMountedOnEveryRoute is the cutover itself: every
+// page a sidebar item links at renders the workspace chrome, not the old
+// top-bar layout. A route that quietly fell back would still answer 200
+// and still carry a nav, so only the drawer hook tells the two apart.
+func TestWorkspaceShellIsMountedOnEveryRoute(t *testing.T) {
 	mux := navMux(t)
+	pid := navProductID
 
-	for _, g := range workspaceNav(navTargets{Product: uuid.New()}, "/") {
+	for _, g := range workspaceNav(navTargets{Product: pid}, "/") {
 		for _, item := range g.Items {
 			body := fetch(t, mux, item.Href).Body.String()
-			if strings.Contains(body, "workspace-shell") {
-				t.Errorf("GET %s renders the workspace shell; the cutover task owns that seam", item.Href)
+			if !strings.Contains(body, `data-krill="workspace-shell"`) {
+				t.Errorf("GET %s does not render the workspace chrome", item.Href)
+			}
+		}
+	}
+}
+
+// TestWorkspaceShellCarriesTheSwitcherAndToastHost pins the two pieces of
+// chrome a page gets for free from the seam rather than asking for: the
+// Product select, and the one live region every mutation's confirmation
+// lands in. Neither appears anywhere in a page's own body, so a page that
+// renders without them means the seam stopped passing the switcher through.
+func TestWorkspaceShellCarriesTheSwitcherAndToastHost(t *testing.T) {
+	mux := navMux(t)
+
+	for _, path := range shellPagePaths(navProductID) {
+		body := fetch(t, mux, path).Body.String()
+		for _, want := range []string{productSwitchPath, `id="` + components.ToastHostID + `"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("GET %s missing %q from the chrome", path, want)
 			}
 		}
 	}
@@ -579,7 +670,7 @@ func TestWorkspaceShellDataIsNotMountedOnAnyRoute(t *testing.T) {
 // "exactly one" assertion built on it would be counting the sub-nav too.
 func TestPrimaryNavScanIgnoresTheProductSubNav(t *testing.T) {
 	mux := navMux(t)
-	pid := uuid.New()
+	pid := navProductID
 
 	// Pages that render their own product cross-nav, and pages that do
 	// not. The first group is where an unscoped scan would go wrong.
@@ -760,12 +851,10 @@ func TestShellRoutesDoNotCollideWithSelfServe(t *testing.T) {
 
 // TestOpsConsoleReadRoutesRegistered pins the ops console's four read
 // views: each is a real registered route under the ops prefix (so it is
-// not a 404), and the ops root links to every one. Registration is
-// asserted via mux.Handler rather than a request so this runs against the
-// nil-store harness -- the views themselves need a scope/task store and
-// belong to the implementation and testing phases.
+// not a 404), each keeps the Needs-attention item lit, and the ops root
+// links to every one.
 func TestOpsConsoleReadRoutesRegistered(t *testing.T) {
-	mux := newTestMux(t)
+	mux := navMux(t)
 
 	for _, path := range []string{opsClaimedPath, opsEscalatedPath, opsCancelledPath, opsNotesPath} {
 		if !strings.HasPrefix(path, opsPath+"/") {
@@ -775,8 +864,8 @@ func TestOpsConsoleReadRoutesRegistered(t *testing.T) {
 		if pattern == "" {
 			t.Errorf("ops read view %s is not registered", path)
 		}
-		if !navIsActive(areaByPath(t, opsPath), path) {
-			t.Errorf("ops read view %s does not keep the Ops console nav link active", path)
+		if marked := activeLabels(fetch(t, mux, path).Body.String()); len(marked) != 1 || marked[0] != "Needs attention" {
+			t.Errorf("ops read view %s marked %v active, want [Needs attention]", path, marked)
 		}
 	}
 
@@ -793,7 +882,7 @@ func TestOpsConsoleReadRoutesRegistered(t *testing.T) {
 // TestUnknownPathIsNotFound keeps the shell's home from swallowing typos:
 // the home page is registered as /{$}, not as a catch-all "/".
 func TestUnknownPathIsNotFound(t *testing.T) {
-	mux := newTestMux(t)
+	mux := navMux(t)
 
 	if rec := fetch(t, mux, "/does-not-exist"); rec.Code != http.StatusNotFound {
 		t.Errorf("GET /does-not-exist = %d, want 404 (home must not be a catch-all)", rec.Code)
@@ -803,56 +892,7 @@ func TestUnknownPathIsNotFound(t *testing.T) {
 	}
 }
 
-// TestNavAreasAreWellFormed keeps the nav self-consistent: every area has
-// a distinct absolute path and a label and blurb, so a half-filled entry
-// cannot reach an operator's screen.
-func TestNavAreasAreWellFormed(t *testing.T) {
-	seen := make(map[string]string, len(navAreas))
-	for _, area := range navAreas {
-		switch {
-		case area.Path == "" || area.Label == "" || area.Blurb == "":
-			t.Errorf("incomplete nav area: %+v", area)
-		case !strings.HasPrefix(area.Path, "/"):
-			t.Errorf("nav area path %q is not absolute", area.Path)
-		}
-		if prev, dup := seen[area.Path]; dup {
-			t.Errorf("nav areas %q and %q share path %q", prev, area.Label, area.Path)
-		}
-		seen[area.Path] = area.Label
-	}
-}
-
-// TestHomeListsEveryArea checks the landing page describes the whole nav
-// rather than a subset that has to be kept in sync by hand.
-func TestHomeListsEveryArea(t *testing.T) {
-	body := fetch(t, newTestMux(t), "/").Body.String()
-	for _, area := range navAreas {
-		if !strings.Contains(body, area.Blurb) {
-			t.Errorf("home page missing blurb for %q", area.Label)
-		}
-	}
-}
-
 // helpers
-
-func navPaths() []string {
-	paths := make([]string, 0, len(navAreas))
-	for _, area := range navAreas {
-		paths = append(paths, area.Path)
-	}
-	return paths
-}
-
-func areaByPath(t *testing.T, path string) navArea {
-	t.Helper()
-	for _, area := range navAreas {
-		if area.Path == path {
-			return area
-		}
-	}
-	t.Fatalf("no nav area at %s", path)
-	return navArea{}
-}
 
 // activeLabels extracts the link text of every primary-nav anchor the
 // shell marked active, by scanning the rendered <a> tags rather than the

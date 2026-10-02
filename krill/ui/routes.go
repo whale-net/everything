@@ -9,7 +9,9 @@ import (
 )
 
 // Route prefixes for the shell's own pages. Each area's sub-pages hang
-// off its prefix, so navIsActive can mark the active link by prefix.
+// off its prefix, so the nav can mark the active item by prefix. The
+// first three are the legacy, un-prefixed areas; the product-scoped
+// prefixes below are where every link in the sidebar now points.
 const (
 	opsPath    = "/ops"
 	designPath = "/design"
@@ -50,26 +52,36 @@ func productHref(pid uuid.UUID, suffix string) string {
 	return productsPath + "/" + pid.String() + suffix
 }
 
-// homeLinks is the signed-in landing page's list: the nav's areas, one
-// line each.
-func homeLinks() []pages.AreaLink {
-	links := make([]pages.AreaLink, 0, len(navAreas))
-	for _, a := range navAreas {
-		links = append(links, pages.AreaLink{Path: a.Path, Label: a.Label, Blurb: a.Blurb})
-	}
-	return links
-}
-
-// handleShellHome renders the landing page. The home page is not itself a
-// nav area, so no link is marked active on it -- the header's "krill"
-// brand is the way back here from anywhere in the shell.
+// handleShellHome renders the landing page, which is the Overview for
+// whichever product this deployment resolves.
 //
 // "/" names no product, so it resolves one (the last-viewed cookie when
-// still in scope, else the first in scope) purely to record it: the body
-// here is the area list, which is the same whichever product is current.
+// still in scope, else the first in scope) and then serves exactly the
+// page /products/{pid}/overview serves -- one Overview, two URLs.
+//
+// A product read that fails does not take the landing page down with it:
+// an un-prefixed page whose body was already serviceable must stay
+// serviceable (product_scope.go's own rule). With no product resolved the
+// page has nothing to summarise, so it says so and points at the product
+// index, which is the one place a missing product can be looked up.
+//
+// It passes the product's own overview URL as the nav key rather than its
+// own path, because that is the path the sidebar's Overview item owns.
 func (app *App) handleShellHome(w http.ResponseWriter, r *http.Request) {
-	r, _ = app.rememberUnprefixedProduct(w, r)
-	renderShell(w, r, "Home", "/", pages.AreaIndex("Where to next", homeLinks()))
+	product, err := app.resolveProductForUnprefixed(r)
+	if err != nil {
+		logger.Warn("could not resolve a product for the landing page", "error", err)
+		app.renderShell(w, r, "Products", specProductsPath,
+			pages.NoProductsInScope())
+		return
+	}
+	if product.ID == uuid.Nil {
+		app.renderShell(w, r, "No products in this scope", specProductsPath,
+			pages.NoProductsInScope())
+		return
+	}
+	setLastViewedProductCookie(w, product.ID)
+	app.renderOverview(w, withCurrentProduct(r, product), product)
 }
 
 // The area handlers below own the shell's per-area roots. Each renders the
@@ -88,7 +100,7 @@ var opsIndexLinks = []pages.AreaLink{
 // handleOps is the ops console root, linking its four read views.
 func (app *App) handleOps(w http.ResponseWriter, r *http.Request) {
 	r, _ = app.rememberUnprefixedProduct(w, r)
-	renderShell(w, r, "Ops console", opsPath, pages.AreaIndex("Ops console", opsIndexLinks))
+	app.renderShell(w, r, "Ops console", opsPath, pages.AreaIndex("Ops console", opsIndexLinks))
 }
 
 // handleDesign is the design-session browser root. It is the entry point
@@ -102,7 +114,7 @@ func (app *App) handleDesign(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	renderShell(w, r, "Design sessions", designPath,
+	app.renderShell(w, r, "Design sessions", designPath,
 		pages.DesignRoot(product.Name, designProductSessionsPath(product.ID)))
 }
 
@@ -113,13 +125,13 @@ func (app *App) handleDesign(w http.ResponseWriter, r *http.Request) {
 // spec_page.go). The landing itself reads nothing, so the area root stays
 // cheap.
 func (app *App) handleSpec(w http.ResponseWriter, r *http.Request) {
-	renderShell(w, r, "Spec & delivery", specPath, pages.AreaIndex("Spec & delivery", []pages.AreaLink{
+	app.renderShell(w, r, "Spec & delivery", specPath, pages.AreaIndex("Spec & delivery", []pages.AreaLink{
 		{Path: specProductsPath, Label: "Products", Blurb: "Browse a product's capability map, load-bearing decisions, personas, and non-goals."},
 	}))
 }
 
-// handleProductPlaceholder serves every product-scoped sub-path until the
-// area's own page ships. It resolves the product the URL names -- so the
+// handleProductPlaceholder serves every product-scoped sub-path whose own
+// page has not shipped. It resolves the product the URL names -- so the
 // prefixes, the in-shell 404, and the last-viewed cookie are all live and
 // testable from this point -- and renders a body that names the product
 // and links onward, rather than the area's real content.
@@ -130,7 +142,7 @@ func (app *App) handleProductPlaceholder(w http.ResponseWriter, r *http.Request)
 	}
 	setLastViewedProductCookie(w, product.ID)
 
-	renderShell(w, r, product.Name, productHref(product.ID, overviewSuffix),
+	app.renderShell(w, r, product.Name, r.URL.Path,
 		pages.ProductPlaceholder(pages.ProductPlaceholderData{
 			Product: productHeaderOf(product),
 			Area:    r.PathValue("area"),

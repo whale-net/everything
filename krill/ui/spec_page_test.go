@@ -50,7 +50,9 @@ func (specStubReader) Products(context.Context) ([]store.Product, error) { retur
 // specModeMux mounts the four per-product spec handlers against the stub
 // reader, at the paths routes.go really registers.
 func specModeMux() *http.ServeMux {
-	app := &App{spec: specStubReader{}}
+	// scopes and tasks are what the chrome reads for its Needs-attention
+	// badge on every page it renders.
+	app := &App{spec: specStubReader{}, scopes: chromeScopes{}, tasks: chromeTaskCounter{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+specProductPath, app.handleCapabilityMap)
 	mux.HandleFunc("GET "+specProductPath+"/decisions", app.handleSpecDecisions)

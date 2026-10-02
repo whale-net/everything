@@ -121,7 +121,7 @@ func (app *App) soleScopeID(ctx context.Context) (uuid.UUID, error) {
 // A browser gets the same message inside the shell, at the status the
 // error earns. A bare http.Error would answer text/plain with no nav, on
 // exactly the page the operator most needs to navigate away from.
-func writeOpsQueryError(w http.ResponseWriter, r *http.Request, err error) {
+func (app *App) writeOpsQueryError(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusInternalServerError
 	message := "Failed to load console data. Try again."
 	switch {
@@ -138,7 +138,7 @@ func writeOpsQueryError(w http.ResponseWriter, r *http.Request, err error) {
 		renderFragment(w, r, pages.OpsInlineError(message))
 		return
 	}
-	renderShellStatus(w, r, "Ops console", opsActivePath(r), pages.OpsQueryError(message, opsRecoveryPath(r)), status)
+	app.renderShellStatus(w, r, "Ops console", opsActivePath(r), pages.OpsQueryError(message, opsRecoveryPath(r)), status)
 }
 
 // opsActivePath is the path the nav marks active for a console page. The
@@ -321,7 +321,7 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := app.claimedResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, r, err)
+		app.writeOpsQueryError(w, r, err)
 		return
 	}
 	if isHtmxRequest(r) {
@@ -329,7 +329,7 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r, _ = app.rememberUnprefixedProduct(w, r)
-	renderShell(w, r, "Claimed tasks", opsClaimedPath, pages.ClaimedPage(d))
+	app.renderShell(w, r, "Claimed tasks", opsClaimedPath, pages.ClaimedPage(d))
 }
 
 // ---------------------------------------------------------------------------
@@ -397,7 +397,7 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := app.escalatedResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, r, err)
+		app.writeOpsQueryError(w, r, err)
 		return
 	}
 	if isHtmxRequest(r) {
@@ -405,7 +405,7 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r, _ = app.rememberUnprefixedProduct(w, r)
-	renderShell(w, r, "Escalated tasks", opsEscalatedPath, pages.EscalatedPage(d))
+	app.renderShell(w, r, "Escalated tasks", opsEscalatedPath, pages.EscalatedPage(d))
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +454,7 @@ func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := app.cancelledResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, r, err)
+		app.writeOpsQueryError(w, r, err)
 		return
 	}
 	if isHtmxRequest(r) {
@@ -462,7 +462,7 @@ func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r, _ = app.rememberUnprefixedProduct(w, r)
-	renderShell(w, r, "Cancelled tasks", opsCancelledPath, pages.CancelledPage(d))
+	app.renderShell(w, r, "Cancelled tasks", opsCancelledPath, pages.CancelledPage(d))
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +521,7 @@ func (app *App) handleOpenNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := app.openNotesResults(r.Context(), page, opsSelfPath(r))
 	if err != nil {
-		writeOpsQueryError(w, r, err)
+		app.writeOpsQueryError(w, r, err)
 		return
 	}
 	if isHtmxRequest(r) {
@@ -529,5 +529,5 @@ func (app *App) handleOpenNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r, _ = app.rememberUnprefixedProduct(w, r)
-	renderShell(w, r, "Open notes", opsNotesPath, pages.NotesPage(d))
+	app.renderShell(w, r, "Open notes", opsNotesPath, pages.NotesPage(d))
 }

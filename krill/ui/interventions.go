@@ -199,7 +199,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			app.renderInterventionResults(w, r, returnTo, refusal, "")
 			return
 		}
-		renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{
+		app.renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{
 			Heading:  "krill rejected the " + actionLabel(action) + ".",
 			Detail:   message,
 			ReturnTo: returnTo,
@@ -425,7 +425,7 @@ func (app *App) handleCancelConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid task id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	renderShell(w, r, "Confirm cancel", opsPath, pages.CancelConfirmCard(cancelConfirmData(taskID.String(), interventionReturnTo(r), "")))
+	app.renderShell(w, r, "Confirm cancel", opsPath, pages.CancelConfirmCard(cancelConfirmData(taskID.String(), interventionReturnTo(r), "")))
 }
 
 // cancelConfirmData builds the confirm card's view-model. It carries only

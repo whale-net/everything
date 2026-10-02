@@ -7,9 +7,12 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/a-h/templ"
+	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxbase"
@@ -72,16 +75,20 @@ const markdownCSS = `
 .krill-md :where(h1, h2, h3, h4, h5, h6) { font-weight: 700; margin: 0.5em 0 0.25em; }
 `
 
-// renderShell writes one signed-in page: the shared chrome plus body, at
-// HTTP 200.
+// renderShell writes one signed-in page: the workspace chrome plus body,
+// at HTTP 200.
 //
 // body is a templ.Component rather than pre-rendered HTML: templ has no
 // "content" concept, so the caller composes the page and the seam owns
 // the document around it. Every app route is mounted behind
 // app.auth.RequireAuthFunc by mountShellRoutes, so the identity read here
 // is always present.
-func renderShell(w http.ResponseWriter, r *http.Request, title, activePath string, body templ.Component) {
-	renderShellStatus(w, r, title, activePath, body, http.StatusOK)
+//
+// activePath is the path the nav marks from -- the page's own URL, or the
+// nav key for a page whose URL is not one of the nav's own (the shell home
+// renders the Overview, whose nav key is the product's overview URL).
+func (app *App) renderShell(w http.ResponseWriter, r *http.Request, title, activePath string, body templ.Component) {
+	app.renderShellStatus(w, r, title, activePath, body, http.StatusOK)
 }
 
 // renderShellStatus is renderShell with an explicit status code, so a
@@ -96,7 +103,9 @@ func renderShell(w http.ResponseWriter, r *http.Request, title, activePath strin
 // The component is rendered into a buffer *before* WriteHeader, so a
 // component that fails to render leaves the response unwritten rather
 // than committing a status and then truncating the body.
-func renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath string, body templ.Component, status int) {
+func (app *App) renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath string, body templ.Component, status int) {
+	r = app.withShellProduct(w, r)
+
 	// A plain string, never an htmxauth.UserInfo: htmxui §1 requires
 	// components stay free of a specific auth dependency, so no auth type
 	// may reach one.
@@ -105,7 +114,21 @@ func renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath
 		userLabel = u.PreferredUsername
 	}
 
-	page := layoutWithBody(activePath, title, userLabel, withFlashSuccess(r, w, body))
+	productID, _ := currentProduct(r.Context())
+	_, milestoneID := shellPathTargets(r.URL.Path)
+
+	page := shellWithBody(
+		workspaceShellData(
+			app.shellNavTargets(r.Context(), productID.ID, milestoneID),
+			activePath, title, userLabel,
+			// The switcher is read here, by the one seam every page goes
+			// through, rather than left to each route. Passing nil instead
+			// would compile and ship a sidebar with no Product select --
+			// the operator loses the one control that carries the product
+			// in the URL, with nothing failing.
+			app.productSwitcherData(r),
+		),
+		withFlashSuccess(r, w, body))
 
 	var buf bytes.Buffer
 	if err := page.Render(r.Context(), &buf); err != nil {
@@ -125,6 +148,71 @@ func renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath
 	}); err != nil {
 		panic(err)
 	}
+}
+
+// withShellProduct guarantees the request carries a current product before
+// the chrome is assembled, so every shell page's sidebar names the product
+// that page is about. A resolver's own answer wins; a URL that names its
+// product in the path supplies it directly; an un-prefixed page resolves
+// one server-side and records it as the last-viewed.
+func (app *App) withShellProduct(w http.ResponseWriter, r *http.Request) *http.Request {
+	if _, ok := currentProduct(r.Context()); ok {
+		return r
+	}
+	if pid, _ := shellPathTargets(r.URL.Path); pid != uuid.Nil {
+		// The id is the URL's own and is checked against the caller's
+		// scope by the handler that serves it; the chrome only needs it to
+		// build its own hrefs.
+		return withCurrentProduct(r, store.Product{ID: pid})
+	}
+	r, _ = app.rememberUnprefixedProduct(w, r)
+	return r
+}
+
+// shellPathTargets is the product, and the milestone or milepebble under
+// it, that a product-scoped URL names: the id under /products/{id}/...,
+// /spec/products/{id}/... or /design/products/{id}/..., and the container
+// id under that product's /milestones/ prefix.
+//
+// Both are uuid.Nil for a URL that names neither, which is the un-prefixed
+// case the resolvers answer. Reading the ids off the path is what lets the
+// Tasks and Board items link at the right container's pages on every
+// milestone-scoped page, with no per-page work to remember it.
+func shellPathTargets(path string) (product, milestone uuid.UUID) {
+	segments := pathSegments(path)
+	// The id sits directly after "products", which is itself at the root
+	// or under /spec or /design; the container sits directly after
+	// "milestones".
+	const productsSegment, milestonesSegment = "products", "milestones"
+	switch {
+	case len(segments) >= 2 && segments[0] == productsSegment:
+		product = parseUUID(segments[1])
+	case len(segments) >= 3 && segments[1] == productsSegment &&
+		(segments[0] == strings.TrimPrefix(specPath, "/") || segments[0] == strings.TrimPrefix(designPath, "/")):
+		product = parseUUID(segments[2])
+	default:
+		return uuid.Nil, uuid.Nil
+	}
+	if product == uuid.Nil {
+		return uuid.Nil, uuid.Nil
+	}
+	for i, segment := range segments {
+		if segment == milestonesSegment && i+1 < len(segments) {
+			return product, parseUUID(segments[i+1])
+		}
+	}
+	return product, uuid.Nil
+}
+
+// parseUUID is uuid.Parse for a path segment, answering Nil for anything
+// that is not a UUID -- which is how an id-shaped segment that is really
+// some other word never reaches a store call.
+func parseUUID(segment string) uuid.UUID {
+	id, err := uuid.Parse(segment)
+	if err != nil {
+		return uuid.Nil
+	}
+	return id
 }
 
 // renderFragment writes a bare component at HTTP 200, with no chrome and
@@ -155,18 +243,13 @@ func renderFragment(w http.ResponseWriter, r *http.Request, c templ.Component) {
 	}
 }
 
-// layoutWithBody composes the chrome around a page body. templ passes a
+// shellWithBody composes the chrome around a page body. templ passes a
 // component's children through the context rather than as a parameter, so
-// calling components.Layout from Go means re-attaching the body to the
+// calling components.Shell from Go means re-attaching the body to the
 // context inside a ComponentFunc.
-func layoutWithBody(activePath, title, userLabel string, body templ.Component) templ.Component {
-	data := components.LayoutData{
-		Title:     title,
-		UserLabel: userLabel,
-		Nav:       navLinks(activePath),
-	}
+func shellWithBody(data components.ShellData, body templ.Component) templ.Component {
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
-		return components.Layout(data).Render(templ.WithChildren(ctx, body), w)
+		return components.Shell(data).Render(templ.WithChildren(ctx, body), w)
 	})
 }
 

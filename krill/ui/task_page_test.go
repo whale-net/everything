@@ -30,6 +30,13 @@ type fakeTaskLister struct {
 	calls []uuid.UUID
 }
 
+// CountEscalatedTasks is the chrome's Needs-attention badge read, which
+// every page this fake's routes render carries. Zero renders no badge,
+// which keeps these tests about the task views.
+func (f *fakeTaskLister) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
+}
+
 func (f *fakeTaskLister) ListTasksByMilestone(_ context.Context, id uuid.UUID) ([]store.TaskSummary, error) {
 	f.calls = append(f.calls, id)
 	if f.err != nil {
@@ -53,7 +60,9 @@ func newTaskFixture(t *testing.T) *taskFixture {
 		{ID: f.mid, Name: "Plain"},
 		{ID: f.cutID, Name: "Cut", Milepebbles: []slice.MilepebbleListingEntry{{ID: f.mpID, Name: "Pebble"}}},
 	}}
-	app := &App{spec: &fakeSpecReader{listing: listing}, tasks: f.tasks}
+	// scopes and tasks are what the chrome reads for its Needs-attention
+	// badge on every page it renders.
+	app := &App{spec: &fakeSpecReader{listing: listing}, tasks: f.tasks, scopes: chromeScopes{}}
 	f.app = app
 	f.mux = http.NewServeMux()
 	f.mux.HandleFunc("GET /spec/products/{id}/milestones/{mid}/tasks", app.handleTaskList)
