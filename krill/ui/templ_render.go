@@ -201,11 +201,10 @@ func (app *App) renderShellStatus(w http.ResponseWriter, r *http.Request, title,
 	}
 
 	productID, _ := currentProduct(r.Context())
-	_, milestoneID := shellPathTargets(r.URL.Path)
 
 	page := shellWithBody(
 		workspaceShellData(
-			app.shellNavTargets(r.Context(), productID.ID, milestoneID),
+			app.shellNavTargets(r.Context(), productID.ID),
 			activePath, title, userLabel,
 			// The switcher is read here, by the one seam every page goes
 			// through, rather than left to each route. Passing nil instead
@@ -261,9 +260,14 @@ func (app *App) withShellProduct(w http.ResponseWriter, r *http.Request) *http.R
 // id under that product's /milestones/ prefix.
 //
 // Both are uuid.Nil for a URL that names neither, which is the un-prefixed
-// case the resolvers answer. Reading the ids off the path is what lets the
-// Tasks and Board items link at the right container's pages on every
-// milestone-scoped page, with no per-page work to remember it.
+// case the resolvers answer.
+//
+// The container id is no longer read by the chrome: Tasks and Board link
+// at the product-wide pages, so no nav href depends on which milestone a
+// page happens to be scoped to. It is still parsed, and still covered by
+// overview_page_test.go, because the function's shape is a path reader
+// rather than a nav helper -- narrowing it to one return would leave the
+// next path-derived id with nowhere to go.
 func shellPathTargets(path string) (product, milestone uuid.UUID) {
 	segments := pathSegments(path)
 	// The id sits directly after "products", which is itself at the root

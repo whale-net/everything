@@ -111,15 +111,89 @@ type ProductTaskScopeControl struct {
 	// rather than silently dropping a filter the operator set.
 	Lane      string
 	OnlyStuck bool
+
+	// Views is the List/Board toggle: the same scope read the other way,
+	// with this request's own view marked (FR ab5f4936).
+	//
+	// It lives on the control rather than beside it because the scope
+	// control is the ONE component both views render -- the Tasks region
+	// and the Board region each compose their own body around this same
+	// form. A toggle declared next to the region would be rendered by
+	// whichever view template declared it and be silently absent from the
+	// other, which is the exact failure the shared scope control was built
+	// to prevent.
+	Views ProductTaskViewToggle
 }
 
-// ProductTaskScopeForm renders the shared scope control: the three
-// modes as radios, and the selects the active mode reveals.
+// ProductTaskViewToggle is the List/Board switch between the two views of
+// one scope (FR ab5f4936).
+type ProductTaskViewToggle struct {
+	// Views are the two destinations in render order, each carrying the
+	// current URL's own query, with the view being served marked Active.
+	//
+	// The query travels because the switch changes the VIEW, not the
+	// scope: the operator asked the same question the other way, and a
+	// destination that reset the scope would answer a different one.
+	Views []ProductTaskViewLink
+}
+
+// ProductTaskViewLink is one destination of the List/Board toggle.
+type ProductTaskViewLink struct {
+	// Label is what the operator reads: "List" or "Board".
+	Label string
+	// Href is this view's URL at the current scope and filters.
+	Href string
+	// Active marks the view this request is serving.
+	Active bool
+}
+
+// ProductTaskViewToggleForm renders the List/Board switch: two links, the
+// current view marked, each addressing the same scope and filters on the
+// other view's own path.
+//
+// It is a pair of links rather than a control inside the scope form,
+// because switching view is navigation and not a change to the scope: a
+// control that submitted would be a second way to spell "and now show me
+// the other view", which is what the plain links are for. aria-current
+// marks the active one for a screen reader, and the active button class is
+// what marks it visually.
+templ ProductTaskViewToggleForm(t ProductTaskViewToggle) {
+	<div class="join mt-3" role="group" aria-label="View tasks as" data-krill="view-toggle">
+		for _, v := range t.Views {
+			if v.Active {
+				<a href={ templ.URL(v.Href) } class="join-item btn btn-sm btn-active" aria-current="page"
+					data-krill="view-toggle-link" data-krill-view={ v.Label }>
+					{ v.Label }
+				</a>
+			} else {
+				<a href={ templ.URL(v.Href) } class="join-item btn btn-sm"
+					data-krill="view-toggle-link" data-krill-view={ v.Label }>
+					{ v.Label }
+				</a>
+			}
+		}
+	</div>
+}
+
+// ProductTaskScopeForm renders the shared scope control: the List/Board
+// toggle, then the three modes as radios and the selects the active mode
+// reveals.
+//
+// The toggle is rendered HERE, above the form, rather than beside the
+// region body each view composes. This component is the one element both
+// the Tasks region and the Board region render, so a toggle declared in
+// either view's own template would be present on one view and silently
+// absent from the other -- which is the whole failure the shared scope
+// control exists to prevent (FR ab5f4936).
+//
+// It sits outside the <form> on purpose: it is navigation between two
+// views of one scope, not a value the scope form submits.
 //
 // Named ...Form rather than ...Control because templ generates a
 // function under the component's name, which would collide with the
 // view model's type of the same name.
 templ ProductTaskScopeForm(c ProductTaskScopeControl) {
+	@ProductTaskViewToggleForm(c.Views)
 	<form method="get" action={ templ.URL(c.Path) } class="mt-3 flex flex-wrap items-end gap-4"
 		data-krill="scope-control"
 		hx-get={ templ.URL(c.Path) }

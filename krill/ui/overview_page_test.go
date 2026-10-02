@@ -110,6 +110,18 @@ func (*overviewCounter) ListTasksByMilestone(context.Context, uuid.UUID) ([]stor
 	return nil, nil
 }
 
+// The product-wide task read, which shellPagePaths' walk now reaches: the
+// Tasks and Board nav hrefs lead there. Both answer empty, so the walk
+// measures the chrome those pages render rather than the store behind
+// them.
+func (*overviewCounter) ListProductTasks(context.Context, store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
+	return store.Page[store.ProductTaskRow]{}, nil
+}
+
+func (*overviewCounter) CountProductTasks(context.Context, store.ListProductTasksParams) (int, error) {
+	return 0, nil
+}
+
 // overviewMux mounts the shell's own routes against an app whose two
 // Overview reads are fixtures: the escalated counter and the delivery
 // listing. Mounting the real registrations (rather than just the Overview
@@ -719,35 +731,54 @@ func TestShellPathTargets(t *testing.T) {
 	}
 }
 
-// TestShellPathTargetsBuildsTheContainerNavLinks is what the ids are
-// read for: a page under a container links Tasks and Board at that
-// container's own pages, while the same product's pages with no container
-// in the URL link at the delivery page instead.
+// TestShellPathTargetsBuildsTheContainerNavLinks pins what the product id
+// is read for now that both task views are product-wide: Tasks and Board
+// link at the product's own pages from EVERY page, whether or not the URL
+// it is on carries a container.
+//
+// The old contract was the opposite -- a page under a container linked at
+// that container's own pages, and a page without one fell back to the
+// delivery page -- so the same sidebar showed different Tasks and Board
+// links depending on which page it was rendered from. That is the shape
+// this case now excludes: the two hrefs must be identical from a
+// container-scoped URL and from a bare one, and must never name the
+// delivery page.
 func TestShellPathTargetsBuildsTheContainerNavLinks(t *testing.T) {
-	path := "/spec/products/" + overviewProduct.String() + "/milestones/" + overviewMilestone.String() + "/board"
-	product, milestone := shellPathTargets(path)
-
-	hrefs := sidebarHrefsByLabel(workspaceNav(navTargets{Product: product, Milestone: milestone}, path))
-	if want := "/spec/products/" + overviewProduct.String() + "/milestones/" + overviewMilestone.String() + "/tasks"; hrefs["Tasks"] != want {
-		t.Errorf("Tasks href = %q, want %q", hrefs["Tasks"], want)
-	}
-	if want := "/spec/products/" + overviewProduct.String() + "/milestones/" + overviewMilestone.String() + "/board"; hrefs["Board"] != want {
-		t.Errorf("Board href = %q, want %q", hrefs["Board"], want)
-	}
-
-	// The same product with no container in the URL cannot build either
-	// href, and must not hand out a uuid.Nil path.
+	scoped := "/spec/products/" + overviewProduct.String() + "/milestones/" + overviewMilestone.String() + "/board"
 	bare := "/products/" + overviewProduct.String() + "/milestones"
-	bareProduct, bareMilestone := shellPathTargets(bare)
-	if bareMilestone != uuid.Nil {
-		t.Errorf("shellPathTargets(%q) milestone = %s, want uuid.Nil", bare, bareMilestone)
-	}
-	bareHrefs := sidebarHrefsByLabel(workspaceNav(navTargets{Product: bareProduct, Milestone: bareMilestone}, bare))
-	if strings.Contains(bareHrefs["Tasks"], uuid.Nil.String()) {
-		t.Errorf("Tasks href %q carries uuid.Nil", bareHrefs["Tasks"])
-	}
-	if bareHrefs["Tasks"] != bareHrefs["Board"] {
-		t.Errorf("Tasks %q and Board %q disagree with no container in scope", bareHrefs["Tasks"], bareHrefs["Board"])
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "under a container", path: scoped},
+		{name: "with no container in the URL", path: bare},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			product, _ := shellPathTargets(tc.path)
+			hrefs := sidebarHrefsByLabel(workspaceNav(navTargets{Product: product}, tc.path))
+
+			if want := productHref(product, tasksSuffix); hrefs["Tasks"] != want {
+				t.Errorf("Tasks href = %q, want %q", hrefs["Tasks"], want)
+			}
+			if want := productHref(product, boardSuffix); hrefs["Board"] != want {
+				t.Errorf("Board href = %q, want %q", hrefs["Board"], want)
+			}
+			for _, label := range []string{"Tasks", "Board"} {
+				if strings.Contains(hrefs[label], uuid.Nil.String()) {
+					t.Errorf("%s href %q carries uuid.Nil", label, hrefs[label])
+				}
+				if strings.HasSuffix(hrefs[label], milestonesSuffix) || strings.Contains(hrefs[label], "/milestones/") {
+					t.Errorf("%s href %q is still scoped to a milestone", label, hrefs[label])
+				}
+				if strings.HasSuffix(hrefs[label], "/delivery") {
+					t.Errorf("%s href %q still falls back to the delivery page", label, hrefs[label])
+				}
+			}
+			if hrefs["Tasks"] == hrefs["Board"] {
+				t.Errorf("Tasks and Board both link at %q; they are two views, not one", hrefs["Tasks"])
+			}
+		})
 	}
 }
 
