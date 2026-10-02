@@ -172,7 +172,18 @@ func bind(app *App, h func(*App, http.ResponseWriter, *http.Request)) http.Handl
 // table, so a URL dropped from it fails a test instead of quietly 404ing
 // for an operator who had it bookmarked.
 func (app *App) mountLegacyRoutes(mux *http.ServeMux) {
-	for _, l := range legacyURLs() {
+	app.mountLegacyTable(mux, legacyURLs())
+}
+
+// mountLegacyTable registers one table of pre-redesign URLs, and is
+// mountLegacyRoutes with the table as an argument.
+//
+// Every entry currently serves, so no live route takes the Successor
+// branch and a test cannot reach it through the production registrations.
+// Taking the table as a parameter lets one mount a doctored copy and
+// drive the branch a phase gets the moment it names a successor.
+func (app *App) mountLegacyTable(mux *http.ServeMux, table []legacyURL) {
+	for _, l := range table {
 		switch {
 		case l.Successor != nil:
 			mux.HandleFunc(l.Pattern, app.readerRoute(app.serveLegacy(l)))

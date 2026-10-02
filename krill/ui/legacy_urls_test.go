@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -92,16 +94,29 @@ type legacyFixture struct {
 
 func newLegacyFixture(t *testing.T) *legacyFixture {
 	t.Helper()
+	return newLegacyFixtureWith(t, legacyURLs())
+}
+
+// newLegacyFixtureWith is newLegacyFixture with the legacy table as an
+// argument, so a test can mount a doctored copy alongside the real shell
+// pages rather than hand-wiring one route and leaving the rest untested.
+func newLegacyFixtureWith(t *testing.T, table []legacyURL) *legacyFixture {
+	t.Helper()
 	app := newTestApp(t)
 	pid, mid, tid, sid := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 
-	app.spec = &fakeSpecReader{
+	// fakeSliceSpec, not a bare fakeSpecReader: production's specReader
+	// answers the task-detail page's embedded slice read, so a fixture
+	// that cannot renders that page's slice region as a read failure --
+	// a well-chromed 200 whose content is an error, which the status-only
+	// walk would happily pass.
+	app.spec = &fakeSliceSpec{fakeSpecReader: &fakeSpecReader{
 		products: []store.Product{{ID: pid, Name: "Test product"}},
 		product:  store.Product{ID: pid, Name: "Test product"},
 		listing: slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{
 			{ID: mid, Name: "Test milestone", Status: store.MilestoneStatusInProgress},
 		}},
-	}
+	}}
 	// The console views read the task store rather than the badge-only
 	// counter the chrome fixtures install, so a page that lists tasks
 	// would otherwise nil-panic instead of rendering its empty state.
@@ -110,7 +125,8 @@ func newLegacyFixture(t *testing.T) *legacyFixture {
 	app.revisionEvents = emptyRevisionEvents{}
 
 	mux := http.NewServeMux()
-	app.mountShellRoutes(mux)
+	app.mountLegacyTable(mux, table)
+	app.mountShellPages(mux)
 	return &legacyFixture{mux: mux, app: app, pid: pid, mid: mid, tid: tid, sessionID: sid}
 }
 
@@ -183,6 +199,11 @@ func followRedirect(t *testing.T, f *legacyFixture, target string) (code int, fi
 // TestPreRedesignURLsResolve is the FR's acceptance: every pre-redesign URL
 // resolves, none 404s, and one that redirects lands on a page that renders
 // 200 inside the shell.
+//
+// "Resolves" is asserted as the full workspace chrome, not merely a 200: a
+// route left serving the bare pre-shell layout would answer 200 with an
+// operator stranded in a page with no way back, which is the outcome this
+// contract exists to prevent.
 func TestPreRedesignURLsResolve(t *testing.T) {
 	f := newLegacyFixture(t)
 
@@ -197,52 +218,102 @@ func TestPreRedesignURLsResolve(t *testing.T) {
 				t.Fatalf("GET %s resolved to %d, want 200 or a redirect to one", url, code)
 			}
 
-			// The page that finally renders must be a real in-shell page,
-			// not a bare http.NotFound or a mux 405 leaking through.
-			if body := fetch(t, f.mux, final).Body.String(); !strings.Contains(body, "</html>") {
-				t.Errorf("GET %s landed on %s, which is not a shell page", url, final)
+			body := fetch(t, f.mux, final).Body.String()
+			assertShellChrome(t, url, final, body)
+		})
+	}
+}
+
+// assertShellChrome asserts a resolved legacy URL renders the whole
+// workspace shell rather than a bare page.
+//
+// The markers are the chrome's own data-krill hooks rather than page copy:
+// the drawer wrapper, the grouped nav (whose group headings are what
+// separate the groups from their items), and the Product select. A page
+// that answered 200 with the old top-bar layout, or with the nav but no
+// switcher, would fail here rather than reading as "resolves".
+func assertShellChrome(t *testing.T, url, final, body string) {
+	t.Helper()
+	if !strings.Contains(body, "</html>") {
+		t.Fatalf("GET %s landed on %s, which is not an HTML page", url, final)
+	}
+	for _, want := range []string{
+		`data-krill="workspace-shell"`,  // the drawer sidebar, not the pre-shell layout
+		`data-krill="primary-nav"`,      // the grouped nav, with its group headings
+		`menu-title`,                    // a group heading, distinct from the items under it
+		`data-krill="product-switcher"`, // the Product select, listing every product in scope
+		`id="krill-product-switcher"`,
+		`aria-label="Open navigation"`, // the sub-lg drawer toggle
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET %s landed on %s, missing %q: not the full workspace chrome", url, final, want)
+		}
+	}
+}
+
+// TestPreRedesignURLsRenderNoReadFailure guards the fixture's honesty.
+//
+// A stub that answers every read with an empty success makes a page that
+// rendered an inline "could not load" alert indistinguishable from one that
+// rendered its content -- and the walk above only checks status and chrome,
+// so a page degraded by a failing read would pass it. The walk therefore
+// asserts none of the 19 carries an error alert: every one of them must be
+// rendering real content, not a well-chromed error.
+func TestPreRedesignURLsRenderNoReadFailure(t *testing.T) {
+	f := newLegacyFixture(t)
+
+	for _, url := range f.urls() {
+		t.Run(url, func(t *testing.T) {
+			body := fetch(t, f.mux, url).Body.String()
+			for _, marker := range []string{`alert-error`, `role="alert"`} {
+				if strings.Contains(body, marker) {
+					t.Errorf("GET %s renders %q: the fixture answered a read with a failure the walk does not see", url, marker)
+				}
 			}
 		})
 	}
 }
 
-// TestEveryLegacyTableEntryIsCovered keeps the production table and the
-// FR's URL list from drifting apart: an entry in legacyURLs that no test
-// walks is a URL nobody is holding to the contract.
-func TestEveryLegacyTableEntryIsCovered(t *testing.T) {
-	f := newLegacyFixture(t)
-	covered := f.urls()
+// failingSliceSpec is fakeSliceSpec whose slice read fails, standing in
+// for a store that cannot answer. It exists so TestPreRedesignURLsRenderNoReadFailure
+// can be shown to have teeth: a spec reader that cannot answer the
+// task-detail page's slice read is a page rendering an error behind a
+// well-chromed 200, which the status-only walk cannot see.
+type failingSliceSpec struct {
+	*fakeSpecReader
+}
 
-	for _, l := range legacyURLs() {
-		if l.Pattern == "" {
-			t.Fatal("legacyURLs has an entry with no pattern")
-		}
-		// Patterns carry mux wildcards and method prefixes; the covered
-		// list carries concrete paths. Matching on the fixed prefix a
-		// pattern's concrete form must start with is what ties the two
-		// together without duplicating the pattern syntax here. The
-		// wildcard is cut first, then the separator it left behind
-		// trimmed -- the other order leaves "/spec/products/" and never
-		// matches the concrete path.
-		prefix := strings.TrimPrefix(l.Pattern, "GET ")
-		if i := strings.IndexByte(prefix, '{'); i >= 0 {
-			prefix = prefix[:i]
-		}
-		prefix = strings.TrimSuffix(prefix, "/")
-		if prefix == "/{$}" || prefix == "" {
-			continue // the shell home, covered above
-		}
+func (failingSliceSpec) MilestoneDeliversSlice(context.Context, uuid.UUID) (slice.Document, error) {
+	return slice.Document{}, errors.New("slice read unavailable")
+}
 
-		found := false
-		for _, u := range covered {
-			if u == prefix || strings.HasPrefix(u, prefix+"/") {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("legacyURLs registers %s, which no legacy-URL test walks", l.Pattern)
-		}
+// TestPreRedesignURLsRenderNoReadFailure_HasTeeth proves the honesty
+// check above is not vacuous: given a reader that genuinely fails, the
+// task-detail URL renders an error alert and the check catches it.
+//
+// Without this, a future edit could relax the marker list down to nothing
+// and the test would still pass, leaving the fixture free to mask a
+// failing read again -- which is the exact failure the check exists for.
+func TestPreRedesignURLsRenderNoReadFailure_HasTeeth(t *testing.T) {
+	app := newTestApp(t)
+	pid, mid, tid := uuid.New(), uuid.New(), uuid.New()
+	app.spec = failingSliceSpec{fakeSpecReader: &fakeSpecReader{
+		products: []store.Product{{ID: pid, Name: "Test product"}},
+		product:  store.Product{ID: pid, Name: "Test product"},
+		listing: slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{
+			{ID: mid, Name: "Test milestone", Status: store.MilestoneStatusInProgress},
+		}},
+	}}
+	app.tasks = &legacyTasks{taskID: tid, milestoneID: mid}
+	app.designSessions = NewDesignSessions(uuid.New(), pid)
+	app.revisionEvents = emptyRevisionEvents{}
+	mux := http.NewServeMux()
+	app.mountShellRoutes(mux)
+
+	body := fetch(t, mux, milestoneTasksPath(pid, mid)+"/"+tid.String()).Body.String()
+	if !strings.Contains(body, `alert-error`) {
+		t.Fatalf("a task detail page whose slice read failed rendered no error alert: " +
+			"the honesty check has nothing to catch and is vacuous")
 	}
 }
 
@@ -254,6 +325,9 @@ func TestEveryLegacyTableEntryIsCovered(t *testing.T) {
 // prevent.
 func TestLegacyTableEntryNamesExactlyOneDestination(t *testing.T) {
 	for _, l := range legacyURLs() {
+		if l.Pattern == "" {
+			t.Fatal("legacyURLs has an entry with no pattern")
+		}
 		if l.Serve == nil && l.Successor == nil {
 			t.Errorf("legacy URL %s names neither a page nor a successor", l.Pattern)
 		}
@@ -263,35 +337,150 @@ func TestLegacyTableEntryNamesExactlyOneDestination(t *testing.T) {
 	}
 }
 
-// TestLegacyRedirectUsesFoundAndNotMoved pins what a replaced URL answers
-// with, using a stand-in entry wired exactly as mountLegacyRoutes wires a
-// real one. It is what a future phase gets the moment it sets a Successor,
-// so the behaviour is asserted now rather than discovered then.
+// TestLegacyTableAndLiveRoutesAgree is the two halves of one agreement,
+// and it needs both to be load-bearing.
 //
-// 302 rather than 301 is deliberate: a pre-redesign URL stays a live link
-// an operator may keep following, and 301 is the one that lets a browser
-// pin the old URL in its cache past the page it now names.
-func TestLegacyRedirectUsesFoundAndNotMoved(t *testing.T) {
+//   - Every table entry is mounted: a pattern the table names but the mux
+//     does not serve is a URL the FR believes is kept alive and nothing is.
+//   - Every pre-redesign registration appears in the table: a route
+//     serving one of these URLs that the table does not name is a URL
+//     outside the retirement mechanism, which is how a page gets replaced
+//     without its old link ever being repointed.
+//
+// Either half alone misses a real failure. Checking only that the table is
+// mounted passes when a URL has been dropped from the table and still
+// resolves by accident through some other route -- and checking only that
+// each URL resolves passes when the route it resolves through is not the
+// table's, so replacing the page leaves the old URL serving the old page
+// forever.
+func TestLegacyTableAndLiveRoutesAgree(t *testing.T) {
 	f := newLegacyFixture(t)
+	table := legacyURLs()
 
-	entry := legacyURL{
-		Pattern: "/legacy-redirect-probe",
-		Successor: func(_ *App, _ *http.Request) (string, bool) {
-			return productHref(f.pid, overviewSuffix), true
-		},
+	inTable := make(map[string]bool, len(table))
+	for _, l := range table {
+		if l.Pattern == "" {
+			t.Fatal("legacyURLs has an entry with no pattern")
+		}
+		inTable[l.Pattern] = true
 	}
-	probe := http.NewServeMux()
-	probe.HandleFunc(entry.Pattern, f.app.readerRoute(f.app.serveLegacy(entry)))
 
-	rec := fetch(t, probe, entry.Pattern)
+	// Half one: each table pattern is a real registration, not just a
+	// declared one. mux.Handler reports the pattern that actually matched,
+	// so an entry the mount dropped (or shadowed by a more specific route
+	// registered elsewhere) shows up here.
+	for _, l := range table {
+		if _, matched := f.mux.Handler(concreteRequest(l.Pattern, f)); matched == "" {
+			t.Errorf("legacyURLs names %s but the mux does not serve it: the entry is declared, not mounted", l.Pattern)
+		}
+	}
+
+	// Half two: each URL the FR names resolves through the table, so every
+	// pre-redesign route is one a phase can retire by editing one field.
+	for _, url := range f.urls() {
+		_, matched := f.mux.Handler(httptest.NewRequest(http.MethodGet, url, nil))
+		if matched == "" {
+			t.Errorf("GET %s is not registered at all", url)
+			continue
+		}
+		if !inTable[matched] {
+			t.Errorf("GET %s resolves through %q, which legacyURLs does not name: "+
+				"this URL is outside the retirement mechanism", url, matched)
+		}
+	}
+}
+
+// concretePathFor turns one legacyURLs pattern into a request path the
+// fixture resolves, so a table entry can be probed for registration
+// without the probe re-deriving the mux's wildcard names.
+func concretePathFor(pattern string, f *legacyFixture) string {
+	path := strings.ReplaceAll(pattern, "{$}", "")
+	path = strings.ReplaceAll(path, "{productID}", f.pid.String())
+	// The one pattern whose {id} names something other than the product.
+	if strings.Contains(path, "design-sessions/{id}") {
+		path = strings.Replace(path, "design-sessions/{id}",
+			"design-sessions/"+f.sessionID.String(), 1)
+	}
+	return strings.NewReplacer(
+		"{id}", f.pid.String(),
+		"{mid}", f.mid.String(),
+		"{tid}", f.tid.String(),
+	).Replace(path)
+}
+
+// concreteRequest builds the request concretePathFor names, honouring the
+// method prefix a pattern may carry.
+func concreteRequest(pattern string, f *legacyFixture) *http.Request {
+	path := strings.TrimPrefix(pattern, http.MethodGet+" ")
+	return httptest.NewRequest(http.MethodGet, concretePathFor(path, f), nil)
+}
+
+// TestLegacyRedirectUsesFoundAndNotMoved drives the redirect path the way a
+// future phase will: the production table, with one real entry moved from
+// serving its page to naming its successor, mounted through the same
+// mountLegacyTable production calls.
+//
+// A stand-in route hand-wired onto its own mux would pass whether or not
+// mountLegacyTable honours Successor at all -- and that wiring is exactly
+// what a phase inherits when it flips a field. 302 rather than 301 is
+// deliberate: a pre-redesign URL stays a live link an operator may keep
+// following, and 301 lets a browser pin the old URL in its cache past the
+// page it now names.
+func TestLegacyRedirectUsesFoundAndNotMoved(t *testing.T) {
+	const retired = opsEscalatedPath
+
+	table := legacyURLs()
+	replaced := false
+	for i, l := range table {
+		if l.Pattern != retired {
+			continue
+		}
+		replaced = true
+		table[i] = legacyURL{
+			Pattern: retired,
+			// The successor FR 2544224c names for this URL: the
+			// needs-attention page's escalated tab.
+			Successor: func(a *App, r *http.Request) (string, bool) {
+				product, err := a.resolveProductForUnprefixed(r)
+				if err != nil || product.ID == uuid.Nil {
+					return "", false
+				}
+				return productHref(product.ID, needsAttentionSuffix) + "?tab=escalated", true
+			},
+		}
+	}
+	if !replaced {
+		t.Fatal("legacyURLs no longer registers " + retired)
+	}
+	f := newLegacyFixtureWith(t, table)
+
+	rec := fetch(t, f.mux, retired)
 	if rec.Code != http.StatusFound {
-		t.Fatalf("redirect status %d, want 302", rec.Code)
+		t.Fatalf("GET %s = %d, want 302 now that the table names a successor", retired, rec.Code)
 	}
-	if got, want := rec.Header().Get("Location"), productHref(f.pid, overviewSuffix); got != want {
+	if rec.Code == http.StatusMovedPermanently {
+		t.Fatal("a pre-redesign URL must not answer 301; the browser would cache it past the page it now names")
+	}
+	want := productHref(f.pid, needsAttentionSuffix) + "?tab=escalated"
+	if got := rec.Header().Get("Location"); got != want {
 		t.Errorf("redirect Location %q, want %q", got, want)
 	}
-	if got := fetch(t, f.mux, rec.Header().Get("Location")).Code; got != http.StatusOK {
-		t.Errorf("successor page renders %d, want 200", got)
+
+	// The successor has to be a real in-shell page, and one entry's
+	// retirement must leave the rest of the table untouched.
+	target := rec.Header().Get("Location")
+	if code, _ := followRedirect(t, f, retired); code != http.StatusOK {
+		t.Errorf("following %s resolved to %d, want 200", retired, code)
+	}
+	assertShellChrome(t, retired, target, fetch(t, f.mux, target).Body.String())
+
+	for _, url := range f.urls() {
+		if url == retired {
+			continue
+		}
+		if code, _ := followRedirect(t, f, url); code != http.StatusOK {
+			t.Errorf("retiring %s broke %s: it now resolves to %d", retired, url, code)
+		}
 	}
 }
 
@@ -300,28 +489,46 @@ func TestLegacyRedirectUsesFoundAndNotMoved(t *testing.T) {
 // successor from, and an un-prefixed URL must still land somewhere. It
 // renders the product index rather than redirecting to nowhere.
 func TestLegacyRedirectWithNoProductStaysInShell(t *testing.T) {
+	table := legacyURLs()
+	replaced := false
+	for i, l := range table {
+		if l.Pattern != opsEscalatedPath {
+			continue
+		}
+		replaced = true
+		table[i] = legacyURL{
+			Pattern: opsEscalatedPath,
+			Successor: func(a *App, r *http.Request) (string, bool) {
+				product, err := a.resolveProductForUnprefixed(r)
+				if err != nil || product.ID == uuid.Nil {
+					return "", false
+				}
+				return productHref(product.ID, needsAttentionSuffix), true
+			},
+		}
+	}
+	if !replaced {
+		t.Fatal("legacyURLs no longer registers " + opsEscalatedPath)
+	}
+
+	// The whole table, on an app whose scope holds no product -- the same
+	// mux a deployment starts with, not a lone probe route.
 	app := newTestApp(t)
-	app.spec = &fakeSpecReader{} // a scope holding no product
+	app.spec = &fakeSpecReader{}
 	app.tasks = emptyListTasks{}
-
-	entry := legacyURL{
-		Pattern: opsEscalatedPath,
-		Successor: func(a *App, r *http.Request) (string, bool) {
-			product, err := a.resolveProductForUnprefixed(r)
-			if err != nil || product.ID == uuid.Nil {
-				return "", false
-			}
-			return productHref(product.ID, needsAttentionSuffix), true
-		},
-	}
 	mux := http.NewServeMux()
-	mux.HandleFunc(entry.Pattern, app.readerRoute(app.serveLegacy(entry)))
+	app.mountLegacyTable(mux, table)
+	app.mountShellPages(mux)
 
-	rec := fetch(t, mux, entry.Pattern)
+	rec := fetch(t, mux, opsEscalatedPath)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d, want 200: an empty scope must still land on a page", rec.Code)
+		t.Fatalf("GET %s = %d, want 200: an empty scope must still land on a page", opsEscalatedPath, rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "</html>") {
-		t.Error("empty-scope legacy URL did not render a shell page")
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Errorf("empty scope answered a redirect to %q, which has nowhere to go", loc)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `data-krill="no-products"`) {
+		t.Errorf("empty-scope legacy URL did not render the product index: %s", body)
 	}
 }

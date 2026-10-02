@@ -493,7 +493,18 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// serves its existing page inside the shell until the phase that ships
 	// that page's replacement moves it to a redirect. See legacyURLs.
 	app.mountLegacyRoutes(mux)
+	app.mountShellPages(mux)
+}
 
+// mountShellPages registers everything the shell serves that is not a
+// pre-redesign URL: the credential widget, the design root's product
+// browse and write surface, the product-scoped prefixes, and the Product
+// switcher.
+//
+// It is split out of mountShellRoutes so a test can mount the real pages
+// alongside a doctored copy of the legacy table -- the shape the phase
+// that replaces a page will actually mount.
+func (app *App) mountShellPages(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+credentialsPath, app.readerRoute(app.handleCredentials))
 	mux.HandleFunc("POST "+credentialsMintPath, app.readerRoute(app.handleMintCredential))
 	mux.HandleFunc("POST "+credentialsPath+"/{id}/revoke", app.readerRoute(app.handleRevokeCredential))

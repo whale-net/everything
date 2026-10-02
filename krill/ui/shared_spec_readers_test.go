@@ -115,6 +115,14 @@ func (chromeTaskCounter) SummarizeProductTaskProgress(_ context.Context, params 
 // renders chrome should not silently acquire fabricated task rows. Here
 // the empty answer is the point -- the legacy-URL contract is about a
 // page resolving, not about what it lists.
+//
+// Every method here answers the empty list a genuinely empty queue gives,
+// never a fabricated row and never a nil interface: a test reaching for a
+// store method this does not model panics rather than passing on a
+// fabricated answer. legacy_urls_test.go's TestPreRedesignURLsRenderNoReadFailure
+// is the other half of that -- it asserts none of the legacy URLs renders
+// an error alert, so an empty-but-honest stub cannot be confused with a
+// page that failed to read.
 type emptyListTasks struct{ store.TaskStore }
 
 // CountEscalatedTasks is the sidebar badge's read. It is here rather than
@@ -152,6 +160,10 @@ var _ store.TaskStore = emptyListTasks{}
 // real one: a detail URL naming an id that belongs to no session is a
 // correct 404, so testing URL continuity against one would test the 404
 // path and call it a pass. NewDesignSessions seeds exactly that session.
+//
+// GetByID answers ErrNotFound for every other id rather than fabricating a
+// session, so the 404 path stays reachable and this stub cannot be the
+// thing making a broken session URL look alive.
 type emptyDesignSessions struct {
 	store.DesignSessionStore
 	session store.DesignSession
