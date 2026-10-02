@@ -85,7 +85,7 @@ func productBoardPageOf(
 		board.Error = boardProgressError
 		return board
 	}
-	board.Lanes = boardLanesOf(product.ID, scope, rows, progress)
+	board.Lanes = boardLanesOf(product.ID, scope, rows, progress, now)
 	board.Empty = len(board.Lanes) == 0
 	return board
 }
@@ -163,7 +163,10 @@ func boardLaneKeyOf(row store.ProductTaskRow, milepebbleScope bool, idx boardPro
 // or only-stuck filter emptied out would otherwise render five columns
 // headed by zeros, which reads as a milestone that has fallen behind rather
 // than one whose tasks were filtered away.
-func boardLanesOf(productID uuid.UUID, scope resolvedProductTaskScope, rows []store.ProductTaskRow, progress store.ProductTaskProgress) []pages.BoardLane {
+//
+// now is the read instant, handed to every card so one lease is judged
+// against the same clock as the next -- see boardCardOf.
+func boardLanesOf(productID uuid.UUID, scope resolvedProductTaskScope, rows []store.ProductTaskRow, progress store.ProductTaskProgress, now time.Time) []pages.BoardLane {
 	idx := indexBoardProgress(progress.Containers)
 	milepebbleScope := scope.Parsed.Kind == store.ProductTaskScopeMilepebble
 
@@ -179,7 +182,7 @@ func boardLanesOf(productID uuid.UUID, scope resolvedProductTaskScope, rows []st
 			pos = byKey[key]
 		}
 		column := &lanes[pos].Columns[boardColumnIndex(row.CurrentLane)]
-		column.Cards = append(column.Cards, boardCardOf(productID, row))
+		column.Cards = append(column.Cards, boardCardOf(productID, row, now))
 	}
 
 	// The counts are the cards' own length, counted once the lane is
@@ -241,26 +244,75 @@ func boardLaneOf(productID, key uuid.UUID, row store.ProductTaskRow, idx boardPr
 	return lane
 }
 
-// boardCardOf is one task's card.
+// boardCardOf is one task's card (FR f6b62cc7): the title linking to the
+// detail page, the milepebble it came from when the milestone is cut, its
+// state badges, its attempts against the cap, and the claim identity the
+// row observed with its lease expiry.
 //
-// Only what FR cf000440 asks of a card's placement is built here -- the
-// title linking to the detail page, and the claim identity the row
-// observed. The badges, the attempts and the lease countdown are FR
-// f6b62cc7's own work and land on this card without moving it.
-func boardCardOf(productID uuid.UUID, row store.ProductTaskRow) pages.TaskRow {
+// The badges come from the same derivation the Tasks table makes over this
+// same read's row -- one state mapper, applied once -- so a task that is
+// Claimed on the list cannot read as lease-expired on the board.
+func boardCardOf(productID uuid.UUID, row store.ProductTaskRow, now time.Time) pages.TaskRow {
+	badges := boardCardBadges(row, now)
 	card := pages.TaskRow{
 		ID:         row.TaskID.String(),
 		Title:      row.Title,
 		Lane:       string(row.CurrentLane),
 		DetailPath: taskDetailPath(productID, row.Milestone.ID, row.TaskID),
+		Attempts:   taskAttemptsLabel(row.AttemptCount),
+		Badges:     badges,
+		// The carve-out: a Done-lane task with nothing outstanding is
+		// finished work, and a card badging its attempts would read as
+		// work still to do.
+		Quiet: row.CurrentLane == store.LaneDone && len(badges) == 0,
 	}
-	if row.ClaimID != nil {
+	if row.Milepebble != nil {
+		card.Milepebble = row.Milepebble.Name
+	}
+	// Both halves, or neither -- the rule the read's own row guarantees
+	// and the Tasks table follows: a claim whose expiry was not reported
+	// cannot be judged live or lapsed, so badging it would contradict the
+	// claim id the card does or does not carry.
+	if row.ClaimID != nil && row.LeaseExpiresAt != nil {
 		card.ClaimID = row.ClaimID.String()
-	}
-	if row.LeaseExpiresAt != nil {
 		card.LeaseExpiresAt = row.LeaseExpiresAt.UTC().Format(time.RFC3339)
 	}
 	return card
+}
+
+// boardCardBadges is one card's state badges, derived over the product
+// read's own row.
+//
+// It is the same derivation taskStateBadges makes over a TaskSummary, and
+// the same one the Tasks table makes over this row: a claim whose lease
+// has lapsed is "lease-expired" and never "claimed", and a task in no
+// state yields no badges -- which is what leaves a Done card's badge row
+// empty. The colours come from components.TaskStateStyle, so the badge's
+// appearance cannot drift from the list's or the detail's.
+//
+// The cap is store.DefaultAttemptCap rather than the row's own AttemptCap
+// field for the same reason taskAttemptsLabel uses it: that is the cap the
+// read reports and the one every view counts against, so two spellings
+// would be two answers to "when is this capped".
+func boardCardBadges(row store.ProductTaskRow, now time.Time) []pages.TaskBadge {
+	var badges []pages.TaskBadge
+	if row.ClaimID != nil && row.LeaseExpiresAt != nil {
+		if !row.LeaseExpiresAt.After(now) {
+			badges = append(badges, pages.TaskBadge{Key: "lease-expired", Label: "Lease expired"})
+		} else {
+			badges = append(badges, pages.TaskBadge{Key: "claimed", Label: "Claimed"})
+		}
+	}
+	if row.AttemptCount >= store.DefaultAttemptCap {
+		badges = append(badges, pages.TaskBadge{Key: "capped", Label: "Capped"})
+	}
+	if row.State == store.TaskStateEscalated {
+		badges = append(badges, pages.TaskBadge{Key: "escalated", Label: "Escalated"})
+	}
+	if row.CancelledAt != nil {
+		badges = append(badges, pages.TaskBadge{Key: "cancelled", Label: "Cancelled"})
+	}
+	return badges
 }
 
 // emptyBoardColumns is store.CanonicalLaneOrder's five lanes as empty

@@ -48,8 +48,52 @@ document.documentElement.setAttribute('data-theme',t);})();
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
 <style>%s</style>
-<style>%s</style>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS)
+<style>%s</style>
+<script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS, leaseCountdownScript)
 }
+
+// leaseCountdownScript rewrites every board card's lease <time> into the
+// relative form FR f6b62cc7 asks for -- "Lease in 18 min" while the claim
+// holds, "Lease expired 6 min ago" once it does not.
+//
+// It reads the absolute instant off the element's `datetime` attribute,
+// never off text the server rendered, for the reason NFR 7b497d92 gives:
+// the board is a fragment the Refresh button and the scope control
+// re-request, so a relative string inside it would be as old as the
+// response and would differ between two identical reads. Deriving it here
+// -- in the document head, outside every fragment -- also means one
+// implementation for all three task views, and re-running after each swap
+// picks up a Refresh's new instants without a reload.
+//
+// Without JavaScript the element keeps the absolute instant the server
+// put in it, which is why that instant is the element's own content rather
+// than an empty node: the operator still sees when the lease runs out.
+//
+// Both listeners hang off `document`, never `document.body`: htmxbase
+// renders this from CustomHead, so a classic inline script here runs while
+// the parser is still inside <head> and document.body is still null. htmx
+// events bubble, so document sees every swap regardless.
+const leaseCountdownScript = `
+(function(){
+function span(ms){
+var s=Math.max(1,Math.round(ms/1000));
+if(s<60){return s+' second'+(s===1?'':'s');}
+var m=Math.round(s/60);if(m<60){return m+' minute'+(m===1?'':'s');}
+var h=Math.round(m/60);if(h<24){return h+' hour'+(h===1?'':'s');}
+return Math.round(h/24)+' days';
+}
+function upgrade(root){
+var nodes=(root||document).querySelectorAll('time[data-krill="task-lease"][datetime]');
+for(var i=0;i<nodes.length;i++){
+var t=Date.parse(nodes[i].getAttribute('datetime'));
+if(isNaN(t)){continue;}
+var left=t-Date.now();
+nodes[i].textContent=left>=0?('Lease in '+span(left)):('Lease expired '+span(-left)+' ago');
+}
+}
+document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
+document.addEventListener('htmx:afterSwap',function(e){upgrade(e.target);});
+})();`
 
 // markdownCSS gives goldmark-rendered markdown (pages/markdown.go's
 // renderMarkdown, wrapped in a ".krill-md" element at every call site) sane
