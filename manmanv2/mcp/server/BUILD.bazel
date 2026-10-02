@@ -11,6 +11,7 @@ go_library(
         "confirm.go",
         "confirm_store.go",
         "connect_address.go",
+        "lifecycle_tools.go",
         "middleware.go",
         "persona.go",
         "read_tools.go",
