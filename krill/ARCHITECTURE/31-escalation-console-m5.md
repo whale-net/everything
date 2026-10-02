@@ -171,8 +171,7 @@ query rolling its own:
   A token issued under one scope can never become a path across a scope
   boundary into another, even by accident — this is exactly what
   `escalation_console_integration_test.go`'s Step 11 exercises against
-  all three working console queries (see "Known defect" below for the
-  fourth).
+  all four console queries.
 - **A page's `NextToken` is `""` exactly when no rows remain** — every
   query fetches one row beyond the requested page size and trims it off,
   so "is there a next page" is answered by that extra row's presence,
@@ -256,19 +255,56 @@ FROM/JOIN/WHERE its list pages**, not a second predicate:
   product's own figure and never derives a scope-wide total by summing
   per-product ones.
 
-## Known defect: `ListClaimedTasks` (FR4) is an unimplemented stub
+## `ListClaimedTasks` (FR4): the claim, joined to what it is a claim on
 
-`store.TaskStore.ListClaimedTasks` (`krill/store/task_console.go`) was
-scaffolded in issue #2869 alongside `paging.go` and the console
-HTTP/MCP wiring, but that issue closed with the store method itself left
-as a permanent `return Page[ClaimedTaskRow]{}, ErrNotImplemented` — unlike
-its three siblings (`ListCancelledTasks`/`ListEscalatedTasks`/
-`ListOpenNotes`, issues #2873/#2875/#2874), which are fully implemented.
-`GET /console/claimed` and the `list_claimed_tasks` MCP tool are both
-wired end-to-end in production and both fail on every call, in every
-scope. `escalation_console_integration_test.go`'s Step 2 documents this
-explicitly (asserting the current `ErrNotImplemented` behaviour, not the
-intended one) rather than silently passing FR4 or failing the whole
-conformance walk; the fix itself is tracked as a follow-up,
-issue #2916, per this task's own "do not fix a defect the walk
-uncovers" scope.
+`store.TaskStore.ListClaimedTasks` (`krill/store/task_console.go`) is
+implemented like its three siblings (`ListCancelledTasks`/`ListEscalatedTasks`/
+`ListOpenNotes`). None of the four answers its question from `task` alone: each
+joins `milestone_ref` for identifying context — a LEFT JOIN in the open-notes
+query, where a note naming a spec entity has no task and so no delivery
+reference — and then the event table its question is about: `task_claim` here,
+`task_escalation_event` for escalated, `task_intervention_event` for cancelled,
+and (in `task_note_console.go`, which is where the open-notes query lives, since
+it spans the spec axis rather than the work axis) the note's own spec-axis
+tables.
+
+- **One row per live claim, and the live claim only.** `WHERE current_claim_id
+  IS NOT NULL` is the whole membership rule, and the join is on that column
+  rather than on `task_claim.task_id` — which matters because `task_claim` is
+  append-only, with one narrow in-place exception: a claim that ends closes its
+  own row (`released_at`/`release_reason`) rather than inserting a second one.
+  So a task that was claimed, released and reclaimed has two rows there, not
+  three, and only the second is live. Pointing the join at
+  `task.current_claim_id` picks that one, and a task whose claim has been
+  released, force-closed or lapsed drops out of the next read entirely, with
+  nothing marking it.
+- **The claim is joined in explicitly, not by schema.** Claimant session, the
+  claimed-since instant, and both LB4 subject pairs come from `task_claim`
+  (matched on `task.current_claim_id`). `current_claim_id` carries no
+  DB-level FK onto `task_claim(id)` — migration 015 creates `task_claim` later
+  in the same migration that adds the column — so this join is enforced in
+  SQL here, not by the schema.
+- **Every row carries its delivery reference.** `milestone_ref` (resolved from
+  `task.milestone_id`) supplies the id, kind, and title of the milepebble or
+  milestone the task belongs to, so a row is actionable without a second
+  lookup — FR4's answer to the bare-id posture root plan #2851's Assumption 8
+  exists to remove. `task_note_console.go` resolves FR12's rows into the same
+  `ClaimedTaskDeliveryRef` type off the same `milestone_ref` lookup rather than
+  a second copy of it, and the ConsoleFilter narrowing rides in each query's own
+  builder for all four.
+- **Soonest-to-lapse first.** `ORDER BY task.lease_expires_at ASC, task.id
+  ASC` is the operator-useful order: the claim about to need intervention is
+  first, and the keyset cursor over `(lease_expires_at, id)` continues the
+  same order with no ties. Paging and continuation tokens are the shared
+  `paging.go` machinery, with the same `NextToken`-by-extra-row rule the other
+  three use.
+- **The filter is guarded before the query runs.** A narrowing that would cross
+  a scope or product boundary is refused by `guardConsoleFilter` first, so the
+  page can never answer with rows the caller has no claim to — and
+  `claimedTasksQuery` is the same clause `CountClaimedTasks` wraps, so the
+  count printed beside the queue cannot drift from the queue itself.
+
+`escalation_console_integration_test.go`'s Step 2 asserts this against real
+Postgres: every claimed task appears, carrying its own title, delivery
+reference, claimant session id, current lane, attempt count, and a non-zero
+lease expiry.

@@ -187,7 +187,7 @@ is enforced only on the MCP side (`/mcp/ops`, below), never on HTTP.
 | `POST /tasks/{id}/requeue` | Returns an escalated task to claimable (FR6) — resets exactly the counter named by the resolved escalation's own reason, preserves the held lane, and never counts as an attempt itself. Refuses a task with no active escalation and a cancelled one. Body: `{"reason"?, "expected_escalation_id"?}`. Optional `expected_escalation_id` carries the escalation the caller's own row read returned: a supplied id that is no longer current — including the task holding none — is refused with `ErrObservedStateMismatch` and 409, before anything is written. Omitted, the call is unguarded. Gated. Returns the task payload document. |
 | `POST /tasks/{id}/cancel` | Moves a task — escalated or not — to a dead-lettered terminal state a later `requeue` can never reopen (FR7), distinct from lane `Done`. Force-closes any open claim; refuses an already-cancelled task. Body: `{"reason"?, "expected_claim_id"?, "expected_escalation_id"?}`. Optional `expected_claim_id`/`expected_escalation_id` carries the claim or escalation the caller's own row read returned: a supplied id that is no longer current — including the task holding none — is refused with `ErrObservedStateMismatch` and 409, before anything is written. Omitted, the call is unguarded.  Gated. Returns the task payload document. |
 | `POST /notes/{id}/lifecycle` | Transitions a note's lifecycle status — `noted` → `carried-over`/`deferred`/`closed`, or back (FR11). Open to any persona, the same "no claim/ownership check" posture `POST /notes` already has. Body: `{"status"}`. Gated (session only, no persona restriction). |
-| `GET /console/claimed` | **Known defect (issue #2916):** always returns an error — the underlying store query was scaffolded in issue #2869 but never implemented. Intended to return every currently-claimed task (FR4) with claimant, lane, lease expiry, attempt count, title, and delivery reference. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated (read-only). |
+| `GET /console/claimed` | Returns every currently-claimed task (FR4) with claimant (acting/on-behalf-of subjects and session id), lane, lease expiry, attempt count, title, and delivery reference — one row per live claim, soonest lease to lapse first, so the claim about to need intervention reads first. See `ARCHITECTURE/31-escalation-console-m5.md` for why this one query joins `task`, `task_claim`, and `milestone_ref`. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated (read-only). |
 | `GET /console/escalated` | Returns every escalated task in a scope (FR5) — reason, triggering counter/cap (`null` for manual), the held lane, summary counts (attempt count, failing-verdict count, note count), and the most recent verdict where knowable — never the task's full attempt/verdict/note history inline. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
 | `GET /console/cancelled` | Returns every cancelled task in a scope (FR10) — title, delivery reference, and the cancellation's own acting/on-behalf-of subjects and timestamp. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
 | `GET /console/notes` | Returns every note still at status `noted` in a scope (FR12), across both target shapes (a task, or a spec-axis entity) — never a note that has been carried over, deferred, or closed. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
@@ -217,7 +217,7 @@ The MCP surface below is a **separate, Swarm-Operator-only mount**,
 | `escalate_task` | write | `TaskStore.EscalateTask` (FR9) |
 | `requeue_task` | write | `TaskStore.RequeueTask` (FR6) |
 | `cancel_task` | write | `TaskStore.CancelTask` (FR7) |
-| `list_claimed_tasks` | read | `TaskStore.ListClaimedTasks` (FR4) — **known defect, issue #2916**: always errors, see `GET /console/claimed` above |
+| `list_claimed_tasks` | read | `TaskStore.ListClaimedTasks` (FR4) — one row per live claim, soonest lease to lapse first; see `GET /console/claimed` above |
 | `list_escalated_tasks` | read | `TaskStore.ListEscalatedTasks` (FR5) |
 | `list_cancelled_tasks` | read | `TaskStore.ListCancelledTasks` (FR10) |
 | `list_open_notes` | read | `TaskStore.ListOpenNotes` (FR12) |
@@ -392,8 +392,7 @@ See `ARCHITECTURE.md` "The design-session MCP surface" for the full design.
 FR4/FR5/FR10/FR12's console queries (`list_claimed_tasks`,
 `list_escalated_tasks`, `list_cancelled_tasks`, `list_open_notes`) all
 register onto -- see "Escalation/intervention/console endpoints" above
-for each tool's own description. `list_claimed_tasks` currently always
-errors -- see that section's own "known defect" note (issue #2916).
+for each tool's own description.
 
 **Auth -- Swarm Operator only.** Both front doors (auth/human,
 whagent-net/agent) are mounted at `/mcp/ops` exactly as they are at the

@@ -2,9 +2,11 @@
 // per-container task-progress read: one call that returns, for every
 // milestone and milepebble of a product, how many tasks the container
 // holds, how many sit in each of the five lanes, and how many of them are
-// Done. It exists because the "N of M tasks done" figure on the Overview,
-// the Milestones list, a milestone's detail page and each Board swimlane
-// header would otherwise cost one count query per container.
+// Done. It exists because the "N of M tasks done" figures the Overview's
+// milestones-in-flight panel, the Milestones list, a milestone's detail
+// page and each Board swimlane header need would otherwise cost one count
+// query per container. Only the Overview panel renders it today; the rest
+// are M13's operator-UI facelift (status planned).
 //
 // The per-lane counts and the "N of M done" figure this read returns are
 // the same numbers by construction -- Done IS the Done lane's count -- so
