@@ -68,6 +68,11 @@ document.documentElement.setAttribute('data-theme',t);})();
 // Without JavaScript the element keeps the absolute instant the server
 // put in it, which is why that instant is the element's own content rather
 // than an empty node: the operator still sees when the lease runs out.
+//
+// Both listeners hang off `document`, never `document.body`: htmxbase
+// renders this from CustomHead, so a classic inline script here runs while
+// the parser is still inside <head> and document.body is still null. htmx
+// events bubble, so document sees every swap regardless.
 const leaseCountdownScript = `
 (function(){
 function span(ms){
@@ -87,7 +92,7 @@ nodes[i].textContent=left>=0?('Lease in '+span(left)):('Lease expired '+span(-le
 }
 }
 document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
-document.body&&document.body.addEventListener('htmx:afterSwap',function(e){upgrade(e.target);});
+document.addEventListener('htmx:afterSwap',function(e){upgrade(e.target);});
 })();`
 
 // markdownCSS gives goldmark-rendered markdown (pages/markdown.go's
