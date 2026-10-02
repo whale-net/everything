@@ -1509,6 +1509,90 @@ func TestTaskStore_SummarizeProductTaskProgress_SingleContainerScopes(t *testing
 	})
 }
 
+// TestTaskStore_SummarizeProductTaskProgress_ContainerRowsAreNotAdditive
+// proves FR 59f664ff's one sharp edge rather than restating it: because a
+// milestone's PerLane spans its whole cut, a milepebble's tasks are counted
+// in the milepebble's row AND in the parent milestone's row, so summing the
+// rows double-counts them and reports a product total larger than the real
+// one. The test asserts both the double-count and its mechanism, and pins
+// CountProductTasks as the read that reports the honest figure -- one extra
+// read over the same predicate, not a second source of truth.
+//
+// It is the counterpart of task_note_console_integration_test.go's
+// CountOpenNotes_PerProductFiguresDoNotSum: both non-additivity hazards are
+// guarded the same way, each asserted to be strictly less than the honest
+// scope-wide count rather than merely described.
+func TestTaskStore_SummarizeProductTaskProgress_ContainerRowsAreNotAdditive(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// Two milepebbles under the one cut milestone, so the milestone's row
+	// demonstrably covers each of them rather than only the first.
+	pebble2, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, fx.cutID, "MP2", "another slice", nil, self, self)
+	require.NoError(t, err)
+
+	createProductTask(t, ctx, s, scopeID, fx.uncutID, "on the uncut milestone", self)
+	for i := 0; i < 2; i++ {
+		createProductTask(t, ctx, s, scopeID, fx.pebbleID, fmt.Sprintf("pebble one %d", i), self)
+	}
+	createProductTask(t, ctx, s, scopeID, pebble2.ID, "pebble two", self)
+	// A task in another product: it must be in no figure below.
+	createProductTask(t, ctx, s, scopeID, fx.otherMilestoneID, "theirs", self)
+
+	progress := summarizeIncomplete(t, ctx, s, scopeID, fx.productID)
+	require.Equal(t, []uuid.UUID{fx.uncutID, fx.cutID, fx.pebbleID, pebble2.ID}, containerIDs(progress))
+
+	// The mechanism: each cut milepebble's tasks are in its own row and in
+	// the milestone's, and nowhere else. CreateTask refuses a milestone
+	// once it is cut, so the milestone's own direct slice is zero and its
+	// whole row comes from its milepebbles -- which is exactly why adding
+	// the two milepebble rows to it double-counts every task underneath.
+	cutRow := containerRow(t, progress, fx.cutID, uuid.Nil)
+	pebbleOneRow := containerRow(t, progress, fx.cutID, fx.pebbleID)
+	pebbleTwoRow := containerRow(t, progress, fx.cutID, pebble2.ID)
+	assert.Equal(t, pebbleOneRow.Total()+pebbleTwoRow.Total(), cutRow.Total(),
+		"a milestone row spans its whole cut: its own direct tasks plus every milepebble's")
+
+	summed := 0
+	for _, row := range progress.Containers {
+		summed += row.Total()
+	}
+
+	// The honest product-wide count, from the read that shares the
+	// predicate and counts each task exactly once over task.milestone_id.
+	trueCount, err := s.Tasks().CountProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 4, trueCount, "one uncut task plus three under the cut's milepebbles")
+	assert.Equal(t, 7, summed, "the rows as read: 1 + 3 (the milestone, which already covers both milepebbles) + 2 + 1")
+	assert.Greater(t, summed, trueCount,
+		"per-container task-progress rows are not additive -- which is why a consumer must never sum them for a product-wide total, and reads CountProductTasks instead")
+
+	// And the sum is not wrong by accident: the excess is exactly the
+	// milepebbles' rows, because every double-counted task is one scoped to
+	// a milepebble -- counted once by its own row and once by its
+	// milestone's, never a third time.
+	assert.Equal(t, trueCount+pebbleOneRow.Total()+pebbleTwoRow.Total(), summed,
+		"the excess is precisely the milepebbles' rows")
+
+	// Narrowing to one container agrees with that container's row, which is
+	// the only per-container total the progress read is ever summed into.
+	cutCount, err := s.Tasks().CountProductTasks(ctx, store.ListProductTasksParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: fx.cutID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, cutRow.Total(), cutCount)
+}
+
 // ============================================================================
 // CountProductTasks (task_product_list.go, FR c4ab6c68)
 // ============================================================================
