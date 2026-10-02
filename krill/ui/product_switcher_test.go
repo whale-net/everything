@@ -31,7 +31,7 @@ var errSwitcherScope = errors.New("product list read failed")
 func switcherScopeApp(t *testing.T, products ...store.Product) *App {
 	t.Helper()
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{}, products: products}
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{}, products: products}
 	app.scopes = productScopeScopes{scope: store.Scope{ID: uuid.New()}}
 	return app
 }
@@ -106,7 +106,7 @@ func TestSwitcherListsEveryProductInScope(t *testing.T) {
 // which is the one thing a failed read does not mean.
 func TestSwitcherOmitsItselfWhenTheScopeCannotBeRead(t *testing.T) {
 	app := switcherScopeApp(t)
-	app.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{}, productsErr: errSwitcherScope}
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{}, productsErr: errSwitcherScope}
 
 	body := renderSwitcher(t, app, "/products/"+uuid.NewString()+"/overview", uuid.New())
 	if strings.Contains(body, "product-switcher") {
@@ -125,10 +125,10 @@ func TestSwitcherOmitsItselfWhenTheScopeCannotBeRead(t *testing.T) {
 // untouched either way -- the failure costs the control, not the page.
 func TestSwitcherDistinguishesAnUnreadableScopeFromAnEmptyOne(t *testing.T) {
 	failed := switcherScopeApp(t)
-	failed.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{}, productsErr: errSwitcherScope}
+	failed.spec = scopedProductsReader{specReadClient: &fakeSpecReader{}, productsErr: errSwitcherScope}
 
 	empty := switcherScopeApp(t)
-	empty.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{}, products: nil}
+	empty.spec = scopedProductsReader{specReadClient: &fakeSpecReader{}, products: nil}
 
 	from := "/products/" + uuid.NewString() + "/overview"
 	for name, body := range map[string]string{

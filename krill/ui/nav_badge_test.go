@@ -388,7 +388,7 @@ func TestNeedsAttentionBadgeNeedsNoProduct(t *testing.T) {
 func workspaceShellPage(app *App, productID uuid.UUID, activePath string) templ.Component {
 	data := workspaceShellData(
 		app.shellNavTargets(context.Background(), productID, uuid.Nil),
-		activePath, "Overview", "developer",
+		activePath, "Overview", "developer", nil,
 	)
 	return components.Shell(data)
 }
