@@ -86,6 +86,7 @@ templ TaskBoard(page TaskBoardPage) {
 									<a href={ templ.URL(t.DetailPath) } class="link link-primary" data-krill="task-title">{ t.Title }</a>
 									<div data-krill="task-attempts">{ t.Attempts }</div>
 									<div class="flex flex-wrap gap-1">
+										@TaskLaneBadge(t.Lane)
 										@TaskBadges(t.Badges)
 									</div>
 									if t.LeaseExpiresAt != "" {
