@@ -700,6 +700,49 @@ The region renders the scope it resolved to, the total behind it, and its
 own answer: the Tasks view's table of rows, an empty state naming the active
 filters, or an inline failure.
 
+**The table pages, and never truncates silently.** Under the table the
+Tasks view renders a footer reading `Showing X of Y tasks`, where Y is
+`CountProductTasks`'s answer for the *same* `store.ListProductTasksParams`
+the rows were read with (`readProductTasks` builds it once and hands the one
+value to both) and X is the page the store returned. Neither number is
+derived from the rows: a footer that counted what it had would read
+"Showing 25 of 25" on the first of four pages, which is the failure FR
+7bff09fe rules out. **Next is present exactly when `Page.NextToken` is** —
+the store's own answer that a row remains, not a comparison of X against Y,
+which gets an exactly-full final page wrong. **Previous is always disabled.**
+The store's keyset paging is forward-only: a token names a position to
+resume *after*, so nothing in this layer can name the position before the
+page being shown. The control is rendered inert with a `title` saying so
+rather than omitted (absent on some pages and present on others, it would
+read as a rendering bug) and rather than pointed at a guessed page (which
+would land the operator somewhere they did not ask for). The browser's Back
+button is the way back, and it works because the pages are real URLs.
+
+**A page move keeps every filter.** `productTaskPagePath` rebuilds the
+link from `r.URL.Query()` with only `page_token` replaced, so scope mode,
+`container_id`, the UI-only `milestone`, `lane`, `only_stuck` and
+`page_size` all survive by construction rather than by a re-derivation that
+could forget one. The risk this rules out is a parameter the rebuild drops,
+which would silently change what the next page shows.
+
+**A refused token is a fourth state, kept apart from the other three.**
+`store.ErrTokenScopeMismatch`, `ErrTokenFilterMismatch` and
+`ErrInvalidContinuationToken` are all the caller's own stale link — the
+token is URL-carried, so this is a genuinely reachable case — and none of
+them is a read failure. They render `product-tasks-page-error` plus a
+recovery link, at 400 for a browser and 200 inline for htmx. Folding them
+into `product-tasks-error` would answer "see the logs" to someone whose
+database is fine, and answering them with rows would show tasks the URL does
+not ask for. The recovery link **keeps** every filter and drops only the
+token: a token goes stale when the scope or the filters *change*, which is
+what the operator just did, so resetting them would discard the thing that
+caused the refusal. A page that comes back empty while the count for the
+same filters is non-zero is a fourth thing again — a position past the end
+of a set that has since shrunk — and the empty state says so rather than
+blaming the filters (see `productTaskPastEndDetailOf`). The footer renders
+on the Tasks view only; the Board's own requirement about exceeding one
+render is FR cf000440's, not this footer's.
+
 **The rows are the read's order, never a re-sort.** The store's keyset
 sort (milestone position descending, then id, then creation, then id) is
 what a continuation token is bound to; a table that ordered its rows any
