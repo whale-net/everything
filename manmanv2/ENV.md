@@ -119,3 +119,7 @@ The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 
 ## Platform-Wide Variables
 
 `GRPC_AUTH_MODE` appears on every component. Set it consistently across the platform — mismatched modes will cause `codes.Unauthenticated` errors.
+
+## MCP server (`manmanv2/mcp`)
+
+Scaffold only; variables are defined by the Implementation lane (OIDC issuer/audience, control API address, listen port).

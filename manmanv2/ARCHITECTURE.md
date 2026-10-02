@@ -805,3 +805,7 @@ Items to address during implementation:
 - Release app patterns: `//tools/bazel/release.bzl`
 - RabbitMQ library: `//libs/python/rmq/`
 - PostgreSQL patterns: `//libs/python/postgres/`
+
+## MCP Server (`manmanv2/mcp`)
+
+MCP front for the control API. Authenticates the caller's bearer token, resolves one persona from `realm_access.roles` (admin > server-manager > gamer), filters `tools/list` and gates calls through a single tool registry, forwards the caller's own access token on every gRPC call, and audit-logs every call. Code in `mcp/server`.

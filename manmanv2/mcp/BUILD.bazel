@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "mcp_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/manmanv2/mcp",
+    visibility = ["//visibility:private"],
+    deps = ["//manmanv2/mcp/server"],
+)
+
+go_binary(
+    name = "mcp",
+    embed = [":mcp_lib"],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "mcp",
+    binary_name = ":mcp",
+    language = "go",
+    domain = "manmanv2",
+    description = "ManMan MCP server: persona-authorized tools over the control API",
+    app_type = "external-api",
+    port = 8081,
+)
