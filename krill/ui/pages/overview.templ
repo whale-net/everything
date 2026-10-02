@@ -3,12 +3,16 @@ package pages
 // The Overview page body: the shell's home, answering "is anything stuck,
 // which milestone is in flight" (FR c3e1c276).
 //
-// It is the page frame. The Needs-attention panel and the in-flight
-// milestones panel are separate work and render their own slots below; the
-// header here has to stand on its own, because it is the part that must
-// answer both questions in the first glance.
+// It is the page frame. The four stat tiles, the in-flight milestones
+// panel and the Needs-attention panel each render their own slot below;
+// the header here has to stand on its own, because it is the part that
+// must answer both questions in the first glance.
 
-import "github.com/whale-net/everything/libs/go/htmxui"
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
 
 // OverviewAnchor is the DOM id this page's content region carries, so a
 // swap can replace the region rather than the document around it.
@@ -51,6 +55,12 @@ type OverviewPage struct {
 	// it counts. Every tile's data is carried on its own, so one region's
 	// read failing never costs the others their figures.
 	StatTiles []OverviewStatTile
+
+	// InFlightPanel is the "Milestones in flight" card: the same
+	// containers the header names, each carrying the task progress the
+	// one product-wide read returned for it (FR 8ef82053).
+	InFlightPanel OverviewInFlightPanel
+}
 }
 
 // OverviewStatTile is one headline figure and the link behind it.
@@ -109,6 +119,86 @@ templ overviewStatTiles(tiles []OverviewStatTile) {
 			@overviewStatTile(tile)
 		}
 	</div>
+
+// OverviewInFlightRow is one container's row in the in-flight panel: the
+// name linking to its detail page, the status that put it in flight, and
+// the two figures its progress bar is built from.
+//
+// Done and Total are handed over whole rather than re-derived here. The
+// read owns how a cancelled task counts (store.CancelledTaskCounting),
+// and a view that summed the lanes again could disagree with the
+// breakdown rendered elsewhere on the same figures.
+type OverviewInFlightRow struct {
+	Name   string
+	Href   string
+	Status string
+	Done   int
+	Total  int
+}
+
+// AwaitingSignoff reports whether this row is a container whose spec is
+// still being written. It renders as a sentence rather than a progress
+// bar: there are no tasks to count yet, and "0 of 0 tasks done" beside
+// an empty bar reads as a stalled container rather than a new one.
+func (r OverviewInFlightRow) AwaitingSignoff() bool {
+	return r.Status == statusInDesign
+}
+
+// HasTasks reports whether the container holds any task at all. A
+// container that does not says so rather than rendering "0 of 0".
+func (r OverviewInFlightRow) HasTasks() bool { return r.Total > 0 }
+
+// OverviewInFlightPanel is the whole card. Error and empty are separate
+// states rather than one, because only one of them is an answer.
+type OverviewInFlightPanel struct {
+	// Rows are the in-flight containers, in the roadmap order the read
+	// returned them.
+	Rows []OverviewInFlightRow
+
+	// Error is set when the progress read failed, in place of the rows.
+	// An unreadable read must not render as an empty list: "nothing is in
+	// flight" and "we could not check" are different answers and only one
+	// of them is true.
+	Error string
+}
+
+// statusInDesign is the wire spelling of the one in-flight status whose
+// rows carry no task counts yet. It matches store.MilestoneStatusInDesign;
+// the view takes it as a string because every status a row carries is one
+// (OverviewInFlightRow.Status), so comparing it to the store's typed
+// constant here would mean importing the store into a page that has no
+// other reason to.
+const statusInDesign = "in design"
+
+// inFlightPanelRows renders the rows of the in-flight card, each with the
+// milestone or milepebble's name linking to its detail page, the status
+// badge that put it in flight, and its progress.
+templ inFlightPanelRows(rows []OverviewInFlightRow) {
+	<ul class="space-y-3" data-krill="overview-in-flight-panel-rows">
+		for _, m := range rows {
+			<li data-krill="overview-in-flight-row">
+				<div class="flex items-center gap-2">
+					<a href={ templ.URL(m.Href) } class="link font-medium">{ m.Name }</a>
+					@statusBadge(m.Status)
+				</div>
+				if m.AwaitingSignoff() {
+					<span class="text-sm text-base-content/70" data-krill="overview-in-flight-signoff">
+						Spec not yet signed off.
+					</span>
+				} else if !m.HasTasks() {
+					<span class="text-sm text-base-content/70" data-krill="overview-in-flight-no-tasks">
+						No tasks yet.
+					</span>
+				} else {
+					<progress class="progress progress-warning w-full" data-krill="overview-in-flight-progress"
+						value={ strconv.Itoa(m.Done) } max={ strconv.Itoa(m.Total) }></progress>
+					<span class="text-sm text-base-content/70" data-krill="overview-in-flight-progress-label">
+						{ strconv.Itoa(m.Done) } of { strconv.Itoa(m.Total) } tasks done
+					</span>
+				}
+			</li>
+		}
+	</ul>
 }
 
 // inFlightBadges renders one badge per in-flight container, through the
@@ -174,7 +264,23 @@ templ Overview(page OverviewPage) {
 		if len(page.StatTiles) > 0 {
 			@overviewStatTiles(page.StatTiles)
 		}
-		// The Needs-attention panel and the in-flight milestones panel
-		// render into the slots below once they ship.
+		// The Needs-attention panel renders into the second slot of this
+		// grid once it ships.
+		<div class="grid gap-6 lg:grid-cols-2">
+			<div class="card bg-base-100 border border-base-300" data-krill="overview-in-flight-panel">
+				<div class="card-body">
+					<h2 class="card-title">Milestones in flight</h2>
+					if page.InFlightPanel.Error != "" {
+						@htmxui.Alert(htmxui.AlertError, page.InFlightPanel.Error, nil)
+					} else if len(page.InFlightPanel.Rows) == 0 {
+						@htmxui.EmptyState("Nothing is in flight",
+							"No milestone is in design or in progress.",
+							"", "", templ.Attributes{"data-krill": "overview-in-flight-panel-empty"})
+					} else {
+						@inFlightPanelRows(page.InFlightPanel.Rows)
+					}
+				</div>
+			</div>
+		</div>
 	</section>
 }

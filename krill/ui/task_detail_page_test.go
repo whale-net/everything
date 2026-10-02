@@ -39,6 +39,13 @@ func (f *fakeDetailStore) CountEscalatedTasks(context.Context, store.ListEscalat
 	return 0, nil
 }
 
+// SummarizeProductTaskProgress is the read the Overview's in-flight panel
+// makes. It answers with no containers so the panel renders its empty
+// state: these fixtures' subject is the task detail, not the panel's rows.
+func (fakeDetailStore) SummarizeProductTaskProgress(_ context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
+}
+
 func (f *fakeDetailStore) GetTaskByID(_ context.Context, id uuid.UUID) (store.Task, error) {
 	if f.getErr != nil {
 		return store.Task{}, f.getErr

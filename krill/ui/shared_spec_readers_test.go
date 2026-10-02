@@ -97,3 +97,11 @@ func (chromeTaskCounter) CountEscalatedTasks(context.Context, store.ListEscalate
 func (chromeTaskCounter) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
 	return store.ConsoleOverviewCounts{}, nil
 }
+
+// SummarizeProductTaskProgress is the read the Overview's in-flight panel
+// makes, so every test that renders a full page needs it to answer. It
+// answers with no containers, which renders the panel's empty state --
+// the chrome tests are indifferent to the panel's contents.
+func (chromeTaskCounter) SummarizeProductTaskProgress(_ context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
+}
