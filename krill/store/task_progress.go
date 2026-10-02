@@ -171,26 +171,27 @@ func (s taskStore) SummarizeProductTaskProgress(ctx context.Context, params Prod
 		}
 	}
 
-	// $1 is the "no status event is not started" seed currentContainerStatusSQL
-	// COALESCEs to; $2/$3 are scope and product, matching ListProductTasks'
-	// own argument order so one reader recognises both statements.
-	args := []any{string(MilestoneStatusNotStarted), params.ScopeID, params.ProductID}
+	// $1/$2 are scope and product, matching ListProductTasks' own argument
+	// order so one reader recognises both statements. The "no status event
+	// is not started" seed is inlined by currentContainerStatusSQL rather
+	// than bound, so there is no leading argument to shift.
+	args := []any{params.ScopeID, params.ProductID}
 	containerFilter := ""
 	switch params.Scope.Kind {
 	case ProductTaskScopeIncomplete:
 		containerFilter = " AND c.kind <> 'backlog' AND " + incompleteContainerFilterSQL("c.id")
 	case ProductTaskScopeMilestone:
-		containerFilter = " AND (c.id = $4 OR c.parent_milestone_id = $4)"
+		containerFilter = " AND (c.id = $3 OR c.parent_milestone_id = $3)"
 		args = append(args, params.Scope.ContainerID)
 	case ProductTaskScopeMilepebble:
-		containerFilter = " AND c.id = $4"
+		containerFilter = " AND c.id = $3"
 		args = append(args, params.Scope.ContainerID)
 	default:
 		return ProductTaskProgress{}, fmt.Errorf("unknown product task scope kind %q", params.Scope.Kind)
 	}
 
-	containerStatusSQL := fmt.Sprintf(currentContainerStatusSQL, "c.id")
-	milestoneStatusSQL := fmt.Sprintf(currentContainerStatusSQL, "m.id")
+	containerStatusSQL := currentContainerStatusSQL("c.id")
+	milestoneStatusSQL := currentContainerStatusSQL("m.id")
 
 	// A milestone's partition spans the whole cut, so its join reaches the
 	// tasks scoped to any of its current milepebbles; a milepebble's own
@@ -208,15 +209,15 @@ func (s taskStore) SummarizeProductTaskProgress(ctx context.Context, params Prod
 			COUNT(task.id),
 			COUNT(task.id) FILTER (WHERE task.cancelled_at IS NOT NULL)
 		FROM milestone_ref c
-		JOIN milestone_ref m ON m.id = COALESCE(c.parent_milestone_id, c.id) AND m.valid_to IS NULL AND m.scope_id = $2
-		LEFT JOIN task ON task.scope_id = $2 AND (
+		JOIN milestone_ref m ON m.id = COALESCE(c.parent_milestone_id, c.id) AND m.valid_to IS NULL AND m.scope_id = $1
+		LEFT JOIN task ON task.scope_id = $1 AND (
 			task.milestone_id = c.id
 			OR task.milestone_id IN (
 				SELECT child.id FROM milestone_ref child
 				WHERE child.parent_milestone_id = c.id AND child.valid_to IS NULL
 			)
 		)
-		WHERE c.valid_to IS NULL AND c.scope_id = $2 AND c.product_id = $3` + containerFilter + `
+		WHERE c.valid_to IS NULL AND c.scope_id = $1 AND c.product_id = $2` + containerFilter + `
 		GROUP BY c.id, c.kind, c.name, c.position, c.parent_milestone_id, ` + containerStatusSQL + `,
 			m.id, m.name, m.position, ` + milestoneStatusSQL + `, task.current_lane
 		ORDER BY m.position ASC, m.id ASC, (c.parent_milestone_id IS NOT NULL) ASC, c.position ASC, c.id ASC`
