@@ -501,6 +501,39 @@ func TestAFailedReadCostsOnlyItsOwnTilesIsPerTile(t *testing.T) {
 	})
 }
 
+// TestTheEscalatedTileDropsOnlyItsSubLineWhenTheConsoleReadFails is the
+// Escalated tile's half of the failure seam, and the one tile whose figure
+// and sub-line come from two different reads.
+//
+// The figure comes from the badge's CountEscalatedTasks and the sub-line
+// from the console overview read, so this is the only tile a single failure
+// can half-cope: it must keep the figure it can still read and drop the line
+// it cannot. The line that must not happen is "0 new in the last hour" --
+// that is not an absent figure, it is a claim that nothing was escalated in
+// the last hour, made by a read that returned no rows at all. The fixture's
+// badge answer of 3 is what an operator is entitled to keep seeing, so the
+// absence of the sub-line and the presence of 3 are one assertion.
+func TestTheEscalatedTileDropsOnlyItsSubLineWhenTheConsoleReadFails(t *testing.T) {
+	tasks := busyTileFixture()
+	tasks.overviewErr = store.ErrNotFound
+
+	body := fetchOverviewBody(t, tileFixtureMux(t, tasks, tileDesignFixture()))
+
+	tile := overviewTileSection(t, body, "Escalated")
+	if strings.Contains(tile, `data-krill="overview-stat-error"`) {
+		t.Errorf("the tile's figure came from the badge read, which succeeded; it should not read as failed: %s", tile)
+	}
+	if !strings.Contains(tile, ">3<") {
+		t.Errorf("the tile lost the badge's figure of 3 to an unrelated read's failure; tile: %s", tile)
+	}
+	if strings.Contains(tile, `data-krill="overview-stat-sub"`) {
+		t.Errorf("the tile rendered a sub-line from a read that failed; a figure of 0 new is not an absent figure: %s", tile)
+	}
+	if strings.Contains(tile, "new in the last hour") {
+		t.Errorf("the tile claims a recency window it could not read; tile: %s", tile)
+	}
+}
+
 // assertTileFailed pins the two halves of a tile whose read failed: a
 // message in place of the figure, and no figure at all. The second half is
 // the one that matters -- "Escalated could not be read" beside a 0 is an
