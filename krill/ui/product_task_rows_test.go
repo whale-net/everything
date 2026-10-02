@@ -423,6 +423,23 @@ func TestBoardViewIsAlsoReadOnly(t *testing.T) {
 	}
 }
 
+// taskTableHTML returns the rendered Tasks table, cut out of the page.
+//
+// The lane filter's select is a legitimate place for a lane NAME to appear as
+// plain text -- it is the operator naming the value they are filtering by,
+// not a row rendering its lane -- so the "lane reaches the page as bare text
+// rather than a badge" assertion has to be made about the TABLE. Scoping it
+// to the whole page would forbid the control FR 61d7fb7b requires.
+func taskTableHTML(t *testing.T, body string) string {
+	t.Helper()
+	const marker = `data-krill="task-table"`
+	start := strings.Index(body, marker)
+	require.NotEqual(t, -1, start, "the table never rendered: %s", body)
+	end := strings.Index(body[start:], "</table>")
+	require.NotEqual(t, -1, end, "the table never closes: %s", body)
+	return body[start : start+end]
+}
+
 // TestTasksTableRendersLaneAndStateAsBadges is FR de4d0e42's rule on this
 // page: lane and state are badges from the shared mappers, and NEITHER
 // reaches the table as bare text. The last part is asserted by stripping
@@ -442,7 +459,7 @@ func TestTasksTableRendersLaneAndStateAsBadges(t *testing.T) {
 	assert.Contains(t, body, ">"+string(store.LaneImplementation)+"<",
 		"the badge carries the lane's own name")
 
-	stripped := stripBadges(body)
+	stripped := stripBadges(taskTableHTML(t, body))
 	for _, value := range []string{
 		string(store.LaneImplementation), string(store.LaneTesting),
 		string(store.LaneDone), string(store.LaneScaffold),

@@ -632,9 +632,17 @@ func TestScopeControlChangeSwapsInPlace(t *testing.T) {
 }
 
 // TestScopeControlCarriesTheSiblingFilters: changing the scope must not
-// silently drop the lane and only-stuck filters the operator set. They
-// ride along as hidden fields, so a scope change keeps the read the same
-// width apart from its container.
+// silently drop the lane and only-stuck filters the operator set, on
+// either view.
+//
+// The two views carry them by different mechanisms, and the difference is
+// the point. The Tasks page offers the lane select and the only-stuck
+// checkbox (FR 61d7fb7b), so the form carries them as controls -- the
+// selected option and the checked box. The Board reads the same parsed
+// scope but offers neither control, so its form carries them as hidden
+// fields. Either way a scope change re-submits them; what would break this
+// is a Board that dropped them, leaving an operator who filtered on Tasks
+// to land on a Board showing everything with no indication why.
 func TestScopeControlCarriesTheSiblingFilters(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -645,18 +653,73 @@ func TestScopeControlCarriesTheSiblingFilters(t *testing.T) {
 		{name: "both", query: "scope=milestone&container_id=" + productTaskMilestone.String() + "&lane=Testing&only_stuck=true"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			body := scopeControlOf(t, tc.query)
-			control := body[strings.Index(body, `data-krill="scope-control"`):]
-			control = control[:strings.Index(control, "</form>")]
+			hasLane := strings.Contains(tc.query, "lane=")
+			hasStuck := strings.Contains(tc.query, "only_stuck")
 
-			if strings.Contains(tc.query, "lane=") {
-				assert.Contains(t, control, `name="lane" value="Testing"`)
+			tasks := scopeControlFormOf(t, productTaskTasksURL(tc.query))
+			if hasLane {
+				assert.Equal(t, "Testing", selectedOption(t, tasks, `data-krill="lane-filter-select"`),
+					"the Tasks form's lane select shows the filtered lane")
+			} else {
+				assert.Equal(t, "", selectedOption(t, tasks, `data-krill="lane-filter-select"`),
+					"an unfiltered URL opens on Any lane, not on whichever lane happens to sort first")
 			}
-			if strings.Contains(tc.query, "only_stuck") {
-				assert.Contains(t, control, `name="only_stuck" value="true"`)
+			if hasStuck {
+				assert.Contains(t, checkedBoxOf(tasks), "checked",
+					"the Tasks form's only-stuck box is checked, so a scope change keeps the filter")
+			} else {
+				assert.NotContains(t, checkedBoxOf(tasks), "checked",
+					"an unfiltered URL must not open with the box already ticked")
+			}
+
+			board := scopeControlFormOf(t, "/products/"+productTaskProduct.String()+"/board?"+tc.query)
+			assert.NotContains(t, board, `data-krill="lane-filter-select"`,
+				"the Board offers no lane control to change")
+			if hasLane {
+				assert.Contains(t, board, `name="lane" value="Testing"`,
+					"the Board carries the lane forward as a hidden field")
+			}
+			if hasStuck {
+				assert.Contains(t, board, `name="only_stuck" value="true"`,
+					"the Board carries only-stuck forward as a hidden field")
 			}
 		})
 	}
+}
+
+// checkedBoxOf is the only-stuck checkbox's own opening tag, so an
+// assertion that it is CHECKED is made about that input rather than about
+// the word appearing anywhere in the form -- templ renders `checked` after
+// the class list, so pinning an attribute order would pin templ's output
+// rather than the state.
+func checkedBoxOf(form string) string {
+	at := strings.Index(form, `data-krill="only-stuck-filter"`)
+	if at == -1 {
+		return ""
+	}
+	start := strings.LastIndex(form[:at], "<input")
+	if start == -1 {
+		return ""
+	}
+	return form[start:at]
+}
+
+// scopeControlFormOf is the scope control's own form, cut out of the page
+// the given URL served -- so an assertion about what the form submits is
+// made about the form rather than about whatever else the page carries.
+func scopeControlFormOf(t *testing.T, url string) string {
+	t.Helper()
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+
+	rec := fetch(t, mux, url)
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	body := rec.Body.String()
+	at := strings.Index(body, `data-krill="scope-control"`)
+	require.NotEqual(t, -1, at, "no scope control rendered: %s", body)
+	rest := body[at:]
+	end := strings.Index(rest, "</form>")
+	require.NotEqual(t, -1, end, "the scope control never closes: %s", body)
+	return rest[:end]
 }
 
 // TestScopeControlLeavesACleanProductWithSomethingToChooseFrom: a product

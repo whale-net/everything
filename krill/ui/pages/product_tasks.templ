@@ -134,6 +134,13 @@ type ProductTaskRegion struct {
 	// says so instead of reading as a page that failed.
 	Empty bool
 
+	// EmptyDetail is that empty state's second sentence, and it NAMES the
+	// active filters rather than saying "nothing matches" (FR 61d7fb7b).
+	// "No tasks" alone is ambiguous between a scope with no work and a
+	// filter that excluded everything the operator can see; naming the
+	// scope and the lane is what tells them which control to change.
+	EmptyDetail string
+
 	// UpdatedAt is the read instant as an absolute RFC3339 string. It is
 	// what the region renders and what the relative "Updated N ago" text is
 	// derived from client-side: the server never emits a now-derived string
@@ -195,7 +202,7 @@ templ ProductTasks(d ProductTaskRegion) {
 			<div class="mt-3" data-krill="product-tasks-empty">
 				@htmxui.EmptyState(
 					"No tasks in this scope",
-					"Nothing matches the active scope and filters.",
+					d.EmptyDetail,
 					"", "", templ.Attributes{},
 				)
 			</div>
@@ -271,11 +278,18 @@ templ ProductTasksFreshness(updatedAt string) {
 //
 // It keeps the region's anchor id for the same reason SpecInlineError does
 // -- a fragment without it deletes its own swap target.
+//
+// Its own marker is product-tasks-scope-error rather than the region's
+// product-tasks-error: both are alerts, but one is a scope the URL named
+// that this product does not own and the other is a read that failed, and
+// FR 61d7fb7b requires the three states never be confused. Sharing the
+// marker would make them indistinguishable in the markup even though the
+// sentences differ.
 templ ProductTasksInlineError(anchor, message string) {
 	<section id={ anchor } data-krill="product-tasks">
-		<div data-krill="product-tasks-error">
+		<div data-krill="product-tasks-scope-error">
 			@htmxui.Alert(htmxui.AlertError, message, templ.Attributes{
-				"data-krill": "product-tasks-error-alert",
+				"data-krill": "product-tasks-scope-error-alert",
 			})
 		</div>
 	</section>
