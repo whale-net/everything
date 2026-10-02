@@ -330,6 +330,13 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return
 	}
+	// Both outcomes below are navigations -- a 303 for a no-JS browser, an
+	// HX-Redirect for an htmx one -- and neither carries a body to state
+	// the outcome in, so the confirmation rides the same one-shot cookie
+	// every other redirect-after-post uses. The landing page is the new
+	// session's own detail page, which is the page the operator needs to
+	// read next anyway.
+	flashSuccess(w, "Design session opened.")
 	if isHXRequest(r) {
 		hxRedirect(w, designSessionPath(id))
 		return
@@ -417,6 +424,9 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Same redirect-after-post shape as opening a session: both outcomes
+	// navigate, so the confirmation rides the flash cookie.
+	flashSuccess(w, "Follow-up submitted.")
 	if isHXRequest(r) {
 		hxRedirect(w, designSessionPath(id))
 		return

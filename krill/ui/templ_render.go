@@ -105,7 +105,7 @@ func renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath
 		userLabel = u.PreferredUsername
 	}
 
-	page := layoutWithBody(activePath, title, userLabel, body)
+	page := layoutWithBody(activePath, title, userLabel, withFlashSuccess(r, w, body))
 
 	var buf bytes.Buffer
 	if err := page.Render(r.Context(), &buf); err != nil {

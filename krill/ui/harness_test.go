@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -349,6 +350,10 @@ type fakeScopeStore struct{ scope store.Scope }
 func (f fakeScopeStore) GetByID(context.Context, uuid.UUID) (store.Scope, error) { return f.scope, nil }
 func (f fakeScopeStore) GetSole(context.Context) (store.Scope, error)            { return f.scope, nil }
 
+// newTestApp builds the App every harness test drives. spec lists one
+// product because the shell's un-prefixed pages resolve one to record it in
+// the last-viewed cookie; without it those pages nil-panic on the interface
+// call rather than rendering.
 func newTestApp(t *testing.T, authenticator *htmxauth.Authenticator, issuer, apiURL string) *App {
 	t.Helper()
 
@@ -360,6 +365,9 @@ func newTestApp(t *testing.T, authenticator *htmxauth.Authenticator, issuer, api
 		oidcIssuer: issuer,
 		writes:     writes,
 		scopes:     fakeScopeStore{scope: store.Scope{ID: testScopeID}},
+		spec: scopedProductsReader{products: []store.Product{
+			{ID: testScopeID, Name: "krill"},
+		}},
 	}
 }
 
@@ -411,4 +419,92 @@ func writeTestJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// ---------------------------------------------------------------------------
+// intervention + toast routing
+// ---------------------------------------------------------------------------
+
+// fakeFragmentTasks is the minimum console-query surface a mutation handler
+// needs: after a write, the handler re-derives the whole results block of
+// the view the operator acted from, which means re-reading it. It embeds
+// store.TaskStore so any other List method the re-derivation ever grew would
+// nil-panic rather than pass unnoticed -- these tests must not depend on
+// store surface the console does not use.
+type fakeFragmentTasks struct {
+	store.TaskStore
+
+	claimed []store.ClaimedTaskRow
+	// escalated is distinct from claimed so a test can tell which view the
+	// re-derivation actually read.
+	escalated []store.EscalatedTaskRow
+}
+
+func (f *fakeFragmentTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
+	return store.Page[store.ClaimedTaskRow]{Items: f.claimed}, nil
+}
+
+func (f *fakeFragmentTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{Items: f.escalated}, nil
+}
+
+// newHtmxInterventionApp wires a signed-in operator to a fake api AND to the
+// console-query surface, so a mutation can be driven all the way through to
+// the fragment or page its response renders. It returns the fake IdP's
+// issuer so attribution can be asserted the same fresh way the no-HX cases
+// assert it.
+func newHtmxInterventionApp(t *testing.T, api *fakeAPI, operatorSub string) (*App, *http.Cookie, string) {
+	t.Helper()
+	idp := newFakeIDP(t, operatorSub)
+	authenticator, sessionCookie := newSignedInOperator(t, idp)
+	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app.tasks = &fakeFragmentTasks{
+		claimed:   []store.ClaimedTaskRow{{TaskID: uuid.New(), Title: "a still-claimed task"}},
+		escalated: []store.EscalatedTaskRow{{TaskID: uuid.New(), Title: "a still-escalated task"}},
+	}
+	return app, sessionCookie, idp.server.URL
+}
+
+// newInterventionMux registers exactly the intervention routes setupRoutes
+// mounts, each behind the same operatorRoute, so a form submission traverses
+// the production auth -> operator -> write path. Route paths are written as
+// literals here (not built from opsTaskActionBase) to keep the test
+// independent of the constant it exercises.
+func newInterventionMux(app *App) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /ops/tasks/{id}/release", app.operatorRoute(app.handleTaskIntervention("release")))
+	mux.HandleFunc("POST /ops/tasks/{id}/requeue", app.operatorRoute(app.handleTaskIntervention("requeue")))
+	mux.HandleFunc("POST /ops/tasks/{id}/escalate", app.operatorRoute(app.handleTaskIntervention("escalate")))
+	mux.HandleFunc("POST /ops/tasks/{id}/cancel", app.operatorRoute(app.handleTaskIntervention("cancel")))
+	mux.HandleFunc("GET /ops/tasks/{id}/cancel/confirm", app.operatorRoute(app.handleCancelConfirm))
+	return mux
+}
+
+// serveFormPost issues a urlencoded form POST -- what the browser's inline
+// action form and the cancel-confirm form actually send -- through mux with
+// the operator's session cookie attached. No HX-Request: this is the
+// no-JavaScript browser.
+func serveFormPost(mux *http.ServeMux, target string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// hxFormPost issues the same form POST with the HX-Request header htmx
+// sets -- the one difference between the route's two branches.
+func hxFormPost(mux *http.ServeMux, target string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
 }

@@ -363,6 +363,53 @@ means registering `productPathPrefix + <suffix>` in `mountShellRoutes`
 and calling `resolveProductFromPath` first, so an out-of-scope link is
 rejected before any content is built.
 
+## Mutation success feedback: the toast host
+
+`components/toast.templ` is the shell's **one** toast region (an
+`aria-live="status"` div, `ToastHostID`), and `toast.go` is the mechanism
+that fills it. `//libs/go/htmxui` has no Toast; this is krill-local
+(htmxui §8 — escalate a primitive only at 2–3 independent call sites).
+
+**Success takes one of two paths, and which one is decided by the
+request, not by the handler.**
+
+| Request | Mechanism | Why |
+|---|---|---|
+| htmx (`HX-Request`) | `renderFragment(w, r, withToast(msg, c))` — the toast rides along in the same response, out-of-band into the host | templ builds the markup, so the message is templ-escaped. `HX-Trigger` would hand the raw string to a JS template that would have to escape it again. |
+| no-JS form post | `flashSuccess(w, msg)` before the 303, then `withFlashSuccess` in `renderShellStatus` renders it as a success alert | a redirect has no body. The cookie is one-shot (`MaxAge: 30`, expired on read) and `SameSite=Lax` — Strict would drop it on the cross-site-initiated navigation it exists for. |
+
+**Out-of-band `beforeend`, never `outerHTML`.** The default OOB swap
+replaces the host itself, taking the live region with it, so the second
+toast of a session would land in a region that announces nothing.
+
+**A refusal is never a toast.** `renderInterventionResults` takes
+`message` and `toast` as separate arguments precisely for this: a refusal
+rides inline in `message` (stays until read), a success in `toast`
+(transient). A toast is the only record of an outcome only if the operator
+never looks away, which a 5-second self-dismiss cannot promise.
+
+**Empty means nothing, on both paths.** `withToast` returns the fragment
+unchanged for a blank message and `flashSuccess` sets no cookie. A handler
+that already records its outcome where the operator is looking — the
+credential mint's one-time token block, the revoked row flipping to
+"revoked" — names no message and correctly shows no toast.
+
+**A redirect is the only thing that carries a flash**, so the design-session
+forms (`design_write.go`) name a message on the same cookie: both their
+success outcomes navigate (303 for no-JS, `HX-Redirect` for htmx) and
+neither has a body to state the outcome in.
+
+**The flash is only read by a full page load.** `withFlashSuccess` returns
+the body untouched for an htmx request: a fragment renders no document, so
+a prepended alert would be swapped into the middle of whatever target
+asked for it, and consuming the cookie there would leave nothing to show.
+For the same reason the cookie is expired only when one is actually
+present, so an ordinary page load does not carry a `Set-Cookie` clearing a
+cookie it never had.
+
+Installing the host on every page is the cutover task's job; this task
+builds the component and the mechanism only.
+
 ## Task views
 
 `/spec/products/{id}/milestones/{mid}/tasks` (task_page.go,
