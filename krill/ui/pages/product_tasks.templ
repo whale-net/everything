@@ -151,6 +151,68 @@ type ProductTaskRegion struct {
 	// Error is a read failure in the operator's words, empty on success.
 	// Distinct from Empty: one is an answer, the other is a failure.
 	Error string
+
+	// PageError is a continuation token the store refused -- issued for
+	// another scope or another filter set (FR 7bff09fe). It is its own
+	// field, not Error, because it is a different fact: the read may be
+	// perfectly healthy and the URL is what cannot be honoured. Folding it
+	// into Error would answer "the tasks could not be read" to a request
+	// whose only fault is a stale link, and would point an operator at the
+	// logs instead of at the one control that fixes it.
+	PageError string
+
+	// PageRecoveryHref and PageRecoveryText are the way back out of a
+	// refused token: the same view and the same filters with the token
+	// dropped. Empty when there is nothing to recover to.
+	PageRecoveryHref  string
+	PageRecoveryText string
+
+	// Paging is the table's footer, or nil when this region has no table
+	// to page -- a failed read, or the empty outcomes the scope resolver
+	// renders without ever asking the store. A table with no footer would
+	// be a silently truncated one, which is the one outcome FR 7bff09fe
+	// rules out; an error or an empty scope has nothing to truncate.
+	Paging *ProductTaskPaging
+}
+
+// ProductTaskPaging is the Tasks table's own footer state (FR 7bff09fe):
+// how much of the filtered set is on screen, and the one link that moves
+// forward.
+//
+// Shown and Total are separate numbers on purpose. Total is the count the
+// store answered for the SAME parameters the rows were read with, so the
+// two cannot describe different filter sets; Shown is how many rows this
+// page actually rendered. A footer that derived either from the rows would
+// claim a table is complete when it is not.
+type ProductTaskPaging struct {
+	// Shown is how many rows this page rendered.
+	Shown int
+
+	// Total is the count read for this page's filters -- the whole set
+	// behind the rows, however many pages that is.
+	Total int
+
+	// Summary is the footer's sentence, built from Shown and Total in Go so
+	// the markup is one string rather than text interleaved with numbers:
+	// templ separates adjacent text and expressions with HTML comments,
+	// which would split "Showing 25 of 100 tasks" into pieces no reader
+	// -- and no assertion -- sees as one sentence.
+	Summary string
+
+	// NextHref is the following page, empty on the last one. The store
+	// issues a token exactly when rows remain, so its presence IS the
+	// existence of a following page rather than a guess from a row count.
+	NextHref string
+
+	// PrevHref is the preceding page, empty when none can be named. See
+	// PrevNote for why it is empty in practice.
+	PrevHref string
+
+	// PrevNote and NextNote are the disabled control's title: they say WHY
+	// the button is inert, so an operator reaching for it is not left to
+	// conclude the control is broken.
+	PrevNote string
+	NextNote string
 }
 
 // ProductTasks renders the product-wide Tasks/Board region: the scope it
@@ -192,7 +254,19 @@ templ ProductTasks(d ProductTaskRegion) {
 				<span data-krill="only-stuck">that are stuck</span>
 			}
 		</p>
-		if d.Error != "" {
+		if d.PageError != "" {
+			<div class="mt-3" data-krill="product-tasks-page-error">
+				@htmxui.Alert(htmxui.AlertError, d.PageError, templ.Attributes{
+					"data-krill": "product-tasks-page-error-alert",
+				})
+				if d.PageRecoveryHref != "" && d.PageRecoveryText != "" {
+					<div class="mt-3">
+						<a href={ templ.URL(d.PageRecoveryHref) } class="btn btn-secondary btn-sm"
+							data-krill="product-tasks-page-recovery">{ d.PageRecoveryText }</a>
+					</div>
+				}
+			</div>
+		} else if d.Error != "" {
 			<div class="mt-3" data-krill="product-tasks-error">
 				@htmxui.Alert(htmxui.AlertError, d.Error, templ.Attributes{
 					"data-krill": "product-tasks-error-alert",
@@ -208,8 +282,49 @@ templ ProductTasks(d ProductTaskRegion) {
 			</div>
 		} else {
 			@ProductTaskTable(d.Rows)
+			if d.Paging != nil {
+				@ProductTaskPagingFooter(*d.Paging)
+			}
 		}
 	</section>
+}
+
+// ProductTaskPagingFooter is the Tasks table's own footer: the explicit
+// "Showing X of Y tasks" and the one control that moves through the pages
+// (FR 7bff09fe).
+//
+// It is a real <a> for the enabled direction, not a button that swaps: a
+// page position is a URL, and a URL is what a reload, a shared link and the
+// browser's own Back button all have to agree with. A swap-only control
+// would leave all three pointing at a page the operator is no longer on.
+//
+// Previous renders as an explicitly disabled control rather than being
+// omitted. The store's keyset paging issues tokens forward only -- a token
+// names a position to resume AFTER, and nothing in the read layer can name
+// the position before the one being shown -- so a Previous that appeared
+// only when a preceding token happened to be in hand would be absent on
+// almost every page and look like a rendering bug. A control that is always
+// there and says why it is inert is the honest shape; what must never
+// happen is a Previous that guesses a position and lands on a page the
+// operator did not ask for.
+templ ProductTaskPagingFooter(p ProductTaskPaging) {
+	<div class="mt-3 flex flex-wrap items-center justify-between gap-2" data-krill="task-paging">
+		<span class="text-sm text-base-content/70" data-krill="paging-summary">{ p.Summary }</span>
+		<div class="flex items-center gap-2">
+			if p.PrevHref != "" {
+				<a href={ templ.URL(p.PrevHref) } class="btn btn-ghost btn-sm" data-krill="paging-previous">Previous</a>
+			} else {
+				<button type="button" class="btn btn-ghost btn-sm" disabled data-krill="paging-previous"
+					title={ p.PrevNote }>Previous</button>
+			}
+			if p.NextHref != "" {
+				<a href={ templ.URL(p.NextHref) } class="btn btn-ghost btn-sm" data-krill="paging-next">Next</a>
+			} else {
+				<button type="button" class="btn btn-ghost btn-sm" disabled data-krill="paging-next"
+					title={ p.NextNote }>Next</button>
+			}
+		</div>
+	</div>
 }
 
 // ProductTaskTable is the Tasks view's rows, in the order the read returned

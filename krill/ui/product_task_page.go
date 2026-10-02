@@ -10,6 +10,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -88,6 +90,30 @@ func (app *App) serveProductTaskRegion(w http.ResponseWriter, r *http.Request, v
 	readAt := time.Now()
 	page, err := app.readProductTasks(r.Context(), product.ID, resolved)
 	if err != nil {
+		// A continuation token the store refused is the caller's own stale
+		// link, not a broken read, so it is answered BEFORE the read-failure
+		// branch below can call it one. Both refusals -- another scope and
+		// another filter set -- reach here as themselves rather than as an
+		// empty or wrong-scope page, which is the outcome FR 7bff09fe rules
+		// out: a rejected token answered with rows would be rows this URL
+		// did not ask for.
+		if problem := productTaskTokenProblemOf(err); problem != productTaskTokenOK {
+			region.PageError = productTaskTokenProblemMessage(problem)
+			region.PageRecoveryHref = productTaskPageRecoveryPath(r)
+			region.PageRecoveryText = "Back to the first page"
+			// A stale link is the caller's, so 400 -- the same status the
+			// ops console's own token refusals use (ops.go's
+			// writeOpsQueryError). An htmx request still gets 200, for the
+			// reason it does everywhere else here: htmx does not swap on a
+			// non-2xx, so a 400 fragment would leave the operator looking
+			// at an unchanged table.
+			status := http.StatusBadRequest
+			if r.Header.Get("HX-Request") != "" {
+				status = http.StatusOK
+			}
+			app.renderProductTaskRegion(w, r, view, region, status)
+			return
+		}
 		// A failed read is a 500 the operator can act on, and an empty
 		// region would read as "this scope has no tasks" -- the one answer
 		// it must never be mistaken for.
@@ -100,7 +126,170 @@ func (app *App) serveProductTaskRegion(w http.ResponseWriter, r *http.Request, v
 	region.Rows = productTaskRowsOf(product.ID, page.Rows, readAt)
 	region.UpdatedAt = readAt.UTC().Format(time.RFC3339)
 	region.Empty = len(page.Rows) == 0
+	// A page that came back empty while the count for the SAME filters says
+	// otherwise is not a scope with no work: it is a position past the end
+	// of a set that has since shrunk, reached by a token that was valid
+	// when the operator followed it. Blaming the filters there would point
+	// them at a control that is not the problem, so the sentence names the
+	// page -- and still names the scope and filters, the way every other
+	// empty state does.
+	if region.Empty && page.Total > 0 {
+		region.EmptyDetail = productTaskPastEndDetailOf(resolved, page.Total)
+	}
+	if region.Empty {
+		// The footer belongs to the table and only to the table: an empty
+		// answer and a failure have no rows to truncate, and a "Showing 0
+		// of 0" under either would be a count dressed as a page.
+		region.Paging = nil
+	} else if view == productTasksView {
+		// The Tasks view only. The Board is a different view of the same
+		// scope with its own paging requirement (FR cf000440), and giving
+		// it this footer's Next/Previous -- links into a board that renders
+		// no lanes yet -- would be answering for it here.
+		region.Paging = productTaskPagingOf(r, page)
+	}
 	app.renderProductTaskView(w, r, product, region, resolved, page.Rows, http.StatusOK)
+}
+
+// productTaskPagingOf is the table footer's state for one page: the
+// explicit "Showing X of Y tasks" and the one control that moves on.
+//
+// Both numbers come from the read rather than from the rows. Y is the
+// count the store answered for the identical parameters the rows were read
+// with, so the footer cannot describe a different filter set than the table
+// above it; X is the length of the page the store actually returned. A
+// footer that derived Y by counting what it had would read "Showing 25 of
+// 25" on the first of four pages -- the silently truncated table FR
+// 7bff09fe exists to rule out.
+//
+// NextHref is present exactly when the store issued a token, which it does
+// exactly when a row remained beyond this page -- so "more rows remain" is
+// the store's own answer, not an inference from comparing X against Y.
+//
+// PrevHref is always empty. The store's keyset paging is forward-only: a
+// token names a position to resume AFTER, and nothing in this layer can
+// name the position before the one being shown. So Previous is rendered
+// disabled rather than pointed at a guessed page -- guessing would land the
+// operator on a page they did not ask for, which is the failure this whole
+// task exists to prevent. The disabled control's title says so, and the
+// browser's own Back button remains the way back.
+//
+// The links are rebuilt from the request's own query with only the token
+// replaced, which is what keeps every active filter -- scope mode,
+// container, lane, only-stuck and page size -- in the URL of the page they
+// move to.
+func productTaskPagingOf(r *http.Request, page productTaskPage) *pages.ProductTaskPaging {
+	paging := &pages.ProductTaskPaging{
+		Shown:   len(page.Rows),
+		Total:   page.Total,
+		Summary: fmt.Sprintf("Showing %d of %d tasks", len(page.Rows), page.Total),
+		PrevNote: "This list pages forward only, so there is no previous page to link to. " +
+			"Use the browser's Back button, or change a filter to start again from the first page.",
+	}
+	if page.NextToken != "" {
+		paging.NextHref = productTaskPagePath(r, page.NextToken)
+		return paging
+	}
+	paging.NextNote = "This is the last page: every task matching these filters is already shown."
+	return paging
+}
+
+// productTaskPagePath is this view's own URL at a given page position: the
+// request's query with page_token replaced and every other parameter left
+// exactly as it arrived.
+//
+// Rebuilding from r.URL.Query() rather than re-deriving the filters from the
+// resolved scope is deliberate. A re-derivation would have to know which of
+// scope/container_id/milestone/lane/only_stuck/page_size the URL carried,
+// and a parameter it forgot to carry forward would silently drop a filter
+// the operator set -- the exact drift the scope control's one-form shape
+// exists to prevent.
+func productTaskPagePath(r *http.Request, token string) string {
+	query := r.URL.Query()
+	query.Set(productTaskPageTokenParam, token)
+	return r.URL.Path + "?" + query.Encode()
+}
+
+// productTaskPageRecoveryPath is the way back out of a refused
+// continuation token: this view at this scope and these filters, with the
+// token dropped.
+//
+// It keeps every filter rather than resetting to the product-wide default.
+// A token goes stale when the scope or the filters CHANGE -- which is
+// exactly what the operator did to get here -- so dropping their filters on
+// the way out would discard the thing that caused the refusal and land them
+// on a different answer than the one they were reading.
+func productTaskPageRecoveryPath(r *http.Request) string {
+	query := r.URL.Query()
+	query.Del(productTaskPageTokenParam)
+	if len(query) == 0 {
+		return r.URL.Path
+	}
+	return r.URL.Path + "?" + query.Encode()
+}
+
+// productTaskPastEndDetailOf is the empty state's sentence for a page past
+// the end of its set: the filters named as usual, plus the fact that the
+// PAGE -- not the scope -- is what came back with nothing.
+func productTaskPastEndDetailOf(scope resolvedProductTaskScope, total int) string {
+	return fmt.Sprintf("%s This page is past the last one: the %d task(s) matching these filters are on an earlier page.",
+		productTaskEmptyDetailOf(scope), total)
+}
+
+// productTaskTokenProblem is a continuation token the store refused, named
+// rather than string-matched at the call site.
+//
+// It is its own set because every member is the caller's stale link and none
+// of them is a read failure: answering any of them with "see the logs"
+// would send an operator hunting a database problem they do not have.
+type productTaskTokenProblem int
+
+const (
+	// productTaskTokenOK is the absence of a token refusal.
+	productTaskTokenOK productTaskTokenProblem = iota
+	// productTaskTokenScope is a token issued for another scope.
+	productTaskTokenScope
+	// productTaskTokenFilter is a token issued for a different filter set.
+	productTaskTokenFilter
+	// productTaskTokenInvalid is a token that is not a token at all -- a
+	// hand-edited or truncated page_token. It earns its own name rather
+	// than being lumped in with the two mismatches because it says
+	// something different to an operator debugging a shared link, and it
+	// is grouped HERE rather than left to the read-failure branch because
+	// that branch blames the logs for something the URL did.
+	productTaskTokenInvalid
+)
+
+// productTaskTokenProblemOf names which refusal err is, or
+// productTaskTokenOK for a read failure that has nothing to do with
+// paging.
+//
+// errors.Is rather than a string match, and no default case claiming an
+// arbitrary error: an unrecognized failure is the read's own problem and
+// belongs in the 500 branch, never here.
+func productTaskTokenProblemOf(err error) productTaskTokenProblem {
+	switch {
+	case errors.Is(err, store.ErrTokenScopeMismatch):
+		return productTaskTokenScope
+	case errors.Is(err, store.ErrTokenFilterMismatch):
+		return productTaskTokenFilter
+	case errors.Is(err, store.ErrInvalidContinuationToken):
+		return productTaskTokenInvalid
+	}
+	return productTaskTokenOK
+}
+
+// productTaskTokenProblemMessage is each refusal in the operator's words.
+// Never the store's own Go error, which names an internal package and tells
+// an operator nothing they can act on.
+func productTaskTokenProblemMessage(problem productTaskTokenProblem) string {
+	switch problem {
+	case productTaskTokenScope, productTaskTokenFilter:
+		return "This page's page_token was issued for a different scope or set of filters, so it cannot be used here."
+	case productTaskTokenInvalid:
+		return "This page's page_token is not a valid continuation token."
+	}
+	return "The page could not be read."
 }
 
 // productTaskRowsOf is the read's page as the table's rows.
