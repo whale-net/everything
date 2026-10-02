@@ -1,9 +1,9 @@
 package components
 
 import (
-	"fmt"
 	"sort"
 
+	"github.com/whale-net/everything/manmanv2/connectaddr"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -80,29 +80,16 @@ type ConnectAddress struct {
 	Protocol string // "TCP" | "UDP"
 }
 
-// ComputeConnectAddresses builds one ConnectAddress per port binding.
-// Returns nil when hostPublicAddress is empty or there are no port bindings.
-//
-// M1 does no validation or normalisation of hostPublicAddress — it is passed
-// through as configured, and no "primary" port is designated; every bound
-// port is represented.
+// ComputeConnectAddresses maps connectaddr.Derive to display pairs. Returns
+// nil when the derivation is unavailable.
 func ComputeConnectAddresses(hostPublicAddress string, portBindings []*manmanpb.PortBinding) []ConnectAddress {
-	if hostPublicAddress == "" || len(portBindings) == 0 {
+	res := connectaddr.Derive(hostPublicAddress, portBindings)
+	if res.Unavailable {
 		return nil
 	}
-	addresses := make([]ConnectAddress, 0, len(portBindings))
-	for _, pb := range portBindings {
-		if pb == nil {
-			continue
-		}
-		addresses = append(addresses, ConnectAddress{
-			Address:  fmt.Sprintf("%s:%d", hostPublicAddress, pb.GetHostPort()),
-			Port:     pb.GetHostPort(),
-			Protocol: pb.GetProtocol(),
-		})
-	}
-	if len(addresses) == 0 {
-		return nil
+	addresses := make([]ConnectAddress, 0, len(res.Entries))
+	for _, e := range res.Entries {
+		addresses = append(addresses, ConnectAddress{Address: e.Address(), Port: e.Port, Protocol: e.Protocol})
 	}
 	return addresses
 }

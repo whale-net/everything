@@ -17,6 +17,7 @@ templ_library(
         "//libs/go/htmxauth",
         "//libs/go/htmxsse/liveindicator",
         "//libs/go/htmxui",
+        "//manmanv2/connectaddr",
         "//manmanv2/protos:manmanpb",
     ],
 )
