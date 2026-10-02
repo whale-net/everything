@@ -44,25 +44,27 @@ func overviewTileError(label string) string {
 // remaining figures, and every sub-line, come from one product-wide
 // console read plus the product's design-session summary.
 func (app *App) overviewStatTiles(r *http.Request, productID uuid.UUID, badge navBadge) []pages.OverviewStatTile {
-	tiles := []pages.OverviewStatTile{app.escalatedStatTile(badge)}
-
 	counts, countsErr := app.consoleOverviewCounts(r.Context(), productID)
 	countsRead := countsErr == nil
 
-	tiles = append(tiles,
+	return []pages.OverviewStatTile{
+		app.escalatedStatTile(badge, counts, countsRead),
 		claimedStatTile(counts, countsRead),
 		openNotesStatTile(counts, countsRead),
 		app.blockingQuestionsStatTile(r.Context(), productID),
-	)
-	return tiles
+	}
 }
 
 // escalatedStatTile is the Escalated tile.
 //
 // Its figure is the badge's own, so the sidebar count, this tile, and the
 // unfiltered Escalated tab are one number by construction rather than by
-// three queries that happen to agree.
-func (app *App) escalatedStatTile(badge navBadge) pages.OverviewStatTile {
+// three queries that happen to agree. Its sub-line narrows that same queue
+// to the recent window, counted by the console read that counts the other
+// two queues -- so the two numbers describe one row set at two moments,
+// and an operator who escalates something and sees the figure rise knows
+// which part of the queue is new.
+func (app *App) escalatedStatTile(badge navBadge, counts store.ConsoleOverviewCounts, countsRead bool) pages.OverviewStatTile {
 	tile := pages.OverviewStatTile{
 		Label:      "Escalated",
 		Href:       escalatedTabHref,
@@ -73,7 +75,21 @@ func (app *App) escalatedStatTile(badge navBadge) pages.OverviewStatTile {
 		return tile
 	}
 	tile.Count = strconv.Itoa(badge.count)
+	if countsRead {
+		tile.Sub = recentEscalationSubLine(counts.EscalatedRecently)
+	}
 	return tile
+}
+
+// recentEscalationSubLine reads "N new in the last hour" beneath an
+// escalated figure. It is a narrowing of that figure by time, never the
+// figure again: an escalation from yesterday is still in the queue and is
+// not what this line is counting.
+func recentEscalationSubLine(recent int) string {
+	if recent == 1 {
+		return "1 new in the last hour"
+	}
+	return strconv.Itoa(recent) + " new in the last hour"
 }
 
 // claimedStatTile is the Claimed tile: how many tasks are held by a live
