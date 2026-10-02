@@ -45,20 +45,21 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("oidc verifier: %w", err)
 	}
 
-	reg := server.NewRegistry(server.WhoamiTool, server.ConnectAddressTool)
-	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")})
-
-	controlAddr := os.Getenv("CONTROL_API_URL")
-	if controlAddr == "" {
-		controlAddr = "control-api-dev-service:50051"
+	apiAddr := os.Getenv("CONTROL_API_URL")
+	if apiAddr == "" {
+		return errors.New("CONTROL_API_URL is required")
 	}
-	// The user-token dial option forwards the caller's token on every backend call.
-	conn, err := grpcclient.NewClient(ctx, controlAddr, grpcauth.NewUserTokenDialOption(grpcauth.AuthMode(os.Getenv("GRPC_AUTH_MODE"))))
+	conn, err := grpcclient.NewClient(ctx, apiAddr, grpcauth.NewUserTokenDialOption(grpcauth.AuthModeOIDC))
 	if err != nil {
-		return fmt.Errorf("control api client: %w", err)
+		return fmt.Errorf("control api: %w", err)
 	}
 	defer conn.Close()
-	server.AddConnectAddressTool(srv, manmanpb.NewManManAPIClient(conn.GetConnection()))
+
+	reg := server.NewRegistry(append([]server.Tool{server.WhoamiTool, server.ConnectAddressTool}, server.ReadTools...)...)
+	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")})
+	apiClient := manmanpb.NewManManAPIClient(conn.GetConnection())
+	server.AddReadTools(srv, apiClient)
+	server.AddConnectAddressTool(srv, apiClient)
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	mux := http.NewServeMux()
