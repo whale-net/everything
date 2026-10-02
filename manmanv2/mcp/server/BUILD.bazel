@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "server",
+    srcs = [
+        "audit.go",
+        "auth.go",
+        "caller.go",
+        "middleware.go",
+        "persona.go",
+        "whoami.go",
+    ],
+    importpath = "github.com/whale-net/everything/manmanv2/mcp/server",
+    visibility = ["//manmanv2/mcp:__subpackages__"],
+    deps = [
+        "//libs/go/grpcauth",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
+
+go_test(
+    name = "server_test",
+    srcs = glob(["*_test.go"]),
+    embed = [":server"],
+    deps = [
+        "//libs/go/grpcauth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//health",
+        "@org_golang_google_grpc//health/grpc_health_v1",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//test/bufconn",
+    ],
+)

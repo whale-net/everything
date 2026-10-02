@@ -44,6 +44,7 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 
 - [docs/DESIGN_UI_REDESIGN.md](docs/DESIGN_UI_REDESIGN.md) — UI redesign: decisions, assumed-but-unbuilt functionality, TBDs (draft; wireframes are layout source of truth)
 - [docs/DESIGN_SGC_ENV_OVERRIDES.md](docs/DESIGN_SGC_ENV_OVERRIDES.md) — Per-deployment env var overrides: Option B accepted, not scheduled
+- [ENV.md](ENV.md) § MCP server — env vars for `manmanv2/mcp` (persona-authorized MCP server over the control API; scaffold)
 
 ## Archive
 
