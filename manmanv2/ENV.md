@@ -131,4 +131,6 @@ The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 
 | `MCP_RESOURCE_METADATA_URL` | no | RFC 9728 metadata URL advertised in 401 challenges |
 | `CONTROL_API_URL` | yes | Control API gRPC address; caller token is forwarded on every call |
 
+Tilt: opt-in via `ENABLE_MANMANV2_MCP=true` with `MCP_OIDC_ISSUER` and `MCP_OIDC_CLIENT_ID` (required), optional `MCP_RESOURCE_METADATA_URL` and `MCP_CONTROL_API_URL`; forwarded to `localhost:8081`. Image `manmanv2-mcp` is also in the `manmanv2_chart` Helm composition. Helm: set `apps.manmanv2-mcp.env.{OIDC_ISSUER,OIDC_CLIENT_ID,PG_DATABASE_URL,CONTROL_API_URL}` (plus optional `MCP_RESOURCE_METADATA_URL`) in the deployment's values; the chart does not default them. Verified with `helm template --set apps.manmanv2-mcp.env.*`.
+
 There is no unauthenticated mode: the server refuses to start without the OIDC settings. Callers need a `gamer`, `server-manager`, or `admin` realm role; any other caller is refused every tool.

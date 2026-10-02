@@ -11,6 +11,7 @@ MANMAN_V2_APPS = [
     "//manmanv2/processor:event-processor_metadata",
     "//manmanv2/log-processor:log-processor_metadata",
     "//manmanv2/ui:manmanv2-ui_metadata",
+    "//manmanv2/mcp:mcp_metadata",
 ]
 
 # ManManV2 Helm chart - Go-based control plane services
