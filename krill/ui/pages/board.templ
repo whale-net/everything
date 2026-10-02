@@ -240,6 +240,49 @@ templ boardLaneHeader(lane BoardLane) {
 	</div>
 }
 
+// boardCard is one task's card: the title linking to detail, the
+// milepebble it came from when the milestone is cut, its state badges, its
+// attempts against the cap, and its lease countdown.
+//
+// A Quiet card -- a Done-lane task with nothing outstanding -- renders its
+// title and its milepebble and nothing else, which is FR f6b62cc7's
+// explicit carve-out: finished work that still badged "3 of 3" and a lease
+// reads as work to do.
+//
+// The lease is a <time> carrying the absolute instant in `datetime` and in
+// its own text, so the page states a real time with scripting off; the
+// countdown the FR asks for is derived from that attribute by the
+// page-level script rather than rendered here, because a relative string
+// inside a fragment the Refresh button re-requests would be as old as the
+// response and change on every poll (NFR 7b497d92).
+templ boardCard(t TaskRow) {
+	<li data-krill="board-card" data-krill-task-id={ t.ID }
+		data-krill-claim-id={ t.ClaimID }
+		data-krill-lease-expires-at={ t.LeaseExpiresAt }
+		class="card bg-base-100 border border-base-300">
+		<div class="card-body p-3 gap-1">
+			<a href={ templ.URL(t.DetailPath) } class="link font-medium" data-krill="task-title">{ t.Title }</a>
+			if t.Milepebble != "" {
+				<span data-krill="task-milepebble" class="badge badge-neutral badge-sm">{ t.Milepebble }</span>
+			}
+			if !t.Quiet {
+				if t.Attempts != "" {
+					<div data-krill="task-attempts" class="text-xs text-base-content/70">{ t.Attempts }</div>
+				}
+				<div class="flex flex-wrap gap-1">
+					@TaskBadges(t.Badges)
+				</div>
+				if t.LeaseExpiresAt != "" {
+					<time data-krill="task-lease" datetime={ t.LeaseExpiresAt } title={ t.LeaseExpiresAt }
+						class="text-xs text-base-content/70">
+						{ t.LeaseExpiresAt }
+					</time>
+				}
+			}
+		</div>
+	</li>
+}
+
 // boardLaneColumns renders one swimlane's five columns, each headed by its
 // lane name and its count -- a zero included, so an empty lane is visibly
 // empty rather than absent.
@@ -255,14 +298,7 @@ templ boardLaneColumns(columns []BoardColumn) {
 				</h3>
 				<ul class="space-y-2">
 					for _, t := range col.Cards {
-						<li data-krill="board-card" data-krill-task-id={ t.ID }
-							data-krill-claim-id={ t.ClaimID }
-							data-krill-lease-expires-at={ t.LeaseExpiresAt }
-							class="card bg-base-100 border border-base-300">
-							<div class="card-body p-3 gap-1">
-								<a href={ templ.URL(t.DetailPath) } class="link font-medium" data-krill="task-title">{ t.Title }</a>
-							</div>
-						</li>
+						@boardCard(t)
 					}
 				</ul>
 			</div>

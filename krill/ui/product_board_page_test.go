@@ -699,17 +699,18 @@ func TestBoardPageDoesNotScrollHorizontally(t *testing.T) {
 // TestBoardCardIsThinEnoughForTheCardTaskToLand pins review target 5. The
 // card carries the title link and the claim identity, and nothing else --
 // the badges, "n of cap attempts" and "Lease in N min" are FR f6b62cc7's
-// own work on a later task (krill 0ae33eaf), which must be able to add
-// to this card without moving it.
+// own work (krill 0ae33eaf, now landed in product_board_card_test.go),
+// which had to add all of it to this card without moving it.
 //
-// So this asserts the card is the anchor the later task builds on: the
-// title is a link to the detail page, and the claim identity is carried
-// on the card element itself as data attributes. It deliberately does NOT
-// assert the absence of badges -- that would pin a temporary state and
-// fail the moment the next task lands -- but it does assert the card is
-// thin in the ways that would have required moving it: one link, the
-// title, and the claim identity in attributes rather than in prose that
-// a later badge would have to interleave with.
+// So this asserts the card is the anchor that work built on: the title is
+// a link to the detail page, and the claim identity is carried on the card
+// element itself as data attributes. It deliberately does NOT assert the
+// absence of badges -- that would pin a temporary state and fail the moment
+// the next task lands -- but it does assert the card is thin in the ways
+// that would have required moving it: one link, the title, and the claim
+// identity in attributes rather than in prose that a later badge would have
+// to interleave with. That "one link" count is why the milepebble badge
+// FR f6b62cc7 added is a <span>, not an anchor.
 func TestBoardCardIsThinEnoughForTheCardTaskToLand(t *testing.T) {
 	claim := uuid.New()
 	lease := time.Now().Add(20 * time.Minute).UTC().Truncate(time.Second)
