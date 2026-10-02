@@ -60,3 +60,30 @@ func TestBuildHead_ThemeBootstrapReadsTheSharedStorageKey(t *testing.T) {
 		t.Errorf("the theme bootstrap must not force a reload, got: %s", head)
 	}
 }
+
+// TestBuildHead_RelativeAgeBindsItsListenerWhereItRuns guards the load-time
+// trap in relativeAgeScript: it is emitted into the HEAD, where <body> does
+// not exist yet, so a document.body guard evaluates false and binds nothing.
+//
+// The consequence is silent and specific: the DOMContentLoaded upgrade runs,
+// so the first paint says "Updated 3 seconds ago"; but the afterSwap listener
+// never binds, so every later in-place swap -- a filter change on the Tasks
+// page, a Refresh -- leaves the element showing the absolute instant the
+// server rendered. Nothing anywhere reports an error.
+//
+// Asserting the binding is on `document` is what makes this a test rather
+// than a substring check: the line could be deleted outright and a naive
+// "does the script mention afterSwap" assertion would stay green.
+func TestBuildHead_RelativeAgeBindsItsListenerWhereItRuns(t *testing.T) {
+	head := buildHead()
+
+	const listen = "addEventListener('htmx:afterSwap'"
+	if !strings.Contains(head, listen) {
+		t.Fatalf("the relative-age script no longer listens for htmx:afterSwap at all, got: %s", head)
+	}
+	if strings.Contains(head, "document.body&&document.body."+listen) {
+		t.Errorf("the afterSwap listener is guarded on document.body, which does not exist "+
+			"when a head script runs -- it can never bind, and every in-place swap falls back "+
+			"to the absolute instant: %s", head)
+	}
+}

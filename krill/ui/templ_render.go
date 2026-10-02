@@ -134,6 +134,13 @@ const markdownCSS = `
 // It degrades to the instant the server rendered, which is why that text is
 // the element's server-side content rather than an empty node: with
 // JavaScript off the operator still sees when the page was read.
+//
+// Both listeners are on document, never on document.body: this script is
+// emitted into the head, where <body> does not exist yet, so a
+// document.body guard would evaluate false and bind nothing -- the
+// afterSwap upgrade would then never fire, and every in-place swap on the
+// Tasks region (a filter change, a Refresh) would leave the element
+// showing the absolute instant the server rendered.
 const relativeAgeScript = `
 (function(){
 function ago(then){

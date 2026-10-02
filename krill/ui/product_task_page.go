@@ -11,6 +11,7 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,10 @@ import (
 // The two views' own names. They are the region's heading and its nav key
 // as well as the choice between two templates, so they are named once here
 // rather than spelled at each call site.
+//
+// productTasksView is also the one that offers the lane and only-stuck
+// controls (FR 61d7fb7b); the Board reuses the same parsed scope without
+// them.
 const (
 	productTasksView = "Tasks"
 	productBoardView = "Board"
@@ -179,12 +184,40 @@ func productTaskRegionOf(r *http.Request, product store.Product, view string, sc
 		RefreshPath: r.URL.RequestURI(),
 		ScopeLabel:  productTaskScopeLabelOf(scope),
 		OnlyStuck:   scope.Parsed.OnlyStuck,
-		Scope:       productTaskScopeControlOf(r.URL.Path, scope),
+		Scope:       productTaskScopeControlOf(r.URL.Path, scope, view == productTasksView),
+		// The empty state's sentence is built here, from the same scope, so
+		// it names the filters the read was actually built from rather than
+		// a second description of them that could drift.
+		EmptyDetail: productTaskEmptyDetailOf(scope),
 	}
 	if scope.Parsed.Lane != nil {
 		region.Lane = string(*scope.Parsed.Lane)
 	}
 	return region
+}
+
+// productTaskEmptyDetailOf is the sentence the empty state shows under its
+// title, naming the scope and every active filter.
+//
+// It is the third of the three states that must never be confused, and the
+// one that most easily is: a bare "no tasks" cannot tell an operator whether
+// the scope holds no work or a filter they set is hiding work that IS there.
+// Naming the lane and the only-stuck flag is what tells them which control
+// to change, so the sentence is assembled from the parsed scope -- the same
+// value the read was given.
+func productTaskEmptyDetailOf(scope resolvedProductTaskScope) string {
+	filters := make([]string, 0, 2)
+	if scope.Parsed.Lane != nil {
+		filters = append(filters, "lane "+string(*scope.Parsed.Lane))
+	}
+	if scope.Parsed.OnlyStuck {
+		filters = append(filters, "only stuck")
+	}
+	scopeLabel := productTaskScopeLabelOf(scope)
+	if len(filters) == 0 {
+		return "No task in " + scopeLabel + " matches this scope."
+	}
+	return "No task in " + scopeLabel + " matches " + strings.Join(filters, " and ") + "."
 }
 
 // productTaskScopeControlOf builds the control both views render, from the
@@ -202,7 +235,13 @@ func productTaskRegionOf(r *http.Request, product store.Product, view string, sc
 //
 // Either way the operator chooses from a select of the product's own
 // containers; nothing here is a field to type an id into.
-func productTaskScopeControlOf(path string, scope resolvedProductTaskScope) pages.ProductTaskScopeControl {
+//
+// showFilters is the Tasks view's own pair of filters (FR 61d7fb7b). The
+// Board passes false and keeps carrying them as hidden fields instead: it
+// reads the same parsed scope but offers no control that changes it, so a
+// scope change there must still not drop a filter the operator set on the
+// Tasks page.
+func productTaskScopeControlOf(path string, scope resolvedProductTaskScope, showFilters bool) pages.ProductTaskScopeControl {
 	kind := scope.Parsed.Kind
 	control := pages.ProductTaskScopeControl{
 		Path:           path,
@@ -210,6 +249,10 @@ func productTaskScopeControlOf(path string, scope resolvedProductTaskScope) page
 		MilestoneParam: pages.ProductTaskMilestoneQueryParam,
 		Lane:           productTaskLaneOf(scope),
 		OnlyStuck:      scope.Parsed.OnlyStuck,
+		ShowFilters:    showFilters,
+	}
+	if showFilters {
+		control.Lanes = markSelectedLane(productTaskLaneOptions(), productTaskLaneOf(scope))
 	}
 	if kind == store.ProductTaskScopeMilestone {
 		control.MilestoneParam = pages.ProductTaskContainerQueryParam
@@ -327,6 +370,34 @@ func productTaskLaneOf(scope resolvedProductTaskScope) string {
 	return string(*scope.Parsed.Lane)
 }
 
+// productTaskLaneOptions is the lane select's options: "Any lane" first,
+// then the store's five canonical lanes in store.CanonicalLaneOrder's own
+// order.
+//
+// The lane set is the STORE's, not a UI copy of it: a lane the store adds
+// appears here without a second edit, and the "Any lane" option submits an
+// empty value, which parseProductTaskScope reads as no lane -- the same
+// absence a bare URL means, so the control never produces a filter the
+// parser would refuse.
+func productTaskLaneOptions() []pages.ProductTaskLaneOption {
+	out := make([]pages.ProductTaskLaneOption, 0, len(store.CanonicalLaneOrder)+1)
+	out = append(out, pages.ProductTaskLaneOption{Value: "", Label: "Any lane", Selected: true})
+	for _, lane := range store.CanonicalLaneOrder {
+		out = append(out, pages.ProductTaskLaneOption{Value: string(lane), Label: string(lane)})
+	}
+	return out
+}
+
+// markSelectedLane is productTaskLaneOptions with the request's own lane
+// marked, so the select shows what the URL currently names rather than
+// always opening on "Any lane" while the URL filters to Testing.
+func markSelectedLane(options []pages.ProductTaskLaneOption, selected string) []pages.ProductTaskLaneOption {
+	for i := range options {
+		options[i].Selected = options[i].Value == selected
+	}
+	return options
+}
+
 // renderProductTaskView writes whichever of the two views the URL named:
 // the Tasks table's rows, or the Board's swimlanes. rows is nil for the
 // scope problems that are ordinary empty answers, which render as the
@@ -334,7 +405,9 @@ func productTaskLaneOf(scope resolvedProductTaskScope) string {
 //
 // The two views share one scope, one control and one anchor, and this is
 // the only place that chooses between their bodies -- so a URL can never
-// serve the Tasks view under the Board path or the other way round.
+// serve the Tasks view under the Board path or the other way round. The
+// region's own EmptyDetail travels on the region, so a read-driven empty
+// Tasks state still names the filters the read was built from.
 func (app *App) renderProductTaskView(w http.ResponseWriter, r *http.Request, product store.Product, region pages.ProductTaskRegion, resolved resolvedProductTaskScope, rows []store.ProductTaskRow, status int) {
 	if region.View != productBoardView {
 		app.renderProductTaskRegion(w, r, region.View, region, status)
@@ -397,17 +470,17 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 		// The modes are still offered even with nothing to scope to: the
 		// operator's way out of this page is the control, not a back link,
 		// so a control that disappeared here would be the one case where
-		// they cannot leave.
+		// they cannot leave. The filters come with them for the same reason
+		// -- a lane the operator set is still set once they pick a mode that
+		// has a container to apply it to.
 		app.renderProductTaskView(w, r, product, pages.ProductTaskRegion{
-			Product:    productHeaderOf(product),
-			View:       view,
-			Path:       r.URL.Path,
-			ScopeLabel: "No milestones yet",
-			Empty:      true,
-			Scope: pages.ProductTaskScopeControl{
-				Path:  r.URL.Path,
-				Modes: productTaskScopeModes(""),
-			},
+			Product:     productHeaderOf(product),
+			View:        view,
+			Path:        r.URL.Path,
+			ScopeLabel:  "No milestones yet",
+			Empty:       true,
+			EmptyDetail: "This product has no milestone or milepebble to scope to yet.",
+			Scope:       productTaskScopeControlOf(r.URL.Path, resolved, view == productTasksView),
 		}, resolved, nil, http.StatusOK)
 		return
 	}
@@ -426,7 +499,11 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 			Empty:      true,
 			Lane:       productTaskLaneOf(resolved),
 			OnlyStuck:  resolved.Parsed.OnlyStuck,
-			Scope:      productTaskScopeControlOf(r.URL.Path, resolved),
+			Scope:      productTaskScopeControlOf(r.URL.Path, resolved, view == productTasksView),
+			// An ordinary empty answer, so it names its filters the same way
+			// the read-driven empty state does -- a lane the operator set is
+			// still the lane their next change has to keep.
+			EmptyDetail: productTaskEmptyDetailOf(resolved),
 		}, resolved, nil, http.StatusOK)
 		return
 	}
