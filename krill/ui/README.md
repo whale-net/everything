@@ -873,9 +873,13 @@ Each item still **owns** the pre-redesign `/milestones/{mid}/tasks` subtree
 as its `AltPath`: that URL is a task view however it is reached, and an
 operator who followed a bookmarked one is on a Tasks page and must see the
 sidebar say so. The href moved to the product-wide page; the active marking
-did not. If those URLs are later cut over to redirect (FR f41a352d's legacy
-rule) the AltPath goes quietly inert rather than stale, because the
-redirect's destination is the product-wide page `Path` already owns.
+did not. Under FR f41a352d's legacy rule the per-milestone **list and
+board** URLs become 302s into these very product-wide pages, so for those
+two the `AltPath` stops mattering — the operator arrives on a path `Path`
+already owns. The per-container task **detail** is the exception, and the
+reason the `AltPath` outlives the cutover: it keeps serving at the legacy
+URL, and an operator reading one of those still needs the sidebar to say
+Tasks.
 <!-- END product-task-scope section -->
 
 <!-- BEGIN task-detail section (task 9599fc1f) -->

@@ -44,6 +44,8 @@ type navItem struct {
 	// AltPath is a second path this item also owns, for a page that has
 	// two URLs. Overview is one: "/" and the product's own overview both
 	// render it, and the operator must see where they are on either.
+	// Tasks and Board are the other kind -- one wildcard pattern owning a
+	// subtree rooted at a container id the chrome does not hold.
 	AltPath string
 
 	// Exact marks an item whose only active page is its own path, with
@@ -326,11 +328,15 @@ func navGroupTable(t navTargets) []navGroup {
 	// not hold.
 	//
 	// The href does not follow: it is the product-wide page either way.
-	// If those URLs are later cut over to redirect (FR f41a352d's legacy
-	// rule), the redirect's destination IS the product-wide page, which
-	// Path already owns -- so this AltPath goes quietly inert rather than
-	// stale, and an operator arriving by the redirect still lands on a
-	// page whose sidebar marks Tasks.
+	// Under FR f41a352d's legacy rule the list and board URLs become 302s
+	// into these very product-wide pages, so for those two the AltPath
+	// stops mattering -- the operator arrives by the redirect on a path
+	// Path already owns, and the sidebar marks Tasks from Path. The
+	// per-container task DETAIL is the exception and the reason this
+	// AltPath outlives the cutover: it keeps serving at the legacy URL,
+	// because redirecting a detail would trade a page that answers for
+	// one whose replacement has not shipped. An operator reading one of
+	// those must still see the sidebar say Tasks, and Path cannot do it.
 	tasks := productHref(t.Product, tasksSuffix)
 	board := productHref(t.Product, boardSuffix)
 

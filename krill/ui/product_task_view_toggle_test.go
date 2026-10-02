@@ -22,6 +22,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/whale-net/everything/krill/slice"
+	"github.com/whale-net/everything/krill/store"
 )
 
 // viewToggleDestinations reads the toggle's own links out of a rendered
@@ -424,6 +427,358 @@ func TestSidebarTasksAndBoardAreTwoDistinctLinks(t *testing.T) {
 		assert.NotContains(t, hrefs[label], uuid.Nil.String(),
 			"%s href carries uuid.Nil", label)
 	}
+}
+
+// TestViewToggleCarriesAMilepebbleScope is the per-mode case the other
+// cases only covered structurally: milepebble mode names TWO containers --
+// the parent milestone whose milepebbles are on offer, and the chosen
+// milepebble itself -- and the parent is the parameter a re-derivation is
+// most likely to drop.
+//
+// The default-mode and milestone-mode destinations are a single container
+// either way, so a toggle that carried the read's own scope would pass
+// every other case here while losing the `milestone` parameter and leaving
+// the destination's second select empty. Asserted by requesting the
+// destination and reading the scope back off the control it renders, which
+// is also what proves the destination resolved rather than merely spelled
+// the right-looking href.
+func TestViewToggleCarriesAMilepebbleScope(t *testing.T) {
+	const lane = "Validation"
+	query := "scope=milepebble&milestone=" + productTaskMilestone.String() +
+		"&container_id=" + productTaskMilepebble.String() +
+		"&lane=" + lane + "&only_stuck=true&page_size=4"
+
+	for _, from := range []struct {
+		view string
+		url  string
+	}{
+		{view: productTasksView, url: productTaskTasksURL(query)},
+		{view: productBoardView, url: "/products/" + productTaskProduct.String() + "/board?" + query},
+	} {
+		t.Run("from "+from.view, func(t *testing.T) {
+			tasks := &recordingProductTasks{total: 2}
+			mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+			body := fetch(t, mux, from.url).Body.String()
+			other := productTasksView
+			if from.view == productTasksView {
+				other = productBoardView
+			}
+
+			link := viewToggleLinkOf(t, body, viewToggleLabels[other])
+			want, err := url.Parse(from.url)
+			require.NoError(t, err)
+			got, err := url.Parse(link.Href)
+			require.NoError(t, err)
+			assert.Equal(t, want.Query(), got.Query(),
+				"milepebble mode names a parent milestone as well as a container; both travel")
+
+			// Request it: the destination's own control has to show the same
+			// pair, which is what "the parent survived" means from where the
+			// operator is standing.
+			dest := fetch(t, mux, link.Href)
+			require.Equal(t, http.StatusOK, dest.Code, "body: %s", dest.Body.String())
+			assert.Equal(t, productTaskMilestone.String(),
+				selectedOption(t, dest.Body.String(), `data-krill="scope-milestone-select"`),
+				"the parent milestone is still the one the second select's options come from")
+			assert.Equal(t, productTaskMilepebble.String(),
+				selectedOption(t, dest.Body.String(), `data-krill="scope-milepebble-select"`),
+				"the milepebble is still the one chosen")
+
+			// And the read behind it was scoped to that milepebble, not to
+			// the parent: the two parameters have different meanings and a
+			// toggle that swapped them would still render a plausible page.
+			require.Len(t, tasks.listed, 2)
+			assert.Equal(t, store.ProductTaskScope{
+				Kind:        store.ProductTaskScopeMilepebble,
+				ContainerID: productTaskMilepebble,
+			}, tasks.listed[1].Scope)
+		})
+	}
+}
+
+// TestViewToggleIsOnTheEmptyOutcomesThatStillCarryTheControl: the two
+// scope problems that are ORDINARY ANSWERS rather than refusals -- a
+// product with no containers at all, and milepebble mode over a milestone
+// with nothing cut -- still render the region, and with it the toggle.
+//
+// They matter because the operator who lands on one of them has reached a
+// page that resolved to nothing and needs to get somewhere else. A toggle
+// that lived beside the region body would be missing from exactly these
+// two renderings if either of them built the region by a different route,
+// and nothing on the page would say so.
+func TestViewToggleIsOnTheEmptyOutcomesThatStillCarryTheControl(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+		// listing is the delivery listing the scope resolver reads; an
+		// empty one is what makes every mode an ordinary empty result.
+		listing func() slice.DeliveryListing
+	}{
+		{
+			name:    "a product with no containers to scope to",
+			query:   "scope=milestone",
+			listing: emptyDeliveryListing,
+		},
+		{
+			name:  "milepebble mode over a milestone with nothing cut",
+			query: "scope=milepebble&milestone=" + productTaskOldestMilestone.String() + "&lane=Testing",
+			listing: func() slice.DeliveryListing {
+				return productTaskListing()
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, view := range []string{productTasksView, productBoardView} {
+				t.Run(view, func(t *testing.T) {
+					target := productTaskTasksURL(tc.query)
+					if view == productBoardView {
+						target = "/products/" + productTaskProduct.String() + "/board?" + tc.query
+					}
+					mux := productTaskMux(t, &recordingProductTasks{}, tc.listing(), nil)
+
+					body := fetch(t, mux, target).Body.String()
+					require.Contains(t, body, `data-krill="scope-control"`,
+						"these outcomes keep the control: %s", body)
+
+					// Both links render, the current view is marked, and the
+					// sibling's href carries the query this page was opened
+					// with -- so the operator can leave without losing what
+					// they had asked for.
+					links := viewToggleDestinations(t, body)
+					require.Len(t, links, 2, "the toggle is offered on this outcome too")
+
+					var active []string
+					for _, l := range links {
+						if l.Active {
+							active = append(active, l.Label)
+						}
+					}
+					assert.Equal(t, []string{viewToggleLabels[view]}, active,
+						"exactly the view being served is marked")
+
+					sibling := viewToggleLinkOf(t, body, viewToggleLabels[viewToggleSiblingOf(view)])
+					want, err := url.Parse(target)
+					require.NoError(t, err)
+					got, err := url.Parse(sibling.Href)
+					require.NoError(t, err)
+					assert.Equal(t, want.Query(), got.Query(),
+						"the sibling link carries the query this page was opened with")
+				})
+			}
+		})
+	}
+}
+
+// TestViewToggleIsAbsentOnlyWhereTheScopeControlIs: the boundary of the
+// previous case. A container this product does not own is a REFUSAL, not
+// an empty answer, and the refusal replaces the whole region -- scope
+// control and toggle together -- with an in-shell status page.
+//
+// Pinning the absence is what stops the toggle being rendered somewhere
+// else on the way: the toggle lives in the scope control, so "the control
+// is gone" and "the toggle is gone" must be the same statement. An operator
+// arriving by a stale link has the sidebar's Tasks and Board to recover
+// with, which the next case confirms.
+func TestViewToggleIsAbsentOnlyWhereTheScopeControlIs(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{total: 1}, productTaskListing(), nil)
+
+	for _, view := range []string{productTasksView, productBoardView} {
+		t.Run(view, func(t *testing.T) {
+			target := productTaskTasksURL("scope=milestone&container_id=" + productTaskOtherMilestone.String())
+			if view == productBoardView {
+				target = "/products/" + productTaskProduct.String() + "/board?scope=milestone&container_id=" +
+					productTaskOtherMilestone.String()
+			}
+
+			rec := fetch(t, mux, target)
+			assert.Equal(t, http.StatusNotFound, rec.Code)
+			assert.NotContains(t, rec.Body.String(), `data-krill="view-toggle"`,
+				"the refusal replaced the region, so the toggle goes with it")
+			assert.NotContains(t, rec.Body.String(), `data-krill="scope-control"`)
+
+			// The operator is not stranded: the sidebar still offers both
+			// views, product-wide, from a page that has no container in its
+			// own URL at all.
+			hrefs := navHrefsByLabelInBody(rec.Body.String())
+			assert.Equal(t, "/products/"+productTaskProduct.String()+"/tasks", hrefs["Tasks"])
+			assert.Equal(t, "/products/"+productTaskProduct.String()+"/board", hrefs["Board"])
+		})
+	}
+}
+
+// TestViewToggleDropsAStalePageTokenFromTheBoardURLToo: the token is
+// dropped whichever view the operator is on when they press it.
+//
+// The table is where a real token is ever issued, but a shared link or a
+// hand-edited URL can carry one onto the Board, and the Board's own read
+// does not page the way the table's does. A toggle that dropped the token
+// on one leg and not the other would send the operator to a list showing a
+// page of a board's scope with nothing saying so.
+func TestViewToggleDropsAStalePageTokenFromTheBoardURLToo(t *testing.T) {
+	// The paging fixture, because it REFUSES a token that is not one --
+	// which is what puts the operator on a Board page carrying a stale
+	// token in the first place, and what makes the page they are on the
+	// page-error path the toggle has to survive.
+	mux := pagedTaskMux(t, &pagedProductTasks{rows: pagedRowFixture(6)})
+
+	body := fetch(t, mux, "/products/"+productTaskProduct.String()+
+		"/board?scope=milestone&container_id="+productTaskMilestone.String()+
+		"&page_size=2&page_token=not-a-real-token").Body.String()
+
+	list := viewToggleLinkOf(t, body, "List")
+	assert.NotContains(t, list.Href, "page_token=",
+		"a stale token on the Board's own URL does not travel to the list: %q", list.Href)
+	assert.Contains(t, list.Href, "page_size=2",
+		"the page SIZE is a filter and does survive: %q", list.Href)
+
+	// The page itself is unaffected: the read refuses the token as itself
+	// rather than as a failure, which is the page-error path the toggle
+	// then renders on top of -- and the recovery link it offers drops the
+	// token the same way the toggle does.
+	assert.Contains(t, body, `data-krill="product-tasks-page-error"`,
+		"the stale token is answered as the stale link it is")
+	assert.NotContains(t, pagingLinkHref(body, `data-krill="product-tasks-page-recovery"`), "page_token=",
+		"the way out of a refused token is the first page, not the same bad token")
+}
+
+// TestViewToggleIsNotInsideTheScopeForm: the toggle is a SIBLING of the
+// form, not a control in it.
+//
+// This is not cosmetic. Every assertion about the form elsewhere reads it
+// by cutting the page from the scope control's marker to the first
+// </form> -- so a toggle rendered inside the form would be swept into
+// "the scope control" by TestScopeControlCarriesTheSiblingFilters and by
+// the replay in TestScopeControlURLCarriesTheWholeScope, and the two
+// components would have to agree about being one thing. They are two: a
+// form is the scope's own value, and switching view is navigation.
+func TestViewToggleIsNotInsideTheScopeForm(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+	body := fetch(t, mux, productTaskTasksURL("scope=milestone&container_id="+
+		productTaskMilestone.String())).Body.String()
+
+	toggle := strings.Index(body, `data-krill="view-toggle"`)
+	form := strings.Index(body, `data-krill="scope-control"`)
+	require.NotEqual(t, -1, toggle, "no toggle rendered: %s", body)
+	require.NotEqual(t, -1, form, "no scope control rendered: %s", body)
+	assert.Less(t, toggle, form,
+		"the toggle renders before the form opens, so cutting the form cannot capture it")
+
+	formEnd := strings.Index(body[form:], "</form>")
+	require.NotEqual(t, -1, formEnd)
+	assert.NotContains(t, body[form:form+formEnd], `data-krill="view-toggle"`,
+		"the toggle is outside the form's own markup")
+}
+
+// TestSidebarTasksAndBoardHrefsDoNotDependOnThePageContainer is the guard
+// on the field this task removed: navTargets no longer carries a milestone
+// id, so the sidebar an operator sees is the SAME sidebar whatever
+// container the page they are on happens to be scoped to.
+//
+// Before, the Tasks and Board hrefs were rebuilt per request out of a
+// milestone id the chrome could only sometimes be given -- which is why a
+// page reached without a container in its URL sent them to the delivery
+// page instead. Driven through two real pages of different scopes rather
+// than against the nav table, so it is the link an operator is actually
+// offered that is compared.
+func TestSidebarTasksAndBoardHrefsDoNotDependOnThePageContainer(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+
+	bare := navHrefsByLabelInBody(fetch(t, mux, productTaskTasksURL("")).Body.String())
+	scoped := navHrefsByLabelInBody(fetch(t, mux, productTaskTasksURL(
+		"scope=milestone&container_id="+productTaskMilestone.String())).Body.String())
+	board := navHrefsByLabelInBody(fetch(t, mux, "/products/"+productTaskProduct.String()+
+		"/board?scope=milepebble&milestone="+productTaskMilestone.String()+
+		"&container_id="+productTaskMilepebble.String()).Body.String())
+
+	for _, label := range []string{"Tasks", "Board"} {
+		require.NotEmpty(t, bare[label], "the sidebar offers %s", label)
+		assert.Equal(t, bare[label], scoped[label],
+			"%s href differs between an unscoped page and a milestone-scoped one", label)
+		assert.Equal(t, bare[label], board[label],
+			"%s href differs between the two views", label)
+		assert.NotContains(t, bare[label], "/delivery",
+			"%s still falls back to the delivery page", label)
+	}
+}
+
+// TestSidebarTasksOwnBothSpellingsOfTheTasksURL: the Tasks item marks
+// active on the product-wide page AND on the pre-redesign per-milestone
+// subtree, while linking at the product-wide one.
+//
+// The two-spelling ownership is what survives the legacy-URL cutover. The
+// sibling task makes /milestones/{mid}/tasks 302 into the product-wide
+// Tasks scoped to that milestone, so the landing page's own path is the
+// one Path already owns and this item lights from Path; but the per-
+// container task DETAIL keeps serving at the legacy URL, and an operator
+// reading one of those must still see the sidebar say Tasks. Asserting both
+// here means the merge that redirects the list cannot quietly leave the
+// detail page's sidebar unlit, and cannot light Tasks on a page that is
+// neither.
+func TestSidebarTasksOwnBothSpellingsOfTheTasksURL(t *testing.T) {
+	pid := navProductID
+
+	// Both spellings light the same single item.
+	for _, path := range []string{
+		productHref(pid, tasksSuffix),
+		milestoneTasksPath(pid, navMilestoneID),
+		taskDetailPath(pid, navMilestoneID, uuid.New()),
+	} {
+		assert.Equal(t, []string{"Tasks"}, activeLabelsAtPath(pid, path),
+			"%s is a Tasks page and must say so", path)
+	}
+
+	// The href is the product-wide one either way, and the Board item owns
+	// the board subtree rather than the tasks one: a wildcard pattern that
+	// matched too much would light both items, and workspaceNav lights only
+	// the first match in render order -- so a Board subtree the Tasks
+	// pattern swallowed would show Tasks on a Board.
+	hrefs := sidebarHrefsByLabel(workspaceNav(navTargets{Product: pid}, "/"))
+	assert.Equal(t, productHref(pid, tasksSuffix), hrefs["Tasks"])
+	assert.Equal(t, productHref(pid, boardSuffix), hrefs["Board"])
+
+	assert.Equal(t, []string{"Board"},
+		activeLabelsAtPath(pid, milestoneBoardPath(pid, navMilestoneID)),
+		"the per-milestone board subtree belongs to Board, not to Tasks")
+}
+
+// activeLabelsAtPath is the sidebar's marked items when it is rendered for
+// one page's path -- the marking a served page carries, read off the nav
+// table rather than the markup so a case can name a path no route in this
+// file mounts.
+func activeLabelsAtPath(pid uuid.UUID, path string) []string {
+	return activeGroupLabels(workspaceNav(navTargets{Product: pid}, path))
+}
+
+// viewToggleSiblingOf is the other view's name -- the one a toggle link
+// on this view points at.
+func viewToggleSiblingOf(view string) string {
+	if view == productTasksView {
+		return productBoardView
+	}
+	return productTasksView
+}
+
+// navHrefsByLabelInBody reads the sidebar's rendered hrefs out of a served
+// page, keyed by the link's own label, so a case can compare what two
+// different pages OFFER rather than what the nav table would build for
+// them.
+func navHrefsByLabelInBody(body string) map[string]string {
+	out := map[string]string{}
+	primary := primaryNavRegion(body)
+	if primary == "" {
+		return out
+	}
+	for _, tag := range anchorTags(primary) {
+		label := strings.TrimSpace(tag[strings.Index(tag, ">")+1:])
+		at := strings.Index(tag, `href="`)
+		if at == -1 {
+			continue
+		}
+		rest := tag[at+len(`href="`):]
+		out[html.UnescapeString(label)] = html.UnescapeString(rest[:strings.Index(rest, `"`)])
+	}
+	return out
 }
 
 // scopeControlFormOfFrom is the existing scopeControlFormOf helper against
