@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -282,6 +283,57 @@ func TestTasksOnlyStuckIsNotReDerivedInTheUI(t *testing.T) {
 		"a row the store returned renders even though the UI could have guessed it was not stuck")
 }
 
+// TestTasksFiltersAndScopeAreOneFormWithOneApply is the structural claim
+// FR 61d7fb7b's filters rest on: the lane select and the only-stuck checkbox
+// live INSIDE the shared scope form, so scope + lane + only-stuck are a
+// single plain GET submitted by a single button.
+//
+// The alternative -- a second form beside the scope control -- is what the
+// markup would have to drift away from, because each form would then have
+// to re-submit the other's state as hidden fields, and a field one of them
+// forgot was exactly the bug this shape exists to prevent. So this asserts
+// the shape rather than the behaviour: one form in the region, one Apply,
+// and both filter controls inside that form rather than beside it.
+//
+// A page-wide count would be wrong here -- the shell's own chrome renders
+// its forms (the product switcher is one), so the count is scoped to the
+// tasks region.
+func TestTasksFiltersAndScopeAreOneFormWithOneApply(t *testing.T) {
+	tasks := &filteringProductTasks{rows: filterRowFixture()}
+	mux := productTaskFilterMux(t, tasks)
+
+	rec := fetch(t, mux, productTaskTasksURL(""))
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	region := regionHTML(t, rec.Body.String())
+
+	assert.Equal(t, 1, strings.Count(region, "<form"),
+		"the scope and both filters are one form; a second one would have to copy the other's state")
+	assert.Equal(t, 1, strings.Count(region, `data-krill="scope-apply"`),
+		"one Apply submits every filter at once")
+
+	// And both controls are inside that one form, not beside it: the form's
+	// own markup is the submission, so anything outside it is state the
+	// operator can set and the server never sees.
+	form := region[strings.Index(region, "<form"):]
+	form = form[:strings.Index(form, "</form>")]
+	for _, control := range []string{
+		`data-krill="lane-filter-select"`,
+		`data-krill="only-stuck-filter"`,
+		`data-krill="scope-mode"`,
+	} {
+		assert.Contains(t, form, control,
+			"%s must be a control the scope form submits, not a decoration beside it", control)
+	}
+
+	// Nothing is carried as a hidden field on the Tasks page: with the
+	// controls real, a hidden carrier would be a second source of truth for
+	// the same filter, and the two could disagree.
+	assert.NotContains(t, region, `data-krill="scope-carried-lane"`,
+		"the Tasks page has a real lane control, so it has no hidden lane carrier")
+	assert.NotContains(t, region, `data-krill="scope-carried-only-stuck"`,
+		"the Tasks page has a real only-stuck control, so it has no hidden carrier")
+}
+
 // TestTasksFilterChangeSwapsTheRegionInPlace drives the half of FR 61d7fb7b
 // that only htmx can show: changing a filter issues an hx-get answered with
 // a fragment that replaces the whole region.
@@ -534,40 +586,106 @@ func TestTasksOutOfProductFilterIsInlineForHTMX(t *testing.T) {
 // TestTasksThreeStatesNeverShareMarkup is the property the three cases
 // above each assert one third of: no state carries another's marker, so
 // nothing in the markup can be read as two of them at once.
+//
+// It runs every state on BOTH paths, and the htmx half is the half that
+// carries the property. A full-page 404 renders the shell's status page,
+// which has no region marker of any kind -- so an absence assertion made
+// against it passes for the wrong reason and would stay green if the scope
+// error borrowed the read-failed marker. The swap is where all three states
+// render as region fragments and could genuinely be confused, so that is
+// where "never share markup" has to be proven.
 func TestTasksThreeStatesNeverShareMarkup(t *testing.T) {
 	const (
 		emptyMark = `data-krill="product-tasks-empty"`
 		readMark  = `data-krill="product-tasks-error"`
 		scopeMark = `data-krill="product-tasks-scope-error"`
 	)
+	outOfProductQuery := "scope=milestone&container_id=" + productTaskOtherMilestone.String()
 
-	empty := fetch(t,
-		productTaskFilterMux(t, &filteringProductTasks{rows: filterRowFixture()[:1]}),
-		productTaskTasksURL("lane=Done"))
-	readFailed := fetch(t,
-		productTaskFilterMux(t, &filteringProductTasks{err: errors.New("down")}),
-		productTaskTasksURL(""))
-	outOfProduct := fetch(t,
-		productTaskFilterMux(t, &filteringProductTasks{rows: filterRowFixture()}),
-		productTaskTasksURL("scope=milestone&container_id="+productTaskOtherMilestone.String()))
+	emptyStore := func() *filteringProductTasks { return &filteringProductTasks{rows: filterRowFixture()[:1]} }
+	downStore := func() *filteringProductTasks { return &filteringProductTasks{err: errors.New("down")} }
+	rowsStore := func() *filteringProductTasks { return &filteringProductTasks{rows: filterRowFixture()} }
 
-	require.Equal(t, http.StatusOK, empty.Code, "an empty scope is an answer at 200")
-	require.Equal(t, http.StatusInternalServerError, readFailed.Code)
-	require.Equal(t, http.StatusNotFound, outOfProduct.Code)
-
-	for _, tc := range []struct {
+	for _, path := range []struct {
 		name   string
-		body   string
-		absent []string
+		get    func(*testing.T, *http.ServeMux, string) *httptest.ResponseRecorder
+		status map[string]int
 	}{
-		{"empty", empty.Body.String(), []string{readMark, scopeMark}},
-		{"read failed", readFailed.Body.String(), []string{emptyMark, scopeMark}},
-		{"out of product", outOfProduct.Body.String(), []string{emptyMark, readMark}},
+		{
+			name: "full page",
+			get:  fetch,
+			status: map[string]int{
+				"empty": http.StatusOK, "read failed": http.StatusInternalServerError,
+				"out of product": http.StatusNotFound,
+			},
+		},
+		{
+			// htmx gets 200 for all three -- it does not swap on a non-2xx,
+			// so the status cannot be what tells them apart here. Only the
+			// markup can, which is why this half is the load-bearing one.
+			name: "htmx swap",
+			get: func(_ *testing.T, mux *http.ServeMux, url string) *httptest.ResponseRecorder {
+				return htmxGet(mux, url)
+			},
+			status: map[string]int{
+				"empty": http.StatusOK, "read failed": http.StatusOK,
+				"out of product": http.StatusOK,
+			},
+		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			for _, other := range tc.absent {
-				assert.NotContains(t, tc.body, other,
-					"state %q must not carry another state's marker", tc.name)
+		t.Run(path.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name  string
+				query string
+				store func() *filteringProductTasks
+				// present is the marker this state DOES carry as a REGION.
+				// Empty means this state is not a region on this path at
+				// all -- the full-page 404 renders the shell's status page,
+				// not the tasks region -- in which case only the absence
+				// assertions below say anything, and the status is what
+				// distinguishes it.
+				present string
+				absent  []string
+			}{
+				{
+					name: "empty", query: "lane=Done", store: emptyStore,
+					present: emptyMark, absent: []string{readMark, scopeMark},
+				},
+				{
+					name: "read failed", query: "", store: downStore,
+					present: readMark, absent: []string{emptyMark, scopeMark},
+				},
+				{
+					// The full-page half of this one is a status page rather
+					// than a region, so it is told apart by its 404. The
+					// htmx half has no status to do it with -- that is the
+					// half the marker exists for, and where the swap could
+					// otherwise be handed the read-failed alert.
+					name: "out of product", query: outOfProductQuery, store: rowsStore,
+					present: scopeMark, absent: []string{emptyMark, readMark},
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					rec := path.get(t, productTaskFilterMux(t, tc.store()),
+						productTaskTasksURL(tc.query))
+
+					require.Equal(t, path.status[tc.name], rec.Code)
+					body := rec.Body.String()
+					// A full-page 404 is the shell's status page: it must
+					// render no REGION marker of any kind, which is the
+					// strongest form of "shares no markup" for that state.
+					if tc.present != "" && path.name == "full page" && tc.name == "out of product" {
+						assert.NotContains(t, body, `data-krill="product-tasks"`,
+							"a refused scope renders the status page, not a stale region")
+						return
+					}
+					assert.Contains(t, body, tc.present,
+						"state %q must carry its own marker, or this case proves nothing", tc.name)
+					for _, other := range tc.absent {
+						assert.NotContains(t, body, other,
+							"state %q must not carry another state's marker", tc.name)
+					}
+				})
 			}
 		})
 	}
