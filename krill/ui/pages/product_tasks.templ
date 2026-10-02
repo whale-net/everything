@@ -1,0 +1,176 @@
+package pages
+
+import "github.com/whale-net/everything/libs/go/htmxui"
+
+// The product-wide Tasks/Board region's view model. The pure builder that
+// populates it lives in //krill/ui (product_task_scope.go); this file owns
+// only the shape and the rendering.
+//
+// It is deliberately the smallest honest region the read layer can serve:
+// the scope the URL resolved to, the total behind it, and a sentence when
+// there is nothing to list. The rows, the board's columns and the scope
+// control itself are the later pages' work -- so what renders today says
+// what it read and names what it is scoped to, rather than pretending to
+// be a table with no rows.
+
+// ProductTasksAnchor is the DOM id of the region's content: the id the
+// scope control's and Refresh's hx-target points at, and the root id of the
+// fragment an htmx request gets back. A fragment without it would delete
+// its own swap target on the next request (see SpecInlineError).
+const ProductTasksAnchor = "krill-product-tasks"
+
+// ProductTaskScopeLabel is one scope mode's name as the control offers it.
+type ProductTaskScopeLabel struct {
+	// Mode is the store scope kind's wire value -- the same string the
+	// query parameter carries.
+	Mode string
+	// Label is what the operator reads, e.g. "All incomplete milestones".
+	Label string
+	// Active marks the mode this request resolved to.
+	Active bool
+}
+
+// ProductTaskContainerOption is one selectable milestone or milepebble. The
+// control renders these once it ships; the region carries them now so the
+// resolved scope is a member of the set it was chosen from.
+type ProductTaskContainerOption struct {
+	ID      string
+	Name    string
+	Selected bool
+}
+
+// ProductTaskRegion is the Tasks/Board region's view model.
+type ProductTaskRegion struct {
+	// Product is the banner for the product the URL named.
+	Product ProductHeader
+
+	// View is "Tasks" or "Board" -- which of the two views of this one
+	// scope is being served, so the region can mark itself.
+	View string
+
+	// Path is this region's own URL, so the swap control can re-request it.
+	Path string
+
+	// ScopeModes are the three modes, in the order the control offers them.
+	ScopeModes []ProductTaskScopeLabel
+
+	// Milestones and Milepebbles are the product's own containers. The
+	// second is non-empty only for the selected milestone's children.
+	Milestones  []ProductTaskContainerOption
+	Milepebbles []ProductTaskContainerOption
+
+	// ScopeLabel is the scope this request resolved to, read back in prose:
+	// "All incomplete milestones", or a container's own name.
+	ScopeLabel string
+
+	// Lane is the selected lane filter's name, empty for "Any lane".
+	Lane string
+
+	// OnlyStuck mirrors the checked filter.
+	OnlyStuck bool
+
+	// Total is the count read for this scope's filters -- the "Y" the page
+	// footer will read beside the rows it has not rendered yet.
+	Total int
+
+	// Empty is set when the scope resolved and holds no tasks, so the region
+	// says so instead of reading as a page that failed.
+	Empty bool
+
+	// Error is a read failure in the operator's words, empty on success.
+	// Distinct from Empty: one is an answer, the other is a failure.
+	Error string
+}
+
+// scopeModeVariant marks the active mode in the control's own vocabulary,
+// which is ghost for the chosen one and quiet for the rest.
+func scopeModeVariant(active bool) htmxui.BadgeVariant {
+	if active {
+		return htmxui.BadgePrimary
+	}
+	return htmxui.BadgeGhost
+}
+
+// ProductTasks renders the product-wide Tasks/Board region: the scope it
+// resolved to, the total behind it, and -- while the rows are still to come
+// -- an honest sentence saying so.
+templ ProductTasks(d ProductTaskRegion) {
+	<section id={ ProductTasksAnchor } data-krill="product-tasks" data-krill-view={ d.View }>
+		<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
+		<p class="mt-1 text-sm text-base-content/70">
+			Scoped to
+			<span data-krill="scope-label">{ d.ScopeLabel }</span>
+		</p>
+		<ul class="mt-3 flex flex-wrap items-center gap-2" data-krill="scope-modes">
+			for _, mode := range d.ScopeModes {
+				<li data-krill="scope-mode">
+					@htmxui.Badge(mode.Label, scopeModeVariant(mode.Active), htmxui.BadgeSizeSM, true, templ.Attributes{
+						"data-krill-mode": mode.Mode,
+					})
+				</li>
+			}
+		</ul>
+		<ul class="mt-2 flex flex-wrap items-center gap-2 text-sm" data-krill="scope-containers">
+			for _, c := range d.Milestones {
+				<li data-krill="scope-milestone" data-krill-container-id={ c.ID }>
+					@htmxui.Badge(c.Name, scopeModeVariant(c.Selected), htmxui.BadgeSizeSM, true, templ.Attributes{
+						"data-krill": "scope-milestone-badge",
+					})
+				</li>
+			}
+			for _, c := range d.Milepebbles {
+				<li data-krill="scope-milepebble" data-krill-container-id={ c.ID }>
+					@htmxui.Badge(c.Name, scopeModeVariant(c.Selected), htmxui.BadgeSizeSM, true, templ.Attributes{
+						"data-krill": "scope-milepebble-badge",
+					})
+				</li>
+			}
+		</ul>
+		<p class="mt-2 text-sm text-base-content/70">
+			<span data-krill="task-count">{ itoa(d.Total) }</span>
+			tasks in scope
+			if d.Lane != "" {
+				<span data-krill="lane-filter">in lane { d.Lane }</span>
+			}
+			if d.OnlyStuck {
+				<span data-krill="only-stuck">that are stuck</span>
+			}
+		</p>
+		if d.Error != "" {
+			<div class="mt-3" data-krill="product-tasks-error">
+				@htmxui.Alert(htmxui.AlertError, d.Error, templ.Attributes{
+					"data-krill": "product-tasks-error-alert",
+				})
+			</div>
+		} else if d.Empty {
+			<div class="mt-3" data-krill="product-tasks-empty">
+				@htmxui.EmptyState(
+					"No tasks in this scope",
+					"Nothing matches the active scope and filters.",
+					"", "", templ.Attributes{},
+				)
+			</div>
+		} else {
+			<p class="mt-3 text-sm text-base-content/70" data-krill="product-tasks-pending">
+				The task rows for this scope are not rendered yet.
+			</p>
+		}
+	</section>
+}
+
+// ProductTasksInlineError is the fragment an htmx caller gets when the
+// scope or the read failed: a 200 carrying the failure inline, because
+// htmx does not swap on a non-2xx and the operator would otherwise be left
+// clicking Refresh with no feedback at all.
+//
+// It keeps the region's anchor id for the same reason SpecInlineError does
+// -- a fragment without it deletes its own swap target.
+templ ProductTasksInlineError(anchor, message string) {
+	<section id={ anchor } data-krill="product-tasks">
+		<div data-krill="product-tasks-error">
+			@htmxui.Alert(htmxui.AlertError, message, templ.Attributes{
+				"data-krill": "product-tasks-error-alert",
+			})
+		</div>
+	</section>
+}

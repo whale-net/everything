@@ -76,6 +76,17 @@ func (productScopeTasks) ListOpenNotes(context.Context, store.ListOpenNotesParam
 	return store.Page[store.OpenNoteRow]{}, nil
 }
 
+// The product-wide Tasks/Board read, which those two routes now serve.
+// Both answer empty: this fixture's subject is which product a URL resolves
+// to, not what any page lists.
+func (productScopeTasks) ListProductTasks(context.Context, store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
+	return store.Page[store.ProductTaskRow]{}, nil
+}
+
+func (productScopeTasks) CountProductTasks(context.Context, store.ListProductTasksParams) (int, error) {
+	return 0, nil
+}
+
 func (productScopeTasks) ListCancelledTasks(context.Context, store.ListCancelledTasksParams) (store.Page[store.CancelledTaskRow], error) {
 	return store.Page[store.CancelledTaskRow]{}, nil
 }
