@@ -40,12 +40,24 @@ type taskContainer struct {
 	// would guess wrong for an uncut milestone the listing gave no children.
 	Kind string
 
+	// Status is the container's own current status, which the product-wide
+	// scope control judges "incomplete" by (store.IsIncompleteContainerStatus).
+	// Carried rather than re-read, so the control marks the containers the
+	// all-incomplete scope excludes from the same status the store's own
+	// query filtered on.
+	Status store.MilestoneStatus
+
 	Milepebbles []taskContainerChild // non-empty only for a cut milestone
 }
 
 type taskContainerChild struct {
 	ID   uuid.UUID
 	Name string
+
+	// Status is the milepebble's own current status, for the same reason
+	// taskContainer.Status is: the all-incomplete scope is judged per
+	// container, and a milepebble is a container.
+	Status store.MilestoneStatus
 }
 
 // resolveTaskContainer finds mid among the milestones and milepebbles of
@@ -53,15 +65,15 @@ type taskContainerChild struct {
 func resolveTaskContainer(listing slice.DeliveryListing, mid uuid.UUID) (taskContainer, bool) {
 	for _, m := range listing.Milestones {
 		if m.ID == mid {
-			c := taskContainer{ID: m.ID, Name: m.Name, Kind: string(store.MilestoneKindMilestone)}
+			c := taskContainer{ID: m.ID, Name: m.Name, Kind: string(store.MilestoneKindMilestone), Status: m.Status}
 			for _, mp := range m.Milepebbles {
-				c.Milepebbles = append(c.Milepebbles, taskContainerChild{ID: mp.ID, Name: mp.Name})
+				c.Milepebbles = append(c.Milepebbles, taskContainerChild{ID: mp.ID, Name: mp.Name, Status: mp.Status})
 			}
 			return c, true
 		}
 		for _, mp := range m.Milepebbles {
 			if mp.ID == mid {
-				return taskContainer{ID: mp.ID, Name: mp.Name, Kind: string(store.MilestoneKindMilepebble)}, true
+				return taskContainer{ID: mp.ID, Name: mp.Name, Kind: string(store.MilestoneKindMilepebble), Status: mp.Status}, true
 			}
 		}
 	}

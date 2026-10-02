@@ -203,6 +203,7 @@ go_test(
         "product_scope_test.go",
         "product_switcher_test.go",
         "product_task_scope_test.go",
+        "product_task_scope_control_test.go",
         "overview_page_test.go",
 "overview_tiles_test.go",
         "overview_panel_acceptance_test.go",

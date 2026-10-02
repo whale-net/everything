@@ -42,17 +42,25 @@ func (app *App) serveProductTaskRegion(w http.ResponseWriter, r *http.Request, v
 	if !ok {
 		return
 	}
-	setLastViewedProductCookie(w, product.ID)
+	// The last-viewed cookie is recorded only for a real page view. An
+	// htmx request is a swap inside a page the operator is already on, and
+	// a fragment response has no business moving where their next
+	// un-prefixed page lands -- especially since a swap fires on every
+	// control change, so it would rewrite the cookie repeatedly for a
+	// navigation the operator never made.
+	if r.Header.Get("HX-Request") == "" {
+		setLastViewedProductCookie(w, product.ID)
+	}
 
 	scope, problem := parseProductTaskScope(r.URL.Query())
 	if problem != productTaskScopeOK {
-		app.renderProductTaskScopeProblem(w, r, product, view, problem)
+		app.renderProductTaskScopeProblem(w, r, product, view, resolvedProductTaskScope{}, problem)
 		return
 	}
 
 	resolved, problem := app.resolveProductTaskScope(r.Context(), product.ID, scope)
 	if problem != productTaskScopeOK {
-		app.renderProductTaskScopeProblem(w, r, product, view, problem)
+		app.renderProductTaskScopeProblem(w, r, product, view, resolved, problem)
 		return
 	}
 
@@ -82,13 +90,119 @@ func productTaskRegionOf(r *http.Request, product store.Product, view string, sc
 		Path:       r.URL.Path,
 		ScopeLabel: productTaskScopeLabelOf(scope),
 		OnlyStuck:  scope.Parsed.OnlyStuck,
-		ScopeModes: productTaskScopeModes(scope.Parsed.Kind),
+		Scope:      productTaskScopeControlOf(r.URL.Path, scope),
 	}
 	if scope.Parsed.Lane != nil {
 		region.Lane = string(*scope.Parsed.Lane)
 	}
-	region.Milestones, region.Milepebbles = productTaskContainerOptionsOf(scope)
 	return region
+}
+
+// productTaskScopeControlOf builds the control both views render, from the
+// resolved scope -- so the marked mode, the selected option and the read
+// the rows come from are one answer rather than three.
+//
+// The two single-container modes reveal different pairs of selects, and
+// the difference is deliberate rather than incidental:
+//
+//   - Milestone mode names one container, so its milestone select submits
+//     container_id -- the same parameter the api and the store read.
+//   - Milepebble mode names two: the milestone whose milepebbles are on
+//     offer, and the chosen milepebble itself. Only the second is the
+//     read's container, so only the second is container_id.
+//
+// Either way the operator chooses from a select of the product's own
+// containers; nothing here is a field to type an id into.
+func productTaskScopeControlOf(path string, scope resolvedProductTaskScope) pages.ProductTaskScopeControl {
+	kind := scope.Parsed.Kind
+	control := pages.ProductTaskScopeControl{
+		Path:           path,
+		Modes:          productTaskScopeModes(kind),
+		MilestoneParam: pages.ProductTaskMilestoneQueryParam,
+		Lane:           productTaskLaneOf(scope),
+		OnlyStuck:      scope.Parsed.OnlyStuck,
+	}
+	if kind == store.ProductTaskScopeMilestone {
+		control.MilestoneParam = pages.ProductTaskContainerQueryParam
+	}
+	if kind == store.ProductTaskScopeIncomplete {
+		// The product-wide mode names no container, so it reveals no
+		// select. The listing is not read here either, so there is nothing
+		// to offer -- which is why this branch cannot be reached with
+		// options attached.
+		return control
+	}
+
+	control.Milestones = productTaskMilestoneOptionsOf(scope)
+	control.ShowMilestone = len(control.Milestones) > 0
+	if kind != store.ProductTaskScopeMilepebble {
+		return control
+	}
+
+	control.Milepebbles = productTaskMilepebbleOptionsOf(scope)
+	control.ShowMilepebble = len(control.Milepebbles) > 0
+	return control
+}
+
+// productTaskMilestoneOptionsOf is the milestone select's options, marking
+// the one this request resolved to. In milepebble mode the marked one is
+// the resolved milepebble's PARENT -- the milestone whose milepebbles the
+// second select offers -- rather than a container this scope does not
+// name, so the control shows where the choices in the next select come
+// from.
+func productTaskMilestoneOptionsOf(scope resolvedProductTaskScope) []pages.ProductTaskContainerOption {
+	out := make([]pages.ProductTaskContainerOption, 0, len(scope.Milestones))
+	for _, m := range scope.Milestones {
+		out = append(out, pages.ProductTaskContainerOption{
+			ID:               m.ID.String(),
+			Name:             m.Name,
+			Selected:         m.ID == scope.Milestone.ID,
+			OutOfScopeSuffix: outOfScopeSuffix(m.Status),
+		})
+	}
+	return out
+}
+
+// productTaskMilepebbleOptionsOf is the milepebble select's options: the
+// selected milestone's own children, marking the resolved one. Sourced
+// from the resolved milestone rather than from scope.Container's
+// Milepebbles, because the resolved container IS a milepebble in this mode
+// and carries no children of its own.
+func productTaskMilepebbleOptionsOf(scope resolvedProductTaskScope) []pages.ProductTaskContainerOption {
+	out := make([]pages.ProductTaskContainerOption, 0, len(scope.Milestone.Milepebbles))
+	for _, mp := range scope.Milestone.Milepebbles {
+		out = append(out, pages.ProductTaskContainerOption{
+			ID:               mp.ID.String(),
+			Name:             mp.Name,
+			Selected:         mp.ID == scope.Store.ContainerID,
+			OutOfScopeSuffix: outOfScopeSuffix(mp.Status),
+		})
+	}
+	return out
+}
+
+// productTaskNoMilepebblesLabel is the scope in prose for a milepebble
+// scope whose milestone has nothing cut under it. It names the milestone
+// the operator chose rather than the mode, because the mode's own claim --
+// "one milepebble" -- is what could not be honoured.
+func productTaskNoMilepebblesLabel(scope resolvedProductTaskScope) string {
+	if scope.Milestone.Name == "" {
+		return "No milepebbles here"
+	}
+	return "No milepebbles under " + scope.Milestone.Name
+}
+
+// outOfScopeSuffix marks a container the product-wide all-incomplete scope
+// would not have included, judged by the store's own predicate rather than
+// a UI copy of it. FR 7191dba1 still lets the operator pick such a
+// container explicitly -- it shows its tasks whatever its status -- so it
+// stays in the list; saying so is what keeps it from reading as a
+// contradiction. Empty for a container that scope would include.
+func outOfScopeSuffix(status store.MilestoneStatus) string {
+	if store.IsIncompleteContainerStatus(status) {
+		return ""
+	}
+	return " (outside the all-incomplete scope)"
 }
 
 // productTaskScopeLabelOf is the scope in prose: the product-wide mode's
@@ -115,29 +229,13 @@ func productTaskScopeModes(active store.ProductTaskScopeKind) []pages.ProductTas
 	}
 }
 
-// productTaskContainerOptionsOf lists the product's own containers as
-// selectable options, marking the one this scope resolved to. The
-// milepebble list is the selected milestone's children, so it is non-empty
-// only in milestone scope -- which is exactly the pair of selects the
-// control needs when it ships.
-func productTaskContainerOptionsOf(scope resolvedProductTaskScope) ([]pages.ProductTaskContainerOption, []pages.ProductTaskContainerOption) {
-	var milestones []pages.ProductTaskContainerOption
-	for _, c := range scope.Milestones {
-		milestones = append(milestones, pages.ProductTaskContainerOption{
-			ID:       c.ID.String(),
-			Name:     c.Name,
-			Selected: scope.Parsed.Kind == store.ProductTaskScopeMilestone && c.ID == scope.Store.ContainerID,
-		})
+// productTaskLaneOf is the lane filter's name for the control to carry
+// through, empty for "every lane".
+func productTaskLaneOf(scope resolvedProductTaskScope) string {
+	if scope.Parsed.Lane == nil {
+		return ""
 	}
-	var milepebbles []pages.ProductTaskContainerOption
-	for _, c := range scope.Container.Milepebbles {
-		milepebbles = append(milepebbles, pages.ProductTaskContainerOption{
-			ID:       c.ID.String(),
-			Name:     c.Name,
-			Selected: scope.Parsed.Kind == store.ProductTaskScopeMilepebble && c.ID == scope.Store.ContainerID,
-		})
-	}
-	return milestones, milepebbles
+	return string(*scope.Parsed.Lane)
 }
 
 // renderProductTaskRegion writes the region, as a bare fragment for an
@@ -159,18 +257,47 @@ func (app *App) renderProductTaskRegion(w http.ResponseWriter, r *http.Request, 
 //
 // A container outside the product is a 404, never another product's rows
 // and never an empty page that would read as "this milestone has no work".
-// A product with no container of the requested kind is not a failure at
-// all -- it is an ordinary empty result, so it renders the region with
-// nothing in it rather than an error.
-func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Request, product store.Product, view string, problem productTaskScopeProblem) {
+// The two empty outcomes are not failures at all -- they are ordinary
+// answers, so each renders the region with nothing in it rather than an
+// error. They are kept apart because their controls differ: a product with
+// no milestones has nothing to put in a select, while a product whose
+// milestones are simply not cut still has a milestone select, and that
+// select is how the operator picks a cut one.
+func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Request, product store.Product, view string, resolved resolvedProductTaskScope, problem productTaskScopeProblem) {
 	if problem == productTaskScopeNoContainers {
+		// The modes are still offered even with nothing to scope to: the
+		// operator's way out of this page is the control, not a back link,
+		// so a control that disappeared here would be the one case where
+		// they cannot leave.
 		app.renderProductTaskRegion(w, r, view, pages.ProductTaskRegion{
 			Product:    productHeaderOf(product),
 			View:       view,
 			Path:       r.URL.Path,
 			ScopeLabel: "No milestones yet",
 			Empty:      true,
-			ScopeModes: productTaskScopeModes(""),
+			Scope: pages.ProductTaskScopeControl{
+				Path:  r.URL.Path,
+				Modes: productTaskScopeModes(""),
+			},
+		}, http.StatusOK)
+		return
+	}
+
+	if problem == productTaskScopeNoMilepebbles {
+		// Milepebble mode over a milestone with nothing cut under it. The
+		// product does have milestones, and the milestone select -- which
+		// is how the operator picks a cut one -- is exactly what must not
+		// disappear here. So the control is built from the resolved scope,
+		// which carries the product's milestones and the one named.
+		app.renderProductTaskRegion(w, r, view, pages.ProductTaskRegion{
+			Product:    productHeaderOf(product),
+			View:       view,
+			Path:       r.URL.Path,
+			ScopeLabel: productTaskNoMilepebblesLabel(resolved),
+			Empty:      true,
+			Lane:       productTaskLaneOf(resolved),
+			OnlyStuck:  resolved.Parsed.OnlyStuck,
+			Scope:      productTaskScopeControlOf(r.URL.Path, resolved),
 		}, http.StatusOK)
 		return
 	}
