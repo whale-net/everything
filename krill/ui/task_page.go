@@ -61,14 +61,17 @@ func resolveTaskContainer(listing slice.DeliveryListing, mid uuid.UUID) (taskCon
 }
 
 // taskStateBadges derives a task's distinct state badges. A claim whose
-// lease has lapsed is "lease expired", never "claimed".
+// lease has lapsed is "lease-expired", never "claimed": a task whose
+// worker has gone is not being worked on. A task in no state at all
+// yields no badges, which is why a Done task with nothing outstanding
+// shows no state badge.
 func taskStateBadges(t store.TaskSummary, now time.Time) []pages.TaskBadge {
 	var badges []pages.TaskBadge
 	if t.CurrentClaimID != nil {
 		if t.LeaseExpiresAt != nil && !t.LeaseExpiresAt.After(now) {
 			badges = append(badges, pages.TaskBadge{Key: "lease-expired", Label: "Lease expired"})
 		} else {
-			badges = append(badges, pages.TaskBadge{Key: "live", Label: "Claimed"})
+			badges = append(badges, pages.TaskBadge{Key: "claimed", Label: "Claimed"})
 		}
 	}
 	if t.AttemptCount >= store.DefaultAttemptCap {

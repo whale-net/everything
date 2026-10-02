@@ -55,3 +55,60 @@ func MilestoneStatusStyle(status string) StatusStyle {
 		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
 	}
 }
+
+// TaskLaneStyle maps krill's five canonical task lanes (store's
+// CanonicalLaneOrder, spelled out as strings so this package keeps no
+// //krill/store dependency) onto a daisyUI badge. It is the only place a
+// task's lane acquires a colour, so the list, the board and the detail
+// all show the same lane the same way.
+//
+// The lanes read as progress towards Done: ghost for the lane nothing
+// has entered, warning for work in flight, and success once the task has
+// shipped. An unrecognised lane falls through to a neutral badge rather
+// than failing to compile when a sixth lane is added.
+func TaskLaneStyle(lane string) StatusStyle {
+	switch lane {
+	case "Scaffold":
+		return StatusStyle{htmxui.BadgeGhost, htmxui.BadgeSizeSM, false}
+	case "Implementation":
+		return StatusStyle{htmxui.BadgePrimary, htmxui.BadgeSizeSM, true}
+	case "Testing":
+		return StatusStyle{htmxui.BadgeInfo, htmxui.BadgeSizeSM, false}
+	case "Validation":
+		return StatusStyle{htmxui.BadgeWarning, htmxui.BadgeSizeSM, false}
+	case "Done":
+		return StatusStyle{htmxui.BadgeSuccess, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
+
+// TaskStateStyle maps one derived task state -- the keys
+// taskStateBadges hands it -- onto a daisyUI badge. It is the only place
+// a task's state acquires a colour, so a claimed task looks the same on
+// the list, the board and the detail.
+//
+// The colours come from manmanv2/ui/DESIGN_SYSTEM.md via htmxui §6:
+// info for a live claim, warning for a claim that needs reclaiming or a
+// task that has run out of attempts, error for a task that needs a
+// human, and ghost for one nobody has claimed. As with
+// MilestoneStatusStyle, distinctness is over the whole (variant, soft)
+// tuple -- error and warning each carry two states that share a hue.
+func TaskStateStyle(state string) StatusStyle {
+	switch state {
+	case "escalated":
+		return StatusStyle{htmxui.BadgeError, htmxui.BadgeSizeSM, false}
+	case "cancelled":
+		return StatusStyle{htmxui.BadgeError, htmxui.BadgeSizeSM, true}
+	case "lease-expired":
+		return StatusStyle{htmxui.BadgeWarning, htmxui.BadgeSizeSM, false}
+	case "capped":
+		return StatusStyle{htmxui.BadgeWarning, htmxui.BadgeSizeSM, true}
+	case "claimed":
+		return StatusStyle{htmxui.BadgeInfo, htmxui.BadgeSizeSM, false}
+	case "ready":
+		return StatusStyle{htmxui.BadgeGhost, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
