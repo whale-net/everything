@@ -110,6 +110,35 @@ go_test(
     ],
 )
 
+# Coverage for the shell's one toast host (FR c97a5018): a success naming a
+# message drops exactly one out-of-band toast into the host, carrying its
+# auto-dismiss timer and dismiss control; a success naming none shows
+# nothing; a refusal (the P0 escalate-of-a-Done-lane 409) is an inline alert
+# and no toast; and with JavaScript disabled the same success lands on a page
+# showing the same message as a success-severity alert. Drives the real
+# intervention routes through the shared signed-in-operator harness, and
+# models the no-JS flash as a cookie jar rather than a second read of one
+# request, because the one-shot guarantee lives in the Set-Cookie.
+go_test(
+    name = "ui_toast_test",
+    size = "small",
+    srcs = [
+        "toast_test.go",
+        "harness_test.go",
+    ],
+    embed = [":ui_lib"],
+    deps = [
+        "//krill/mcp/server",
+        "//krill/store",
+        "//krill/ui/components",
+        "//krill/ui/pages",
+        "//libs/go/htmxauth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Round-trip coverage for the console's four task interventions
 # (release/requeue/escalate/cancel, FR 1f44e461): each form POST reaches the
 # same api endpoint its MCP tool drives, with the same {"reason"} body,

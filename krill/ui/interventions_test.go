@@ -26,10 +26,8 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -39,38 +37,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/pages"
 )
-
-// newInterventionMux registers exactly the intervention routes setupRoutes
-// mounts, each behind the same operatorRoute, so a form submission traverses
-// the production auth -> operator -> write path. Route paths are written as
-// literals here (not built from opsTaskActionBase) to keep the test
-// independent of the constant it exercises.
-func newInterventionMux(app *App) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /ops/tasks/{id}/release", app.operatorRoute(app.handleTaskIntervention("release")))
-	mux.HandleFunc("POST /ops/tasks/{id}/requeue", app.operatorRoute(app.handleTaskIntervention("requeue")))
-	mux.HandleFunc("POST /ops/tasks/{id}/escalate", app.operatorRoute(app.handleTaskIntervention("escalate")))
-	mux.HandleFunc("POST /ops/tasks/{id}/cancel", app.operatorRoute(app.handleTaskIntervention("cancel")))
-	mux.HandleFunc("GET /ops/tasks/{id}/cancel/confirm", app.operatorRoute(app.handleCancelConfirm))
-	return mux
-}
-
-// serveFormPost issues a urlencoded form POST -- what the browser's inline
-// action form and the cancel-confirm form actually send -- through mux with
-// the operator's session cookie attached.
-func serveFormPost(mux *http.ServeMux, target string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	for _, c := range cookies {
-		req.AddCookie(c)
-	}
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	return rec
-}
 
 // assertInterventionAttribution asserts the recorded init minted the krill
 // session under the fake-Keycloak operator's REAL (iss, sub) as both
@@ -385,60 +353,6 @@ func TestCancelConfirmPageRequiresReasonAndPostsToCancel(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 7. the htmx branch: one route, two modes
 // ---------------------------------------------------------------------------
-
-// fakeFragmentTasks is the minimum console-query surface the htmx branch
-// of an intervention needs: after a write, the handler re-derives the whole
-// results block of the view the operator acted from, which means re-reading
-// it. It embeds store.TaskStore so any other List method the re-derivation
-// ever grew would nil-panic rather than pass unnoticed -- these tests must
-// not depend on store surface the console does not use.
-type fakeFragmentTasks struct {
-	store.TaskStore
-
-	claimed []store.ClaimedTaskRow
-	// escalated is distinct from claimed so a test can tell which view the
-	// re-derivation actually read.
-	escalated []store.EscalatedTaskRow
-}
-
-func (f *fakeFragmentTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
-	return store.Page[store.ClaimedTaskRow]{Items: f.claimed}, nil
-}
-
-func (f *fakeFragmentTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
-	return store.Page[store.EscalatedTaskRow]{Items: f.escalated}, nil
-}
-
-// newHtmxInterventionApp wires a signed-in operator to a fake api AND to the
-// console-query surface, so an intervention can be driven all the way
-// through to the fragment its htmx response renders. It returns the fake
-// IdP's issuer so attribution can be asserted the same fresh way the
-// no-HX cases assert it.
-func newHtmxInterventionApp(t *testing.T, api *fakeAPI, operatorSub string) (*App, *http.Cookie, string) {
-	t.Helper()
-	idp := newFakeIDP(t, operatorSub)
-	authenticator, sessionCookie := newSignedInOperator(t, idp)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
-	app.tasks = &fakeFragmentTasks{
-		claimed:   []store.ClaimedTaskRow{{TaskID: uuid.New(), Title: "a still-claimed task"}},
-		escalated: []store.EscalatedTaskRow{{TaskID: uuid.New(), Title: "a still-escalated task"}},
-	}
-	return app, sessionCookie, idp.server.URL
-}
-
-// hxFormPost issues the same form POST with the HX-Request header htmx
-// sets -- the one difference between the route's two branches.
-func hxFormPost(mux *http.ServeMux, target string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("HX-Request", "true")
-	for _, c := range cookies {
-		req.AddCookie(c)
-	}
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	return rec
-}
 
 // TestInterventionHTMXAnswersResultsFragmentNotRedirect requires that an
 // htmx intervention answers 200 with the whole results block of the view
