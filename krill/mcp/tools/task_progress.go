@@ -45,7 +45,7 @@ type getProductTaskProgressInput struct {
 func RegisterGetProductTaskProgress(reg *server.Registry, tasks store.TaskStore, products store.ProductStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name:        "get_product_task_progress",
-		Description: "Return a product's per-container task progress in one read: for every milestone and milepebble in scope, the total task count, the count in each lane (Scaffold, Implementation, Testing, Validation, Done), how many are Done, and how many are cancelled. A milestone's counts include its milepebbles' tasks; a container with no tasks reports total 0 with has_tasks false. Cancelled tasks count in the total and in the lane they were left in, never in Done.",
+		Description: "Return a product's per-container task progress in one read: for every milestone and milepebble in scope, the total task count, the count in each lane (Scaffold, Implementation, Testing, Validation, Done), how many are Done, and how many are cancelled. A milestone's counts include its milepebbles' tasks; a container with no tasks reports total 0 with has_tasks false. Cancelled tasks count in the total and in the lane they were left in, never in Done. The container rows are NOT additive: a milestone's row already covers its milepebbles' tasks, so never sum the containers' totals into a product-wide task count -- call count_product_tasks with scope \"incomplete\" for that.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getProductTaskProgressInput) (*mcp.CallToolResult, handlers.ProductTaskProgressWire, error) {
 		var zero handlers.ProductTaskProgressWire
 
