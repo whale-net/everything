@@ -17,8 +17,10 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/manmanv2/mcp/server"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 func main() {
@@ -43,8 +45,19 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("oidc verifier: %w", err)
 	}
 
-	reg := server.NewRegistry(server.WhoamiTool)
+	apiAddr := os.Getenv("CONTROL_API_URL")
+	if apiAddr == "" {
+		return errors.New("CONTROL_API_URL is required")
+	}
+	conn, err := grpcclient.NewClient(ctx, apiAddr, grpcauth.NewUserTokenDialOption(grpcauth.AuthModeOIDC))
+	if err != nil {
+		return fmt.Errorf("control api: %w", err)
+	}
+	defer conn.Close()
+
+	reg := server.NewRegistry(append([]server.Tool{server.WhoamiTool}, server.ReadTools...)...)
 	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")})
+	server.AddReadTools(srv, manmanpb.NewManManAPIClient(conn.GetConnection()))
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	mux := http.NewServeMux()

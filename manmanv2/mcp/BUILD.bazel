@@ -8,8 +8,10 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
         "//libs/go/logging",
         "//manmanv2/mcp/server",
+        "//manmanv2/protos:manmanpb",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
