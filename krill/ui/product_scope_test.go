@@ -15,14 +15,16 @@ import (
 )
 
 // productScopeMux mounts the real product-scoped routes against a reader
-// holding the given products. The scope and task stores are stubbed too, so
-// the un-prefixed ops views mounted alongside can render without one.
+// holding the given products. The scope, task and design-session stores are
+// stubbed too, so the un-prefixed ops views mounted alongside and the
+// Overview's blocking-questions tile can render without one.
 func productScopeMux(t *testing.T, products ...store.Product) *http.ServeMux {
 	t.Helper()
 	app := newTestApp(t)
 	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{}, products: products}
 	app.scopes = productScopeScopes{scope: store.Scope{ID: uuid.New()}}
 	app.tasks = productScopeTasks{}
+	app.designSessions = navStubDesignSessions{}
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
 	return mux
@@ -69,6 +71,13 @@ func (productScopeTasks) ListOpenNotes(context.Context, store.ListOpenNotesParam
 
 func (productScopeTasks) ListCancelledTasks(context.Context, store.ListCancelledTasksParams) (store.Page[store.CancelledTaskRow], error) {
 	return store.Page[store.CancelledTaskRow]{}, nil
+}
+
+// CountConsoleOverview is the Overview stat tiles' read, reached by every
+// case here that renders the home. Zero figures, so these cases stay about
+// which product a URL resolves to.
+func (productScopeTasks) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	return store.ConsoleOverviewCounts{}, nil
 }
 
 func lastViewedCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {

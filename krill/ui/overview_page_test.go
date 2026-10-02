@@ -63,6 +63,14 @@ func (*overviewCounter) ListClaimedTasks(context.Context, store.ListClaimedTasks
 	return store.Page[store.ClaimedTaskRow]{}, nil
 }
 
+// CountConsoleOverview is the stat tiles' read. These tests are about the
+// header, so the tiles' figures are a constant zero here -- which renders
+// four tiles reading "0" rather than leaving the strip out, and keeps the
+// header assertions about the header.
+func (*overviewCounter) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	return store.ConsoleOverviewCounts{}, nil
+}
+
 func (*overviewCounter) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
 	return store.Page[store.EscalatedTaskRow]{}, nil
 }

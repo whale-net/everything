@@ -3,10 +3,10 @@ package pages
 // The Overview page body: the shell's home, answering "is anything stuck,
 // which milestone is in flight" (FR c3e1c276).
 //
-// It is the page frame. The four stat tiles, the Needs-attention panel
-// and the in-flight milestones panel are separate work and render their
-// own slots below; the header here has to stand on its own, because it is
-// the part that must answer both questions in the first glance.
+// It is the page frame. The Needs-attention panel and the in-flight
+// milestones panel are separate work and render their own slots below; the
+// header here has to stand on its own, because it is the part that must
+// answer both questions in the first glance.
 
 import "github.com/whale-net/everything/libs/go/htmxui"
 
@@ -46,6 +46,69 @@ type OverviewPage struct {
 
 	// EscalatedHref is the Escalated tab of Needs attention.
 	EscalatedHref string
+
+	// StatTiles are the four headline figures, each linking to whatever
+	// it counts. Every tile's data is carried on its own, so one region's
+	// read failing never costs the others their figures.
+	StatTiles []OverviewStatTile
+}
+
+// OverviewStatTile is one headline figure and the link behind it.
+//
+// Count and Sub are separate fields, and Sub is derived from the very rows
+// its own Count was counted over, so a sub-line can never describe a
+// different set than the number above it. Sub is "" when the data does not
+// support one: a tile that can show its count still shows its count rather
+// than a misleading zero.
+type OverviewStatTile struct {
+	Label string
+	Href  string
+
+	// Count is the rendered figure, "" when the read failed.
+	Count string
+
+	// Sub is the one-line qualifier beneath it -- the timeframe or the
+	// narrower slice the figure is drawn from.
+	Sub string
+
+	// ValueClass colours the figure: text-error for a figure that means
+	// something is stuck, text-warning for one that means something is
+	// waiting on an answer.
+	ValueClass string
+
+	// Err is set when this tile's own read failed. It renders in place of
+	// the figure: a queue that could not be counted must not render as an
+	// empty one, which is indistinguishable from a genuinely idle queue.
+	Err string
+}
+
+// overviewStatTile renders one figure as a link to what it counts. The
+// whole stat is the anchor, so the click target is the figure the operator
+// is reading rather than a word under it.
+templ overviewStatTile(tile OverviewStatTile) {
+	<a href={ templ.URL(tile.Href) } class="stat" data-krill="overview-stat">
+		<div class="stat-title">{ tile.Label }</div>
+		if tile.Err != "" {
+			<div class="stat-value text-base font-medium text-base-content/70" data-krill="overview-stat-error">
+				{ tile.Err }
+			</div>
+		} else {
+			<div class={ "stat-value", tile.ValueClass } data-krill="overview-stat-count">{ tile.Count }</div>
+			if tile.Sub != "" {
+				<div class="stat-desc" data-krill="overview-stat-sub">{ tile.Sub }</div>
+			}
+		}
+	</a>
+}
+
+// overviewStatTiles is the four-figure block. Vertical on a narrow screen,
+// horizontal once there is room for four across.
+templ overviewStatTiles(tiles []OverviewStatTile) {
+	<div class="stats stats-vertical sm:stats-horizontal" data-krill="overview-stats">
+		for _, tile := range tiles {
+			@overviewStatTile(tile)
+		}
+	</div>
 }
 
 // inFlightBadges renders one badge per in-flight container, through the
@@ -108,7 +171,10 @@ templ Overview(page OverviewPage) {
 				</p>
 			}
 		</header>
-		// The stat tiles, the Needs-attention panel and the in-flight
-		// milestones panel render into the slots below once they ship.
+		if len(page.StatTiles) > 0 {
+			@overviewStatTiles(page.StatTiles)
+		}
+		// The Needs-attention panel and the in-flight milestones panel
+		// render into the slots below once they ship.
 	</section>
 }

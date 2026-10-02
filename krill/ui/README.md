@@ -104,8 +104,30 @@ escalated" would be a second unverified claim. The action points at the
 console's escalated view, which is the Escalated tab Needs attention
 serves today.
 
-The stat tiles, the Needs-attention panel and the in-flight panel are
-separate work and render their slots on this page empty until they land.
+The four stat tiles (`overview_tiles.go`) sit under the header: Escalated,
+Claimed, Open notes and Blocking questions, each a link to whatever it
+counts. Every figure covers the current product across all its milestones —
+a `ProductID` narrowing and no milestone one, since an escalation in another
+milestone is still something this operator must see.
+
+**Each sub-line comes from the same read as its own figure.**
+`store.CountConsoleOverview` counts each queue and its sub-line over one
+FROM/JOIN/WHERE, the sub-line being that clause with one conjunct added
+(escalation time, lease expiry, note kind) — so "N leases expire within 10
+min" cannot drift from the claimed count above it. The windows
+(`OverviewRecentEscalationWindow`, `OverviewLeaseExpiryWindow`) are measured
+from one explicitly-passed instant, so one render answers for one moment and
+a test can hold the clock still.
+
+The Escalated tile shows the sidebar badge's own figure rather than a
+second read of the same rows: the badge, this tile and the unfiltered
+Escalated tab are required to be one number, and two reads is how two
+numbers happen. Each tile carries its own figures and its own failure, so a
+read that fails costs that tile alone rather than the whole strip — and a
+queue that could not be counted renders as a message, never as a `0`.
+
+The Needs-attention panel and the in-flight panel are separate work and
+render their slots on this page empty until they land.
 
 **Why the body is buffered before `WriteHeader`.** `renderShellStatus`
 renders the component into a buffer *first*, then commits the status. A
@@ -131,7 +153,7 @@ core.
 
 | Package | Owns |
 |---|---|
-| `krill/ui` (package `main`) | Routing, the `App` struct, the write path, the render seam, `nav.go`'s grouped sidebar table and its active-path rule, `overview_page.go`'s Overview frame, and **every pure view-model builder**. |
+| `krill/ui` (package `main`) | Routing, the `App` struct, the write path, the render seam, `nav.go`'s grouped sidebar table and its active-path rule, `overview_page.go`'s Overview frame, `overview_tiles.go`'s stat-tile builders, and **every pure view-model builder**. |
 | `krill/ui/components` | The chrome: `Shell`/`sidebar` (the workspace shell's drawer sidebar and grouped nav), `navLink`, `SubNav`, `ProductSwitcher` (the sidebar's product select), `ToastHost` (the one live region every mutation confirms through), and the `MilestoneStatusStyle` status vocabulary. |
 | `krill/ui/pages` | Page bodies, one `.templ` per area, each declaring its own view-model struct. |
 

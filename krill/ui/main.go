@@ -216,6 +216,12 @@ type App struct {
 	// matching tool agree (see readclient.go). Held as the specReadClient
 	// interface so the view assembly is testable against a fake.
 	spec specReadClient
+
+	// now is the clock the Overview's time-windowed figures are measured
+	// from. Nil in production, where clock() reads the wall time; a test
+	// sets it to hold time still and assert that a sub-line agrees with
+	// the figure it is derived from.
+	now func() time.Time
 }
 
 // NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A

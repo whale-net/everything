@@ -39,11 +39,13 @@ func newTestApp(t *testing.T) *App {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
 	return &App{
-		auth:    auth,
-		devAuth: true,
-		spec:    &fakeSpecReader{},
-		scopes:  chromeScopes{},
-		tasks:   chromeTaskCounter{},
+		auth:           auth,
+		devAuth:        true,
+		spec:           &fakeSpecReader{},
+		scopes:         chromeScopes{},
+		tasks:          chromeTaskCounter{},
+		designSessions: navStubDesignSessions{},
+		revisionEvents: navStubRevisionEvents{},
 	}
 }
 
@@ -312,6 +314,14 @@ func (*navTasks) ListOpenNotes(context.Context, store.ListOpenNotesParams) (stor
 
 func (*navTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
 	return 0, nil
+}
+
+// CountConsoleOverview is the Overview stat tiles' read, which this walk
+// reaches through the home page. Zero figures: an idle deployment's real
+// answer, and it keeps a method the walk exercises from nil-panicking on
+// the embed.
+func (*navTasks) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	return store.ConsoleOverviewCounts{}, nil
 }
 
 func (f *navTasks) ListTasksByMilestone(context.Context, uuid.UUID) ([]store.TaskSummary, error) {
