@@ -123,6 +123,8 @@ func shellPagePaths(pid uuid.UUID) []string {
 		milestoneTasksPath(pid, navMilestoneID),
 		milestoneBoardPath(pid, navMilestoneID),
 		taskDetailPath(pid, navMilestoneID, uuid.New()),
+		productHref(pid, tasksSuffix),
+		productHref(pid, boardSuffix),
 		credentialsPath,
 	}
 }
@@ -332,6 +334,17 @@ func (*navTasks) SummarizeProductTaskProgress(_ context.Context, params store.Pr
 	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
 }
 
+// The product-wide task read, which the Tasks and Board nav hrefs now
+// land on. Both answer empty, which renders as the empty state -- the walk
+// measures the routes and the sidebar, not the store.
+func (*navTasks) ListProductTasks(context.Context, store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
+	return store.Page[store.ProductTaskRow]{}, nil
+}
+
+func (*navTasks) CountProductTasks(context.Context, store.ListProductTasksParams) (int, error) {
+	return 0, nil
+}
+
 func (f *navTasks) ListTasksByMilestone(context.Context, uuid.UUID) ([]store.TaskSummary, error) {
 	return nil, nil
 }
@@ -450,15 +463,32 @@ func TestWorkspaceNav_MarksExactlyOneItemPerPage(t *testing.T) {
 			activePath: designProductSessionsPath(pid), want: "Design sessions",
 		},
 		{
-			name: "milestone task list", targets: navTargets{Product: pid, Milestone: mid},
+			name: "product-wide task list", targets: navTargets{Product: pid},
+			activePath: productHref(pid, tasksSuffix), want: "Tasks",
+		},
+		{
+			name: "product-wide board", targets: navTargets{Product: pid},
+			activePath: productHref(pid, boardSuffix), want: "Board",
+		},
+		{
+			name: "product-wide task detail", targets: navTargets{Product: pid},
+			activePath: productHref(pid, tasksSuffix) + "/" + uuid.NewString(), want: "Tasks",
+		},
+		// The pre-redesign per-milestone URLs keep serving, so the items
+		// still own them -- an operator following a bookmarked
+		// /milestones/{mid}/tasks link is on a Tasks page and must see the
+		// sidebar say so. The href moved to the product-wide page; the
+		// active marking did not move with it.
+		{
+			name: "milestone task list", targets: navTargets{Product: pid},
 			activePath: milestoneTasksPath(pid, mid), want: "Tasks",
 		},
 		{
-			name: "milestone board", targets: navTargets{Product: pid, Milestone: mid},
+			name: "milestone board", targets: navTargets{Product: pid},
 			activePath: milestoneBoardPath(pid, mid), want: "Board",
 		},
 		{
-			name: "milestone task detail", targets: navTargets{Product: pid, Milestone: mid},
+			name: "milestone task detail", targets: navTargets{Product: pid},
 			activePath: taskDetailPath(pid, mid, uuid.New()), want: "Tasks",
 		},
 		{name: "capability map", targets: navTargets{Product: pid}, activePath: productPath(pid), want: "Capabilities"},
@@ -527,9 +557,11 @@ func TestWorkspaceNavHrefResolves(t *testing.T) {
 	mux := navMux(t)
 	pid := navProductID
 
+	// One table entry is enough now that every href is a function of the
+	// product alone -- the two former cases (with and without a milestone
+	// in scope) built different hrefs and so had to be walked separately.
 	for _, targets := range []navTargets{
-		{Product: pid}, // the chrome with no milestone in scope
-		{Product: pid, Milestone: navMilestoneID}, // a milestone-scoped page
+		{Product: pid},
 	} {
 		for _, g := range workspaceNav(targets, "/") {
 			for _, item := range g.Items {

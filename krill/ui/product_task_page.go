@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -373,7 +374,7 @@ func productTaskRegionOf(r *http.Request, product store.Product, view string, sc
 		RefreshPath: r.URL.RequestURI(),
 		ScopeLabel:  productTaskScopeLabelOf(scope),
 		OnlyStuck:   scope.Parsed.OnlyStuck,
-		Scope:       productTaskScopeControlOf(r.URL.Path, scope, view == productTasksView),
+		Scope:       productTaskScopeControlOf(r, scope, view == productTasksView, view),
 		// The empty state's sentence is built here, from the same scope, so
 		// it names the filters the read was actually built from rather than
 		// a second description of them that could drift.
@@ -430,8 +431,16 @@ func productTaskEmptyDetailOf(scope resolvedProductTaskScope) string {
 // reads the same parsed scope but offers no control that changes it, so a
 // scope change there must still not drop a filter the operator set on the
 // Tasks page.
-func productTaskScopeControlOf(path string, scope resolvedProductTaskScope, showFilters bool) pages.ProductTaskScopeControl {
+//
+// view is which of the two views this control is being built for. It is
+// passed rather than derived from showFilters because the List/Board
+// toggle is a separate concern from the filters, and a toggle that
+// inferred "the operator must be on Tasks" from "the lane select is
+// showing" would stop marking the active view the moment a view grew or
+// lost a filter.
+func productTaskScopeControlOf(r *http.Request, scope resolvedProductTaskScope, showFilters bool, view string) pages.ProductTaskScopeControl {
 	kind := scope.Parsed.Kind
+	path := r.URL.Path
 	control := pages.ProductTaskScopeControl{
 		Path:           path,
 		Modes:          productTaskScopeModes(kind),
@@ -439,6 +448,11 @@ func productTaskScopeControlOf(path string, scope resolvedProductTaskScope, show
 		Lane:           productTaskLaneOf(scope),
 		OnlyStuck:      scope.Parsed.OnlyStuck,
 		ShowFilters:    showFilters,
+		// The toggle reads the request's own query rather than
+		// re-deriving it from the resolved scope, so every parameter
+		// this URL carried reaches the sibling view without this
+		// function having to know which ones exist.
+		Views: productTaskViewToggleOf(path, productTaskViewQueryOf(r), view),
 	}
 	if showFilters {
 		control.Lanes = markSelectedLane(productTaskLaneOptions(), productTaskLaneOf(scope))
@@ -463,6 +477,92 @@ func productTaskScopeControlOf(path string, scope resolvedProductTaskScope, show
 	control.Milepebbles = productTaskMilepebbleOptionsOf(scope)
 	control.ShowMilepebble = len(control.Milepebbles) > 0
 	return control
+}
+
+// productTaskViewToggleOf is the List/Board switch for one view: the other
+// view's URL at this same scope and filter set, and this view marked
+// active (FR ab5f4936).
+//
+// The sibling path is derived from this request's own path rather than
+// built from the product id, so the two views' paths stay one spelling
+// wherever they are mounted: the Tasks page and the Board page differ by
+// exactly one path segment, and swapping that segment is the whole of
+// "the other view".
+//
+// The QUERY is carried across in full -- scope mode, container_id, the
+// UI-only milestone, lane, only_stuck and page_size -- because switching
+// view changes which rendering of the scope the operator gets, not which
+// scope they asked for. Rebuilding from the request's own query rather
+// than re-deriving it from the resolved scope is the same rule
+// productTaskPagePath follows, and for the same reason: a re-derivation
+// would have to know which parameters the URL happened to carry, and one
+// it forgot would silently drop a filter the operator set.
+//
+// page_token is the one parameter deliberately NOT carried, which is what
+// productTaskViewQueryOf exists to arrange. It is a position in the paged
+// read's keyset, and the two views do not page the same way: the Board's
+// own contract (FR cf000440) is to show every task in scope, or to state
+// "Showing X of Y" with a link to the filtered list. A token issued for
+// the Tasks table's page 3 names a row offset that means nothing on a
+// board of swimlanes, so carrying it would land the operator on a board
+// showing an arbitrary third of the work with nothing saying so. It is
+// dropped rather than refused: the destination view starts at its own
+// first page, which is the honest answer.
+func productTaskViewToggleOf(path string, query url.Values, view string) pages.ProductTaskViewToggle {
+	suffix := ""
+	if len(query) > 0 {
+		suffix = "?" + query.Encode()
+	}
+	return pages.ProductTaskViewToggle{
+		Views: []pages.ProductTaskViewLink{
+			{
+				Label:  "List",
+				Href:   productTaskViewPath(path, tasksSuffix) + suffix,
+				Active: view == productTasksView,
+			},
+			{
+				Label:  "Board",
+				Href:   productTaskViewPath(path, boardSuffix) + suffix,
+				Active: view == productBoardView,
+			},
+		},
+	}
+}
+
+// productTaskViewPath is the sibling view's path: this view's own path
+// with its trailing segment swapped.
+//
+// The swap is a suffix replacement on the known view segment rather than a
+// reconstruction from the product id, so a path that is neither of the two
+// views' -- which no route mounts -- is returned unchanged rather than
+// turned into a link to a URL nobody serves.
+func productTaskViewPath(path, siblingSuffix string) string {
+	switch {
+	case strings.HasSuffix(path, tasksSuffix):
+		return strings.TrimSuffix(path, tasksSuffix) + siblingSuffix
+	case strings.HasSuffix(path, boardSuffix):
+		return strings.TrimSuffix(path, boardSuffix) + siblingSuffix
+	}
+	return path
+}
+
+// productTaskViewQueryOf is the query the List/Board toggle carries to the
+// other view: this request's own parameters, minus the continuation token.
+//
+// r.URL.Query() returns a fresh copy on every call, so deleting the token
+// from it cannot mutate the request the handler still has to serve this
+// page from -- a shared map here would drop the token out from under the
+// region's own Refresh and paging links, which legitimately need it.
+//
+// The token is dropped because it is a POSITION rather than a filter: see
+// productTaskViewToggleOf. Every other parameter survives untouched,
+// including ones this layer has never heard of, which is what keeps the
+// toggle from silently narrowing a filter set it does not know the
+// meaning of.
+func productTaskViewQueryOf(r *http.Request) url.Values {
+	query := r.URL.Query()
+	query.Del(productTaskPageTokenParam)
+	return query
 }
 
 // productTaskMilestoneOptionsOf is the milestone select's options, marking
@@ -669,7 +769,7 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 			ScopeLabel:  "No milestones yet",
 			Empty:       true,
 			EmptyDetail: "This product has no milestone or milepebble to scope to yet.",
-			Scope:       productTaskScopeControlOf(r.URL.Path, resolved, view == productTasksView),
+			Scope:       productTaskScopeControlOf(r, resolved, view == productTasksView, view),
 		}, resolved, nil, http.StatusOK)
 		return
 	}
@@ -688,7 +788,7 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 			Empty:      true,
 			Lane:       productTaskLaneOf(resolved),
 			OnlyStuck:  resolved.Parsed.OnlyStuck,
-			Scope:      productTaskScopeControlOf(r.URL.Path, resolved, view == productTasksView),
+			Scope:      productTaskScopeControlOf(r, resolved, view == productTasksView, view),
 			// An ordinary empty answer, so it names its filters the same way
 			// the read-driven empty state does -- a lane the operator set is
 			// still the lane their next change has to keep.

@@ -820,6 +820,62 @@ table makes — so a lapsed lease reads `lease-expired` on every view and
 never `claimed`. Claim identity is all-or-nothing: a row carrying a claim
 id without a lease expiry would claim a lease the read did not report.
 
+### The List/Board toggle
+
+The two views are switched by a pair of links rendered **inside the shared
+scope control** (`pages/product_task_scope.templ`), not beside either
+region body. That placement is load-bearing: the Tasks region
+(`pages.ProductTasks`) and the Board region (`pages.ProductBoard`) are two
+separate templates behind one anchor, and the scope control is the one
+component both of them render. A toggle declared in either view's own
+template would be present on one view and silently absent from the other —
+which is exactly the drift the shared scope control exists to prevent.
+For the same reason the toggle is a sibling of the `<form>`, not a control
+inside it: switching view is navigation, not a value the scope submits.
+
+The toggle carries the request's **whole query** to the sibling view,
+because switching view changes which rendering of the scope the operator
+gets, not which scope they asked for. The sibling path is the request's own
+path with its trailing segment swapped (`tasks` ↔ `board`), so the two
+views stay one spelling wherever they are mounted.
+
+**One parameter is deliberately dropped: `page_token`.** A continuation
+token is a *position* in the keyset-paged read, not a filter. The two views
+do not page the same way — the Board's own contract (FR cf000440) is to show
+every task in scope, or to state "Showing X of Y" with a link to the filtered
+list — so a token issued for the Tasks table's page 3 names a row offset that
+means nothing on a board of swimlanes. Carrying it would land the operator on
+a board showing an arbitrary third of the work with nothing saying so. It is
+dropped, not refused: the destination starts at its own first page, which is
+the honest answer. `page_size` *does* survive — it is a filter.
+
+Because the toggle sits inside the region, an htmx scope swap brings it
+back with the marking and hrefs the new URL resolved to. A toggle rendered
+in the shell chrome would survive the swap while going stale, and nothing
+would reveal it.
+
+### The sidebar's Tasks and Board
+
+Both nav items link at the product-wide pages (`/products/{pid}/tasks`,
+`/products/{pid}/board`) and each marks active on its own view. They used to
+fall back to the delivery page, or to whatever milestone the current URL
+carried — which meant the same sidebar showed different links depending on
+which page it was rendered from, and on a page with no container in the URL
+neither item could build its own href at all.
+
+`navTargets` therefore has **no milestone id any more**. It existed only so
+those two items could build per-milestone hrefs, and it was a field the
+chrome could only sometimes fill. Every sidebar href is now a function of
+the product alone, so a request cannot produce a sidebar whose links
+disagree with the page it is on.
+
+Each item still **owns** the pre-redesign `/milestones/{mid}/tasks` subtree
+as its `AltPath`: that URL is a task view however it is reached, and an
+operator who followed a bookmarked one is on a Tasks page and must see the
+sidebar say so. The href moved to the product-wide page; the active marking
+did not. If those URLs are later cut over to redirect (FR f41a352d's legacy
+rule) the AltPath goes quietly inert rather than stale, because the
+redirect's destination is the product-wide page `Path` already owns.
 <!-- END product-task-scope section -->
 
 <!-- BEGIN task-detail section (task 9599fc1f) -->

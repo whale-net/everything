@@ -138,14 +138,18 @@ func (app *App) needsAttentionBadge(ctx context.Context, productID uuid.UUID) na
 }
 
 // navTargets carries the ids the sidebar's hrefs are built from, plus the
-// one figure it shows. Product is the operator's current product;
-// Milestone is the milestone a milestone-scoped page is showing, or
-// uuid.Nil on a page that is not under one -- a milestone id the chrome
-// cannot know is why the Tasks and Board items fall back to the delivery
-// page.
+// one figure it shows. Product is the operator's current product.
+//
+// There is no milestone id here any more. It existed only so Tasks and
+// Board could build per-milestone hrefs, and while neither page needs one
+// it was a field the chrome could only sometimes fill: a page reached
+// without a container in its URL had no milestone to pass, and the two
+// items fell back to the delivery page for it. Now that both views are
+// product-wide, every href is a function of the product alone, so a
+// request cannot produce a sidebar whose links disagree with the page it
+// is on.
 type navTargets struct {
-	Product   uuid.UUID
-	Milestone uuid.UUID
+	Product uuid.UUID
 
 	// Escalated is the Needs-attention item's badge. It is a value the
 	// caller resolved per request, not something the sidebar reads: the
@@ -283,18 +287,17 @@ func escalationBadgeFrom(ctx context.Context) (navBadge, bool) {
 	return badge, ok
 }
 
-// shellNavTargets is the per-request half of the seam: it takes the ids a
-// route already resolved and adds the one figure the chrome must read for
+// shellNavTargets is the per-request half of the seam: it takes the product
+// a route already resolved and adds the one figure the chrome must read for
 // itself, so a route building a shell page never has to remember to fetch
 // it.
-func (app *App) shellNavTargets(ctx context.Context, productID, milestoneID uuid.UUID) navTargets {
+func (app *App) shellNavTargets(ctx context.Context, productID uuid.UUID) navTargets {
 	badge, ok := escalationBadgeFrom(ctx)
 	if !ok {
 		badge = app.needsAttentionBadge(ctx, productID)
 	}
 	return navTargets{
 		Product:   productID,
-		Milestone: milestoneID,
 		Escalated: badge,
 	}
 }
@@ -307,17 +310,29 @@ func navGroupTable(t navTargets) []navGroup {
 	delivery := product + "/delivery"
 	overview := productHref(t.Product, overviewSuffix)
 
-	// Tasks and Board own the milestone task subtree. With no milestone in
-	// scope the chrome cannot build either page's href, so both link at
-	// the product's delivery page -- the page listing the milestones whose
-	// tasks and boards they are. Either way their active paths carry the
-	// "*" wildcard, because the subtree is rooted at a milestone id that
-	// varies per page.
-	tasks, board := delivery, delivery
-	if t.Milestone != uuid.Nil {
-		milestone := product + "/milestones/" + t.Milestone.String()
-		tasks, board = milestone+"/tasks", milestone+"/board"
-	}
+	// Tasks and Board are the two product-wide views of one scope, so both
+	// hrefs are the product's own pages and neither needs a milestone id
+	// from the chrome. They were the delivery page and the in-flight
+	// milestone's board only while the product-wide routes did not exist;
+	// linking an operator to a page listing the milestones rather than to
+	// the tasks they came to see is a fallback that has nothing left to
+	// fall back from.
+	//
+	// Each still OWNS the pre-redesign per-milestone subtree (its
+	// AltPath), because that URL is a task view however it is reached: an
+	// operator who followed a bookmarked /milestones/{mid}/tasks link is
+	// on a Tasks page and must see the sidebar say so. The wildcard is
+	// what lets one item own a subtree rooted at an id the chrome does
+	// not hold.
+	//
+	// The href does not follow: it is the product-wide page either way.
+	// If those URLs are later cut over to redirect (FR f41a352d's legacy
+	// rule), the redirect's destination IS the product-wide page, which
+	// Path already owns -- so this AltPath goes quietly inert rather than
+	// stale, and an operator arriving by the redirect still lands on a
+	// page whose sidebar marks Tasks.
+	tasks := productHref(t.Product, tasksSuffix)
+	board := productHref(t.Product, boardSuffix)
 
 	return []navGroup{
 		{Title: "", Items: []navItem{
@@ -328,8 +343,8 @@ func navGroupTable(t navTargets) []navGroup {
 		}},
 		{Title: "Work", Items: []navItem{
 			{Label: "Needs attention", Href: opsPath, Path: opsPath, Badge: t.Escalated},
-			{Label: "Tasks", Href: tasks, Path: product + "/milestones/*/tasks"},
-			{Label: "Board", Href: board, Path: product + "/milestones/*/board"},
+			{Label: "Tasks", Href: tasks, Path: tasks, AltPath: product + "/milestones/*/tasks"},
+			{Label: "Board", Href: board, Path: board, AltPath: product + "/milestones/*/board"},
 		}},
 		{Title: "Delivery", Items: []navItem{
 			{Label: "Milestones", Href: delivery, Exact: true},

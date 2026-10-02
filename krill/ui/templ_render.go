@@ -201,11 +201,10 @@ func (app *App) renderShellStatus(w http.ResponseWriter, r *http.Request, title,
 	}
 
 	productID, _ := currentProduct(r.Context())
-	_, milestoneID := shellPathTargets(r.URL.Path)
 
 	page := shellWithBody(
 		workspaceShellData(
-			app.shellNavTargets(r.Context(), productID.ID, milestoneID),
+			app.shellNavTargets(r.Context(), productID.ID),
 			activePath, title, userLabel,
 			// The switcher is read here, by the one seam every page goes
 			// through, rather than left to each route. Passing nil instead
