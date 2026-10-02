@@ -95,6 +95,18 @@ PR #2755: this used to be gated too, which was a bug — editing your own
 game's configuration is a routine ops task, not a destructive admin-only
 action).
 
+## Realm roles: admin, server-manager, gamer
+
+The MCP server resolves a persona from the realm roles `admin`,
+`server-manager`, and `gamer`. `gamer` is the lowest, MCP-only persona. The
+UI treats a `gamer`-only user as a plain viewer: `HasAdminRole` does not
+match it and `ui/components/roles.go` is unchanged.
+
+The role is created in Keycloak (realm `whalenet`, the realm in
+`OIDC_ISSUER` / `GRPC_OIDC_ISSUER`), not in this repo. It must be a realm
+role named exactly `gamer` and must appear in the access token's
+`realm_access.roles` claim (default realm-roles mapper).
+
 ## What's actually enforced (read before adding a new admin-only feature)
 
 **`IsAdmin` is UI-only.** It hides tab buttons and panels in the rendered
