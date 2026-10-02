@@ -67,6 +67,11 @@ type Tool struct {
 	// TargetArg names the JSON argument holding the call's target id, for
 	// audit. Empty means the tool has no single target.
 	TargetArg string
+	// Write marks a mutating tool: it accepts an optional idempotency_key
+	// argument and is wrapped by the Idempotency middleware.
+	Write bool
+	// KeyRequired makes idempotency_key mandatory for this write tool.
+	KeyRequired bool
 	// Snapshot, if set, captures pre-call state recorded in the audit entry
 	// of an allowed call (edit tools use it for a before-image). A failure
 	// is logged but does not block the call.

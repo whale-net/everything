@@ -6,6 +6,8 @@ go_library(
         "audit.go",
         "auth.go",
         "caller.go",
+        "idempotency.go",
+        "idempotency_store.go",
         "middleware.go",
         "persona.go",
         "whoami.go",
