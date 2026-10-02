@@ -116,6 +116,15 @@ func (f *tileFixtureTasks) CountEscalatedTasks(context.Context, store.ListEscala
 	return f.escalatedCount, nil
 }
 
+// SummarizeProductTaskProgress is the in-flight panel's read. It is
+// unimplemented by design here: the tile fixture models a deployment with
+// no milestones, so the panel takes its empty state. Implementing it with a
+// fabricated answer would let a tile assertion pass on a read that never
+// happened.
+func (f *tileFixtureTasks) SummarizeProductTaskProgress(context.Context, store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	return store.ProductTaskProgress{}, nil
+}
+
 func (f *tileFixtureTasks) CountConsoleOverview(_ context.Context, p store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
 	f.gotParams = append(f.gotParams, p)
 	if f.overviewErr != nil {

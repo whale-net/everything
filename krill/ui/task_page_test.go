@@ -37,6 +37,20 @@ func (f *fakeTaskLister) CountEscalatedTasks(context.Context, store.ListEscalate
 	return 0, nil
 }
 
+// SummarizeProductTaskProgress is the read the Overview's in-flight panel
+// makes. It answers with no containers so the panel renders its empty
+// state: these fixtures' subject is the task list, not the panel's rows.
+func (fakeTaskLister) SummarizeProductTaskProgress(_ context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
+}
+
+// CountConsoleOverview is the read the Overview's stat tiles make. Zero
+// figures, no error: an idle deployment is the honest answer for a fixture
+// whose subject is the task list.
+func (fakeTaskLister) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	return store.ConsoleOverviewCounts{}, nil
+}
+
 func (f *fakeTaskLister) ListTasksByMilestone(_ context.Context, id uuid.UUID) ([]store.TaskSummary, error) {
 	f.calls = append(f.calls, id)
 	if f.err != nil {

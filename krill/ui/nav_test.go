@@ -324,6 +324,14 @@ func (*navTasks) CountConsoleOverview(context.Context, store.ConsoleOverviewPara
 	return store.ConsoleOverviewCounts{}, nil
 }
 
+// SummarizeProductTaskProgress is the read the Overview's in-flight panel
+// makes on every shell page this walk visits. It answers with no
+// containers, so the panel renders its empty state and the walk measures
+// the route rather than the store.
+func (*navTasks) SummarizeProductTaskProgress(_ context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
+}
+
 func (f *navTasks) ListTasksByMilestone(context.Context, uuid.UUID) ([]store.TaskSummary, error) {
 	return nil, nil
 }

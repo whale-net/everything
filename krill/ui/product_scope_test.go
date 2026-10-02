@@ -61,6 +61,13 @@ func (productScopeTasks) CountEscalatedTasks(context.Context, store.ListEscalate
 	return 0, nil
 }
 
+// SummarizeProductTaskProgress is the read the Overview's in-flight panel
+// makes. It answers with no containers so the panel renders its empty
+// state: these fixtures' subject is the product a URL resolves to, not the panel's rows.
+func (productScopeTasks) SummarizeProductTaskProgress(_ context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
+}
+
 func (productScopeTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
 	return store.Page[store.ClaimedTaskRow]{}, nil
 }
