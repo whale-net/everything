@@ -30,8 +30,16 @@ func taskDetailPath(pid, mid, tid uuid.UUID) string {
 // resolved from the product's own delivery listing so an id that does not
 // belong to the URL's product can never resolve.
 type taskContainer struct {
-	ID          uuid.UUID
-	Name        string
+	ID   uuid.UUID
+	Name string
+
+	// Kind is store.MilestoneKindMilestone or store.MilestoneKindMilepebble,
+	// carried so a caller that asked for one kind can tell a resolved id of
+	// the other kind from a resolved id of its own. The product-wide task
+	// scope needs that distinction, and re-deriving it from Milepebbles
+	// would guess wrong for an uncut milestone the listing gave no children.
+	Kind string
+
 	Milepebbles []taskContainerChild // non-empty only for a cut milestone
 }
 
@@ -45,7 +53,7 @@ type taskContainerChild struct {
 func resolveTaskContainer(listing slice.DeliveryListing, mid uuid.UUID) (taskContainer, bool) {
 	for _, m := range listing.Milestones {
 		if m.ID == mid {
-			c := taskContainer{ID: m.ID, Name: m.Name}
+			c := taskContainer{ID: m.ID, Name: m.Name, Kind: string(store.MilestoneKindMilestone)}
 			for _, mp := range m.Milepebbles {
 				c.Milepebbles = append(c.Milepebbles, taskContainerChild{ID: mp.ID, Name: mp.Name})
 			}
@@ -53,7 +61,7 @@ func resolveTaskContainer(listing slice.DeliveryListing, mid uuid.UUID) (taskCon
 		}
 		for _, mp := range m.Milepebbles {
 			if mp.ID == mid {
-				return taskContainer{ID: mp.ID, Name: mp.Name}, true
+				return taskContainer{ID: mp.ID, Name: mp.Name, Kind: string(store.MilestoneKindMilepebble)}, true
 			}
 		}
 	}

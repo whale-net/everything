@@ -541,8 +541,11 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	// that retires them owns the redirects.
 	mux.HandleFunc("GET "+productPathPrefix+overviewSuffix, app.readerRoute(app.handleProductOverview))
 	mux.HandleFunc("GET "+productPathPrefix+needsAttentionSuffix, app.readerRoute(app.handleProductPlaceholder))
-	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix, app.readerRoute(app.handleProductPlaceholder))
-	mux.HandleFunc("GET "+productPathPrefix+boardSuffix, app.readerRoute(app.handleProductPlaceholder))
+	// Tasks and Board are two views of one scope (FR ab5f4936): each has
+	// its own handler, both over the product-wide task read layer
+	// (product_task_scope.go, product_task_page.go).
+	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix, app.readerRoute(app.handleProductTasks))
+	mux.HandleFunc("GET "+productPathPrefix+boardSuffix, app.readerRoute(app.handleProductBoard))
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix, app.readerRoute(app.handleProductPlaceholder))
 	// Milestone detail ids hang beneath the milestones prefix, so a copied
 	// link to one resolves its product before the id is even looked at.
