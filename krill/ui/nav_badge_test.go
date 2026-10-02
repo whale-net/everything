@@ -336,7 +336,7 @@ func TestNeedsAttentionBadgeRendersTheCountBesideTheLabel(t *testing.T) {
 
 	// The count sits inside the Needs-attention anchor rather than beside
 	// it, so the label and the figure are one target to activate.
-	item := navItemByLabel(t, workspaceNav(app.shellNavTargets(context.Background(), product, uuid.Nil), opsPath), "Needs attention")
+	item := navItemByLabel(t, workspaceNav(app.shellNavTargets(context.Background(), product), opsPath), "Needs attention")
 	assert.Equal(t, strconv.Itoa(f.productEscalated), item.Count)
 }
 
@@ -389,7 +389,7 @@ func TestNeedsAttentionBadgeNeedsNoProduct(t *testing.T) {
 // Nothing registers it on a mux here.
 func workspaceShellPage(app *App, productID uuid.UUID, activePath string) templ.Component {
 	data := workspaceShellData(
-		app.shellNavTargets(context.Background(), productID, uuid.Nil),
+		app.shellNavTargets(context.Background(), productID),
 		activePath, "Overview", "developer",
 		app.productSwitcherData(httptest.NewRequest(http.MethodGet, "/products/"+productID.String()+"/overview", nil)),
 	)
