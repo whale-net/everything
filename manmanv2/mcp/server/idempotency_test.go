@@ -200,3 +200,44 @@ func TestNewServerIdempotencyReplaysOverHTTP(t *testing.T) {
 		t.Fatalf("conflict mutated: %d calls", calls)
 	}
 }
+
+func TestIdempotencyComposesWithGate(t *testing.T) {
+	f := newFixture()
+	g := &Gate{Store: &MemoryConfirmationStore{}}
+	gated := g.Handler(f.tool())
+	backend := func(ctx context.Context, _ string, req mcp.Request) (mcp.Result, error) {
+		return gated(ctx, &mcp.CallToolRequest{Params: req.GetParams().(*mcp.CallToolParamsRaw)})
+	}
+	h := idemChain(&MemIdempotencyStore{}, backend)
+	var out Outcome
+	call := func(a string) mcp.Result {
+		t.Helper()
+		r, err := idemCall(h, callerA, "w", a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cr := r.(*mcp.CallToolResult); cr.IsError {
+			t.Fatalf("error result: %s", text(t, r))
+		}
+		out = Outcome{}
+		_ = json.Unmarshal([]byte(text(t, r)), &out)
+		return r
+	}
+	call(`{"id":"1","idempotency_key":"k"}`)
+	if out.ConfirmationToken == "" || out.Applied {
+		t.Fatalf("expected preview, got %+v", out)
+	}
+	confirm := `{"id":"1","idempotency_key":"k","confirmation_token":"` + out.ConfirmationToken + `"}`
+	r1 := call(confirm)
+	if !out.Applied || f.applied.Load() != 1 {
+		t.Fatalf("expected applied once, got %+v applied=%d", out, f.applied.Load())
+	}
+	r2 := call(confirm)
+	if text(t, r1) != text(t, r2) || f.applied.Load() != 1 {
+		t.Fatalf("replay differs or re-applied: %d", f.applied.Load())
+	}
+	_, err := idemCall(h, callerA, "w", `{"id":"2","idempotency_key":"k"}`)
+	if !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("want conflict, got %v", err)
+	}
+}
