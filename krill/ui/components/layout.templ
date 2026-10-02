@@ -82,3 +82,89 @@ templ Layout(data LayoutData) {
 		{ children... }
 	}
 }
+
+// NavGroup is one headed section of the workspace sidebar: a title and its
+// items. An empty Title renders its items unheaded, which is how Overview
+// sits above the groups rather than inside one.
+type NavGroup struct {
+	Title string
+	Items []NavLink
+}
+
+// ShellData is the workspace shell's chrome data.
+//
+// It is LayoutData plus the grouped sidebar the shell replaces the flat
+// top-bar nav with, kept as its own type so a page can be migrated to the
+// shell without the two shapes having to be reconciled in one struct.
+type ShellData struct {
+	LayoutData
+
+	// NavGroups is the sidebar, in render order.
+	NavGroups []NavGroup
+}
+
+// Shell is the workspace chrome: a daisyUI drawer whose sidebar is
+// persistent at lg and an overlay below it, a sticky top bar, and the
+// grouped nav.
+//
+// The drawer is a checkbox and a pair of <label for>, so it opens and
+// closes with no JavaScript at all; there is no htmx or Alpine behaviour
+// behind it, and therefore nothing to re-test when either moves.
+templ Shell(data ShellData) {
+	<div class="drawer lg:drawer-open min-h-screen bg-base-200" data-krill="workspace-shell">
+		<input id="krill-drawer" type="checkbox" class="drawer-toggle" />
+		<div class="drawer-content flex flex-col min-w-0">
+			<header class="navbar sticky top-0 z-30 gap-2 bg-base-100 border-b border-base-300 px-4">
+				<label for="krill-drawer" class="btn btn-ghost btn-square lg:hidden" aria-label="Open navigation">
+					<svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+				</label>
+				<span class="flex-1 min-w-0 truncate font-semibold">{ data.Title }</span>
+				<span class="flex-none flex items-center gap-2">
+					@htmxui.ThemeSwitcher(htmxui.Themes)
+					@htmxui.UserMenu(htmxui.UserMenuData{
+						IdentityLabel: data.UserLabel,
+						LogoutHref:    "/logout",
+					})
+				</span>
+			</header>
+			<main id="main" class="flex-1 p-4 lg:p-6">
+				{ children... }
+			</main>
+		</div>
+		<div class="drawer-side z-40">
+			<label for="krill-drawer" class="drawer-overlay" aria-label="Close navigation"></label>
+			<aside class="flex min-h-full w-56 flex-col bg-neutral text-neutral-content">
+				<a href="/" class="btn btn-ghost m-2 justify-start text-lg text-neutral-content">krill</a>
+				@sidebar(data.NavGroups)
+			</aside>
+		</div>
+	</div>
+}
+
+// sidebar renders the grouped nav. The data-krill hook is the same one
+// nav_test.go scopes its active-link scan to, so a page's own product
+// sub-nav can never be counted as a primary one; the menu-title headings
+// are daisyUI's, which is what keeps a group heading visually distinct
+// from the items under it.
+templ sidebar(groups []NavGroup) {
+	<nav aria-label="Primary" data-krill="primary-nav" class="px-2 pb-2">
+		<ul class="menu menu-sm w-full gap-0.5">
+			for _, g := range groups {
+				if g.Title == "" {
+					for _, l := range g.Items {
+						@navLink(l)
+					}
+				} else {
+					<li>
+						<h2 class="menu-title text-sm font-bold text-neutral-content">{ g.Title }</h2>
+						<ul>
+							for _, l := range g.Items {
+								@navLink(l)
+							}
+						</ul>
+					</li>
+				}
+			}
+		</ul>
+	</nav>
+}
