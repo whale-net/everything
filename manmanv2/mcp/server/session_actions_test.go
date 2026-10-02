@@ -45,9 +45,9 @@ func (f *fakeActionsAPI) ExecuteAction(_ context.Context, in *manmanpb.ExecuteAc
 	return &manmanpb.ExecuteActionResponse{Success: true, ExecutionId: int64(100 + len(f.executed)), RenderedCommand: "say hi"}, nil
 }
 
-type fakeAllow map[string]bool
+type fakeActionAllow map[string]bool
 
-func (a fakeAllow) Allowed(_ context.Context, dep int64, name string) (bool, error) {
+func (a fakeActionAllow) Allowed(_ context.Context, dep int64, name string) (bool, error) {
 	return a[name], nil
 }
 
@@ -87,7 +87,7 @@ func failed(res *mcp.CallToolResult, err error) (string, bool) {
 }
 
 func TestGetSessionActionsListsNamesAndParams(t *testing.T) {
-	s := actionsSession(t, &fakeActionsAPI{status: "running"}, fakeAllow{}, "gamer")
+	s := actionsSession(t, &fakeActionsAPI{status: "running"}, fakeActionAllow{}, "gamer")
 	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_session_actions", Arguments: map[string]any{"session_id": 11}})
 	if msg, bad := failed(res, err); bad {
 		t.Fatal(msg)
@@ -100,7 +100,7 @@ func TestGetSessionActionsListsNamesAndParams(t *testing.T) {
 
 func TestExecuteActionAllowlist(t *testing.T) {
 	api := &fakeActionsAPI{status: "running"}
-	s := actionsSession(t, api, fakeAllow{"say": true}, "gamer")
+	s := actionsSession(t, api, fakeActionAllow{"say": true}, "gamer")
 	if msg, bad := failed(execAction(s, map[string]any{"session_id": 11, "action_name": "say", "params": map[string]string{"msg": "hi"}, "idempotency_key": "k1"})); bad {
 		t.Fatalf("allowlisted action rejected: %s", msg)
 	}
@@ -116,7 +116,7 @@ func TestExecuteActionAllowlist(t *testing.T) {
 // A grant whose valid_to is set no longer appears as allowed.
 func TestExecuteActionRevokedGrant(t *testing.T) {
 	api := &fakeActionsAPI{status: "running"}
-	allow := fakeAllow{"say": true}
+	allow := fakeActionAllow{"say": true}
 	s := actionsSession(t, api, allow, "gamer")
 	if _, bad := failed(execAction(s, map[string]any{"session_id": 11, "action_name": "say", "idempotency_key": "a"})); bad {
 		t.Fatal("granted call should pass")
@@ -129,7 +129,7 @@ func TestExecuteActionRevokedGrant(t *testing.T) {
 
 func TestExecuteActionServerManagerBypassesAllowlist(t *testing.T) {
 	api := &fakeActionsAPI{status: "running"}
-	s := actionsSession(t, api, fakeAllow{}, "mgr")
+	s := actionsSession(t, api, fakeActionAllow{}, "mgr")
 	if msg, bad := failed(execAction(s, map[string]any{"deployment_id": 7, "action_name": "save", "idempotency_key": "k"})); bad {
 		t.Fatal(msg)
 	}
@@ -140,7 +140,7 @@ func TestExecuteActionServerManagerBypassesAllowlist(t *testing.T) {
 
 func TestExecuteActionNonRunningSession(t *testing.T) {
 	api := &fakeActionsAPI{status: "stopped"}
-	s := actionsSession(t, api, fakeAllow{"say": true}, "gamer")
+	s := actionsSession(t, api, fakeActionAllow{"say": true}, "gamer")
 	msg, bad := failed(execAction(s, map[string]any{"session_id": 11, "action_name": "say", "idempotency_key": "k"}))
 	if !bad || !strings.Contains(msg, "not running") || len(api.executed) != 0 {
 		t.Fatalf("bad=%v msg=%q executed=%d", bad, msg, len(api.executed))
@@ -149,7 +149,7 @@ func TestExecuteActionNonRunningSession(t *testing.T) {
 
 func TestExecuteActionMissingKeyRejected(t *testing.T) {
 	api := &fakeActionsAPI{status: "running"}
-	s := actionsSession(t, api, fakeAllow{"say": true}, "gamer")
+	s := actionsSession(t, api, fakeActionAllow{"say": true}, "gamer")
 	if _, bad := failed(execAction(s, map[string]any{"session_id": 11, "action_name": "say"})); !bad || len(api.executed) != 0 {
 		t.Fatalf("missing key: bad=%v executed=%d", bad, len(api.executed))
 	}
@@ -157,7 +157,7 @@ func TestExecuteActionMissingKeyRejected(t *testing.T) {
 
 func TestExecuteActionReplayReturnsOriginalDispatch(t *testing.T) {
 	api := &fakeActionsAPI{status: "running"}
-	s := actionsSession(t, api, fakeAllow{"say": true}, "gamer")
+	s := actionsSession(t, api, fakeActionAllow{"say": true}, "gamer")
 	args := map[string]any{"session_id": 11, "action_name": "say", "idempotency_key": "same"}
 	r1, err := execAction(s, args)
 	if msg, bad := failed(r1, err); bad {

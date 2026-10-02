@@ -12,6 +12,7 @@ go_library(
         "confirm_store.go",
         "connect_address.go",
         "edit_tools.go",
+        "lifecycle_tools.go",
         "middleware.go",
         "persona.go",
         "read_tools.go",

@@ -70,6 +70,7 @@ func run(logger *slog.Logger) error {
 
 	apiClient := manmanpb.NewManManAPIClient(conn.GetConnection())
 	tools := append([]server.Tool{server.WhoamiTool, server.ConnectAddressTool}, server.ReadTools...)
+	tools = append(tools, server.LifecycleTools...)
 	tools = append(tools, server.SessionActionTools...)
 	tools = append(tools, server.EditTools(apiClient)...)
 	tools = append(tools, admin.Tools(apiClient)...)
@@ -77,6 +78,7 @@ func run(logger *slog.Logger) error {
 	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}, server.SQLIdempotencyStore{DB: db})
 	server.AddReadTools(srv, apiClient)
 	server.AddConnectAddressTool(srv, apiClient)
+	server.AddLifecycleTools(srv, apiClient, server.SQLStartAllowlist{DB: db}, &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
 	server.AddSessionActionTools(srv, apiClient, server.SQLActionAllowlist{DB: db})
 	server.AddEditTools(srv, &server.Gate{Store: server.SQLConfirmationStore{DB: db}}, apiClient)
 	admin.Register(srv, apiClient, &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
