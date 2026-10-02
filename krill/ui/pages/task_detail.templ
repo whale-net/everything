@@ -45,7 +45,6 @@ type TaskDetailPage struct {
 	SliceJSON      string
 	SliceError     string
 	ClaimSummary   string // e.g. "session ..., claimed at ..."; empty when unclaimed
-	State          string
 	Escalation     string
 	TasksPath      string
 	BoardPath      string
@@ -65,14 +64,15 @@ templ TaskDetail(page TaskDetailPage) {
 			hx-swap="outerHTML">
 			Refresh
 		</button>
-		@TaskBadges(page.Badges)
 		<p class="mt-2 text-sm">
 			<a href={ templ.URL(page.TasksPath) } class="link link-primary" data-krill="tasks-link">Back to { page.ContainerName } tasks</a>
 			<a href={ templ.URL(page.BoardPath) } class="link link-primary ml-2" data-krill="board-link">Board</a>
 		</p>
 		<dl class="mt-4 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
 			<dt class="font-semibold">Current lane</dt>
-			<dd data-krill="task-lane">{ page.Lane }</dd>
+			<dd>
+				@TaskLaneBadge(page.Lane)
+			</dd>
 			<dt class="font-semibold">Lane sequence</dt>
 			<dd data-krill="task-lane-sequence">
 				for i, l := range page.LaneSequence {
@@ -85,7 +85,9 @@ templ TaskDetail(page TaskDetailPage) {
 			<dt class="font-semibold">Attempts</dt>
 			<dd data-krill="task-attempts">{ page.Attempts } (lease-lapse and abandon attempts count toward the cap)</dd>
 			<dt class="font-semibold">State</dt>
-			<dd data-krill="task-state">{ page.State }</dd>
+			<dd data-krill="task-state">
+				@TaskBadges(page.Badges)
+			</dd>
 			if page.Escalation != "" {
 				<dt class="font-semibold">Escalation</dt>
 				<dd data-krill="task-escalation">{ page.Escalation }</dd>

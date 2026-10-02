@@ -352,11 +352,14 @@ func TestScopeControlMilepebbleModeStillRefusesAnotherProductsMilepebble(t *test
 	assert.Empty(t, tasks.listed, "the store must never be asked for another product's container")
 }
 
-// TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble: the
-// parent parameter names a milestone. Handed a milepebble id it is not
-// found as a milestone of this product, which is the same refusal as any
-// other id the product does not own under that kind.
-func TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble(t *testing.T) {
+// TestScopeControlMilepebbleModeRefusesAMilepebbleAsTheParentMilestone:
+// the `milestone` parameter names a PARENT milestone. Handed a milepebble
+// id it is not found as a milestone of this product, which is the same
+// refusal as any other id the product does not own under that kind.
+//
+// It is the reverse pairing -- a milepebble where a milestone belongs --
+// that TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble covers.
+func TestScopeControlMilepebbleModeRefusesAMilepebbleAsTheParentMilestone(t *testing.T) {
 	tasks := &recordingProductTasks{}
 	mux := productTaskMux(t, tasks, productTaskListing(), nil)
 
@@ -364,6 +367,50 @@ func TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble(t *testing.T) 
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Empty(t, tasks.listed)
+}
+
+// TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble: the
+// container parameter in milepebble mode names a MILEPEBBLE. Handed a
+// milestone id -- one this product does own, and one with milepebbles cut
+// under it, so nothing else about it is wrong -- it is still a 404, and the
+// store is never asked.
+//
+// The two are the same kind of mistake in opposite directions: a milepebble
+// submitted as the parent (above), and a milestone submitted as the
+// container (here). Answering the second would scope the read to a
+// milestone while the URL said "one milepebble", which is the one reading
+// the operator would have no way to tell apart from the one they asked for.
+func TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "a milestone of this product that has milepebbles cut under it",
+			query: "scope=milepebble&container_id=" + productTaskMilestone.String(),
+		},
+		{
+			name:  "the same, alongside a parent that agrees with it",
+			query: "scope=milepebble&milestone=" + productTaskMilestone.String() + "&container_id=" + productTaskMilestone.String(),
+		},
+		{
+			name:  "an uncut milestone, which has no milepebble to be one of",
+			query: "scope=milepebble&container_id=" + productTaskOldestMilestone.String(),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tasks := &recordingProductTasks{rows: []store.ProductTaskRow{
+				{TaskID: uuid.New(), Title: "a task that must never render"},
+			}, total: 1}
+			mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+			rec := fetch(t, mux, productTaskTasksURL(tc.query))
+
+			assert.Equal(t, http.StatusNotFound, rec.Code)
+			assert.NotContains(t, rec.Body.String(), "a task that must never render")
+			assert.Empty(t, tasks.listed, "the store must never be asked for a milestone's tasks in milepebble mode")
+		})
+	}
 }
 
 // TestScopeControlShipsAMilepebbleModeOnEveryView: the control is one

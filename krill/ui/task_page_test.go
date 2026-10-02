@@ -108,7 +108,7 @@ func TestTaskListOrderAttemptsAndLease(t *testing.T) {
 	assert.Contains(t, html, "0 of 3")
 	assert.Contains(t, html, lease.Format(time.RFC3339))
 	assert.Contains(t, html, `data-krill-claim-id="`+claim.String()+`"`)
-	assert.Contains(t, html, `data-krill="task-badge-live"`)
+	assert.Contains(t, html, `data-krill="task-badge-claimed"`)
 	assert.Contains(t, html, "/milestones/"+f.mid.String()+"/tasks/")
 	assert.Contains(t, html, `data-krill="loaded-at"`)
 	assert.Contains(t, html, `data-krill="board-link"`)
@@ -127,7 +127,7 @@ func TestTaskStateBadges(t *testing.T) {
 		}
 		return k
 	}
-	assert.Equal(t, []string{"live"}, keys(store.TaskSummary{CurrentClaimID: &id, LeaseExpiresAt: &future}))
+	assert.Equal(t, []string{"claimed"}, keys(store.TaskSummary{CurrentClaimID: &id, LeaseExpiresAt: &future}))
 	assert.Equal(t, []string{"lease-expired"}, keys(store.TaskSummary{CurrentClaimID: &id, LeaseExpiresAt: &past}))
 	assert.Equal(t, []string{"capped"}, keys(store.TaskSummary{AttemptCount: store.DefaultAttemptCap}))
 	assert.Equal(t, []string{"escalated"}, keys(store.TaskSummary{CurrentEscalationID: &id}))
@@ -142,7 +142,7 @@ func TestTaskListExpiredLeaseNotShownLive(t *testing.T) {
 	f.tasks.tasks[f.mid] = []store.TaskSummary{{ID: uuid.New(), Title: "stale", CurrentClaimID: &claim, LeaseExpiresAt: &past}}
 	_, html := f.get(f.pid.String(), f.mid.String(), true)
 	assert.Contains(t, html, `data-krill="task-badge-lease-expired"`)
-	assert.NotContains(t, html, `data-krill="task-badge-live"`)
+	assert.NotContains(t, html, `data-krill="task-badge-claimed"`)
 }
 
 func TestTaskListEmptyVersusError(t *testing.T) {

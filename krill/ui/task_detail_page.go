@@ -57,18 +57,6 @@ type taskDetailInputs struct {
 	SliceErr  error
 }
 
-func taskState(t store.Task, now time.Time) string {
-	switch {
-	case t.CancelledAt != nil:
-		return "cancelled"
-	case t.CurrentEscalationID != nil:
-		return "escalated"
-	case t.CurrentClaimID != nil && t.LeaseExpiresAt != nil && !t.LeaseExpiresAt.After(now):
-		return "lease expired"
-	}
-	return "active"
-}
-
 // taskDetailPageOf assembles the detail view model. now is injected so a
 // lease's expiry is judged against the read time.
 func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now time.Time) pages.TaskDetailPage {
@@ -86,7 +74,6 @@ func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now t
 		Attempts:      taskAttemptsLabel(t.AttemptCount),
 		LoadedAt:      now.UTC().Format(time.RFC3339),
 		Badges:        taskStateBadges(summary, now),
-		State:         taskState(t, now),
 		TasksPath:     milestoneTasksPath(pid, c.ID),
 		BoardPath:     milestoneBoardPath(pid, c.ID),
 		ContainerName: c.Name,
@@ -157,20 +144,71 @@ func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		app.taskDetailNotFound(w, r, c, pid)
 		return
 	}
+	// The per-container URL names the container, so a task belonging to
+	// another one under the same product is not this page's answer.
+	app.serveTaskDetail(w, r, pid, tid, func(task store.Task) (taskContainer, bool) {
+		if task.MilestoneID != c.ID {
+			return taskContainer{}, false
+		}
+		return c, true
+	})
+}
+
+// handleProductTaskDetail serves /products/{pid}/tasks/{tid} -- the
+// product-scoped detail the product-wide Tasks table's rows link to
+// (FR f41a352d).
+//
+// The container is the task's own rather than the URL's, because this URL
+// names only the product: the table is not scoped to a container, so a row
+// in it may belong to any milestone under the product. It is still resolved
+// against the product's own listing, so a task from another product is a
+// 404 rather than that product's task rendered under this one's chrome.
+func (app *App) handleProductTaskDetail(w http.ResponseWriter, r *http.Request) {
+	r, product, ok := app.resolveProductFromPath(w, r)
+	if !ok {
+		return
+	}
+	tid, err := uuid.Parse(r.PathValue("tid"))
+	if err != nil {
+		app.renderProductTaskDetailNotFound(w, r, product.ID)
+		return
+	}
+	listing, err := app.spec.Delivery(r.Context(), product.ID, nil)
+	if err != nil {
+		logger.Error("product task detail: delivery listing read failed",
+			"product", product.ID.String(), "error", err)
+		app.renderProductTaskDetailNotFound(w, r, product.ID)
+		return
+	}
+	app.serveTaskDetail(w, r, product.ID, tid, func(task store.Task) (taskContainer, bool) {
+		return resolveTaskContainer(listing, task.MilestoneID)
+	})
+}
+
+// serveTaskDetail is the one read-and-render both detail routes share:
+// resolve the task, refuse it unless container says this URL's answer, then
+// compose and serve. That resolver is the only thing the two routes disagree
+// on, so the reads that build the page cannot drift between them.
+func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, container func(store.Task) (taskContainer, bool)) {
 	ctx := r.Context()
 	task, err := app.tasks.GetTaskByID(ctx, tid)
-	if err != nil || task.MilestoneID != c.ID {
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
 			logger.Error("task read failed", "task", tid.String(), "error", err)
 			app.renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
 				Title:    "Could not load the task",
 				Detail:   "The task could not be read. See the logs.",
-				BackHref: milestoneTasksPath(pid, c.ID),
-				BackText: "Back to " + c.Name + " tasks",
+				BackHref: productHref(pid, tasksSuffix),
+				BackText: "Back to tasks",
 			})
 			return
 		}
-		app.taskDetailNotFound(w, r, c, pid)
+		app.renderProductTaskDetailNotFound(w, r, pid)
+		return
+	}
+	c, found := container(task)
+	if !found {
+		app.renderProductTaskDetailNotFound(w, r, pid)
 		return
 	}
 
@@ -208,4 +246,18 @@ func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app.renderShell(w, r, "Task", r.URL.Path, body)
+}
+
+// renderProductTaskDetailNotFound is the in-shell 404 for a task detail
+// whose id belongs to no milestone under this product. It points back at the
+// product-wide Tasks page, which is the page a detail reached from a table
+// row should return to -- and the only one that exists for a task whose
+// container the URL never named.
+func (app *App) renderProductTaskDetailNotFound(w http.ResponseWriter, r *http.Request, pid uuid.UUID) {
+	app.renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
+		Title:    "Not found",
+		Detail:   "No task with that id belongs to this product.",
+		BackHref: productHref(pid, tasksSuffix),
+		BackText: "Back to tasks",
+	})
 }
