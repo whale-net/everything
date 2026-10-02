@@ -44,6 +44,13 @@ func (fakeTaskLister) SummarizeProductTaskProgress(_ context.Context, params sto
 	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
 }
 
+// CountConsoleOverview is the read the Overview's stat tiles make. Zero
+// figures, no error: an idle deployment is the honest answer for a fixture
+// whose subject is the task list.
+func (fakeTaskLister) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	return store.ConsoleOverviewCounts{}, nil
+}
+
 func (f *fakeTaskLister) ListTasksByMilestone(_ context.Context, id uuid.UUID) ([]store.TaskSummary, error) {
 	f.calls = append(f.calls, id)
 	if f.err != nil {

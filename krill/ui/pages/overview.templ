@@ -61,7 +61,6 @@ type OverviewPage struct {
 	// one product-wide read returned for it (FR 8ef82053).
 	InFlightPanel OverviewInFlightPanel
 }
-}
 
 // OverviewStatTile is one headline figure and the link behind it.
 //
@@ -119,6 +118,7 @@ templ overviewStatTiles(tiles []OverviewStatTile) {
 			@overviewStatTile(tile)
 		}
 	</div>
+}
 
 // OverviewInFlightRow is one container's row in the in-flight panel: the
 // name linking to its detail page, the status that put it in flight, and
