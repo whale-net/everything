@@ -14,6 +14,16 @@ package main
 // successful read of zero. "0 escalated tasks" and "nothing is in flight" are
 // both claims an operator acts on; a read failure is neither, so it renders
 // the alert and nothing else.
+//
+// Every assertion here was proved red against the behaviour it guards. Two
+// mutations stay green, and they are unreachable rather than unguarded:
+// forcing the header's EscalatedReadable true changes nothing, and giving a
+// failed tile a Count shows no figure. Neither is load-bearing on the
+// templ's branch order -- reordering those branches keeps the suite green
+// too -- because buildOverview never sets EscalatedError and
+// EscalatedReadable together, and a tile builder returns before it sets
+// Count. What holds the two apart is that mutual exclusion in the builders,
+// so a view asserting the branch order instead would prove nothing.
 
 import (
 	"context"
