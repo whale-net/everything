@@ -259,14 +259,20 @@ FROM/JOIN/WHERE its list pages**, not a second predicate:
 
 `store.TaskStore.ListClaimedTasks` (`krill/store/task_console.go`) is
 implemented like its three siblings (`ListCancelledTasks`/`ListEscalatedTasks`/
-`ListOpenNotes`): it is the one store method in this milestone that has to
-join three tables to answer its question, because "what is claimed" is not a
-property of `task` alone.
+`ListOpenNotes`). None of the four answers its question from `task` alone: each
+joins `milestone_ref` for identifying context, then the one event table its
+question is about — `task_claim` here, `task_escalation_event` for escalated,
+`task_intervention_event` for cancelled, and (in `task_note_console.go`, which
+is where the open-notes query lives, since it spans the spec axis rather than
+the work axis) the note's own spec-axis tables.
 
-- **One row per live claim, never per task.** `WHERE current_claim_id IS NOT
-  NULL` is the whole membership rule, so a task whose claim has been released,
-  force-closed, or lapsed drops out on the next read without anything marking
-  it.
+- **One row per live claim, and the live claim only.** `WHERE current_claim_id
+  IS NOT NULL` is the whole membership rule, and the join is on that column
+  rather than on `task_claim.task_id` — which matters because `task_claim` is
+  append-only, so a task that was claimed, released and reclaimed has three
+  rows there. Pointing the join at `task.current_claim_id` picks the live one,
+  and a task whose claim has been released, force-closed or lapsed drops out
+  of the next read entirely, with nothing marking it.
 - **The claim is joined in explicitly, not by schema.** Claimant session, the
   claimed-since instant, and both LB4 subject pairs come from `task_claim`
   (matched on `task.current_claim_id`). `current_claim_id` carries no
@@ -277,8 +283,9 @@ property of `task` alone.
   `task.milestone_id`) supplies the id, kind, and title of the milepebble or
   milestone the task belongs to, so a row is actionable without a second
   lookup — FR4's answer to the bare-id posture root plan #2851's Assumption 8
-  exists to remove. The same identifying-context join is why all four console
-  queries live in one file rather than each rolling its own.
+  exists to remove. `task_note_console.go` resolves the same `milestone_ref`
+  lookup for FR12's rows rather than rolling a second copy of it, which is the
+  shared-clause discipline the other three follow.
 - **Soonest-to-lapse first.** `ORDER BY task.lease_expires_at ASC, task.id
   ASC` is the operator-useful order: the claim about to need intervention is
   first, and the keyset cursor over `(lease_expires_at, id)` continues the
