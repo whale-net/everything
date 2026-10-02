@@ -213,6 +213,7 @@ go_test(
         "product_task_rows_test.go",
         "product_task_filters_test.go",
         "product_task_paging_test.go",
+        "product_task_paging_acceptance_test.go",
         "overview_page_test.go",
 "overview_tiles_test.go",
         "overview_panel_acceptance_test.go",
