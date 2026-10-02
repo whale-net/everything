@@ -4,15 +4,20 @@ package pages
 // builders that populate these view models live in //krill/ui
 // (task_page.go).
 
-import "github.com/whale-net/everything/libs/go/htmxui"
+import (
+	"github.com/whale-net/everything/krill/ui/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
 
 // TasksAnchor is the DOM id of the task list's content region; the
 // Refresh button's hx-target and the served fragment's root id.
 const TasksAnchor = "krill-task-list"
 
-// TaskBadge is one derived stuck/claim state badge on a task.
+// TaskBadge is one derived task state. Key is the state vocabulary
+// //krill/ui/components maps onto a colour, not a label, so the three
+// task views can never drift apart on either the key or the label.
 type TaskBadge struct {
-	Key   string // stable data-krill suffix, e.g. "live", "lease-expired"
+	Key   string // stable data-krill suffix, e.g. "claimed", "lease-expired"
 	Label string
 }
 
@@ -48,26 +53,28 @@ type TaskListPage struct {
 	Milepebbles  []TaskMilepebbleLink
 }
 
-// taskBadgeVariant maps a badge key to its colour; keys come from the
-// pure helper in task_page.go.
-func taskBadgeVariant(key string) htmxui.BadgeVariant {
-	switch key {
-	case "live":
-		return htmxui.BadgeInfo
-	case "lease-expired", "capped":
-		return htmxui.BadgeWarning
-	case "escalated", "cancelled":
-		return htmxui.BadgeError
-	}
-	return htmxui.BadgeNeutral
+// TaskLaneBadge renders a task's lane as a badge. The colour comes from
+// components.TaskLaneStyle, so the list, the board and the detail show
+// one lane one way.
+templ TaskLaneBadge(lane string) {
+	{{ s := components.TaskLaneStyle(lane) }}
+	@htmxui.Badge(lane, s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "task-lane"})
+}
+
+// TaskStateBadge renders one derived task state as a badge. The colour
+// comes from components.TaskStateStyle, so a claimed task reads the same
+// wherever it is shown.
+templ TaskStateBadge(b TaskBadge) {
+	{{ s := components.TaskStateStyle(b.Key) }}
+	@htmxui.Badge(b.Label, s.Variant, s.Size, s.Soft, templ.Attributes{
+		"data-krill": "task-badge-" + b.Key,
+	})
 }
 
 // TaskBadges renders a task's derived state badges, one per state.
 templ TaskBadges(badges []TaskBadge) {
 	for _, b := range badges {
-		@htmxui.Badge(b.Label, taskBadgeVariant(b.Key), htmxui.BadgeSizeSM, true, templ.Attributes{
-			"data-krill": "task-badge-" + b.Key,
-		})
+		@TaskStateBadge(b)
 	}
 }
 
@@ -120,7 +127,7 @@ templ TaskList(page TaskListPage) {
 				for _, t := range page.Tasks {
 					<li data-krill="task-row" data-krill-task-id={ t.ID } data-krill-claim-id={ t.ClaimID } data-krill-lease-expires-at={ t.LeaseExpiresAt } class="flex flex-wrap items-center gap-2 text-sm">
 						<a href={ templ.URL(t.DetailPath) } class="link link-primary" data-krill="task-title">{ t.Title }</a>
-						@htmxui.Badge(t.Lane, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "task-lane"})
+						@TaskLaneBadge(t.Lane)
 						<span data-krill="task-attempts">{ t.Attempts }</span>
 						@TaskBadges(t.Badges)
 						if t.LeaseExpiresAt != "" {

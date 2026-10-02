@@ -57,18 +57,6 @@ type taskDetailInputs struct {
 	SliceErr  error
 }
 
-func taskState(t store.Task, now time.Time) string {
-	switch {
-	case t.CancelledAt != nil:
-		return "cancelled"
-	case t.CurrentEscalationID != nil:
-		return "escalated"
-	case t.CurrentClaimID != nil && t.LeaseExpiresAt != nil && !t.LeaseExpiresAt.After(now):
-		return "lease expired"
-	}
-	return "active"
-}
-
 // taskDetailPageOf assembles the detail view model. now is injected so a
 // lease's expiry is judged against the read time.
 func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now time.Time) pages.TaskDetailPage {
@@ -86,7 +74,6 @@ func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now t
 		Attempts:      taskAttemptsLabel(t.AttemptCount),
 		LoadedAt:      now.UTC().Format(time.RFC3339),
 		Badges:        taskStateBadges(summary, now),
-		State:         taskState(t, now),
 		TasksPath:     milestoneTasksPath(pid, c.ID),
 		BoardPath:     milestoneBoardPath(pid, c.ID),
 		ContainerName: c.Name,

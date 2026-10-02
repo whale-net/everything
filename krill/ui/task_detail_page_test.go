@@ -155,7 +155,7 @@ func TestTaskDetailFieldsReachPage(t *testing.T) {
 		`data-krill-claim-id="` + claim.String() + `"`,
 		`data-krill-lease-expires-at="` + lease.Format(time.RFC3339) + `"`,
 		`data-krill="loaded-at"`,
-		`data-krill="task-badge-live"`,
+		`data-krill="task-badge-claimed"`,
 		milestoneTasksPath(f.pid, f.mid), milestoneBoardPath(f.pid, f.mid),
 	} {
 		assert.Contains(t, html, want)
@@ -170,7 +170,7 @@ func TestTaskDetailStuckStates(t *testing.T) {
 	task := f.add(store.Task{Title: "stale", CurrentClaimID: &claim, LeaseExpiresAt: &past})
 	_, html := f.get(task.ID.String(), true)
 	assert.Contains(t, html, `data-krill="task-badge-lease-expired"`)
-	assert.NotContains(t, html, `data-krill="task-badge-live"`)
+	assert.NotContains(t, html, `data-krill="task-badge-claimed"`)
 	assert.Contains(t, html, "lease expired, not live")
 
 	esc := uuid.New()
