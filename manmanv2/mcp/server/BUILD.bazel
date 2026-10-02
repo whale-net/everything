@@ -6,6 +6,7 @@ go_library(
         "audit.go",
         "auth.go",
         "caller.go",
+        "connect_address.go",
         "middleware.go",
         "persona.go",
         "whoami.go",
@@ -14,8 +15,13 @@ go_library(
     visibility = ["//manmanv2/mcp:__subpackages__"],
     deps = [
         "//libs/go/grpcauth",
+        "//manmanv2/connectaddr",
+        "//manmanv2/protos:manmanpb",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )
 

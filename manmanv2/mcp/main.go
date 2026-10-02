@@ -17,8 +17,10 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/manmanv2/mcp/server"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 func main() {
@@ -43,8 +45,20 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("oidc verifier: %w", err)
 	}
 
-	reg := server.NewRegistry(server.WhoamiTool)
+	reg := server.NewRegistry(server.WhoamiTool, server.ConnectAddressTool)
 	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")})
+
+	controlAddr := os.Getenv("CONTROL_API_URL")
+	if controlAddr == "" {
+		controlAddr = "control-api-dev-service:50051"
+	}
+	// The user-token dial option forwards the caller's token on every backend call.
+	conn, err := grpcclient.NewClient(ctx, controlAddr, grpcauth.NewUserTokenDialOption(grpcauth.AuthMode(os.Getenv("GRPC_AUTH_MODE"))))
+	if err != nil {
+		return fmt.Errorf("control api client: %w", err)
+	}
+	defer conn.Close()
+	server.AddConnectAddressTool(srv, manmanpb.NewManManAPIClient(conn.GetConnection()))
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	mux := http.NewServeMux()
