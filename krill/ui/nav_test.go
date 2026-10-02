@@ -20,6 +20,10 @@ import (
 // deliberately does not go through NewApp: that needs a live Postgres pool
 // and a Keycloak realm, neither of which the shell's own rendering
 // depends on.
+//
+// spec is a fakeSpecReader so every un-prefixed page can resolve a product
+// (product_scope.go); it lists none, which is the empty-scope case these
+// nav tests are indifferent to.
 func newTestApp(t *testing.T) *App {
 	t.Helper()
 	auth, err := htmxauth.NewAuthenticator(context.Background(), htmxauth.Config{
@@ -30,7 +34,7 @@ func newTestApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
-	return &App{auth: auth, devAuth: true}
+	return &App{auth: auth, devAuth: true, spec: &fakeSpecReader{}}
 }
 
 // newTestMux registers only the shell's own routes, mirroring

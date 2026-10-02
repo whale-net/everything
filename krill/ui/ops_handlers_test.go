@@ -111,6 +111,10 @@ func newOpsApp(tasks *fakeOpsTasks) *App {
 	return &App{
 		scopes: fakeOpsScopes{scope: opsTestScope},
 		tasks:  tasks,
+		// The un-prefixed read views resolve a product to record the
+		// last-viewed cookie; this fake lists none, so each renders
+		// exactly as it did before the resolution was wired.
+		spec: emptyScopeSpecReader{},
 	}
 }
 

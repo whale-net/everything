@@ -109,28 +109,21 @@ type DesignSessionDetailPage struct {
 // unticked, which is the GET handler's normal case.
 func (p DesignSessionDetailPage) IsChecked(id string) bool { return p.CheckedResolve[id] }
 
-// DesignRoot is the design root's landing body: it takes a product id and
-// navigates to that product's session list -- the entry point a
-// Requirement Contributor needs to reach a session without already holding
-// its id.
+// DesignRoot is the design root's landing body: the session list of the
+// product the server resolved for this un-prefixed URL, as one link. No
+// product id is asked for -- the resolution happens before the page is
+// built, so a pasted or mistyped id is not a failure mode this page has
+// (FR c4bd4bf8).
 //
-// The form is a plain JS-free GET to /design/go, which validates the id
-// server-side and 302s to the session list. The old inline <script> that
-// read a text input and assigned window.location duplicated that rule in
-// the browser; the server already owns it, and the only user-controlled
-// path segment is a validated UUID, so there is no open-redirect surface.
-templ DesignRoot() {
+// The former typed-id form that browsed to /design/go stays registered and
+// keeps working; only the way in changed, so an old bookmark still lands.
+templ DesignRoot(productName, sessionsHref string) {
 	<h2>Design sessions</h2>
-	<p>Browse a product's design sessions. Enter the product's id to open its session list.</p>
-	<form method="get" action="/design/go" class="max-w-xl">
-		<p class="form-control w-full">
-			<label class="label" for="product-id">Product id</label>
-			<input id="product-id" name="product_id" type="text" placeholder="00000000-0000-0000-0000-000000000000" class="input input-bordered w-full font-mono"/>
-		</p>
-		<p class="mt-3">
-			<button type="submit" class="btn btn-primary">Browse sessions</button>
-		</p>
-	</form>
+	<p>
+		Browse a product's design sessions.
+		<a href={ templ.URL(sessionsHref) } class="link link-primary">{ productName }</a>
+		has none yet, or some to read through.
+	</p>
 }
 
 // DesignSessionList is the product-scoped session list, each session

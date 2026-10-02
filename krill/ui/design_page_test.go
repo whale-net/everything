@@ -118,8 +118,12 @@ func (f fakeRevisionEvents) ListLatestSignoffBySessionIDs(_ context.Context, ses
 // read surface touches. The read routes are mounted directly (not behind
 // RequireAuthFunc) -- renderShell tolerates an absent user, and the FRs
 // under test are about the rendered view, not the sign-in gate.
+//
+// spec is a fakeSpecReader so the un-prefixed session-detail page can
+// resolve a product for the last-viewed cookie; it lists none, which
+// leaves every page here rendering exactly as it did before.
 func newDesignReadApp(ds store.DesignSessionStore, re store.RevisionEventStore) *App {
-	return &App{designSessions: ds, revisionEvents: re}
+	return &App{designSessions: ds, revisionEvents: re, spec: emptyScopeSpecReader{}}
 }
 
 func designReadMux(app *App) *http.ServeMux {
@@ -979,17 +983,18 @@ func TestHandleDesignGo(t *testing.T) {
 	})
 }
 
-// TestDesignRoot_FormIsJSFree pins the root page's shape: a plain GET form
-// posting to /design/go, with no inline <script> left to duplicate the
-// server's redirect rule.
-func TestDesignRoot_FormIsJSFree(t *testing.T) {
-	body := mustRenderComponent(pages.DesignRoot())
+// TestDesignRoot_AsksForNoProductID pins the root page's shape: it names
+// the resolved product and links to that product's session list, and
+// carries no input for the operator to type an id into (FR c4bd4bf8).
+func TestDesignRoot_AsksForNoProductID(t *testing.T) {
+	productID := uuid.New()
+	body := mustRenderComponent(pages.DesignRoot("krill", designProductSessionsPath(productID)))
 
-	assert.Contains(t, body, `action="/design/go"`, "the root must submit a plain GET to the browse handler")
-	assert.Contains(t, body, `method="get"`)
-	assert.Contains(t, body, `name="product_id"`)
-	assert.NotContains(t, body, "<script", "the root carries no inline script; the server owns the redirect")
-	assert.NotContains(t, body, "window.location")
+	assert.Contains(t, body, designProductSessionsPath(productID), "the root links to the resolved product's sessions")
+	assert.Contains(t, body, "krill", "the root names the product it resolved")
+	assert.NotContains(t, body, `name="product_id"`, "no shell page asks the operator for a product id")
+	assert.NotContains(t, body, "<input", "the root carries no text input at all")
+	assert.NotContains(t, body, "<script", "the root carries no inline script; the server owns the resolution")
 }
 
 // ---------------------------------------------------------------------------

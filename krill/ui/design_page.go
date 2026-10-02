@@ -197,11 +197,11 @@ func formatTime(t time.Time) string {
 
 // ── handlers ─────────────────────────────────────────────────────────────────
 
-// handleDesignGo is the design root's product-id browse target: a JS-free
-// GET /design/go?product_id=X that validates the id and 302s to that
-// product's session list. It replaces an inline <script> that read a text
-// input and assigned window.location, duplicating in the browser a rule
-// the server owns.
+// handleDesignGo is the design root's old product-id browse target: a
+// JS-free GET /design/go?product_id=X that validates the id and 302s to
+// that product's session list. Nothing links here any more -- the root
+// resolves a product itself (FR c4bd4bf8) -- but the route stays
+// registered so an already-bookmarked URL keeps landing (FR 2544224c).
 //
 // The only user-controlled path segment is the product id, and it is
 // parsed as a UUID before it is interpolated into a path this package
@@ -242,6 +242,11 @@ func (app *App) handleDesignSessionList(w http.ResponseWriter, r *http.Request) 
 		renderFragment(w, r, pages.DesignSessionList(page))
 		return
 	}
+	// The id in the path becomes the last-viewed product so the operator's
+	// next un-prefixed page stays on the product they are reading. An id
+	// that turns out to be outside the scope is simply dropped when the
+	// cookie is read back, so this page needs no scope check of its own.
+	setLastViewedProductCookie(w, productID)
 	renderShell(w, r, "Design sessions", designPath, pages.DesignSessionList(page))
 }
 
@@ -268,6 +273,7 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, pages.DesignSessionDetail(detail))
 		return
 	}
+	app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Design session", designPath, pages.DesignSessionDetail(detail))
 }
 

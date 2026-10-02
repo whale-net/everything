@@ -94,10 +94,56 @@ func (app *App) resolveProductForUnprefixed(r *http.Request) (store.Product, err
 	return products[0], nil
 }
 
-// setLastViewedProductCookie records the product a prefixed URL resolved,
+// resolveUnprefixedProduct is what an un-prefixed page calls to learn
+// which product it is about: it resolves one, writes the last-viewed
+// cookie for it, and reports ok. ok=false means the response has already
+// been written -- a read failure at 500, or a scope holding no product
+// at all.
+//
+// The empty-scope case is worded once, here, and rendered as an ordinary
+// in-shell page rather than a 404: a deployment whose scope holds no
+// product is not a broken deployment, and "no products yet" is what an
+// operator needs to read there. It is 200, not 404, because the URL they
+// followed resolved fine -- there is simply nothing behind it yet.
+func (app *App) resolveUnprefixedProduct(w http.ResponseWriter, r *http.Request) (store.Product, bool) {
+	product, err := app.resolveProductForUnprefixed(r)
+	if err != nil {
+		logger.Error("product list read failed", "error", err)
+		renderProductScopeStatus(w, r, http.StatusInternalServerError, "Could not load the product",
+			"The product list could not be read. See the logs.")
+		return store.Product{}, false
+	}
+	if product.ID == uuid.Nil {
+		renderShell(w, r, "No products in this scope", r.URL.Path, pages.NoProductsInScope())
+		return store.Product{}, false
+	}
+	setLastViewedProductCookie(w, product.ID)
+	return product, true
+}
+
+// rememberUnprefixedProduct resolves the current product purely to record
+// it in the last-viewed cookie, for a page whose own content does not
+// depend on which product it is. Unlike resolveUnprefixedProduct it never
+// writes a response: the credentials page must still mint a token when the
+// scope holds no product, and a read failure must not take a page down
+// whose body was already serviceable. A zero Product means there was
+// nothing to remember.
+func (app *App) rememberUnprefixedProduct(w http.ResponseWriter, r *http.Request) store.Product {
+	product, err := app.resolveProductForUnprefixed(r)
+	if err != nil {
+		logger.Warn("could not resolve the current product for the last-viewed cookie", "path", r.URL.Path, "error", err)
+		return store.Product{}
+	}
+	if product.ID != uuid.Nil {
+		setLastViewedProductCookie(w, product.ID)
+	}
+	return product
+}
+
+// setLastViewedProductCookie records the product a page just resolved,
 // so the operator's next un-prefixed page lands on the product they were
-// just looking at. It is written on every prefixed page render and never
-// read by one.
+// looking at. It is written by both the prefixed and the un-prefixed
+// resolution, and read only by the un-prefixed one.
 func setLastViewedProductCookie(w http.ResponseWriter, pid uuid.UUID) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     lastViewedProductCookie,

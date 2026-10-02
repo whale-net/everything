@@ -1,5 +1,24 @@
 package pages
 
+import "github.com/whale-net/everything/libs/go/htmxui"
+
+// NoProductsInScope is what an un-prefixed page renders when the
+// deployment's sole scope holds no product at all. It is an empty state
+// rather than a 404 -- an empty scope is an ordinary state to be in, not
+// a broken link -- and it points at the one page that lists products
+// rather than asking the operator for an id.
+templ NoProductsInScope() {
+	<section data-krill="no-products">
+		@htmxui.EmptyState(
+			"No products in this scope.",
+			"There is nothing to browse yet. Create a product, or ask an operator to add one to this scope.",
+			"Browse the product index",
+			"/spec/products",
+			templ.Attributes{},
+		)
+	</section>
+}
+
 // ProductPlaceholderData is the body a product-scoped prefix serves until
 // the area's own page ships: the product's own row, so the page names
 // which product a copied link resolved to, and the sub-path that was

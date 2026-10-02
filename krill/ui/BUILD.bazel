@@ -151,6 +151,7 @@ release_app(
 go_test(
     name = "ui_lib_test",
     srcs = [
+        "empty_scope_spec_test.go",
         "nav_test.go",
         "spec_page_test.go",
         "spec_parity_test.go",
@@ -186,6 +187,7 @@ go_test(
 go_test(
     name = "ui_ops_test",
     srcs = [
+        "empty_scope_spec_test.go",
         "ops_test.go",
         "ops_handlers_test.go",
         "failure_paths_test.go",
@@ -206,7 +208,10 @@ go_test(
 # list_open_questions -- plus the 400/404/500 error paths.
 go_test(
     name = "design_test",
-    srcs = ["design_page_test.go"],
+    srcs = [
+        "empty_scope_spec_test.go",
+        "design_page_test.go",
+    ],
     embed = [":ui_lib"],
     deps = [
         "//krill/api/handlers",

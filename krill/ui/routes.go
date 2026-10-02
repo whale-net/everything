@@ -63,7 +63,12 @@ func homeLinks() []pages.AreaLink {
 // handleShellHome renders the landing page. The home page is not itself a
 // nav area, so no link is marked active on it -- the header's "krill"
 // brand is the way back here from anywhere in the shell.
+//
+// "/" names no product, so it resolves one (the last-viewed cookie when
+// still in scope, else the first in scope) purely to record it: the body
+// here is the area list, which is the same whichever product is current.
 func (app *App) handleShellHome(w http.ResponseWriter, r *http.Request) {
+	app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Home", "/", pages.AreaIndex("Where to next", homeLinks()))
 }
 
@@ -82,16 +87,23 @@ var opsIndexLinks = []pages.AreaLink{
 
 // handleOps is the ops console root, linking its four read views.
 func (app *App) handleOps(w http.ResponseWriter, r *http.Request) {
+	app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Ops console", opsPath, pages.AreaIndex("Ops console", opsIndexLinks))
 }
 
 // handleDesign is the design-session browser root. It is the entry point
 // into the read sub-pages registered under this prefix in mountShellRoutes
 // (design_page.go): a product's session list and one session's
-// revision-event log + open questions. The root itself just takes a product
-// id and navigates to that product's session list.
+// revision-event log + open questions. "/design" names no product, so the
+// root resolves one server-side and links to that product's session list
+// rather than asking the operator for an id.
 func (app *App) handleDesign(w http.ResponseWriter, r *http.Request) {
-	renderShell(w, r, "Design sessions", designPath, pages.DesignRoot())
+	product, ok := app.resolveUnprefixedProduct(w, r)
+	if !ok {
+		return
+	}
+	renderShell(w, r, "Design sessions", designPath,
+		pages.DesignRoot(product.Name, designProductSessionsPath(product.ID)))
 }
 
 // handleSpec is the spec + delivery browser root. It is a static landing

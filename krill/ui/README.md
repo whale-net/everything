@@ -329,10 +329,28 @@ The two resolutions are separate functions on purpose:
   otherwise the first product in scope. A stale cookie is the ordinary
   case for a legacy link, and failing there would break every one of them.
 
-The cookie is a **non-authoritative hint**: written on every prefixed
-page render, never read by one, and discarded when it names a product
-that has left the scope. A cookie naming product B can never override a
-prefixed URL for product A.
+Two wrappers sit on the un-prefixed resolution, and which one a page
+calls is the design decision:
+
+- **`resolveUnprefixedProduct`** is for a page that cannot render a body
+  without a product — today only `/design`, whose whole job is to link to
+  one product's session list. It writes the cookie and answers an empty
+  scope with a designed empty state at 200, not a 404: the URL resolved
+  fine, there is simply nothing behind it yet.
+- **`rememberUnprefixedProduct`** is for a page whose body is the same
+  whichever product is current — `/`, `/ops`, the ops read views, the
+  credentials page. It writes the cookie and never writes a response, so
+  neither a failed product read nor an empty scope can take down a page
+  that was already serviceable. The credentials page in particular must
+  still mint a token when the scope holds no product: blocking it would
+  lock an operator out of the very tool they need to fix things.
+
+The cookie is a **non-authoritative hint**: written on every page render
+that resolved a product, and read only by the un-prefixed path — never by
+a prefixed one. A value naming a product that has left the scope is
+discarded on the way back in, so writing it from a page that did not
+itself check scope costs nothing. A cookie naming product B can never
+override a prefixed URL for product A.
 
 Both resolve against `app.spec.Products`, which lists the deployment's
 sole scope — a browser cannot pick a scope. Adding a product-scoped page
