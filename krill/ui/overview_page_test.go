@@ -64,17 +64,22 @@ func (c *overviewCounter) CountEscalatedTasks(context.Context, store.ListEscalat
 	return c.count, nil
 }
 
+// SummarizeProductTaskProgress answers with the fixture's containers only
+// for the product the fixture names, so a caller that read the wrong
+// product gets an empty answer rather than this product's rows. A fixture
+// that answered the same thing whatever it was asked for would let the
+// panel's rows pass against a read of the wrong product.
 func (c *overviewCounter) SummarizeProductTaskProgress(_ context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
 	if c.progressErr != nil {
 		return store.ProductTaskProgress{}, c.progressErr
 	}
-	if c.progress.ProductID == uuid.Nil {
-		c.progress.ProductID = params.ProductID
+	if c.progress.ProductID != params.ProductID {
+		return store.ProductTaskProgress{ProductID: params.ProductID}, nil
 	}
-	if c.progress.Containers == nil {
-		c.progress.Containers = []store.ContainerTaskProgress{}
-	}
-	return c.progress, nil
+	return store.ProductTaskProgress{
+		ProductID:  params.ProductID,
+		Containers: c.progress.Containers,
+	}, nil
 }
 
 func (*overviewCounter) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
