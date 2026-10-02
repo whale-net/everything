@@ -206,6 +206,25 @@ func workspaceNav(t navTargets, activePath string) []components.NavGroup {
 	return out
 }
 
+// workspaceShellData is the one seam a route building a shell page goes
+// through: it takes the ids the caller resolved and returns the chrome
+// with every href already built from them.
+//
+// The product id is the caller's, never one this file resolves: a route
+// that forgot to supply one would silently render a sidebar pointing at
+// uuid.Nil's paths, which resolve to nothing, so passing it explicitly
+// keeps that failure a compile error rather than a dead link.
+func workspaceShellData(t navTargets, activePath, title, userLabel string) components.ShellData {
+	return components.ShellData{
+		LayoutData: components.LayoutData{
+			Title:     title,
+			UserLabel: userLabel,
+			Nav:       navLinks(activePath),
+		},
+		NavGroups: workspaceNav(t, activePath),
+	}
+}
+
 // navGroupTable is the sidebar's fixed shape, in render order. The item
 // set is build-time constant; only the hrefs and the active marking vary
 // per request.
