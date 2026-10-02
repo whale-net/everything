@@ -488,29 +488,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 // the same registrations production does, rather than a copy that could
 // drift from it.
 func (app *App) mountShellRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/{$}", app.readerRoute(app.handleShellHome))
-	mux.HandleFunc(opsPath, app.readerRoute(app.handleOps))
-	mux.HandleFunc(designPath, app.readerRoute(app.handleDesign))
+	// Every pre-redesign URL (FR 2544224c), from one table: the ops console,
+	// the spec and delivery browser, the design-session browser and "/". Each
+	// serves its existing page inside the shell until the phase that ships
+	// that page's replacement moves it to a redirect. See legacyURLs.
+	app.mountLegacyRoutes(mux)
+
 	mux.HandleFunc("GET "+credentialsPath, app.readerRoute(app.handleCredentials))
 	mux.HandleFunc("POST "+credentialsMintPath, app.readerRoute(app.handleMintCredential))
 	mux.HandleFunc("POST "+credentialsPath+"/{id}/revoke", app.readerRoute(app.handleRevokeCredential))
-
-	// The ops console's read views (ops.go), each behind the same sign-in
-	// gate as the area roots. Reads are behind readerRoute and attribute nothing, so
-	// they need no operator identity and no krill session -- just a
-	// signed-in browser and the deployment's sole scope.
-	mux.HandleFunc(opsClaimedPath, app.readerRoute(app.handleClaimedTasks))
-	mux.HandleFunc(opsEscalatedPath, app.readerRoute(app.handleEscalatedTasks))
-	mux.HandleFunc(opsCancelledPath, app.readerRoute(app.handleCancelledTasks))
-	mux.HandleFunc(opsNotesPath, app.readerRoute(app.handleOpenNotes))
-
-	// The design-session read surface (design_page.go): a product's session
-	// list and one session's revision-event log + open questions. Behind
-	// readerRoute like every other read page, but NOT operatorRoute --
-	// a read attributes no mutation, so it resolves no operator Subject and
-	// carries no krill session.
-	mux.HandleFunc("GET /design/products/{productID}/design-sessions", app.readerRoute(app.handleDesignSessionList))
-	mux.HandleFunc("GET /design/design-sessions/{id}", app.readerRoute(app.handleDesignSessionDetail))
 
 	// The design root's JS-free product browse: the operator types a
 	// product id into a plain GET form and this 302s them to that
@@ -520,30 +506,10 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// user-controlled redirect target.
 	mux.HandleFunc("GET "+designGoPath, app.readerRoute(app.handleDesignGo))
 
-	// The spec browser (FRs 638a7e5f, 6aa70e3a, b4c1c77f): a static area
-	// landing, then the store-backed product index at /spec/products, and
-	// per product the capability map, load-bearing decisions, personas, and
-	// non-goals. All the data pages read through app.spec (readclient.go).
-	mux.HandleFunc(specPath, app.readerRoute(app.handleSpec))
-	mux.HandleFunc(specProductsPath, app.readerRoute(app.handleSpecProducts))
-	mux.HandleFunc(specProductPath, app.readerRoute(app.handleCapabilityMap))
-	mux.HandleFunc(specProductPath+"/decisions", app.readerRoute(app.handleSpecDecisions))
-	mux.HandleFunc(specProductPath+"/personas", app.readerRoute(app.handleSpecPersonas))
-	mux.HandleFunc(specProductPath+"/non-goals", app.readerRoute(app.handleSpecNonGoals))
-	// The delivery/roadmap view: every milestone and milepebble with its
-	// current status, plus the shipped/unshipped breakdown for each
-	// partially-complete container (FR 4398c532). It hangs off the same
-	// /spec/products/{id} prefix as the spec pages above, so it cannot
-	// collide with the sibling spec routes or the /spec landing.
-	mux.HandleFunc(specProductPath+"/delivery", app.readerRoute(app.handleSpecDelivery))
-	mux.HandleFunc(specProductPath+"/milestones/{mid}/tasks", app.readerRoute(app.handleTaskList))
-	mux.HandleFunc(specProductPath+"/milestones/{mid}/tasks/{tid}", app.readerRoute(app.handleTaskDetail))
-	mux.HandleFunc(specProductPath+"/milestones/{mid}/board", app.readerRoute(app.handleTaskBoard))
-
 	// The design-session write surface (design_write.go), hung off the read
-	// views above: the list page's "open a session" form and a session detail
-	// page's "submit follow-up" form. Both are operatorRoute (RequireAuth +
-	// requireOperator), so a write only ever proceeds with the signed-in
+	// views in legacyURLs: the list page's "open a session" form and a session
+	// detail page's "submit follow-up" form. Both are operatorRoute (RequireAuth
+	// + requireOperator), so a write only ever proceeds with the signed-in
 	// operator's real (iss, sub) resolved onto the request context, and both
 	// reach krill only through withKrillSession. The open form posts to the
 	// same product-scoped path as the list view (POST vs GET on one pattern);
