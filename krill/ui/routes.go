@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
@@ -22,6 +24,31 @@ const (
 	// two would panic the binary at boot.
 	credentialsPath = "/account/credentials"
 )
+
+// The product-scoped prefixes (FR c4bd4bf8). The current product is
+// carried in the path rather than in a cookie or a query parameter, so a
+// copied link opens on the same product for whoever follows it. Each
+// area's sub-pages hang off productsPath, mirroring the legacy areas
+// above, which stay registered until the cutover task retires them.
+const (
+	productsPath      = "/products"
+	productPathPrefix = productsPath + "/{pid}"
+
+	// The sub-paths a product-scoped page hangs off. overview is the
+	// shell home; the rest are the areas the shell's nav reaches.
+	overviewSuffix       = "/overview"
+	needsAttentionSuffix = "/needs-attention"
+	tasksSuffix          = "/tasks"
+	boardSuffix          = "/board"
+	milestonesSuffix     = "/milestones"
+)
+
+// productHref builds the product-scoped href for a sub-path suffix -- the
+// one place a link under productsPath is spelled, so a page can never
+// hand out a URL the mux does not serve.
+func productHref(pid uuid.UUID, suffix string) string {
+	return productsPath + "/" + pid.String() + suffix
+}
 
 // homeLinks is the signed-in landing page's list: the nav's areas, one
 // line each.
@@ -77,4 +104,23 @@ func (app *App) handleSpec(w http.ResponseWriter, r *http.Request) {
 	renderShell(w, r, "Spec & delivery", specPath, pages.AreaIndex("Spec & delivery", []pages.AreaLink{
 		{Path: specProductsPath, Label: "Products", Blurb: "Browse a product's capability map, load-bearing decisions, personas, and non-goals."},
 	}))
+}
+
+// handleProductPlaceholder serves every product-scoped sub-path until the
+// area's own page ships. It resolves the product the URL names -- so the
+// prefixes, the in-shell 404, and the last-viewed cookie are all live and
+// testable from this point -- and renders a body that names the product
+// and links onward, rather than the area's real content.
+func (app *App) handleProductPlaceholder(w http.ResponseWriter, r *http.Request) {
+	product, ok := app.resolveProductFromPath(w, r)
+	if !ok {
+		return
+	}
+	setLastViewedProductCookie(w, product.ID)
+
+	renderShell(w, r, product.Name, productHref(product.ID, overviewSuffix),
+		pages.ProductPlaceholder(pages.ProductPlaceholderData{
+			Product: productHeaderOf(product),
+			Area:    r.PathValue("area"),
+		}))
 }

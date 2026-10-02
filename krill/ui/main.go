@@ -538,6 +538,25 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// the answer form posts to a sub-path of the detail route.
 	mux.HandleFunc("POST /design/products/{productID}/design-sessions", app.operatorRoute(app.handleOpenDesignSessionForm))
 	mux.HandleFunc("POST /design/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
+
+	// The product-scoped prefixes (FR c4bd4bf8). Each is registered now
+	// and serves a placeholder until its area's own page ships, so the
+	// current product becomes resolvable and carried in the path without
+	// moving any existing page onto the new chrome. Registering them ahead
+	// of their content is safe precisely because the handler resolves the
+	// {pid} against the caller's scope first: an out-of-scope link is
+	// already an in-shell 404 by the time the placeholder would render.
+	//
+	// The legacy prefixes above stay registered alongside these; the
+	// cutover that retires them is a separate task.
+	mux.HandleFunc("GET "+productPathPrefix+overviewSuffix, app.readerRoute(app.handleProductPlaceholder))
+	mux.HandleFunc("GET "+productPathPrefix+needsAttentionSuffix, app.readerRoute(app.handleProductPlaceholder))
+	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix, app.readerRoute(app.handleProductPlaceholder))
+	mux.HandleFunc("GET "+productPathPrefix+boardSuffix, app.readerRoute(app.handleProductPlaceholder))
+	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix, app.readerRoute(app.handleProductPlaceholder))
+	// Milestone detail ids hang beneath the milestones prefix, so a copied
+	// link to one resolves its product before the id is even looked at.
+	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}", app.readerRoute(app.handleProductPlaceholder))
 }
 
 // operatorRoute is the wrapper every signed-in-operator route in this

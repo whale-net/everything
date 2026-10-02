@@ -309,6 +309,37 @@ in sync. `krill/ui/components/status.go` is a `.go` rather than a
 `libs/go/htmxui`'s own `templ_library` carries a `# keep` marker so
 gazelle does not collapse it. The app-level ones do not.
 
+## Product-scoped URLs
+
+`product_scope.go` resolves which product a request is about. A page
+reached under `/products/{pid}/...` names its product in the path, so a
+copied link opens on the same product for whoever follows it. A page
+reached without one — the legacy `/ops/*` routes, the pre-redesign task
+and board URLs, `/`, and the credentials page — resolves one
+server-side, so no shell page ever asks for a typed product id.
+
+The two resolutions are separate functions on purpose:
+
+- `resolveProductFromPath` treats the `{pid}` as authoritative. An
+  unknown or out-of-scope one is an **in-shell 404** through
+  `renderShellStatus`, never a bare `http.Error` — a link an operator
+  followed has to land somewhere they can navigate back out of.
+- `resolveProductForUnprefixed` never 404s. It takes the
+  `krill_last_viewed_product` cookie when that product is still in scope,
+  otherwise the first product in scope. A stale cookie is the ordinary
+  case for a legacy link, and failing there would break every one of them.
+
+The cookie is a **non-authoritative hint**: written on every prefixed
+page render, never read by one, and discarded when it names a product
+that has left the scope. A cookie naming product B can never override a
+prefixed URL for product A.
+
+Both resolve against `app.spec.Products`, which lists the deployment's
+sole scope — a browser cannot pick a scope. Adding a product-scoped page
+means registering `productPathPrefix + <suffix>` in `mountShellRoutes`
+and calling `resolveProductFromPath` first, so an out-of-scope link is
+rejected before any content is built.
+
 ## Task views
 
 `/spec/products/{id}/milestones/{mid}/tasks` (task_page.go,
