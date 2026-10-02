@@ -27,8 +27,9 @@ import (
 // nil-panics rather than quietly returning a zero value.
 type legacyTasks struct {
 	store.TaskStore
-	taskID      uuid.UUID
-	milestoneID uuid.UUID
+	taskID       uuid.UUID
+	milestoneID  uuid.UUID
+	milepebbleID uuid.UUID
 }
 
 func (legacyTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
@@ -74,18 +75,33 @@ func (l legacyTasks) ListTasksByMilestone(_ context.Context, id uuid.UUID) ([]st
 // rather than the milestone's. Answering it with the same single task is
 // what makes the walk check the redirect and the page behind it together:
 // the successor renders a real row, not a well-chromed empty table.
+//
+// The two single-container scopes are answered separately because they are
+// the thing the milepebble redirect has to get right: a redirect that
+// spelled "milestone" for a milepebble id would still land a 200 here (the
+// resolver 404s before the read, so the read is never asked), which is why
+// this answers both rather than only the milestone one.
 func (l legacyTasks) ListProductTasks(_ context.Context, params store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
-	if params.Scope.Kind != store.ProductTaskScopeMilestone || params.Scope.ContainerID != l.milestoneID {
-		return store.Page[store.ProductTaskRow]{}, nil
-	}
-	return store.Page[store.ProductTaskRow]{Items: []store.ProductTaskRow{{
+	row := store.ProductTaskRow{
 		TaskID:       l.taskID,
 		Title:        "Test task",
 		Milestone:    store.ProductTaskMilestoneRef{ID: l.milestoneID, Name: "Test milestone", Status: store.MilestoneStatusInProgress},
 		CurrentLane:  store.LaneImplementation,
 		AttemptCount: 1,
 		AttemptCap:   store.DefaultAttemptCap,
-	}}}, nil
+	}
+	switch {
+	case params.Scope.Kind == store.ProductTaskScopeMilestone && params.Scope.ContainerID == l.milestoneID:
+	case params.Scope.Kind == store.ProductTaskScopeMilepebble && params.Scope.ContainerID == l.milepebbleID:
+		row.Milepebble = &store.ProductTaskMilepebbleRef{
+			ID:     l.milepebbleID,
+			Name:   "Test milepebble",
+			Status: store.MilestoneStatusInProgress,
+		}
+	default:
+		return store.Page[store.ProductTaskRow]{}, nil
+	}
+	return store.Page[store.ProductTaskRow]{Items: []store.ProductTaskRow{row}}, nil
 }
 
 func (l legacyTasks) CountProductTasks(_ context.Context, params store.ListProductTasksParams) (int, error) {
@@ -113,18 +129,25 @@ func (legacyTasks) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([]st
 var _ store.TaskStore = legacyTasks{}
 
 // legacyFixture is the world a legacy-URL test walks: one product holding
-// one milestone with one task, and empty design sessions.
+// one milestone -- cut into one milepebble -- with one task, and empty
+// design sessions.
 //
-// The milestone and task are real rather than fresh random ids because the
-// milestone task-list, task-detail and board URLs resolve their id against
-// the product's delivery listing -- a well-formed id that belongs to no
-// milestone is a correct 404, so testing URL continuity with one would be
-// testing the 404 path and calling it a pass.
+// The milestone, milepebble and task are real rather than fresh random ids
+// because the milestone task-list, task-detail and board URLs resolve their
+// id against the product's delivery listing -- a well-formed id that belongs
+// to no milestone is a correct 404, so testing URL continuity with one would
+// be testing the 404 path and calling it a pass.
+//
+// The milepebble is there for the same reason and is not decoration: the
+// delivery page renders a milepebble's Tasks and Board links at the same
+// /milestones/{id}/ path a milestone's use, so that is a real operator URL
+// this walk has to keep alive.
 type legacyFixture struct {
 	mux       *http.ServeMux
 	app       *App
 	pid       uuid.UUID
 	mid       uuid.UUID
+	mpid      uuid.UUID
 	tid       uuid.UUID
 	sessionID uuid.UUID
 }
@@ -140,7 +163,7 @@ func newLegacyFixture(t *testing.T) *legacyFixture {
 func newLegacyFixtureWith(t *testing.T, table []legacyURL) *legacyFixture {
 	t.Helper()
 	app := newTestApp(t)
-	pid, mid, tid, sid := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	pid, mid, mpid, tid, sid := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 
 	// fakeSliceSpec, not a bare fakeSpecReader: production's specReader
 	// answers the task-detail page's embedded slice read, so a fixture
@@ -151,20 +174,23 @@ func newLegacyFixtureWith(t *testing.T, table []legacyURL) *legacyFixture {
 		products: []store.Product{{ID: pid, Name: "Test product"}},
 		product:  store.Product{ID: pid, Name: "Test product"},
 		listing: slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{
-			{ID: mid, Name: "Test milestone", Status: store.MilestoneStatusInProgress},
+			{ID: mid, Name: "Test milestone", Status: store.MilestoneStatusInProgress,
+				Milepebbles: []slice.MilepebbleListingEntry{
+					{ID: mpid, Name: "Test milepebble", Status: store.MilestoneStatusInProgress},
+				}},
 		}},
 	}}
 	// The console views read the task store rather than the badge-only
 	// counter the chrome fixtures install, so a page that lists tasks
 	// would otherwise nil-panic instead of rendering its empty state.
-	app.tasks = &legacyTasks{taskID: tid, milestoneID: mid}
+	app.tasks = &legacyTasks{taskID: tid, milestoneID: mid, milepebbleID: mpid}
 	app.designSessions = NewDesignSessions(sid, pid)
 	app.revisionEvents = emptyRevisionEvents{}
 
 	mux := http.NewServeMux()
 	app.mountLegacyTable(mux, table)
 	app.mountShellPages(mux)
-	return &legacyFixture{mux: mux, app: app, pid: pid, mid: mid, tid: tid, sessionID: sid}
+	return &legacyFixture{mux: mux, app: app, pid: pid, mid: mid, mpid: mpid, tid: tid, sessionID: sid}
 }
 
 // legacyURLsUnderTest is every pre-redesign URL the FR names, spelled out
@@ -181,6 +207,7 @@ func newLegacyFixtureWith(t *testing.T, table []legacyURL) *legacyFixture {
 func (f *legacyFixture) urls() []string {
 	p := "/spec/products/" + f.pid.String()
 	m := p + "/milestones/" + f.mid.String()
+	mp := p + "/milestones/" + f.mpid.String()
 	return []string{
 		"/",
 		opsPath,
@@ -199,6 +226,12 @@ func (f *legacyFixture) urls() []string {
 		m + "/tasks",
 		m + "/tasks/" + f.tid.String(),
 		m + "/board",
+
+		// The delivery page renders a milepebble's Tasks and Board at this
+		// same path, so these are URLs an operator really follows -- the
+		// walk covers them for the same reason it covers the milestone's.
+		mp + "/tasks",
+		mp + "/board",
 
 		designPath,
 		"/design/products/" + f.pid.String() + "/design-sessions",
@@ -270,41 +303,89 @@ func TestPreRedesignURLsResolve(t *testing.T) {
 // page would resolve, would render, and would still be wrong -- an operator
 // who bookmarked one milestone's board would land on every incomplete
 // milestone's, with nothing on the page to say which view they had left.
+//
+// Both container kinds are driven, because the same path serves both and
+// only the id says which. scope and container_id are spelled as literals
+// rather than read back through the parser's constants: a redirect that
+// built its query with the same constant the parser reads would agree with
+// itself even if both were misspelled, and pinning the two to each other is
+// what this assertion is for.
 func TestLegacyListAndBoardRedirectScopedToTheirContainer(t *testing.T) {
 	f := newLegacyFixture(t)
-	p := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String()
+	p := "/spec/products/" + f.pid.String() + "/milestones/"
 
-	for _, tc := range []struct {
-		legacy string
-		suffix string
+	for _, container := range []struct {
+		id   uuid.UUID
+		kind string
 	}{
-		{legacy: p + "/tasks", suffix: tasksSuffix},
-		{legacy: p + "/board", suffix: boardSuffix},
+		{id: f.mid, kind: "milestone"},
+		{id: f.mpid, kind: "milepebble"},
 	} {
-		t.Run(tc.legacy, func(t *testing.T) {
-			rec := fetch(t, f.mux, tc.legacy)
-			if rec.Code != http.StatusFound {
-				t.Fatalf("GET %s = %d, want 302: the product-wide view replaces this page", tc.legacy, rec.Code)
+		for _, suffix := range []string{tasksSuffix, boardSuffix} {
+			legacy := p + container.id.String() + suffix
+			t.Run(container.kind+legacy[len(p):], func(t *testing.T) {
+				rec := fetch(t, f.mux, legacy)
+				if rec.Code != http.StatusFound {
+					t.Fatalf("GET %s = %d, want 302: the product-wide view replaces this page", legacy, rec.Code)
+				}
+				loc, err := url.Parse(rec.Header().Get("Location"))
+				if err != nil {
+					t.Fatalf("GET %s redirected to an unparseable Location: %v", legacy, err)
+				}
+				if want := productHref(f.pid, suffix); loc.Path != want {
+					t.Errorf("GET %s redirected to %s, want the product-wide %s", legacy, loc.Path, want)
+				}
+				q := loc.Query()
+				if got := q.Get("scope"); got != container.kind {
+					t.Errorf("GET %s redirected with scope=%q, want %s: the id names a %s, and the mode has to agree with it",
+						legacy, got, container.kind, container.kind)
+				}
+				if got := q.Get("container_id"); got != container.id.String() {
+					t.Errorf("GET %s redirected with container_id=%q, want the container the old URL named (%s)",
+						legacy, got, container.id)
+				}
+			})
+		}
+	}
+}
+
+// TestLegacyMilepebbleURLDoesNot404 is why the redirect's mode is read off
+// the container's own kind rather than hardcoded to milestone.
+//
+// The legacy per-container path served a milepebble's tasks at exactly the
+// path a milestone's used -- delivery_page.go renders both under
+// /milestones/{id}/ -- so a redirect that always said scope=milestone would
+// send a milepebble link to a scope that refuses a milepebble's id. The
+// refusal is an in-shell 404 (productTaskScopeNotFound), which is precisely
+// the outcome FR f41a352d forbids: the old URL must not 404.
+//
+// So this asserts the end-to-end answer rather than the query's shape: the
+// milepebble's legacy URL redirects, and where it lands renders the
+// milepebble's own task. The redirect test above already pins the mode
+// literal; what only an end-to-end walk can catch is the mode being right
+// while the page behind it still refuses the id.
+func TestLegacyMilepebbleURLDoesNot404(t *testing.T) {
+	f := newLegacyFixture(t)
+	base := "/spec/products/" + f.pid.String() + "/milestones/" + f.mpid.String()
+
+	for _, suffix := range []string{tasksSuffix, boardSuffix} {
+		legacy := base + suffix
+		t.Run(suffix, func(t *testing.T) {
+			code, final := followRedirect(t, f, legacy)
+			if code == http.StatusNotFound {
+				t.Fatalf("GET %s 404s: the redirect named a scope the product-wide page refuses", legacy)
 			}
-			loc, err := url.Parse(rec.Header().Get("Location"))
-			if err != nil {
-				t.Fatalf("GET %s redirected to an unparseable Location: %v", tc.legacy, err)
+			if code != http.StatusOK {
+				t.Fatalf("GET %s resolved to %d, want 200", legacy, code)
 			}
-			if want := productHref(f.pid, tc.suffix); loc.Path != want {
-				t.Errorf("GET %s redirected to %s, want the product-wide %s", tc.legacy, loc.Path, want)
-			}
-			// Spelled as literals rather than read back through the
-			// parser's constants: a redirect that built its query with the
-			// same constant the parser reads would agree with itself even
-			// if both were misspelled, and pinning the two to each other
-			// is what this assertion is for.
-			q := loc.Query()
-			if got := q.Get("scope"); got != "milestone" {
-				t.Errorf("GET %s redirected with scope=%q, want milestone", tc.legacy, got)
-			}
-			if got := q.Get("container_id"); got != f.mid.String() {
-				t.Errorf("GET %s redirected with container_id=%q, want the milestone the old URL named (%s)",
-					tc.legacy, got, f.mid)
+			body := fetch(t, f.mux, final).Body.String()
+			assertShellChrome(t, legacy, final, body)
+			// And it is the milepebble's own work, not an empty page that
+			// merely avoided the 404. The fixture answers this milepebble's
+			// scope with the one task and every other scope with nothing,
+			// so a row here means the scope resolved to the right container.
+			if !strings.Contains(body, "Test task") {
+				t.Errorf("GET %s landed on %s rendering no task: the milepebble's scope resolved to something else", legacy, final)
 			}
 		})
 	}
@@ -423,17 +504,25 @@ func assertShellChrome(t *testing.T, url, final, body string) {
 // rendered an inline "could not load" alert indistinguishable from one that
 // rendered its content -- and the walk above only checks status and chrome,
 // so a page degraded by a failing read would pass it. The walk therefore
-// asserts none of the 19 carries an error alert: every one of them must be
-// rendering real content, not a well-chromed error.
+// asserts none of the listed URLs carries an error alert: every one of them
+// must be rendering real content, not a well-chromed error.
+//
+// It follows redirects, and that is the point: half of these URLs are now
+// pre-redesign redirects, and a 302 carries no page. Checking the redirect's
+// own body would find no alert on every one of them and quietly stop
+// covering the Tasks and Board pages entirely -- the check would survive a
+// fixture that made every read behind them fail. So it asserts on the page
+// each URL actually lands the operator on.
 func TestPreRedesignURLsRenderNoReadFailure(t *testing.T) {
 	f := newLegacyFixture(t)
 
 	for _, url := range f.urls() {
 		t.Run(url, func(t *testing.T) {
-			body := fetch(t, f.mux, url).Body.String()
+			_, final := followRedirect(t, f, url)
+			body := fetch(t, f.mux, final).Body.String()
 			for _, marker := range []string{`alert-error`, `role="alert"`} {
 				if strings.Contains(body, marker) {
-					t.Errorf("GET %s renders %q: the fixture answered a read with a failure the walk does not see", url, marker)
+					t.Errorf("GET %s landed on %s rendering %q: the fixture answered a read with a failure the walk does not see", url, final, marker)
 				}
 			}
 		})
