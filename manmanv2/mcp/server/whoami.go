@@ -21,10 +21,12 @@ type whoamiOut struct {
 // Tool tasks add their tools to the returned server and declare them in reg.
 func NewServer(reg *Registry, audit Auditor, idem IdempotencyStore) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "manmanv2-mcp", Version: "v0"}, nil)
-	srv.AddReceivingMiddleware(Middleware(reg, audit))
+	// One call: the first middleware is outermost, so persona runs before idempotency.
+	mws := []mcp.Middleware{Middleware(reg, audit)}
 	if idem != nil {
-		srv.AddReceivingMiddleware(Idempotency(reg, idem))
+		mws = append(mws, Idempotency(reg, idem))
 	}
+	srv.AddReceivingMiddleware(mws...)
 	mcp.AddTool(srv, &mcp.Tool{Name: WhoamiTool.Name, Description: "Report the caller's subject and effective persona."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, whoamiOut, error) {
 			c := CallerFromContext(ctx)

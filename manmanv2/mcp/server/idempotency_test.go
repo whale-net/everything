@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -147,5 +151,52 @@ func TestIdempotencyPassThroughAndRequired(t *testing.T) {
 	}
 	if _, err := idemCall(h, callerA, "wreq", `{"id":"1"}`); !errors.Is(err, ErrIdempotencyRequired) || n != 4 {
 		t.Fatalf("err=%v calls=%d", err, n)
+	}
+}
+
+// Retrying a write through the real NewServer + HTTP stack hits the backend once.
+func TestNewServerIdempotencyReplaysOverHTTP(t *testing.T) {
+	reg := NewRegistry(Tool{Name: "write", MinPersona: PersonaServerManager, Write: true})
+	srv := NewServer(reg, LogAuditor{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, &MemIdempotencyStore{})
+	var calls int32
+	type in struct {
+		ID  string `json:"id"`
+		Key string `json:"idempotency_key,omitempty"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{Name: "write"}, func(context.Context, *mcp.CallToolRequest, in) (*mcp.CallToolResult, any, error) {
+		n := atomic.AddInt32(&calls, 1)
+		return nil, map[string]int32{"n": n}, nil
+	})
+	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	ts := httptest.NewServer(HTTPAuth(fakeVerifier{"mgr": claims("u2", "server-manager")}, "")(h))
+	defer ts.Close()
+	c := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "v0"}, nil)
+	s, err := c.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: ts.URL, HTTPClient: &http.Client{Transport: bearerRT{"mgr"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	args := map[string]any{"id": "x", "idempotency_key": "k1"}
+	var first string
+	for i := 0; i < 3; i++ {
+		res, err := s.CallTool(context.Background(), &mcp.CallToolParams{Name: "write", Arguments: args})
+		if err != nil || res.IsError {
+			t.Fatalf("call %d: %v %+v %v", i, err, res, res.Content[0].(*mcp.TextContent).Text)
+		}
+		b, _ := json.Marshal(res.StructuredContent)
+		if i == 0 {
+			first = string(b)
+		} else if string(b) != first {
+			t.Fatalf("call %d result %s, want %s", i, b, first)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("backend called %d times, want 1", calls)
+	}
+	if res, err := s.CallTool(context.Background(), &mcp.CallToolParams{Name: "write", Arguments: map[string]any{"id": "y", "idempotency_key": "k1"}}); err == nil && !res.IsError {
+		t.Fatal("different args under same key should conflict")
+	}
+	if calls != 1 {
+		t.Fatalf("conflict mutated: %d calls", calls)
 	}
 }
