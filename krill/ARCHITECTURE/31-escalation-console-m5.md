@@ -171,8 +171,7 @@ query rolling its own:
   A token issued under one scope can never become a path across a scope
   boundary into another, even by accident — this is exactly what
   `escalation_console_integration_test.go`'s Step 11 exercises against
-  all three working console queries (see "Known defect" below for the
-  fourth).
+  all four console queries.
 - **A page's `NextToken` is `""` exactly when no rows remain** — every
   query fetches one row beyond the requested page size and trims it off,
   so "is there a next page" is answered by that extra row's presence,
@@ -256,19 +255,43 @@ FROM/JOIN/WHERE its list pages**, not a second predicate:
   product's own figure and never derives a scope-wide total by summing
   per-product ones.
 
-## Known defect: `ListClaimedTasks` (FR4) is an unimplemented stub
+## `ListClaimedTasks` (FR4): the claim, joined to what it is a claim on
 
-`store.TaskStore.ListClaimedTasks` (`krill/store/task_console.go`) was
-scaffolded in issue #2869 alongside `paging.go` and the console
-HTTP/MCP wiring, but that issue closed with the store method itself left
-as a permanent `return Page[ClaimedTaskRow]{}, ErrNotImplemented` — unlike
-its three siblings (`ListCancelledTasks`/`ListEscalatedTasks`/
-`ListOpenNotes`, issues #2873/#2875/#2874), which are fully implemented.
-`GET /console/claimed` and the `list_claimed_tasks` MCP tool are both
-wired end-to-end in production and both fail on every call, in every
-scope. `escalation_console_integration_test.go`'s Step 2 documents this
-explicitly (asserting the current `ErrNotImplemented` behaviour, not the
-intended one) rather than silently passing FR4 or failing the whole
-conformance walk; the fix itself is tracked as a follow-up,
-issue #2916, per this task's own "do not fix a defect the walk
-uncovers" scope.
+`store.TaskStore.ListClaimedTasks` (`krill/store/task_console.go`) is
+implemented like its three siblings (`ListCancelledTasks`/`ListEscalatedTasks`/
+`ListOpenNotes`): it is the one store method in this milestone that has to
+join three tables to answer its question, because "what is claimed" is not a
+property of `task` alone.
+
+- **One row per live claim, never per task.** `WHERE current_claim_id IS NOT
+  NULL` is the whole membership rule, so a task whose claim has been released,
+  force-closed, or lapsed drops out on the next read without anything marking
+  it.
+- **The claim is joined in explicitly, not by schema.** Claimant session, the
+  claimed-since instant, and both LB4 subject pairs come from `task_claim`
+  (matched on `task.current_claim_id`). `current_claim_id` carries no
+  DB-level FK onto `task_claim(id)` — migration 015 creates `task_claim` later
+  in the same migration that adds the column — so this join is enforced in
+  SQL here, not by the schema.
+- **Every row carries its delivery reference.** `milestone_ref` (resolved from
+  `task.milestone_id`) supplies the id, kind, and title of the milepebble or
+  milestone the task belongs to, so a row is actionable without a second
+  lookup — FR4's answer to the bare-id posture root plan #2851's Assumption 8
+  exists to remove. The same identifying-context join is why all four console
+  queries live in one file rather than each rolling its own.
+- **Soonest-to-lapse first.** `ORDER BY task.lease_expires_at ASC, task.id
+  ASC` is the operator-useful order: the claim about to need intervention is
+  first, and the keyset cursor over `(lease_expires_at, id)` continues the
+  same order with no ties. Paging and continuation tokens are the shared
+  `paging.go` machinery, with the same `NextToken`-by-extra-row rule the other
+  three use.
+- **The filter is guarded before the query runs.** A narrowing that would cross
+  a scope or product boundary is refused by `guardConsoleFilter` first, so the
+  page can never answer with rows the caller has no claim to — and
+  `claimedTasksQuery` is the same clause `CountClaimedTasks` wraps, so the
+  count printed beside the queue cannot drift from the queue itself.
+
+`escalation_console_integration_test.go`'s Step 2 asserts this against real
+Postgres: every claimed task appears, carrying its own title, delivery
+reference, claimant session id, current lane, attempt count, and a non-zero
+lease expiry.

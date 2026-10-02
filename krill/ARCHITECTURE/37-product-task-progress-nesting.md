@@ -6,9 +6,10 @@ tool, answers "how far along is this product" for every delivery container at
 once. It exists for the "N of M tasks done" figures the Overview, the
 Milestones list, a milestone's detail page and each Board swimlane header
 need — four displays that would otherwise each cost one count query per
-container. No UI renders them yet (those pages are the operator-UI facelift,
-M13, status *planned*); today the read's only callers are the API and MCP
-surfaces below, so this section is the contract the first UI consumer inherits.
+container. Only the first of the four renders it today (the Overview's
+milestones-in-flight panel); the Milestones list, a milestone's detail page and
+each Board swimlane header are the operator-UI facelift, M13, status *planned*,
+so this section is the contract those consumers inherit.
 
 This section covers why it is one statement, why its rows overlap rather than
 partition, and what a consumer reads instead when it wants a product-wide
