@@ -30,6 +30,7 @@ func HTTPAuth(v grpcauth.TokenVerifier, resourceMetadataURL string) func(http.Ha
 			return nil, errInvalidToken
 		}
 		caller := &Caller{
+			Issuer:  claims.Issuer,
 			Subject: claims.Subject,
 			Roles:   claims.Roles,
 			Persona: ResolvePersona(claims.Roles),

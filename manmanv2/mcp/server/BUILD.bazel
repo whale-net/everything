@@ -6,6 +6,8 @@ go_library(
         "audit.go",
         "auth.go",
         "caller.go",
+        "confirm.go",
+        "confirm_store.go",
         "middleware.go",
         "persona.go",
         "whoami.go",

@@ -8,6 +8,7 @@ import (
 
 // Caller is the verified identity behind one MCP request.
 type Caller struct {
+	Issuer  string
 	Subject string
 	Roles   []string
 	Persona Persona
