@@ -75,7 +75,7 @@ func TestBoardBadgesStayInColumn(t *testing.T) {
 	for _, k := range []string{"lease-expired", "capped", "escalated", "cancelled"} {
 		assert.Contains(t, html, `data-krill="task-badge-`+k+`"`)
 	}
-	assert.NotContains(t, html, `data-krill="task-badge-live"`)
+	assert.NotContains(t, html, `data-krill="task-badge-claimed"`)
 	assert.Equal(t, 5, strings.Count(html, `data-krill="board-column"`))
 	assert.Contains(t, html, "Testing (<span data-krill=\"column-count\">4</span>)")
 }
