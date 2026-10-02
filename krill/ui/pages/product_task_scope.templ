@@ -1,0 +1,165 @@
+package pages
+
+// The scope control the Tasks table and the Board share (FR 7191dba1):
+// three modes, and in the two single-container modes a select of the
+// product's own milestones -- and, in milepebble mode, of that
+// milestone's own milepebbles.
+//
+// It is a plain GET form carrying the mode and the selected ids, so the
+// URL is always the whole of the state: a reload, a shared link and a
+// no-JavaScript submit all land on the same scope. htmx is layered on
+// top of that -- hx-get onto the same path, targeting the region's own
+// anchor -- so changing the control re-renders the region in place
+// without making the working case depend on JavaScript.
+
+// The query parameters the Tasks/Board URLs carry. They are declared here
+// rather than in the parser because this control is what writes them: the
+// field names below and the parse in //krill/ui have to be one spelling,
+// and //krill/ui aliases these rather than keeping a second copy.
+const (
+	// ProductTaskScopeQueryParam names the mode: the store's own three
+	// scope kinds by wire value.
+	ProductTaskScopeQueryParam = "scope"
+	// ProductTaskContainerQueryParam names the scope's container -- the
+	// milestone in milestone mode, the milepebble in milepebble mode. It
+	// is the name the api's product task read reads too.
+	ProductTaskContainerQueryParam = "container_id"
+	// ProductTaskMilestoneQueryParam names the PARENT milestone whose
+	// milepebbles the milepebble select offers. It is not a filter and is
+	// never sent to the store: in milepebble mode it answers only "which
+	// milepebbles may be chosen", which the selected container alone
+	// cannot -- the operator changes this select to change that offer.
+	// Deliberately not named container_id, which already means the
+	// container, and deliberately shorter than milestone_id: the store
+	// read never sees it.
+	ProductTaskMilestoneQueryParam = "milestone"
+	// ProductTaskLaneQueryParam and ProductTaskOnlyStuckQueryParam are
+	// the sibling filters the scope control carries through unchanged.
+	ProductTaskLaneQueryParam      = "lane"
+	ProductTaskOnlyStuckQueryParam = "only_stuck"
+)
+
+// The three modes' wire values. The control spells them through the
+// store's own vocabulary, so it compares against these rather than
+// inventing a UI-local word the parser would then have to translate.
+const (
+	productTaskScopeIncompleteMode = "incomplete"
+	productTaskScopeMilestoneMode  = "milestone"
+	productTaskScopeMilepebbleMode = "milepebble"
+)
+
+// ProductTaskScopeControl is the scope control's view model.
+type ProductTaskScopeControl struct {
+	// Path is the view's own URL -- the form's GET action and its hx-get,
+	// the same string either way, so the in-place swap and the full-page
+	// submit ask for exactly the same query.
+	Path string
+
+	// Modes are the three modes in the order the control offers them, with
+	// the active one marked.
+	Modes []ProductTaskScopeLabel
+
+	// MilestoneParam is the query parameter the milestone select submits
+	// under. It is the container parameter in milestone mode, where the
+	// milestone IS the scope's container, and the parent-milestone
+	// parameter in milepebble mode, where it only chooses which
+	// milepebbles are on offer.
+	MilestoneParam string
+
+	// ShowMilestone and ShowMilepebble reveal the two selects. Each is off
+	// both in the product-wide mode, which names no container, and when the
+	// product has nothing to put in it -- so the control never renders a
+	// select an operator cannot choose from.
+	ShowMilestone  bool
+	ShowMilepebble bool
+
+	// Milestones and Milepebbles are the options, each marking the one
+	// this request resolved to. A container outside the all-incomplete
+	// scope is still offered -- picking one explicitly shows its tasks
+	// whatever its status -- but says so, so the operator is not left
+	// wondering why a shipped milestone is in the list.
+	Milestones  []ProductTaskContainerOption
+	Milepebbles []ProductTaskContainerOption
+
+	// Lane and OnlyStuck are the sibling filters this URL carries. They
+	// are re-submitted as hidden fields so changing the scope keeps them
+	// rather than silently dropping a filter the operator set.
+	Lane      string
+	OnlyStuck bool
+}
+
+// ProductTaskScopeForm renders the shared scope control: the three
+// modes as radios, and the selects the active mode reveals.
+//
+// Named ...Form rather than ...Control because templ generates a
+// function under the component's name, which would collide with the
+// view model's type of the same name.
+templ ProductTaskScopeForm(c ProductTaskScopeControl) {
+	<form method="get" action={ templ.URL(c.Path) } class="mt-3 flex flex-wrap items-end gap-4"
+		data-krill="scope-control"
+		hx-get={ templ.URL(c.Path) }
+		hx-target={ "#" + ProductTasksAnchor }
+		hx-swap="outerHTML"
+		hx-trigger="change, submit"
+		hx-push-url="true">
+		<fieldset class="fieldset">
+			<legend class="fieldset-legend">Scope</legend>
+			for _, mode := range c.Modes {
+				<label class="label cursor-pointer justify-start gap-2 p-0">
+					<input type="radio" name={ ProductTaskScopeQueryParam } value={ mode.Mode } class="radio radio-primary"
+						checked?={ mode.Active }
+						data-krill="scope-mode" data-krill-mode={ mode.Mode }
+						title={ scopeModeHint(mode) } />
+					<span class="label-text">{ mode.Label }</span>
+				</label>
+			}
+		</fieldset>
+		if c.ShowMilestone {
+			<label class="fieldset">
+				<span class="fieldset-legend">Milestone</span>
+				<select name={ c.MilestoneParam } class="select select-sm" data-krill="scope-milestone-select">
+					for _, o := range c.Milestones {
+						<option value={ o.ID } selected?={ o.Selected } data-krill-container-id={ o.ID }>
+							{ o.Name }{ o.OutOfScopeSuffix }
+						</option>
+					}
+				</select>
+			</label>
+		}
+		if c.ShowMilepebble {
+			<label class="fieldset">
+				<span class="fieldset-legend">Milepebble</span>
+				<select name={ ProductTaskContainerQueryParam } class="select select-sm" data-krill="scope-milepebble-select">
+					for _, o := range c.Milepebbles {
+						<option value={ o.ID } selected?={ o.Selected } data-krill-container-id={ o.ID }>
+							{ o.Name }{ o.OutOfScopeSuffix }
+						</option>
+					}
+				</select>
+			</label>
+		}
+		if c.Lane != "" {
+			<input type="hidden" name={ ProductTaskLaneQueryParam } value={ c.Lane } data-krill="scope-carried-lane" />
+		}
+		if c.OnlyStuck {
+			<input type="hidden" name={ ProductTaskOnlyStuckQueryParam } value="true" data-krill="scope-carried-only-stuck" />
+		}
+		<button type="submit" class="btn btn-primary btn-sm" data-krill="scope-apply">
+			Apply scope
+		</button>
+	</form>
+}
+
+// scopeModeHint is the one sentence that says what each mode means, on
+// the radio rather than in prose beside the control: the product-wide
+// mode filters on status and the two single-container modes deliberately
+// do not, which is the rule an operator is most likely to get wrong.
+func scopeModeHint(mode ProductTaskScopeLabel) string {
+	switch mode.Mode {
+	case productTaskScopeIncompleteMode:
+		return "Every milestone that is neither shipped nor abandoned."
+	case productTaskScopeMilestoneMode, productTaskScopeMilepebbleMode:
+		return "Shows the selected container's tasks whatever its status, shipped or not."
+	}
+	return ""
+}

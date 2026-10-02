@@ -48,6 +48,11 @@ var (
 	productTaskMilepebble       = uuid.MustParse("99999999-9999-9999-9999-999999999999")
 	productTaskNewestMilepebble = uuid.MustParse("99998888-8888-8888-8888-888888888888")
 
+	// productTaskShippedMilestone is outside the product-wide all-incomplete
+	// scope by its own status, and is the fixture for the rule that it is
+	// still offered and still readable when picked explicitly.
+	productTaskShippedMilestone = uuid.MustParse("dddd5555-5555-5555-5555-555555555555")
+
 	// productTaskOtherProduct is a second product, whose milestone is the
 	// id a cross-product link would carry.
 	productTaskOtherProduct   = uuid.MustParse("aaaa1111-1111-1111-1111-111111111111")
@@ -80,6 +85,12 @@ func productTaskListing() slice.DeliveryListing {
 	}
 }
 
+// emptyDeliveryListing is a product with no containers at all, which is
+// what makes every mode an ordinary empty result rather than a 404.
+func emptyDeliveryListing() slice.DeliveryListing {
+	return slice.DeliveryListing{}
+}
+
 // recordingProductTasks records every ListProductTasks / CountProductTasks
 // call's parameters verbatim, so a test can compare the two byte for byte.
 //
@@ -95,6 +106,29 @@ type recordingProductTasks struct {
 	rows  []store.ProductTaskRow
 	total int
 	err   error
+
+	// tasks backs the detail route's own reads. Nil for the table cases,
+	// which never reach a task detail.
+	tasks map[uuid.UUID]store.Task
+}
+
+func (s *recordingProductTasks) GetTaskByID(_ context.Context, id uuid.UUID) (store.Task, error) {
+	if t, ok := s.tasks[id]; ok {
+		return t, nil
+	}
+	return store.Task{}, store.ErrNotFound
+}
+
+func (s *recordingProductTasks) ListDependencies(context.Context, uuid.UUID, uuid.UUID) ([]store.TaskDependency, error) {
+	return nil, nil
+}
+
+func (s *recordingProductTasks) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([]store.Note, error) {
+	return nil, nil
+}
+
+func (s *recordingProductTasks) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
+	return store.Claim{}, store.ErrNotFound
 }
 
 func (s *recordingProductTasks) ListProductTasks(_ context.Context, params store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
