@@ -300,7 +300,11 @@ func workspaceNav(t navTargets, activePath string) []components.NavGroup {
 // that forgot to supply one would silently render a sidebar pointing at
 // uuid.Nil's paths, which resolve to nothing, so passing it explicitly
 // keeps that failure a compile error rather than a dead link.
-func workspaceShellData(t navTargets, activePath, title, userLabel string) components.ShellData {
+//
+// switcher is the sidebar's Product select, which this function does not
+// build: it reads the scope, and a seam that stayed pure is one a route
+// cannot accidentally turn into a second, differently-filtered read.
+func workspaceShellData(t navTargets, activePath, title, userLabel string, switcher *components.ProductSwitcherData) components.ShellData {
 	return components.ShellData{
 		LayoutData: components.LayoutData{
 			Title:     title,
@@ -308,6 +312,7 @@ func workspaceShellData(t navTargets, activePath, title, userLabel string) compo
 			Nav:       navLinks(activePath),
 		},
 		NavGroups: workspaceNav(t, activePath),
+		Switcher:  switcher,
 	}
 }
 

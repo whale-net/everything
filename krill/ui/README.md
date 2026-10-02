@@ -80,7 +80,7 @@ core.
 | Package | Owns |
 |---|---|
 | `krill/ui` (package `main`) | Routing, the `App` struct, the write path, the render seam, `nav.go`'s two nav tables (the flat `navArea` list, and the workspace shell's grouped one) and their active-path rules, and **every pure view-model builder**. |
-| `krill/ui/components` | The chrome: `Layout` (a wrapper around `htmxui.Shell`), `nav`, `navLink`, `SubNav`, `Shell`/`sidebar` (the workspace shell's drawer sidebar and grouped nav), and the `MilestoneStatusStyle` status vocabulary. |
+| `krill/ui/components` | The chrome: `Layout` (a wrapper around `htmxui.Shell`), `nav`, `navLink`, `SubNav`, `Shell`/`sidebar` (the workspace shell's drawer sidebar and grouped nav), `ProductSwitcher` (the sidebar's product select), and the `MilestoneStatusStyle` status vocabulary. |
 | `krill/ui/pages` | Page bodies, one `.templ` per area, each declaring its own view-model struct. |
 
 **Builders stay in `package main`; only the structs and the components
@@ -409,6 +409,58 @@ cookie it never had.
 
 Installing the host on every page is the cutover task's job; this task
 builds the component and the mechanism only.
+
+Both resolvers return the request as well as the product, and put the
+product on its context (`withCurrentProduct` / `currentProduct`). That is
+how the chrome knows which product is current without resolving it a
+second time — see the switcher below.
+
+### The Product switcher
+
+`components.ProductSwitcher` is the sidebar's product select, and
+`product_switcher.go` is its view-model builder and its change handler.
+It is the one control that moves an operator between products, and the
+reason no shell page asks for a typed product id.
+
+`productSwitcherData` reads the same scope the page already depends on
+and renders **every** product, the current one marked — including when
+the scope holds exactly one, because the select is also how an operator
+tells which product they are in, and that is true most often when there
+is only one. A scope the page cannot read yields no switcher at all
+rather than an empty one: an empty select reads as "this deployment has
+no products", which is the one thing a failed read does not mean.
+
+The current product comes from the request context a resolver populated,
+never from the cookie — a component that re-guessed it could disagree
+with the page it is rendered beside.
+
+`handleProductSwitch` (`GET /product-switch?product=<pid>&from=<path>`)
+is where the change lands. Two rules make it safe:
+
+- **The picked id is checked against the caller's scope.** An id the
+  scope does not hold is an in-shell 404, so the control is never a way
+  to reach a product this deployment does not serve.
+- **`from` is only ever classified, never echoed.** `productAreaHref`
+  reduces the page to a *shape* — its segments with every UUID replaced
+  by `*` — looks the shape up in a table of areas, and rebuilds the
+  target from the validated product id alone. So a milestone, task, or
+  design-session id from the product being left cannot ride along under
+  the new one, and a hand-edited `from` cannot become an open redirect.
+  Every switch therefore lands on a **list** page, and the operator
+  keeps their bearings: a switch from Decisions lands on the new
+  product's Decisions, not on its overview.
+
+Recognising ids by being UUIDs rather than by counting segments off a
+prefix is deliberate: the shape says which area a page is, and an id is
+exactly the part of a path that must not survive. A positional rule would
+mean re-deciding for each new area which segment holds the id, and
+getting that wrong leaks it.
+
+A shell page is given the switcher through `workspaceShellData`, whose
+last argument is the `*components.ProductSwitcherData`. That seam stays
+pure: the switcher needs a scope read, and a builder that read one would
+be a second, differently-filtered read that could disagree with the
+page's own.
 
 ## Task views
 

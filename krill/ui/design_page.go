@@ -273,7 +273,7 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, pages.DesignSessionDetail(detail))
 		return
 	}
-	app.rememberUnprefixedProduct(w, r)
+	r, _ = app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Design session", designPath, pages.DesignSessionDetail(detail))
 }
 

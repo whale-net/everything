@@ -503,7 +503,7 @@ func TestWorkspaceNavHrefCarriesTheCallersProduct(t *testing.T) {
 func TestWorkspaceShellDataBuildsEveryHrefFromTheProduct(t *testing.T) {
 	pid, other := uuid.New(), uuid.New()
 
-	data := workspaceShellData(navTargets{Product: pid}, deliveryPath(pid), "Delivery", "developer")
+	data := workspaceShellData(navTargets{Product: pid}, deliveryPath(pid), "Delivery", "developer", nil)
 	if data.Title != "Delivery" || data.UserLabel != "developer" {
 		t.Errorf("shell data = %+v, want the caller's title and identity", data.LayoutData)
 	}
@@ -523,7 +523,7 @@ func TestWorkspaceShellDataBuildsEveryHrefFromTheProduct(t *testing.T) {
 
 	// A different product must move the sidebar's hrefs with it, or the
 	// assertion above would pass on a table that hardcoded one id.
-	otherData := workspaceShellData(navTargets{Product: other}, deliveryPath(other), "Delivery", "developer")
+	otherData := workspaceShellData(navTargets{Product: other}, deliveryPath(other), "Delivery", "developer", nil)
 	otherByLabel := sidebarHrefsByLabel(otherData.NavGroups)
 	for label, href := range otherByLabel {
 		switch label {

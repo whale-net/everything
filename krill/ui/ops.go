@@ -328,7 +328,7 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, pages.ClaimedResults(d))
 		return
 	}
-	app.rememberUnprefixedProduct(w, r)
+	r, _ = app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Claimed tasks", opsClaimedPath, pages.ClaimedPage(d))
 }
 
@@ -404,7 +404,7 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, pages.EscalatedResults(d))
 		return
 	}
-	app.rememberUnprefixedProduct(w, r)
+	r, _ = app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Escalated tasks", opsEscalatedPath, pages.EscalatedPage(d))
 }
 
@@ -461,7 +461,7 @@ func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, pages.CancelledResults(d))
 		return
 	}
-	app.rememberUnprefixedProduct(w, r)
+	r, _ = app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Cancelled tasks", opsCancelledPath, pages.CancelledPage(d))
 }
 
@@ -528,6 +528,6 @@ func (app *App) handleOpenNotes(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, pages.NotesResults(d))
 		return
 	}
-	app.rememberUnprefixedProduct(w, r)
+	r, _ = app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Open notes", opsNotesPath, pages.NotesPage(d))
 }

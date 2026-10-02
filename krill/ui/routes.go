@@ -68,7 +68,7 @@ func homeLinks() []pages.AreaLink {
 // still in scope, else the first in scope) purely to record it: the body
 // here is the area list, which is the same whichever product is current.
 func (app *App) handleShellHome(w http.ResponseWriter, r *http.Request) {
-	app.rememberUnprefixedProduct(w, r)
+	r, _ = app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Home", "/", pages.AreaIndex("Where to next", homeLinks()))
 }
 
@@ -87,7 +87,7 @@ var opsIndexLinks = []pages.AreaLink{
 
 // handleOps is the ops console root, linking its four read views.
 func (app *App) handleOps(w http.ResponseWriter, r *http.Request) {
-	app.rememberUnprefixedProduct(w, r)
+	r, _ = app.rememberUnprefixedProduct(w, r)
 	renderShell(w, r, "Ops console", opsPath, pages.AreaIndex("Ops console", opsIndexLinks))
 }
 
@@ -98,7 +98,7 @@ func (app *App) handleOps(w http.ResponseWriter, r *http.Request) {
 // root resolves one server-side and links to that product's session list
 // rather than asking the operator for an id.
 func (app *App) handleDesign(w http.ResponseWriter, r *http.Request) {
-	product, ok := app.resolveUnprefixedProduct(w, r)
+	r, product, ok := app.resolveUnprefixedProduct(w, r)
 	if !ok {
 		return
 	}
@@ -124,7 +124,7 @@ func (app *App) handleSpec(w http.ResponseWriter, r *http.Request) {
 // testable from this point -- and renders a body that names the product
 // and links onward, rather than the area's real content.
 func (app *App) handleProductPlaceholder(w http.ResponseWriter, r *http.Request) {
-	product, ok := app.resolveProductFromPath(w, r)
+	r, product, ok := app.resolveProductFromPath(w, r)
 	if !ok {
 		return
 	}

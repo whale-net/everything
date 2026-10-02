@@ -124,6 +124,11 @@ type ShellData struct {
 
 	// NavGroups is the sidebar, in render order.
 	NavGroups []NavGroup
+
+	// Switcher is the sidebar's Product select, above the nav. It is a
+	// pointer so a page with no product in scope (an empty deployment)
+	// renders the nav alone rather than a select with nothing to pick.
+	Switcher *ProductSwitcherData
 }
 
 // Shell is the workspace chrome: a daisyUI drawer whose sidebar is
@@ -158,6 +163,9 @@ templ Shell(data ShellData) {
 			<label for="krill-drawer" class="drawer-overlay" aria-label="Close navigation"></label>
 			<aside class="flex min-h-full w-56 flex-col bg-neutral text-neutral-content">
 				<a href="/" class="btn btn-ghost m-2 justify-start text-lg text-neutral-content">krill</a>
+				if data.Switcher != nil {
+					@ProductSwitcher(*data.Switcher)
+				}
 				@sidebar(data.NavGroups)
 			</aside>
 		</div>
