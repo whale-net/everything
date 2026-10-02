@@ -18,7 +18,6 @@ import (
 
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
-	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
@@ -99,9 +98,10 @@ func (app *App) buildOverview(r *http.Request, product store.Product, badge navB
 	listing, err := app.spec.Delivery(r.Context(), product.ID, inFlightStatuses)
 	if err != nil {
 		logger.Error("overview in-flight read failed", "product", product.ID.String(), "error", err)
-		// The header is the one thing this page cannot do without, so it
-		// says what could not be read rather than claiming no milestone
-		// is in flight.
+		// The header says what could not be read rather than claiming no
+		// milestone is in flight, but it does not stop the panel: the two
+		// read different stores and share no state, so one failing must
+		// not cost the operator the other's answer.
 		page.InFlightError = "Which milestones are in flight could not be read. See the logs."
 	} else {
 		page.InFlight = inFlightOf(listing)
@@ -197,22 +197,6 @@ func milestoneDetailHref(productID, containerID uuid.UUID) string {
 	return productHref(productID, milestonesSuffix+"/"+containerID.String())
 }
 
-	page.InFlight = inFlightOf(listing)
-
-	// The attention panel is a second region rather than part of the
-	// header: its read failing must not cost the operator the in-flight
-	// answer the header just rendered, and its success must not be
-	// reported alongside an in-flight failure.
-	escalated, err := app.needsAttentionRows(r.Context(), product.ID, time.Now())
-	if err != nil {
-		logger.Error("overview needs-attention read failed", "product", product.ID.String(), "error", err)
-		page.NeedsAttentionError = "Which tasks are escalated could not be read. See the logs."
-		return page
-	}
-	page.NeedsAttention = escalated
-	return page
-}
-
 // needsAttentionRows reads the panel's rows: this product's most recently
 // escalated tasks, at most the panel's own limit.
 //
@@ -248,7 +232,6 @@ func (app *App) needsAttentionRows(ctx context.Context, productID uuid.UUID, now
 			Title:            row.Title,
 			Href:             taskDetailPath(productID, row.DeliveryRef.ID, row.TaskID),
 			Reason:           string(row.Reason),
-			ReasonLabel:      components.EscalationReasonLabel(string(row.Reason)),
 			EscalatedAt:      relativeTime(row.EscalatedAt, now),
 			EscalatedAtExact: row.EscalatedAt.Format(time.RFC3339),
 		})

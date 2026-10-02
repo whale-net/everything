@@ -237,9 +237,9 @@ type OverviewEscalation struct {
 	Title  string
 	Href   string
 
-	// Reason is the store's wire value; ReasonLabel is its human wording.
-	Reason      string
-	ReasonLabel string
+	// Reason is the store's wire value; the badge renders its human
+	// wording through components.EscalationReasonLabel.
+	Reason string
 
 	EscalatedAt      string
 	EscalatedAtExact string
