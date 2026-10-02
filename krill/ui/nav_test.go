@@ -192,6 +192,7 @@ func TestActiveLinkPerRoute(t *testing.T) {
 	for _, tc := range []struct {
 		path       string
 		wantActive string // "" means no item should be marked
+		redirect   bool   // the path is pre-redesign and answers a 302
 	}{
 		{path: "/", wantActive: "Overview"},
 		{path: productHref(pid, overviewSuffix), wantActive: "Overview"},
@@ -201,15 +202,18 @@ func TestActiveLinkPerRoute(t *testing.T) {
 		{path: productPath(pid), wantActive: "Capabilities"},
 		{path: decisionsPath(pid), wantActive: "Decisions"},
 		{path: deliveryPath(pid), wantActive: "Milestones"},
-		{path: milestoneTasksPath(pid, navMilestoneID), wantActive: "Tasks"},
-		{path: milestoneBoardPath(pid, navMilestoneID), wantActive: "Board"},
+		// The per-milestone task list and board are pre-redesign URLs that
+		// now redirect into the product-wide views, so the walk follows the
+		// hop the way a browser does and asks what the operator lands on.
+		{path: milestoneTasksPath(pid, navMilestoneID), wantActive: "Tasks", redirect: true},
+		{path: milestoneBoardPath(pid, navMilestoneID), wantActive: "Board", redirect: true},
 		{path: credentialsPath, wantActive: "Credentials"},
 		// The two legacy area roots no sidebar item owns: both are static
 		// landings a later phase retires, and neither is a nav item's page.
 		{path: designPath},
 		{path: specPath},
 	} {
-		body := fetch(t, mux, tc.path).Body.String()
+		body := navPageBody(t, mux, tc.path, tc.redirect)
 
 		marked := activeLabels(body)
 		switch {
@@ -362,18 +366,6 @@ func (*navTasks) ListDependencies(context.Context, uuid.UUID, uuid.UUID) ([]stor
 
 func (*navTasks) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([]store.Note, error) {
 	return nil, nil
-}
-
-// The per-milestone list and board URLs redirect into the product-wide
-// views, so this walk reaches a page whose read is the product-wide one.
-// Empty is a real answer for a product whose read is not the subject here:
-// the walk measures the route and the chrome, and an empty table renders.
-func (*navTasks) ListProductTasks(context.Context, store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
-	return store.Page[store.ProductTaskRow]{}, nil
-}
-
-func (*navTasks) CountProductTasks(context.Context, store.ListProductTasksParams) (int, error) {
-	return 0, nil
 }
 
 func (*navTasks) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
@@ -765,8 +757,11 @@ func TestPrimaryNavScanIgnoresTheProductSubNav(t *testing.T) {
 		}
 	}
 
+	// The per-milestone task list is pre-redesign and redirects into the
+	// product-wide Tasks, so the scan runs on the page the operator lands
+	// on rather than on the 302's empty body.
 	for _, path := range withoutSubNav {
-		if got := activeLabels(fetch(t, mux, path).Body.String()); len(got) != 1 {
+		if got := activeLabels(fetchPage(t, mux, path).Body.String()); len(got) != 1 {
 			t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
 		}
 	}
@@ -1021,6 +1016,19 @@ func anchorTags(body string) []string {
 		tags = append(tags, rest[:j])
 		rest = rest[j+len("</a>"):]
 	}
+}
+
+// navPageBody is fetch for the paths the active-mark table marks as
+// redirect: it follows the hop and answers with the body of the page the
+// operator lands on. Asking the 302 for a body instead would read the
+// scan off an empty response and report nothing marked, whatever the nav
+// actually says.
+func navPageBody(t *testing.T, mux *http.ServeMux, path string, redirect bool) string {
+	t.Helper()
+	if redirect {
+		return fetchPage(t, mux, path).Body.String()
+	}
+	return fetch(t, mux, path).Body.String()
 }
 
 func fetch(t *testing.T, mux *http.ServeMux, target string) *httptest.ResponseRecorder {
