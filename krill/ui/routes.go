@@ -84,6 +84,140 @@ func (app *App) handleShellHome(w http.ResponseWriter, r *http.Request) {
 	app.renderOverview(w, withCurrentProduct(r, product), product)
 }
 
+// ── legacy URL continuity (FR 2544224c) ─────────────────────────────────────
+
+// legacyURL is one pre-redesign URL and how it resolves during the
+// operator UI facelift. It is the unit later phases retire URLs with.
+//
+// Exactly one of Serve and Successor is set. Serve is the URL's existing
+// page, rendered inside the shell at 200. Successor is where the URL goes
+// once its redesigned page has shipped; leaving it nil keeps the old page
+// serving, which is what every entry does until its successor lands.
+// Naming the successor is the whole cutover for that URL, and it is why a
+// replaced page's old link can never go dark: the URL is already accounted
+// for here, so replacing the page and repointing the link is one edit in
+// one file rather than a route registration someone has to remember.
+type legacyURL struct {
+	// Pattern is the pre-redesign URL exactly as the mux spells it,
+	// including any method prefix and id wildcards.
+	Pattern string
+
+	// Serve renders the URL's existing page while Successor is nil.
+	Serve func(app *App, w http.ResponseWriter, r *http.Request)
+
+	// Successor builds the redesigned page's URL for this request. ok is
+	// false when no product could be resolved to build it, which is the
+	// one case a legacy URL cannot redirect on: an un-prefixed URL must
+	// always land somewhere, so an empty scope renders the product index
+	// rather than answering with a redirect to nowhere.
+	Successor func(app *App, r *http.Request) (target string, ok bool)
+}
+
+// legacyURLs is every pre-redesign URL the operator UI facelift must keep
+// resolving, in one table the next phases extend rather than a set of
+// ad-hoc handlers.
+//
+// Every entry serves its existing page today, and that is deliberate
+// rather than unfinished. A redesigned page that has not shipped renders a
+// placeholder, so redirecting to one would send an operator who followed a
+// working link -- "what is escalated?" -- to a page saying nothing is there
+// yet. The Overview is the one redesigned page this milestone ships, and it
+// does not replace an old URL: "/" and /products/{pid}/overview are both its
+// own addresses. The rest of the table moves from Serve to Successor in the
+// phase that ships each page's replacement.
+func legacyURLs() []legacyURL {
+	return []legacyURL{
+		// The ops console. "/" is named by c4bd4bf8 among the un-prefixed
+		// URLs; it renders the Overview at every phase of the facelift.
+		{Pattern: "/{$}", Serve: (*App).handleShellHome},
+		{Pattern: opsPath, Serve: (*App).handleOps},
+		{Pattern: opsClaimedPath, Serve: (*App).handleClaimedTasks},
+		{Pattern: opsEscalatedPath, Serve: (*App).handleEscalatedTasks},
+		{Pattern: opsCancelledPath, Serve: (*App).handleCancelledTasks},
+		{Pattern: opsNotesPath, Serve: (*App).handleOpenNotes},
+
+		// The spec and delivery browser.
+		{Pattern: specPath, Serve: (*App).handleSpec},
+		{Pattern: specProductsPath, Serve: (*App).handleSpecProducts},
+		{Pattern: specProductPath, Serve: (*App).handleCapabilityMap},
+		{Pattern: specProductPath + "/decisions", Serve: (*App).handleSpecDecisions},
+		{Pattern: specProductPath + "/personas", Serve: (*App).handleSpecPersonas},
+		{Pattern: specProductPath + "/non-goals", Serve: (*App).handleSpecNonGoals},
+		{Pattern: specProductPath + "/delivery", Serve: (*App).handleSpecDelivery},
+		{Pattern: specProductPath + "/milestones/{mid}/tasks", Serve: (*App).handleTaskList},
+		{Pattern: specProductPath + "/milestones/{mid}/tasks/{tid}", Serve: (*App).handleTaskDetail},
+		{Pattern: specProductPath + "/milestones/{mid}/board", Serve: (*App).handleTaskBoard},
+
+		// The design-session browser.
+		{Pattern: designPath, Serve: (*App).handleDesign},
+		{Pattern: "GET /design/products/{productID}/design-sessions", Serve: (*App).handleDesignSessionList},
+		{Pattern: "GET /design/design-sessions/{id}", Serve: (*App).handleDesignSessionDetail},
+	}
+}
+
+// bind closes an App method over the receiver, turning a method expression
+// into the handler the mux registers. legacyURLs stores method expressions
+// rather than bound handlers so the table stays plain data that does not
+// need an App to build.
+func bind(app *App, h func(*App, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { h(app, w, r) }
+}
+
+// mountLegacyRoutes registers every pre-redesign URL from legacyURLs,
+// behind the sign-in gate, redirecting to its successor when one is named
+// and otherwise serving its existing page inside the shell.
+//
+// The registrations live in one table so that "no pre-redesign URL 404s"
+// is checkable rather than assumed: the acceptance test walks this same
+// table, so a URL dropped from it fails a test instead of quietly 404ing
+// for an operator who had it bookmarked.
+func (app *App) mountLegacyRoutes(mux *http.ServeMux) {
+	app.mountLegacyTable(mux, legacyURLs())
+}
+
+// mountLegacyTable registers one table of pre-redesign URLs, and is
+// mountLegacyRoutes with the table as an argument.
+//
+// Every entry currently serves, so no live route takes the Successor
+// branch and a test cannot reach it through the production registrations.
+// Taking the table as a parameter lets one mount a doctored copy and
+// drive the branch a phase gets the moment it names a successor.
+func (app *App) mountLegacyTable(mux *http.ServeMux, table []legacyURL) {
+	for _, l := range table {
+		switch {
+		case l.Successor != nil:
+			mux.HandleFunc(l.Pattern, app.readerRoute(app.serveLegacy(l)))
+		case l.Serve != nil:
+			mux.HandleFunc(l.Pattern, app.readerRoute(bind(app, l.Serve)))
+		default:
+			// A programming mistake rather than a runtime condition: an
+			// entry with neither field would register a route that serves
+			// nothing, which is the one outcome this table exists to make
+			// impossible.
+			panic("legacy URL " + l.Pattern + " names neither a page nor a successor")
+		}
+	}
+}
+
+// serveLegacy is a legacy URL's redirect-to-successor handler. The status
+// is 302 rather than 301: a pre-redesign URL is a live link an operator
+// may keep following, and 302 is the one that does not let a browser pin
+// the old URL in its cache past the page it now names.
+func (app *App) serveLegacy(l legacyURL) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		target, ok := l.Successor(app, r)
+		if !ok {
+			// An un-prefixed URL must always land somewhere, so a scope
+			// with no product to resolve renders the product index rather
+			// than a redirect with nowhere to go.
+			app.renderShell(w, r, "No products in this scope", specProductsPath,
+				pages.NoProductsInScope())
+			return
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+	}
+}
+
 // The area handlers below own the shell's per-area roots. Each renders the
 // chrome; the read and write surfaces under these prefixes are registered
 // alongside these roots.

@@ -30,8 +30,8 @@ shell pages and none may ever be wrapped in `components.Shell`:**
 | `/favicon.ico` | A static asset, unauthenticated on purpose. |
 
 **The operator shell.** Everything registered in `mountShellRoutes` — the
-home page, the four nav areas, and their sub-pages. All of it is behind
-`app.auth.RequireAuthFunc`.
+home page, the product-scoped areas, and the pre-redesign URLs mounted
+from `legacyURLs`. All of it is behind `app.auth.RequireAuthFunc`.
 
 `credentialsPath` is `/account/credentials`, **not** `/credentials`, and
 that is not an inconsistency: `MountSelfServe`'s `{id}` wildcard outranks
@@ -176,11 +176,80 @@ directly.
    do not hand-roll a badge, an alert, an empty state, or a confirm.
 5. **The handler**, calling `app.renderShell`.
 6. **Register it** in `mountShellRoutes` behind `app.auth.RequireAuthFunc`
-   (or `app.operatorRoute` if it writes).
+   (or `app.operatorRoute` if it writes). If it is a **pre-redesign** URL,
+   it belongs in `routes.go`'s `legacyURLs` table instead — see below.
 7. **An `HX-Request` branch** if it is a list or a view that benefits —
    see below.
 8. **A test** asserting the data reaches the page, and an entry in
    `nav_test.go`'s `requiredAreas` if it is a new area.
+
+## Legacy URLs: the pre-redesign table (`legacyURLs`)
+
+Every URL the operator UI facelift replaces is registered from one table,
+`legacyURLs` in `routes.go`, mounted by `mountLegacyRoutes`. Each entry
+names exactly one destination:
+
+- **`Serve`** — the URL's existing page, rendered inside the shell at 200.
+  Every entry is in this state today.
+- **`Successor`** — where the URL goes once its redesigned page ships.
+
+So the phase that replaces a page moves its URL from `Serve` to
+`Successor` and changes nothing else. That is the point: a replaced page's
+old link cannot go dark, because the URL was already accounted for in one
+table rather than being a route registration someone has to remember to
+redirect.
+
+A `Successor` is a `func(*App, *http.Request) (target string, ok bool)`.
+`ok` is false only when no product could be resolved to build the target —
+an un-prefixed URL must always land somewhere, so that case renders the
+product index rather than redirecting to nowhere. Redirects are **302**,
+not 301: a pre-redesign URL stays a live link an operator may keep
+following, and 301 lets a browser pin the old URL in its cache past the
+page it now names.
+
+Do **not** redirect a URL to a page that has not shipped. Those render a
+placeholder, so an operator following a working "what is escalated?" link
+would land on a page saying nothing is there yet. The Overview is the one
+redesigned page P1 ships, and it replaces no old URL: `/` and
+`/products/{pid}/overview` are both its own addresses.
+
+`legacy_urls_test.go` holds the acceptance. It walks every pre-redesign
+URL the FR names — spelled out as literals, **not** derived from the
+production table, since a test iterating the table it polices passes just
+as well after an entry is deleted — asserts none 404s, and follows any
+redirect to a page rendering the **full workspace chrome** at 200 (the
+drawer shell, the grouped nav with its group headings, and the Product
+select), not merely a 200 with an HTML body.
+
+Four checks hold that walk to the contract, and each catches something the
+others do not:
+
+- **`TestPreRedesignURLsResolve`** — none 404s, and each renders the
+  whole shell.
+- **`TestPreRedesignURLsRenderNoReadFailure`** — none carries an error
+  alert. A fixture that answers a read with a failure produces a
+  well-chromed 200 whose body is an error, which a status-and-chrome check
+  cannot see; its `_HasTeeth` case proves the check still fires.
+- **`TestLegacyTableAndLiveRoutesAgree`** — the table and the live mux
+  agree in **both** directions. A pattern the table names but the mux does
+  not serve is a URL the FR believes is kept alive and nothing is; a
+  pre-redesign URL resolving through a pattern the table does *not* name
+  is one outside the retirement mechanism, so replacing its page would
+  leave the old link serving the old page forever. Either half alone
+  passes on the other's failure mode.
+- **`TestLegacyRedirectUsesFoundAndNotMoved`** — mounts the real table
+  with one real entry moved to `Successor` and asserts 302 (not 301), the
+  `Location`, that the successor renders in-shell, and that no other entry
+  broke. It goes through `mountLegacyTable` rather than a hand-wired
+  probe mux, so it exercises the wiring a phase actually inherits.
+
+Adding a URL to `legacyURLs` without adding it to the literal list fails
+`TestLegacyTableAndLiveRoutesAgree`; so does registering a pre-redesign
+route anywhere outside the table.
+
+`mountLegacyRoutes` delegates to `mountLegacyTable(mux, table)` and
+`mountShellRoutes` to `mountShellPages(mux)` purely so a test can mount a
+doctored legacy table alongside the real shell pages.
 
 ## The `HX-Request` branch: one route, two modes
 

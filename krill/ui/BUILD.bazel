@@ -191,6 +191,7 @@ go_test(
         "shared_spec_readers_test.go",
         "nav_test.go",
         "nav_badge_test.go",
+        "legacy_urls_test.go",
         "spec_page_test.go",
         "spec_parity_test.go",
         "delivery_page_test.go",

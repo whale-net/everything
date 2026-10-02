@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -105,3 +106,115 @@ func (chromeTaskCounter) CountConsoleOverview(context.Context, store.ConsoleOver
 func (chromeTaskCounter) SummarizeProductTaskProgress(_ context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
 	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
 }
+// emptyListTasks answers the console's four list views and the milestone
+// task pages with no rows, which is what a scope holding a product that has
+// no tasks yet renders.
+//
+// It is a separate type from chromeTaskCounter because that one is the
+// badge read and deliberately implements nothing else: a test that only
+// renders chrome should not silently acquire fabricated task rows. Here
+// the empty answer is the point -- the legacy-URL contract is about a
+// page resolving, not about what it lists.
+//
+// Every method here answers the empty list a genuinely empty queue gives,
+// never a fabricated row and never a nil interface: a test reaching for a
+// store method this does not model panics rather than passing on a
+// fabricated answer. legacy_urls_test.go's TestPreRedesignURLsRenderNoReadFailure
+// is the other half of that -- it asserts none of the legacy URLs renders
+// an error alert, so an empty-but-honest stub cannot be confused with a
+// page that failed to read.
+type emptyListTasks struct{ store.TaskStore }
+
+// CountEscalatedTasks is the sidebar badge's read. It is here rather than
+// left to the nil embedded interface because every shell page renders the
+// chrome, so a page reached through the full route set would panic on the
+// badge before reaching its own body.
+func (emptyListTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (emptyListTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
+	return store.Page[store.ClaimedTaskRow]{}, nil
+}
+
+func (emptyListTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{}, nil
+}
+
+func (emptyListTasks) ListCancelledTasks(context.Context, store.ListCancelledTasksParams) (store.Page[store.CancelledTaskRow], error) {
+	return store.Page[store.CancelledTaskRow]{}, nil
+}
+
+func (emptyListTasks) ListOpenNotes(context.Context, store.ListOpenNotesParams) (store.Page[store.OpenNoteRow], error) {
+	return store.Page[store.OpenNoteRow]{}, nil
+}
+
+var _ store.TaskStore = emptyListTasks{}
+
+// emptyDesignStores answer the design-session browser. A legacy-URL test
+// walks /design/products/{pid}/design-sessions and /design/design-sessions/{id},
+// both of which read these two stores, so without them those URLs would
+// nil-panic rather than render.
+//
+// The session list is empty but the one session detail URL resolves is a
+// real one: a detail URL naming an id that belongs to no session is a
+// correct 404, so testing URL continuity against one would test the 404
+// path and call it a pass. NewDesignSessions seeds exactly that session.
+//
+// GetByID answers ErrNotFound for every other id rather than fabricating a
+// session, so the 404 path stays reachable and this stub cannot be the
+// thing making a broken session URL look alive.
+type emptyDesignSessions struct {
+	store.DesignSessionStore
+	session store.DesignSession
+}
+
+// SummarizeByProduct answers the Overview's Blocking-questions tile. The
+// seeded session holds no open questions, so both figures are zero.
+func (d emptyDesignSessions) SummarizeByProduct(_ context.Context, productID uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	return store.ProductDesignSessionsSummary{ProductID: productID}, nil
+}
+
+func (d emptyDesignSessions) ListByProduct(context.Context, uuid.UUID) ([]store.DesignSession, error) {
+	if d.session.ID == uuid.Nil {
+		return nil, nil
+	}
+	return []store.DesignSession{d.session}, nil
+}
+
+func (d emptyDesignSessions) GetByID(_ context.Context, id uuid.UUID) (store.DesignSession, error) {
+	if d.session.ID == uuid.Nil || id != d.session.ID {
+		return store.DesignSession{}, store.ErrNotFound
+	}
+	return d.session, nil
+}
+
+// NewDesignSessions seeds the one session the legacy-URL fixture names.
+func NewDesignSessions(id, productID uuid.UUID) emptyDesignSessions {
+	return emptyDesignSessions{session: store.DesignSession{
+		ID:                id,
+		ProductID:         productID,
+		OpeningSubmission: "Test submission",
+		CreatedAt:         time.Now(),
+	}}
+}
+
+type emptyRevisionEvents struct{ store.RevisionEventStore }
+
+func (emptyRevisionEvents) ListLatestSignoffBySessionIDs(context.Context, []uuid.UUID) (map[uuid.UUID]store.SignoffStatus, error) {
+	return nil, nil
+}
+
+func (emptyRevisionEvents) ListBySession(context.Context, uuid.UUID) ([]store.RevisionEvent, error) {
+	return nil, nil
+}
+
+func (emptyRevisionEvents) ListOpenQuestions(context.Context, uuid.UUID) ([]store.OpenQuestion, error) {
+	return nil, nil
+}
+
+var (
+	_ store.DesignSessionStore = emptyDesignSessions{}
+	_ store.RevisionEventStore = emptyRevisionEvents{}
+)
+
