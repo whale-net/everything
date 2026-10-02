@@ -54,43 +54,43 @@ func productTaskRowFixture() []store.ProductTaskRow {
 	}
 	return []store.ProductTaskRow{
 		{
-			TaskID:      productTaskRowOnMiddle,
-			Title:       "A task on the cut milestone itself",
-			CreatedAt:   time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC),
-			Milestone:   store.ProductTaskMilestoneRef{ID: productTaskMilestone, Name: "Middle milestone", Status: store.MilestoneStatusInProgress},
-			CurrentLane: store.LaneImplementation,
-			State:       store.TaskStateEscalated,
+			TaskID:       productTaskRowOnMiddle,
+			Title:        "A task on the cut milestone itself",
+			CreatedAt:    time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC),
+			Milestone:    store.ProductTaskMilestoneRef{ID: productTaskMilestone, Name: "Middle milestone", Status: store.MilestoneStatusInProgress},
+			CurrentLane:  store.LaneImplementation,
+			State:        store.TaskStateEscalated,
 			AttemptCount: 2,
 			AttemptCap:   store.DefaultAttemptCap,
 		},
 		{
-			TaskID:      productTaskRowOnMilep,
-			Title:       "A task on a milepebble of the cut milestone",
-			CreatedAt:   time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC),
-			Milestone:   store.ProductTaskMilestoneRef{ID: productTaskMilestone, Name: "Middle milestone", Status: store.MilestoneStatusInProgress},
-			Milepebble:  &milepebble,
-			CurrentLane: store.LaneTesting,
-			State:       store.TaskStateActive,
+			TaskID:       productTaskRowOnMilep,
+			Title:        "A task on a milepebble of the cut milestone",
+			CreatedAt:    time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC),
+			Milestone:    store.ProductTaskMilestoneRef{ID: productTaskMilestone, Name: "Middle milestone", Status: store.MilestoneStatusInProgress},
+			Milepebble:   &milepebble,
+			CurrentLane:  store.LaneTesting,
+			State:        store.TaskStateActive,
 			AttemptCount: 1,
 			AttemptCap:   store.DefaultAttemptCap,
 		},
 		{
-			TaskID:      productTaskRowNewest,
-			Title:       "A task on the newest milestone",
-			CreatedAt:   time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC),
-			Milestone:   store.ProductTaskMilestoneRef{ID: productTaskNewestMilestone, Name: "Newest milestone", Status: store.MilestoneStatusInProgress},
-			CurrentLane: store.LaneDone,
-			State:       store.TaskStateActive,
+			TaskID:       productTaskRowNewest,
+			Title:        "A task on the newest milestone",
+			CreatedAt:    time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC),
+			Milestone:    store.ProductTaskMilestoneRef{ID: productTaskNewestMilestone, Name: "Newest milestone", Status: store.MilestoneStatusInProgress},
+			CurrentLane:  store.LaneDone,
+			State:        store.TaskStateActive,
 			AttemptCount: 0,
 			AttemptCap:   store.DefaultAttemptCap,
 		},
 		{
-			TaskID:      productTaskRowUncut,
-			Title:       "A task on the uncut oldest milestone",
-			CreatedAt:   time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
-			Milestone:   store.ProductTaskMilestoneRef{ID: productTaskOldestMilestone, Name: "Oldest milestone", Status: store.MilestoneStatusInProgress},
-			CurrentLane: store.LaneScaffold,
-			State:       store.TaskStateActive,
+			TaskID:       productTaskRowUncut,
+			Title:        "A task on the uncut oldest milestone",
+			CreatedAt:    time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
+			Milestone:    store.ProductTaskMilestoneRef{ID: productTaskOldestMilestone, Name: "Oldest milestone", Status: store.MilestoneStatusInProgress},
+			CurrentLane:  store.LaneScaffold,
+			State:        store.TaskStateActive,
 			AttemptCount: 0,
 			AttemptCap:   store.DefaultAttemptCap,
 		},
@@ -238,6 +238,22 @@ func TestTasksTableAggregatesACutMilestoneUnderIt(t *testing.T) {
 	assert.Contains(t, onMilestone, "Middle milestone")
 	assert.NotContains(t, onMilestone, "Middle milepebble",
 		"a task scoped to the milestone itself has no milepebble to name")
+
+	// The same aggregation has to hold in the all-incomplete scope, which
+	// is the DEFAULT an operator lands on. Asserting it only for an
+	// explicitly-picked milestone would leave the default view free to
+	// answer a cut milestone with the empty state.
+	defaultRec := fetch(t, mux, productTaskTasksURL(""))
+	require.Equal(t, http.StatusOK, defaultRec.Code)
+	defaultBody := defaultRec.Body.String()
+
+	assert.NotContains(t, defaultBody, `data-krill="product-tasks-empty"`,
+		"a cut milestone with tasks must never show the empty state, in the default scope either")
+	defaultOnMilepebble := taskRowHTML(t, defaultBody, productTaskRowOnMilep.String())
+	assert.Contains(t, defaultOnMilepebble, "Middle milepebble",
+		"the default scope names the milepebble too")
+	assert.Contains(t, defaultOnMilepebble, "Middle milestone",
+		"under its parent milestone")
 }
 
 // TestTasksTableRowsCarryTheObservedClaimIdentity pins FR f41a352d's claim
@@ -252,12 +268,12 @@ func TestTasksTableRowsCarryTheObservedClaimIdentity(t *testing.T) {
 	live := time.Now().Add(20 * time.Minute).UTC().Truncate(time.Second)
 
 	for _, tc := range []struct {
-		name          string
-		mutate        func(*store.ProductTaskRow)
-		wantClaim     string
-		wantLease     string
-		wantBadges    []string
-		absentBadges  []string
+		name         string
+		mutate       func(*store.ProductTaskRow)
+		wantClaim    string
+		wantLease    string
+		wantBadges   []string
+		absentBadges []string
 	}{
 		{
 			name: "a live claim carries both halves and the claimed badge",
@@ -286,10 +302,10 @@ func TestTasksTableRowsCarryTheObservedClaimIdentity(t *testing.T) {
 			absentBadges: []string{`data-krill="task-badge-claimed"`},
 		},
 		{
-			name:          "an unclaimed row carries neither and claims no lease",
-			wantClaim:     "",
-			wantLease:     "",
-			absentBadges:  []string{`data-krill="task-badge-claimed"`, `data-krill="task-badge-lease-expired"`},
+			name:         "an unclaimed row carries neither and claims no lease",
+			wantClaim:    "",
+			wantLease:    "",
+			absentBadges: []string{`data-krill="task-badge-claimed"`, `data-krill="task-badge-lease-expired"`},
 		},
 		{
 			// The store guarantees the two agree, so this shape never
@@ -377,6 +393,34 @@ func TestTasksTableIssuesNoWrite(t *testing.T) {
 	assert.Contains(t, region, `hx-get="/products/`+productTaskProduct.String()+`/tasks"`)
 	// The lane-move affordance the read-only rule rules out by name.
 	assert.NotContains(t, strings.ToLower(region), "drag")
+}
+
+// TestBoardViewIsAlsoReadOnly pins the same rule on the OTHER view of the
+// scope. FR f41a352d's read-only bullet names the Tasks table AND the
+// Board, and both are served by one handler -- so a read-only assertion on
+// only the Tasks URL would be satisfied by a Board that offered a
+// drag-and-drop card for free.
+//
+// The Board here renders the Tasks region rather than lanes (the swimlane
+// layout is a later task's), which is exactly why this has to be pinned
+// now: the row markup is shared, and the day the Board grows its own
+// controls this is the test that stops them being write-capable.
+func TestBoardViewIsAlsoReadOnly(t *testing.T) {
+	rows := productTaskRowFixture()
+	tasks := &recordingProductTasks{rows: rows, total: len(rows)}
+	mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+	rec := fetch(t, mux, "/products/"+productTaskProduct.String()+"/board")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	region := regionHTML(t, rec.Body.String())
+	assert.Contains(t, region, `data-krill-view="Board"`, "the Board view rendered")
+	assert.Equal(t, 1, strings.Count(region, "<form"),
+		"the Board's only form is the scope control's plain GET")
+	for _, forbidden := range []string{"hx-post", "hx-put", "hx-delete", `method="post"`, "drag"} {
+		assert.NotContains(t, strings.ToLower(region), strings.ToLower(forbidden),
+			"the Board must offer no control that changes task state")
+	}
 }
 
 // TestTasksTableRendersLaneAndStateAsBadges is FR de4d0e42's rule on this
@@ -545,4 +589,226 @@ func TestProductScopedTaskDetailRefusesATaskOutsideTheProduct(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "A task on another product's milestone")
+}
+
+// TestPerContainerTaskDetailStillServes pins the other half of the route
+// split: sharing serveTaskDetail between the two URLs did not cost the
+// per-container one its page.
+//
+// This is driven through mountShellRoutes rather than a hand-built mux so
+// the assertion covers the real registration as well as the handler -- a
+// route that served correctly but was no longer mounted would pass a
+// handler-level test. The URL is spelled by taskDetailPath, the same
+// helper the row link test says a row must NOT use, so the two URLs stay
+// distinguishable by construction rather than by a literal typed here.
+func TestPerContainerTaskDetailStillServes(t *testing.T) {
+	mux := productTaskDetailMux(t)
+
+	// The container named is the MILEPEBBLE the task belongs to: a task is
+	// scoped to one container, and that container is what the URL has to
+	// name for this route to serve it.
+	rec := fetch(t, mux, taskDetailPath(productTaskProduct, productTaskMilepebble, productTaskRowOnMilep))
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "A task on a milepebble of the cut milestone")
+}
+
+// TestPerContainerTaskDetailStillRefusesATaskInAnotherContainer is the
+// per-container route's own membership rule after the split: a task that
+// exists and reads fine, but belongs to a container the URL did not name,
+// is not this page's answer.
+//
+// The product-scoped URL has no container to compare against, so the two
+// routes' refusals are decided by different code -- this is the half that
+// only the per-container route can get wrong.
+func TestPerContainerTaskDetailStillRefusesATaskInAnotherContainer(t *testing.T) {
+	mux := productTaskDetailMux(t)
+
+	// The other task belongs to productTaskOtherMilestone, which this
+	// product's listing does not carry. The URL names a real container of
+	// THIS product, so only the container comparison can refuse it -- the
+	// listing check the product-scoped route relies on would pass here.
+	rec := fetch(t, mux, taskDetailPath(productTaskProduct, productTaskMilepebble, productTaskOtherMilestone))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "A task on another product's milestone")
+}
+
+// TestTasksRegionRefreshReReadsTheCurrentScope pins the Refresh control's
+// target: it carries THIS request's query, so pressing it re-reads the
+// scope and filters the URL currently names.
+//
+// A Refresh pointing at the bare product Tasks path would answer with the
+// product-wide default -- silently discarding a milestone scope, a lane
+// filter and only-stuck, and leaving the operator looking at a different
+// table than the one they pressed Refresh on with no indication it moved.
+func TestTasksRegionRefreshReReadsTheCurrentScope(t *testing.T) {
+	rows := productTaskRowFixture()
+	tasks := &recordingProductTasks{rows: rows, total: len(rows)}
+	mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+	query := "scope=milestone&container_id=" + productTaskMilestone.String() +
+		"&lane=Done&only_stuck=1"
+	rec := fetch(t, mux, productTaskTasksURL(query))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	region := regionHTML(t, rec.Body.String())
+	at := strings.Index(region, `data-krill="refresh"`)
+	require.NotEqual(t, -1, at, "the region offers no Refresh: %s", region)
+
+	refresh := region[at:]
+	if end := strings.Index(refresh, "</button>"); end != -1 {
+		refresh = refresh[:end]
+	}
+	assert.Contains(t, refresh, "scope=milestone",
+		"Refresh must re-read the scope the URL names")
+	assert.Contains(t, refresh, "container_id="+productTaskMilestone.String())
+	assert.Contains(t, refresh, "lane=Done")
+	assert.Contains(t, refresh, "only_stuck=1")
+
+	// And it is a GET back to this same page, not a write and not a
+	// different one.
+	assert.Contains(t, refresh, `hx-get="/products/`+productTaskProduct.String()+`/tasks?`)
+}
+
+// TestTasksTableRendersAttemptsAgainstTheCap pins FR f41a352d's attempts
+// column: "2 of 3" against the cap the READ reported.
+//
+// The product read supplies its own cap rather than this package assuming
+// the default, so the cell has to be built from what the read said. A
+// table that hardcoded store.DefaultAttemptCap would render "2 of 3" for
+// every row and be right until a task's cap was ever anything else.
+func TestTasksTableRendersAttemptsAgainstTheCap(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		count      int
+		cap        int
+		want       string
+		absentCell string
+	}{
+		{
+			name:  "the read's own cap is used",
+			count: 2,
+			cap:   5,
+			want:  "2 of 5",
+			// The default would read "2 of 3" -- so this assertion is what
+			// distinguishes reading the cap from assuming it.
+			absentCell: ">2 of 3<",
+		},
+		{
+			name:  "a cap the read did not supply falls back to the default",
+			count: 1,
+			cap:   0,
+			// "1 of 0" would be nonsense, and a cap of zero read as a
+			// reached cap would put a "capped" badge on every row.
+			want: "1 of 3",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := productTaskRowFixture()[0]
+			row.AttemptCount = tc.count
+			row.AttemptCap = tc.cap
+			tasks := &recordingProductTasks{rows: []store.ProductTaskRow{row}, total: 1}
+			mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+			rec := fetch(t, mux, productTaskTasksURL(""))
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			rendered := taskRowHTML(t, rec.Body.String(), row.TaskID.String())
+			cell := rowCell(t, rendered, "task-attempts")
+			assert.Contains(t, cell, tc.want)
+			if tc.absentCell != "" {
+				assert.NotContains(t, rendered, tc.absentCell)
+			}
+		})
+	}
+}
+
+// rowCell returns the single cell of a rendered row carrying this
+// data-krill marker, so an assertion about a column is made about that
+// column rather than about whatever text the row happens to contain.
+func rowCell(t *testing.T, row, marker string) string {
+	t.Helper()
+	needle := `data-krill="` + marker + `"`
+	at := strings.Index(row, needle)
+	require.NotEqual(t, -1, at, "no %s cell in the row: %s", marker, row)
+	start := strings.LastIndex(row[:at], "<td")
+	require.NotEqual(t, -1, start, "the marker is not inside a cell: %s", row)
+	end := strings.Index(row[at:], "</td>")
+	require.NotEqual(t, -1, end, "the cell never closes: %s", row)
+	return row[start : at+end]
+}
+
+// cellText is a cell's text content with its tags stripped, so "this cell
+// says nothing" can be asserted without depending on templ's whitespace.
+func cellText(cell string) string {
+	out := cell
+	for {
+		open := strings.Index(out, "<")
+		if open == -1 {
+			return out
+		}
+		closeAt := strings.Index(out[open:], ">")
+		if closeAt == -1 {
+			return out
+		}
+		out = out[:open] + " " + out[open+closeAt+1:]
+	}
+}
+
+// TestTasksTableLeaseCellNamesTheExpiryACLaimedRowHolds pins the claim
+// state's VISIBLE half. The data attributes are FR f41a352d's claim
+// identity, but the row also has to show the operator the lease the read
+// observed -- an expiry in the Lease cell is what tells a claimed task from
+// an idle one at a glance.
+//
+// An unclaimed row must leave that cell empty rather than naming some
+// default instant.
+func TestTasksTableLeaseCellNamesTheExpiryACLaimedRowHolds(t *testing.T) {
+	claimID := uuid.MustParse("55555555-5555-5555-5555-555555555555")
+	lease := time.Now().Add(20 * time.Minute).UTC().Truncate(time.Second)
+
+	for _, tc := range []struct {
+		name  string
+		mutat func(*store.ProductTaskRow)
+		want  string
+	}{
+		{
+			name: "a claimed row names the expiry it observed",
+			mutat: func(r *store.ProductTaskRow) {
+				r.ClaimID = &claimID
+				r.LeaseExpiresAt = &lease
+			},
+			want: lease.Format(time.RFC3339),
+		},
+		{
+			name:  "an unclaimed row leaves the cell empty",
+			mutat: func(*store.ProductTaskRow) {},
+			want:  "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := productTaskRowFixture()[0]
+			row.ClaimID, row.LeaseExpiresAt = nil, nil
+			tc.mutat(&row)
+
+			tasks := &recordingProductTasks{rows: []store.ProductTaskRow{row}, total: 1}
+			mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+			rec := fetch(t, mux, productTaskTasksURL(""))
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			cell := rowCell(t, taskRowHTML(t, rec.Body.String(), row.TaskID.String()), "task-lease")
+			if tc.want == "" {
+				// templ pads an empty cell with whitespace, so the assertion
+				// is that the cell carries no TEXT -- not that it is byte-
+				// empty. What would be wrong here is any instant at all.
+				assert.Empty(t, strings.TrimSpace(cellText(cell)),
+					"an unclaimed row must not name a lease expiry")
+				return
+			}
+			assert.Contains(t, cell, tc.want,
+				"the Lease cell shows the absolute expiry the read observed")
+		})
+	}
 }
