@@ -122,4 +122,11 @@ The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 
 
 ## MCP server (`manmanv2/mcp`)
 
-Scaffold only; variables are defined by the Implementation lane (OIDC issuer/audience, control API address, listen port).
+| Variable | Required | Description |
+|---|---|---|
+| `OIDC_ISSUER` | yes | Keycloak realm issuer URL used to verify caller bearer tokens |
+| `OIDC_CLIENT_ID` | yes | Expected token audience |
+| `PORT` | no | Listen port (default `8081`) |
+| `MCP_RESOURCE_METADATA_URL` | no | RFC 9728 metadata URL advertised in 401 challenges |
+
+There is no unauthenticated mode: the server refuses to start without the OIDC settings. Callers need a `gamer`, `server-manager`, or `admin` realm role; any other caller is refused every tool.

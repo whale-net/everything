@@ -6,7 +6,13 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/whale-net/everything/manmanv2/mcp",
     visibility = ["//visibility:private"],
-    deps = ["//manmanv2/mcp/server"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//libs/go/logging",
+        "//manmanv2/mcp/server",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
 )
 
 go_binary(
