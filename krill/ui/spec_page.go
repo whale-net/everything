@@ -44,10 +44,10 @@ const (
 // un-prefixed page lands on the product they were just reading. The cookie
 // is a hint -- an id from another scope is discarded on the way back in --
 // so writing it here costs these pages nothing they would not have paid.
-func specProductID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+func (app *App) specProductID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		renderSpecStatus(w, r, http.StatusBadRequest, pages.StatusPage{
+		app.renderSpecStatus(w, r, http.StatusBadRequest, pages.StatusPage{
 			Title:    "Bad product id",
 			Detail:   "The product id in the URL is not a UUID.",
 			BackHref: specProductsPath,
@@ -63,9 +63,9 @@ func specProductID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // (an unknown or superseded product) is a 404 the operator can act on;
 // anything else is a genuine read failure and is logged at ERROR before a
 // 500. Both render inside the shell, not as a bare http.Error string.
-func renderSpecError(w http.ResponseWriter, r *http.Request, anchor string, err error) {
+func (app *App) renderSpecError(w http.ResponseWriter, r *http.Request, anchor string, err error) {
 	if errors.Is(err, store.ErrNotFound) {
-		renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
+		app.renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
 			Title:    "Not found",
 			Detail:   "No current product matches that id.",
 			BackHref: specProductsPath,
@@ -84,7 +84,7 @@ func renderSpecError(w http.ResponseWriter, r *http.Request, anchor string, err 
 		renderFragment(w, r, pages.SpecInlineError(anchor, "Could not load the spec. The spec store could not be read; see the logs."))
 		return
 	}
-	renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
+	app.renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
 		Title:    "Could not load the spec",
 		Detail:   "The spec store could not be read. See the logs.",
 		BackHref: specProductsPath,
@@ -100,8 +100,8 @@ func renderSpecError(w http.ResponseWriter, r *http.Request, anchor string, err 
 // The status necessarily lives here rather than in the component: templ
 // components are body-writers with no status concept, so renderShellStatus
 // keeps owning the response and this only supplies the body.
-func renderSpecStatus(w http.ResponseWriter, r *http.Request, status int, page pages.StatusPage) {
-	renderShellStatus(w, r, "Spec", specPath, pages.SpecStatus(page), status)
+func (app *App) renderSpecStatus(w http.ResponseWriter, r *http.Request, status int, page pages.StatusPage) {
+	app.renderShellStatus(w, r, "Spec", r.URL.Path, pages.SpecStatus(page), status)
 }
 
 // renderSpecPage serves one spec page in both modes off its single
@@ -109,12 +109,12 @@ func renderSpecStatus(w http.ResponseWriter, r *http.Request, status int, page p
 // 200 fragment, and a browser gets that same component inside the shell
 // chrome. The Refresh button each page carries re-requests its own path
 // with HX-Request set, which is what lands on the fragment branch.
-func renderSpecPage(w http.ResponseWriter, r *http.Request, title string, body templ.Component) {
+func (app *App) renderSpecPage(w http.ResponseWriter, r *http.Request, title string, body templ.Component) {
 	if r.Header.Get("HX-Request") != "" {
 		renderFragment(w, r, body)
 		return
 	}
-	renderShell(w, r, title, specPath, body)
+	app.renderShell(w, r, title, r.URL.Path, body)
 }
 
 // productHeaderOf builds the banner from a store product's own current
@@ -180,7 +180,7 @@ func productNavFor(id uuid.UUID, current string) []components.NavLink {
 func (app *App) handleSpecProducts(w http.ResponseWriter, r *http.Request) {
 	products, err := app.spec.Products(r.Context())
 	if err != nil {
-		renderSpecError(w, r, pages.ProductsAnchor, err)
+		app.renderSpecError(w, r, pages.ProductsAnchor, err)
 		return
 	}
 
@@ -192,7 +192,7 @@ func (app *App) handleSpecProducts(w http.ResponseWriter, r *http.Request) {
 			CapabilityH: productPath(p.ID),
 		})
 	}
-	renderSpecPage(w, r, "Products", pages.Products(pages.ProductsPage{
+	app.renderSpecPage(w, r, "Products", pages.Products(pages.ProductsPage{
 		Path:  specProductsPath,
 		Items: items,
 	}))
@@ -204,18 +204,18 @@ func (app *App) handleSpecProducts(w http.ResponseWriter, r *http.Request) {
 // Requirements (current revisions only) as a navigable capability map --
 // get_product_slice's shape, nested by parent. FR 638a7e5f.
 func (app *App) handleCapabilityMap(w http.ResponseWriter, r *http.Request) {
-	productID, ok := specProductID(w, r)
+	productID, ok := app.specProductID(w, r)
 	if !ok {
 		return
 	}
 
 	doc, err := app.spec.ProductSlice(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, pages.CapabilityMapAnchor, err)
+		app.renderSpecError(w, r, pages.CapabilityMapAnchor, err)
 		return
 	}
 
-	renderSpecPage(w, r, "Capability map", pages.CapabilityMap(capabilityPageOf(doc, productID)))
+	app.renderSpecPage(w, r, "Capability map", pages.CapabilityMap(capabilityPageOf(doc, productID)))
 }
 
 // capabilityPageOf assembles the capability map from a slice.Document,
@@ -267,18 +267,18 @@ func capabilityPageOf(doc slice.Document, productID uuid.UUID) pages.CapabilityP
 // their full body text -- get_product_slice's decisions, unchanged (FR
 // 6aa70e3a).
 func (app *App) handleSpecDecisions(w http.ResponseWriter, r *http.Request) {
-	productID, ok := specProductID(w, r)
+	productID, ok := app.specProductID(w, r)
 	if !ok {
 		return
 	}
 
 	doc, err := app.spec.ProductSlice(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, pages.DecisionsAnchor, err)
+		app.renderSpecError(w, r, pages.DecisionsAnchor, err)
 		return
 	}
 
-	renderSpecPage(w, r, "Decisions", pages.Decisions(decisionsPageOf(doc, productID)))
+	app.renderSpecPage(w, r, "Decisions", pages.Decisions(decisionsPageOf(doc, productID)))
 }
 
 // decisionsPageOf assembles the decisions list, copying each decision's
@@ -306,23 +306,23 @@ func decisionsPageOf(doc slice.Document, productID uuid.UUID) pages.DecisionsPag
 // handleSpecPersonas lists a product's current Personas -- list_personas'
 // shape (FR b4c1c77f).
 func (app *App) handleSpecPersonas(w http.ResponseWriter, r *http.Request) {
-	productID, ok := specProductID(w, r)
+	productID, ok := app.specProductID(w, r)
 	if !ok {
 		return
 	}
 
 	product, err := app.spec.Product(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, pages.PersonasAnchor, err)
+		app.renderSpecError(w, r, pages.PersonasAnchor, err)
 		return
 	}
 	personas, err := app.spec.Personas(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, pages.PersonasAnchor, err)
+		app.renderSpecError(w, r, pages.PersonasAnchor, err)
 		return
 	}
 
-	renderSpecPage(w, r, "Personas", pages.Personas(personasPageOf(product, personas, productID)))
+	app.renderSpecPage(w, r, "Personas", pages.Personas(personasPageOf(product, personas, productID)))
 }
 
 // personasPageOf assembles the personas list, copying every field
@@ -356,23 +356,23 @@ var nonGoalHeadings = []struct{ kind, heading string }{
 // handleSpecNonGoals lists a product's current Non-Goals, both the
 // permanent and deferred kinds -- list_non_goals' shape (FR b4c1c77f).
 func (app *App) handleSpecNonGoals(w http.ResponseWriter, r *http.Request) {
-	productID, ok := specProductID(w, r)
+	productID, ok := app.specProductID(w, r)
 	if !ok {
 		return
 	}
 
 	product, err := app.spec.Product(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, pages.NonGoalsAnchor, err)
+		app.renderSpecError(w, r, pages.NonGoalsAnchor, err)
 		return
 	}
 	nonGoals, err := app.spec.NonGoals(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, pages.NonGoalsAnchor, err)
+		app.renderSpecError(w, r, pages.NonGoalsAnchor, err)
 		return
 	}
 
-	renderSpecPage(w, r, "Non-goals", pages.NonGoals(nonGoalsPageOf(product, nonGoals, productID)))
+	app.renderSpecPage(w, r, "Non-goals", pages.NonGoals(nonGoalsPageOf(product, nonGoals, productID)))
 }
 
 // nonGoalsPageOf assembles the non-goals list, copying every field

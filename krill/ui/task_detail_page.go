@@ -34,8 +34,8 @@ func (r *specReader) MilestoneDeliversSlice(ctx context.Context, milestoneID uui
 	return doc, nil
 }
 
-func taskDetailNotFound(w http.ResponseWriter, r *http.Request, c taskContainer, pid uuid.UUID) {
-	renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
+func (app *App) taskDetailNotFound(w http.ResponseWriter, r *http.Request, c taskContainer, pid uuid.UUID) {
+	app.renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
 		Title:    "Not found",
 		Detail:   "No task with that id belongs to this milestone or milepebble.",
 		BackHref: milestoneTasksPath(pid, c.ID),
@@ -154,7 +154,7 @@ func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	tid, err := uuid.Parse(r.PathValue("tid"))
 	if err != nil {
-		taskDetailNotFound(w, r, c, pid)
+		app.taskDetailNotFound(w, r, c, pid)
 		return
 	}
 	ctx := r.Context()
@@ -162,7 +162,7 @@ func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	if err != nil || task.MilestoneID != c.ID {
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			logger.Error("task read failed", "task", tid.String(), "error", err)
-			renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
+			app.renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
 				Title:    "Could not load the task",
 				Detail:   "The task could not be read. See the logs.",
 				BackHref: milestoneTasksPath(pid, c.ID),
@@ -170,7 +170,7 @@ func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		taskDetailNotFound(w, r, c, pid)
+		app.taskDetailNotFound(w, r, c, pid)
 		return
 	}
 
@@ -207,5 +207,5 @@ func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, body)
 		return
 	}
-	renderShell(w, r, "Task", specPath, body)
+	app.renderShell(w, r, "Task", r.URL.Path, body)
 }

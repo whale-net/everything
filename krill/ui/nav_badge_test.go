@@ -5,11 +5,10 @@ package main
 // with, and the two absences -- nothing escalated, nothing readable --
 // which are both rendered as no badge rather than as a 0.
 //
-// The chrome is exercised through the seam a shell page will use
+// The chrome is exercised through the seam a shell page uses
 // (shellNavTargets -> workspaceShellData -> components.Shell) and rendered
-// through this package's own fragment seam. It is deliberately not mounted
-// on a route: the cutover task owns that seam, and
-// TestWorkspaceShellDataIsNotMountedOnAnyRoute guards it.
+// through this package's own fragment seam, so a test can pin the badge
+// against one specific store fixture rather than whatever a mux resolves.
 
 import (
 	"bytes"
@@ -174,7 +173,10 @@ func newBadgeFixture() badgeFixture {
 // badgeApp is the app the badge reads through: the deployment's sole scope
 // plus the fixture store, with nothing else the seam touches.
 func (f badgeFixture) badgeApp() *App {
-	return &App{scopes: fakeBadgeScopes{}, tasks: f.tasks}
+	// spec answers the scope read the sidebar's Product switcher makes;
+	// an empty one leaves the switcher off, which is a state the chrome
+	// renders and these tests are not about.
+	return &App{scopes: fakeBadgeScopes{}, tasks: f.tasks, spec: emptyScopeSpecReader{}}
 }
 
 // escalatingParams is the P0 narrowing the badge, the Overview tile and the
@@ -388,7 +390,8 @@ func TestNeedsAttentionBadgeNeedsNoProduct(t *testing.T) {
 func workspaceShellPage(app *App, productID uuid.UUID, activePath string) templ.Component {
 	data := workspaceShellData(
 		app.shellNavTargets(context.Background(), productID, uuid.Nil),
-		activePath, "Overview", "developer", nil,
+		activePath, "Overview", "developer",
+		app.productSwitcherData(httptest.NewRequest(http.MethodGet, "/products/"+productID.String()+"/overview", nil)),
 	)
 	return components.Shell(data)
 }

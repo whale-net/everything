@@ -22,10 +22,10 @@ func renderComponent(t *testing.T, c templ.Component) string {
 	return sb.String()
 }
 
-func TestLayout_MountsSharedShellChrome(t *testing.T) {
-	body := renderComponent(t, Layout(LayoutData{Title: "Claimed tasks"}))
+func TestShell_MountsTheSharedChromeContributions(t *testing.T) {
+	body := renderComponent(t, Shell(ShellData{LayoutData: LayoutData{Title: "Claimed tasks"}}))
 
-	assert.Contains(t, body, "krill", "the brand label is krill's own, passed via ShellData")
+	assert.Contains(t, body, "krill", "the brand label is krill's own")
 	// htmxui's own contribution: the theme switcher and the shared theme
 	// list, which krill must not redeclare.
 	assert.Contains(t, body, "data-htmxui-theme-switcher")
@@ -33,38 +33,26 @@ func TestLayout_MountsSharedShellChrome(t *testing.T) {
 		"the shared Themes list supplies the night theme; krill must not redeclare it")
 }
 
-func TestLayout_IdentityIsRenderedAsAPlainLabel(t *testing.T) {
+func TestShell_IdentityIsRenderedAsAPlainLabel(t *testing.T) {
 	// The AUTH_MODE=none dev user must still surface, because its
 	// presence is the signal that the page rendered authenticated.
-	body := renderComponent(t, Layout(LayoutData{UserLabel: "developer"}))
+	body := renderComponent(t, Shell(ShellData{LayoutData: LayoutData{UserLabel: "developer"}}))
 	assert.Contains(t, body, "developer")
 }
 
-func TestLayout_EmptyIdentityRendersNoMenuContent(t *testing.T) {
+func TestShell_EmptyIdentityRendersNoMenuContent(t *testing.T) {
 	// htmxui §4: an empty identity means render nothing, so a deployment
 	// with no signed-in user never shows a logout control with no identity
 	// behind it.
-	body := renderComponent(t, Layout(LayoutData{UserLabel: ""}))
+	body := renderComponent(t, Shell(ShellData{LayoutData: LayoutData{UserLabel: ""}}))
 	assert.NotContains(t, body, "Logout")
 }
 
-func TestNav_MarksExactlyTheActiveLink(t *testing.T) {
-	body := renderComponent(t, Layout(LayoutData{Nav: []NavLink{
-		{Label: "Ops console", Href: "/ops", Active: true},
-		{Label: "Spec & delivery", Href: "/spec", Active: false},
-	}}))
-
-	// aria-current is the contract; menu-active is the styling.
-	assert.Contains(t, body, `href="/ops" class="menu-active" aria-current="page"`)
-	assert.Contains(t, body, `href="/spec">`)
-	assert.Equal(t, 1, strings.Count(body, `aria-current="page"`),
-		"exactly one primary nav link is ever active")
-}
-
-func TestNav_CarriesThePrimaryLandmark(t *testing.T) {
-	// nav_test.go asserts on <nav>; keep it a real landmark rather than a
-	// bare list, and keep the data-krill hook it scopes its scan to.
-	body := renderComponent(t, Layout(LayoutData{Nav: []NavLink{{Label: "Ops", Href: "/ops"}}}))
+// TestShell_CarriesThePrimaryLandmark keeps the sidebar a real landmark
+// rather than a bare list, and keeps the data-krill hook nav_test.go
+// scopes its active-link scan to.
+func TestShell_CarriesThePrimaryLandmark(t *testing.T) {
+	body := renderComponent(t, Shell(ShellData{NavGroups: shellGroups}))
 	assert.Contains(t, body, `data-krill="primary-nav"`)
 }
 

@@ -30,20 +30,20 @@ import (
 // and milepebble with its current status, plus the shipped/unshipped
 // breakdown for each partially-complete container.
 func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
-	productID, ok := specProductID(w, r)
+	productID, ok := app.specProductID(w, r)
 	if !ok {
 		return
 	}
 
 	product, err := app.spec.Product(r.Context(), productID)
 	if err != nil {
-		renderSpecError(w, r, pages.DeliveryAnchor, err)
+		app.renderSpecError(w, r, pages.DeliveryAnchor, err)
 		return
 	}
 	// A nil status filter means "all", mirroring the querier's contract.
 	listing, err := app.spec.Delivery(r.Context(), productID, nil)
 	if err != nil {
-		renderSpecError(w, r, pages.DeliveryAnchor, err)
+		app.renderSpecError(w, r, pages.DeliveryAnchor, err)
 		return
 	}
 	// A per-container breakdown read that fails is non-fatal: every
@@ -51,7 +51,7 @@ func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
 	// replaced by an inline error.
 	breakdowns := app.deliveryBreakdowns(r.Context(), listing)
 
-	renderSpecPage(w, r, "Delivery", pages.Delivery(deliveryPageOf(product, listing, breakdowns, productID)))
+	app.renderSpecPage(w, r, "Delivery", pages.Delivery(deliveryPageOf(product, listing, breakdowns, productID)))
 }
 
 // deliveryBreakdowns resolves the per-item shipped/unshipped breakdown for

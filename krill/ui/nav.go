@@ -1,7 +1,16 @@
+// The workspace shell's nav: the sidebar every signed-in page renders
+// (design/wireframes/_shell.html) as one unheaded Overview link followed by
+// six headed groups, and the rule for deciding which one the page being
+// rendered belongs to.
+//
+// The item set is build-time constant; only the hrefs, the badges, and
+// the active marking vary per request, because a link has to carry the
+// operator's current product.
 package main
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -10,90 +19,6 @@ import (
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/components"
 )
-
-// navArea is one top-level destination in the shell's persistent nav.
-// The three areas the shell exists to expose -- ops console,
-// design-session browser, spec+delivery browser -- are FR 85a8b33c's
-// contract; the credential widget is the page that predates the shell and
-// stays reachable from it.
-//
-// The chrome that renders these lives in krill/ui/components/layout.templ
-// (a wrapper around //libs/go/htmxui's Shell); this file keeps only what
-// is krill's own: the area table and the rule for deciding which one is
-// active. htmxui.Shell hardcodes no nav of its own, by design.
-type navArea struct {
-	// Path is this area's own route prefix on this binary.
-	Path string
-
-	// Label is the nav link's text.
-	Label string
-
-	// Blurb is the one-line description the shell's home page shows
-	// beside the link.
-	Blurb string
-}
-
-// navAreas is the shell's nav, in render order. Kept as package-level
-// state rather than per-request data: the set is fixed at build time and
-// every page renders the same nav.
-var navAreas = []navArea{
-	{
-		Path:  opsPath,
-		Label: "Ops console",
-		Blurb: "Claimed, escalated, and cancelled tasks, and open notes.",
-	},
-	{
-		Path:  designPath,
-		Label: "Design sessions",
-		Blurb: "Browse design sessions, their revisions, and open questions.",
-	},
-	{
-		Path:  specPath,
-		Label: "Spec & delivery",
-		Blurb: "The spec entities, decisions, and milestone delivery status.",
-	},
-	{
-		Path:  credentialsPath,
-		Label: "Credentials",
-		Blurb: "Mint a static bearer token for an MCP client.",
-	},
-}
-
-// navIsActive reports whether the page being rendered belongs to this nav
-// area, so an operator can see where they are without reading the URL.
-// Matched at path-segment boundaries rather than by raw prefix: an area
-// root is a prefix of its sub-pages ("/ops" of "/ops/claimed"), but not
-// of an unrelated sibling that merely starts with the same characters
-// ("/opsarchive").
-func navIsActive(area navArea, activePath string) bool {
-	if activePath == area.Path {
-		return true
-	}
-	return strings.HasPrefix(activePath, area.Path+"/")
-}
-
-// navLinks turns the area table into the chrome's nav slot, marking the
-// area the page being rendered belongs to.
-func navLinks(activePath string) []components.NavLink {
-	links := make([]components.NavLink, 0, len(navAreas))
-	for _, area := range navAreas {
-		links = append(links, components.NavLink{
-			Label:  area.Label,
-			Href:   area.Path,
-			Active: navIsActive(area, activePath),
-		})
-	}
-	return links
-}
-
-// ── the workspace shell's grouped nav ───────────────────────────────────────
-//
-// The model below is the chrome the operator facelift's sidebar renders
-// (design/wireframes/_shell.html): one unheaded Overview link followed by
-// six headed groups. It sits beside the flat navArea table above rather
-// than replacing it -- the pages renderShell still serves resolve their
-// product server-side and have no product id to scope hrefs with, so they
-// keep the flat table until the shell takes over routing.
 
 // navItem is one link in the workspace shell's sidebar.
 type navItem struct {
@@ -115,6 +40,11 @@ type navItem struct {
 	// and board pages differ by their own trailing segment, not by any
 	// one milestone.
 	Path string
+
+	// AltPath is a second path this item also owns, for a page that has
+	// two URLs. Overview is one: "/" and the product's own overview both
+	// render it, and the operator must see where they are on either.
+	AltPath string
 
 	// Exact marks an item whose only active page is its own path, with
 	// nothing under it. The Spec group's tabs are siblings hanging off
@@ -231,24 +161,45 @@ func (i navItem) itemPath() string {
 	return i.Href
 }
 
+// itemPaths is every path an item owns: its own, plus the alternative a
+// two-URL item carries.
+func (i navItem) itemPaths() []string {
+	if i.AltPath == "" {
+		return []string{i.itemPath()}
+	}
+	return []string{i.itemPath(), i.AltPath}
+}
+
 // navItemIsActive reports whether the page being rendered belongs to this
-// item. It generalises navIsActive's segment-boundary rule: a page belongs
-// to an item when it is at the item's path or under it, unless the item is
-// Exact (which owns its path alone). A "*" segment in the item's path
-// matches exactly one segment.
+// item. Matched at path-segment boundaries rather than by raw prefix: an
+// item's path is a prefix of its sub-pages ("/ops" of "/ops/claimed"), but
+// not of an unrelated sibling that merely starts with the same characters
+// ("/opsarchive"). A "*" segment matches exactly one segment.
 func navItemIsActive(item navItem, activePath string) bool {
-	pattern := pathSegments(item.itemPath())
+	for _, pattern := range item.itemPaths() {
+		if pathOwns(pattern, activePath, item.Exact) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathOwns reports whether the page at activePath is the pattern itself or
+// sits under it. An Exact pattern owns its path alone; the Spec group's
+// tabs are siblings, not a chain, and prefix matching would leave
+// Capabilities lit while an operator reads Decisions.
+func pathOwns(pattern, activePath string, exact bool) bool {
+	patternSegments := pathSegments(pattern)
 	segments := pathSegments(activePath)
-	if len(pattern) > len(segments) {
+	if len(patternSegments) > len(segments) {
 		return false
 	}
-	for i, seg := range pattern {
+	for i, seg := range patternSegments {
 		if seg != "*" && seg != segments[i] {
 			return false
 		}
 	}
-	// A path the page sits under is only owned by a non-Exact item.
-	return len(segments) == len(pattern) || !item.Exact
+	return len(segments) == len(patternSegments) || !exact
 }
 
 // pathSegments splits a URL path into its non-empty segments. The root is
@@ -269,7 +220,7 @@ func pathSegments(path string) []string {
 // Tasks and Board both link at the delivery page until their own pages
 // ship -- and a sidebar showing two active items is worse than one showing
 // the more specific Work item it currently points through. Overview sits
-// first and matches the bare root only, so it is never active while
+// first and matches its own two URLs alone, so it is never active while
 // another area is.
 func workspaceNav(t navTargets, activePath string) []components.NavGroup {
 	groups := navGroupTable(t)
@@ -309,26 +260,42 @@ func workspaceShellData(t navTargets, activePath, title, userLabel string, switc
 		LayoutData: components.LayoutData{
 			Title:     title,
 			UserLabel: userLabel,
-			Nav:       navLinks(activePath),
 		},
 		NavGroups: workspaceNav(t, activePath),
 		Switcher:  switcher,
 	}
 }
 
+// escalationBadgeKey carries an escalated count this request already read,
+// so a page whose own body shows the same figure -- the Overview's primary
+// action -- and the sidebar's Needs-attention badge are one read rather
+// than two that could disagree.
+type escalationBadgeKey struct{}
+
+// withEscalationBadge returns a request carrying an already-read badge.
+func withEscalationBadge(r *http.Request, badge navBadge) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), escalationBadgeKey{}, badge))
+}
+
+// escalationBadgeFrom returns the badge this request already read, if any.
+func escalationBadgeFrom(ctx context.Context) (navBadge, bool) {
+	badge, ok := ctx.Value(escalationBadgeKey{}).(navBadge)
+	return badge, ok
+}
+
 // shellNavTargets is the per-request half of the seam: it takes the ids a
 // route already resolved and adds the one figure the chrome must read for
 // itself, so a route building a shell page never has to remember to fetch
 // it.
-//
-// It returns targets rather than rendering, because the cutover task owns
-// the seam that mounts the chrome; this only fills the data that seam
-// will render.
 func (app *App) shellNavTargets(ctx context.Context, productID, milestoneID uuid.UUID) navTargets {
+	badge, ok := escalationBadgeFrom(ctx)
+	if !ok {
+		badge = app.needsAttentionBadge(ctx, productID)
+	}
 	return navTargets{
 		Product:   productID,
 		Milestone: milestoneID,
-		Escalated: app.needsAttentionBadge(ctx, productID),
+		Escalated: badge,
 	}
 }
 
@@ -338,6 +305,7 @@ func (app *App) shellNavTargets(ctx context.Context, productID, milestoneID uuid
 func navGroupTable(t navTargets) []navGroup {
 	product := productPath(t.Product)
 	delivery := product + "/delivery"
+	overview := productHref(t.Product, overviewSuffix)
 
 	// Tasks and Board own the milestone task subtree. With no milestone in
 	// scope the chrome cannot build either page's href, so both link at
@@ -353,9 +321,10 @@ func navGroupTable(t navTargets) []navGroup {
 
 	return []navGroup{
 		{Title: "", Items: []navItem{
-			// The home page is the Overview. It matches the bare root
-			// only, never a prefix, so no other area's page lights it.
-			{Label: "Overview", Href: "/", Path: "/", Exact: true},
+			// The home page is the Overview, and so is the product's own
+			// overview URL. Both light this item, neither as a prefix, so
+			// no other area's page does.
+			{Label: "Overview", Href: overview, Path: overview, AltPath: "/", Exact: true},
 		}},
 		{Title: "Work", Items: []navItem{
 			{Label: "Needs attention", Href: opsPath, Path: opsPath, Badge: t.Escalated},

@@ -31,6 +31,13 @@ type failingOpsTasks struct {
 	err error
 }
 
+// CountEscalatedTasks fails with everything else, which is the point: the
+// chrome renders its badge from this read, and a page must still render
+// when it cannot.
+func (f failingOpsTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, f.err
+}
+
 func (f failingOpsTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
 	return store.Page[store.ClaimedTaskRow]{}, f.err
 }
@@ -63,6 +70,7 @@ func (failingOpsScopes) GetSole(context.Context) (store.Scope, error) {
 func TestOpsQueryFailureIsVisibleToHtmx(t *testing.T) {
 	boom := errors.New("connection refused")
 	app := &App{
+		spec:   emptyScopeSpecReader{},
 		scopes: fakeOpsScopes{scope: opsTestScope},
 		tasks:  failingOpsTasks{err: boom},
 	}
@@ -141,10 +149,10 @@ func TestOpsQueryErrorNeverShowsStoreText(t *testing.T) {
 				handler http.HandlerFunc
 				path    string
 			}{
-				{"claimed", (&App{scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: tc.err}}).handleClaimedTasks, opsClaimedPath},
-				{"escalated", (&App{scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: tc.err}}).handleEscalatedTasks, opsEscalatedPath},
-				{"cancelled", (&App{scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: tc.err}}).handleCancelledTasks, opsCancelledPath},
-				{"notes", (&App{scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: tc.err}}).handleOpenNotes, opsNotesPath},
+				{"claimed", (&App{spec: emptyScopeSpecReader{}, scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: tc.err}}).handleClaimedTasks, opsClaimedPath},
+				{"escalated", (&App{spec: emptyScopeSpecReader{}, scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: tc.err}}).handleEscalatedTasks, opsEscalatedPath},
+				{"cancelled", (&App{spec: emptyScopeSpecReader{}, scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: tc.err}}).handleCancelledTasks, opsCancelledPath},
+				{"notes", (&App{spec: emptyScopeSpecReader{}, scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: tc.err}}).handleOpenNotes, opsNotesPath},
 			} {
 				t.Run(view.name, func(t *testing.T) {
 					// A token in the URI so the rejection is reachable
@@ -198,6 +206,7 @@ func TestOpsQueryErrorNeverShowsStoreText(t *testing.T) {
 // navigate away from. A text/plain body has no nav and no recovery link.
 func TestOpsQueryErrorKeepsTheNav(t *testing.T) {
 	app := &App{
+		spec:   emptyScopeSpecReader{},
 		scopes: fakeOpsScopes{scope: opsTestScope},
 		tasks:  failingOpsTasks{err: store.ErrTokenScopeMismatch},
 	}
@@ -243,6 +252,7 @@ func TestOpsRecoveryPathDropsOnlyTheToken(t *testing.T) {
 // while a genuine outage stays a 500 with a generic message.
 func TestOpsQueryFailureDistinguishesCallerErrorFromOutage(t *testing.T) {
 	caller := &App{
+		spec:   emptyScopeSpecReader{},
 		scopes: fakeOpsScopes{scope: opsTestScope},
 		tasks:  failingOpsTasks{err: store.ErrInvalidContinuationToken},
 	}
@@ -251,6 +261,7 @@ func TestOpsQueryFailureDistinguishesCallerErrorFromOutage(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "token", "the caller is told which token was wrong")
 
 	outage := &App{
+		spec:   emptyScopeSpecReader{},
 		scopes: fakeOpsScopes{scope: opsTestScope},
 		tasks:  failingOpsTasks{err: errors.New("connection refused")},
 	}
@@ -264,7 +275,7 @@ func TestOpsQueryFailureDistinguishesCallerErrorFromOutage(t *testing.T) {
 // the handler never got far enough to know which view it was building.
 // OpsInlineError is view-agnostic for exactly that reason.
 func TestOpsQueryFailureBeforeAViewExists(t *testing.T) {
-	app := &App{scopes: failingOpsScopes{}, tasks: &fakeOpsTasks{}}
+	app := &App{spec: emptyScopeSpecReader{}, scopes: failingOpsScopes{}, tasks: &fakeOpsTasks{}}
 
 	rec := serveHX(app.handleClaimedTasks, opsClaimedPath)
 
@@ -279,7 +290,7 @@ func TestOpsQueryFailureBeforeAViewExists(t *testing.T) {
 // confident "No claimed tasks." -- indistinguishable from success, and it
 // would also silently stop the poll.
 func TestInterventionReReadFailureNeverLooksEmpty(t *testing.T) {
-	app := &App{scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: errors.New("boom")}}
+	app := &App{spec: emptyScopeSpecReader{}, scopes: fakeOpsScopes{scope: opsTestScope}, tasks: failingOpsTasks{err: errors.New("boom")}}
 
 	req := httptest.NewRequest(http.MethodGet, opsClaimedPath, nil)
 	rec := httptest.NewRecorder()

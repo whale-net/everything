@@ -4,10 +4,16 @@
 // not-yet-signed-in caller, per ProviderConfig.SignInURL -- before this
 // binary existed, `/authorize` had no SignInURL configured and just 401ed
 // on an unresolved caller (see ARCHITECTURE.md "krill/ui and the auth front
-// door") -- and, behind that sign-in, the persistent nav shell (nav.go)
-// linking the ops console, the design-session browser, and the
-// spec+delivery browser, plus the credential widget that shell inherited
-// from the original single-page UI.
+// door") -- and, behind that sign-in, the workspace shell: a drawer
+// sidebar (nav.go) whose grouped nav links the ops console, the
+// design-session browser, and the spec+delivery browser, plus the
+// credential widget that shell inherited from the original single-page
+// UI. Its home is the Overview (overview_page.go), served at both "/" and
+// /products/{pid}/overview.
+//
+// Every signed-in page renders in that one chrome, from the one seam
+// (renderShellStatus in templ_render.go), so the product switcher, the
+// Needs-attention badge, and the toast host are never a per-page decision.
 //
 // The OAuth2 authorization-code + PKCE flow (discovery -> registration ->
 // sign-in -> `/authorize` -> `/token`) must stay completable regardless of
@@ -380,11 +386,11 @@ func run() error {
 // "/logout" are the Keycloak sign-in flow's own public routes; every
 // other app route requires a signed-in operator.
 //
-// The signed-in app surface is the persistent nav shell (FR 85a8b33c):
-// "/{$}" is its home page and each nav area's own prefix is registered
-// here (see nav.go's navAreas). The home page is registered as "/{$}"
-// rather than the old catch-all "/" so an unknown path 404s instead of
-// silently rendering the landing page.
+// The signed-in app surface is the workspace shell: "/{$}" is its home
+// page and each nav area's own prefix is registered here (see nav.go's
+// navGroupTable). The home page is registered as "/{$}" rather than the
+// old catch-all "/" so an unknown path 404s instead of silently rendering
+// the landing page.
 //
 // "/login" is this binary's chosen route name, but
 // libs/go/htmxauth.Authenticator's RequireAuth/WithAccessToken hardcode
@@ -464,14 +470,14 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// operator confirms here.
 	mux.HandleFunc("GET "+opsTaskActionBase+"{id}"+cancelConfirmSuffix, app.operatorRoute(app.handleCancelConfirm))
 
-	// The signed-in shell (FR 85a8b33c): a home page plus one root per
-	// nav area, every one of them wrapped in the same chrome by
-	// renderShell. Each area's sub-pages register under its prefix
+	// The signed-in shell: the home page plus one root per nav area,
+	// every one of them rendered in the same chrome by
+	// renderShellStatus. Each area's sub-pages register under its prefix
 	// alongside its root.
 	app.mountShellRoutes(mux)
 }
 
-// mountShellRoutes registers the persistent nav shell's pages, each behind
+// mountShellRoutes registers the workspace shell's pages, each behind
 // the sign-in gate. Split out of setupRoutes so the shell's tests mount
 // the same registrations production does, rather than a copy that could
 // drift from it.
@@ -539,17 +545,18 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /design/products/{productID}/design-sessions", app.operatorRoute(app.handleOpenDesignSessionForm))
 	mux.HandleFunc("POST /design/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
 
-	// The product-scoped prefixes (FR c4bd4bf8). Each is registered now
-	// and serves a placeholder until its area's own page ships, so the
-	// current product becomes resolvable and carried in the path without
-	// moving any existing page onto the new chrome. Registering them ahead
-	// of their content is safe precisely because the handler resolves the
-	// {pid} against the caller's scope first: an out-of-scope link is
-	// already an in-shell 404 by the time the placeholder would render.
+	// The product-scoped prefixes (FR c4bd4bf8). Overview is the shell's
+	// home and serves its real page; every other sub-path serves a
+	// placeholder until its area's own page ships, so the current product
+	// becomes resolvable and carried in the path without moving any
+	// existing page. Registering a placeholder ahead of its content is safe
+	// precisely because the handler resolves the {pid} against the
+	// caller's scope first: an out-of-scope link is already an in-shell
+	// 404 by the time the placeholder would render.
 	//
-	// The legacy prefixes above stay registered alongside these; the
-	// cutover that retires them is a separate task.
-	mux.HandleFunc("GET "+productPathPrefix+overviewSuffix, app.readerRoute(app.handleProductPlaceholder))
+	// The legacy prefixes above stay registered alongside these; the task
+	// that retires them owns the redirects.
+	mux.HandleFunc("GET "+productPathPrefix+overviewSuffix, app.readerRoute(app.handleProductOverview))
 	mux.HandleFunc("GET "+productPathPrefix+needsAttentionSuffix, app.readerRoute(app.handleProductPlaceholder))
 	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix, app.readerRoute(app.handleProductPlaceholder))
 	mux.HandleFunc("GET "+productPathPrefix+boardSuffix, app.readerRoute(app.handleProductPlaceholder))

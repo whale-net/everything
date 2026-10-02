@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 
+	"github.com/google/uuid"
+
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 )
 
@@ -23,6 +26,13 @@ type emptyScopeSpecReader struct {
 
 func (emptyScopeSpecReader) Products(context.Context) ([]store.Product, error) { return nil, nil }
 
+// Delivery answers "this product delivers nothing". A page that renders the
+// Overview asks, and a fake with no delivery fixture should say the product
+// has no containers rather than nil-panic on the embedded nil interface.
+func (emptyScopeSpecReader) Delivery(context.Context, uuid.UUID, []store.MilestoneStatus) (slice.DeliveryListing, error) {
+	return slice.DeliveryListing{}, nil
+}
+
 var _ specReadClient = emptyScopeSpecReader{}
 
 // scopedProductsReader answers Products with a fixed list, so the
@@ -42,4 +52,40 @@ func (r scopedProductsReader) Products(context.Context) ([]store.Product, error)
 	return r.products, nil
 }
 
+// Delivery delegates to the embedded reader, and answers "no containers"
+// when there is none -- an App with products but no delivery fixture is a
+// product that has delivered nothing so far, which is what the Overview
+// then renders.
+func (r scopedProductsReader) Delivery(ctx context.Context, pid uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error) {
+	if r.specReadClient == nil {
+		return slice.DeliveryListing{}, nil
+	}
+	return r.specReadClient.Delivery(ctx, pid, statuses)
+}
+
 var _ specReadClient = scopedProductsReader{}
+
+// chromeScopeID is the sole scope the chrome's Needs-attention badge is
+// read under. Any non-nil id does; it is spelled out so a test asserting
+// on the badge has a scope it can name.
+var chromeScopeID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
+
+// chromeScopes and chromeTaskCounter are the two stores every full-page
+// shell render reads for the sidebar's Needs-attention badge. They live
+// here, not beside the fixtures that wire them, because every go_test
+// target in this package renders chrome now and the targets do not share
+// sources.
+//
+// Each embeds its interface, so a fixture reaching for any other store
+// method still nil-panics rather than passing on a fabricated answer.
+type chromeScopes struct{ store.ScopeStore }
+
+func (chromeScopes) GetSole(context.Context) (store.Scope, error) {
+	return store.Scope{ID: chromeScopeID}, nil
+}
+
+type chromeTaskCounter struct{ store.TaskStore }
+
+func (chromeTaskCounter) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
+}

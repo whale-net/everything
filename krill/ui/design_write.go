@@ -197,7 +197,7 @@ func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, pr
 		renderFragment(w, r, pages.OpenSessionForm(page))
 		return
 	}
-	renderShell(w, r, "Design sessions", designPath, pages.DesignSessionList(page))
+	app.renderShell(w, r, "Design sessions", r.URL.Path, pages.DesignSessionList(page))
 }
 
 // transportFailureMessage is the operator-facing half of a non-rejection
@@ -258,7 +258,7 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 		renderFragment(w, r, pages.FollowUpForm(detail))
 		return
 	}
-	renderShell(w, r, "Design session", designPath, pages.DesignSessionDetail(detail))
+	app.renderShell(w, r, "Design session", r.URL.Path, pages.DesignSessionDetail(detail))
 }
 
 // hxRedirect answers a successful doubled-form write for an htmx caller:

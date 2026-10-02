@@ -19,7 +19,7 @@ not-yet-signed-in caller, and that is this binary's `/login`. `ui` mounts
 `auth.Provider`'s OAuth2 authorization-server endpoints, so MCP clients
 can authorize against it. See
 `../ARCHITECTURE/20-krill-ui-mcpauth-front-door.md`. **None of these are
-shell pages and none may ever be wrapped in `components.Layout`:**
+shell pages and none may ever be wrapped in `components.Shell`:**
 
 | Route | Why not a shell page |
 |---|---|
@@ -45,8 +45,8 @@ Everything a page renders goes through one of three functions in
 
 | Function | Use it for | Status |
 |---|---|---|
-| `renderShell(w, r, title, activePath, body)` | A full page in the shared chrome. | 200 |
-| `renderShellStatus(..., status int)` | A full page that is a real 400 / 404 / 500 **rendered inside the chrome** rather than a bare `http.Error`. | the given code |
+| `app.renderShell(w, r, title, activePath, body)` | A full page in the shared chrome. | 200 |
+| `app.renderShellStatus(..., status int)` | A full page that is a real 400 / 404 / 500 **rendered inside the chrome** rather than a bare `http.Error`. | the given code |
 | `renderFragment(w, r, c)` | A bare component with no chrome — the `HX-Request` half of a one-route-two-modes branch. | always 200 |
 
 **Why the status code lives in Go and not in a component.** templ
@@ -54,6 +54,58 @@ components are body-writers; they have no status concept. So the status
 necessarily lives in the seam, which is exactly the capability the
 pre-templ `renderShellStatus` already had. That is why the spec area's
 bad-product-id page and the intervention-rejection page still work.
+
+**The seam is the whole chrome.** `app.renderShellStatus` is a method
+because it is not just a document wrapper any more: it resolves the
+current product, builds the grouped sidebar, reads the Needs-attention
+badge, and passes `app.productSwitcherData(r)` through. Every signed-in
+page gets the drawer sidebar, the Product select, the toast host, and the
+signed-in identity from this one call, and no page has per-page work to
+get any of it.
+
+Two consequences worth knowing before editing it:
+
+- **`activePath` is a nav key, not always the URL.** A page passes its own
+  `r.URL.Path` unless its URL is not one of the nav's own — the shell
+  home renders the Overview, whose nav key is the product's overview URL.
+- **The product is read off the path, not off the router.**
+  `shellPathTargets` pulls `{pid}` and the container under it out of the
+  URL, which is what lets a milestone-scoped page light Tasks and link at
+  that milestone's own pages with no work of its own. A resolver's answer
+  wins over the path; an un-prefixed page falls back to
+  `rememberUnprefixedProduct`.
+
+**Passing `nil` for the switcher compiles and ships a broken sidebar.**
+That trailing argument exists only so routes kept compiling during the
+cutover; there is no correct reason to pass nil.
+
+## The Overview
+
+`/` and `/products/{pid}/overview` serve the same page
+(`overview_page.go`, `pages/overview.templ`): the product as its heading,
+a status badge per container in flight, and the `Review N escalated
+tasks` action. It is the shell's home, so it is the one page both the
+legacy `/` and the product-scoped prefix reach.
+
+**In flight means two of the eight statuses**, `in design` and `in
+progress` (`milestoneInFlight`). `designed` and `planned` are up next and
+`partially complete` is stalled — work that stopped, which is the one
+status that most looks like progress and is not it. A product with
+nothing in flight says so in a sentence rather than rendering an empty
+panel. Milepebbles are listed beside their milestones, because a cut
+milestone that is merely "designed" while its milepebbles are in progress
+is a product being built.
+
+The escalated count is read once and carried on the request
+(`withEscalationBadge`), so the primary action and the sidebar's badge are
+one read rather than two that could disagree. An unreadable count renders
+no action and says nothing about escalation at all — "nothing is
+escalated" would be a second unverified claim. The action points at the
+console's escalated view, which is the Escalated tab Needs attention
+serves today.
+
+The stat tiles, the Needs-attention panel and the in-flight panel are
+separate work and render their slots on this page empty until they land.
 
 **Why the body is buffered before `WriteHeader`.** `renderShellStatus`
 renders the component into a buffer *first*, then commits the status. A
@@ -79,8 +131,8 @@ core.
 
 | Package | Owns |
 |---|---|
-| `krill/ui` (package `main`) | Routing, the `App` struct, the write path, the render seam, `nav.go`'s two nav tables (the flat `navArea` list, and the workspace shell's grouped one) and their active-path rules, and **every pure view-model builder**. |
-| `krill/ui/components` | The chrome: `Layout` (a wrapper around `htmxui.Shell`), `nav`, `navLink`, `SubNav`, `Shell`/`sidebar` (the workspace shell's drawer sidebar and grouped nav), `ProductSwitcher` (the sidebar's product select), and the `MilestoneStatusStyle` status vocabulary. |
+| `krill/ui` (package `main`) | Routing, the `App` struct, the write path, the render seam, `nav.go`'s grouped sidebar table and its active-path rule, `overview_page.go`'s Overview frame, and **every pure view-model builder**. |
+| `krill/ui/components` | The chrome: `Shell`/`sidebar` (the workspace shell's drawer sidebar and grouped nav), `navLink`, `SubNav`, `ProductSwitcher` (the sidebar's product select), `ToastHost` (the one live region every mutation confirms through), and the `MilestoneStatusStyle` status vocabulary. |
 | `krill/ui/pages` | Page bodies, one `.templ` per area, each declaring its own view-model struct. |
 
 **Builders stay in `package main`; only the structs and the components
@@ -93,14 +145,14 @@ directly.
 ## Adding a page, end to end
 
 1. **Path constant** in `routes.go`, inside the area's prefix. If it is a
-   new top-level area, add a `navArea` to `navAreas` too.
+   new top-level area, add a group to `navGroupTable` too.
 2. **View-model struct** in the area's `.templ` file in `pages`, beside
    the component that renders it. Use exported field names.
 3. **Pure builder** in the area's `.go` file in `package main`, returning
    `pages.X`. It reads through `app.spec` / `app.tasks` / `app.designSessions`.
 4. **The component**, taking the view model. Compose `htmxui` primitives;
    do not hand-roll a badge, an alert, an empty state, or a confirm.
-5. **The handler**, calling `renderShell`.
+5. **The handler**, calling `app.renderShell`.
 6. **Register it** in `mountShellRoutes` behind `app.auth.RequireAuthFunc`
    (or `app.operatorRoute` if it writes).
 7. **An `HX-Request` branch** if it is a list or a view that benefits —
@@ -407,8 +459,9 @@ For the same reason the cookie is expired only when one is actually
 present, so an ordinary page load does not carry a `Set-Cookie` clearing a
 cookie it never had.
 
-Installing the host on every page is the cutover task's job; this task
-builds the component and the mechanism only.
+`components.Shell` mounts the host on every page, outside `<main>` so a
+swap of the page content cannot destroy the live region that is meant to
+announce the swap.
 
 Both resolvers return the request as well as the product, and put the
 product on its context (`withCurrentProduct` / `currentProduct`). That is
@@ -529,8 +582,9 @@ So, when adding a write surface:
   `action="…"`, and `hx-post="…"` as three separate checks. They happen
   to be emitted in source order today; that is not a contract.
 - **Do not derive a test's expectations from the list it is checking.**
-  `nav_test.go`'s `requiredAreas` is spelled out as literals on purpose —
-  a test iterating `navAreas` passes even if you delete an entry from it.
+  `nav_test.go`'s `requiredAreas` and `requiredNavGroups` are spelled out
+  as literals on purpose — a test iterating `navGroupTable` passes even if
+  you delete an entry from it.
 - Match an **exact class token**, not a substring: `hasClass(body,
   "btn-error")`, because `"btn"` is a substring of every other `btn-*`.
 

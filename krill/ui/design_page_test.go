@@ -123,7 +123,16 @@ func (f fakeRevisionEvents) ListLatestSignoffBySessionIDs(_ context.Context, ses
 // resolve a product for the last-viewed cookie; it lists none, which
 // leaves every page here rendering exactly as it did before.
 func newDesignReadApp(ds store.DesignSessionStore, re store.RevisionEventStore) *App {
-	return &App{designSessions: ds, revisionEvents: re, spec: emptyScopeSpecReader{}}
+	// scopes and tasks are what the chrome reads for its Needs-attention
+	// badge on every page it renders; without them a nil-panic in the
+	// sidebar would be this test's failure rather than a page defect.
+	return &App{
+		designSessions: ds,
+		revisionEvents: re,
+		spec:           emptyScopeSpecReader{},
+		scopes:         chromeScopes{},
+		tasks:          chromeTaskCounter{},
+	}
 }
 
 func designReadMux(app *App) *http.ServeMux {

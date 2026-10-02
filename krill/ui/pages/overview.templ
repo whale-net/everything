@@ -1,0 +1,114 @@
+package pages
+
+// The Overview page body: the shell's home, answering "is anything stuck,
+// which milestone is in flight" (FR c3e1c276).
+//
+// It is the page frame. The four stat tiles, the Needs-attention panel
+// and the in-flight milestones panel are separate work and render their
+// own slots below; the header here has to stand on its own, because it is
+// the part that must answer both questions in the first glance.
+
+import "github.com/whale-net/everything/libs/go/htmxui"
+
+// OverviewAnchor is the DOM id this page's content region carries, so a
+// swap can replace the region rather than the document around it.
+const OverviewAnchor = "krill-overview"
+
+// OverviewMilestone is one container currently in flight: its name and the
+// status that put it there, rendered as a badge so "in design" and "in
+// progress" are distinguishable at a glance.
+type OverviewMilestone struct {
+	Name   string
+	Status string
+}
+
+// OverviewPage is one product's Overview.
+type OverviewPage struct {
+	Product ProductHeader
+
+	// InFlight is every container in this product whose status means work
+	// is happening now. Empty is a real answer -- it renders as a sentence
+	// saying so, not as a blank panel an operator has to interpret.
+	InFlight []OverviewMilestone
+
+	// InFlightError is set when the delivery read failed, in place of the
+	// list. It is never both: claiming no milestone is in flight because
+	// the read failed would answer the page's central question wrongly.
+	InFlightError string
+
+	// Escalated is the count the primary action is built from.
+	Escalated int
+
+	// EscalatedReadable is false when the count could not be read. The
+	// action is then absent and the header says nothing about escalation
+	// at all -- "nothing is escalated" would be a second unverified claim.
+	EscalatedReadable bool
+
+	// EscalatedHref is the Escalated tab of Needs attention.
+	EscalatedHref string
+}
+
+// inFlightBadges renders one badge per in-flight container, through the
+// same statusBadge the delivery page uses so the colours match every
+// other status badge in the shell.
+templ inFlightBadges(milestones []OverviewMilestone) {
+	<ul class="mt-2 flex flex-wrap gap-2" data-krill="overview-in-flight">
+		for _, m := range milestones {
+			<li class="flex items-center gap-2">
+				<span class="font-medium">{ m.Name }</span>
+				@statusBadge(m.Status)
+			</li>
+		}
+	</ul>
+}
+
+// overviewTaskWord is the plural the primary action needs. "1 escalated
+// task" read beside "2 escalated task" is the kind of small wrongness
+// that makes an operator doubt the number next to it.
+func overviewTaskWord(n int) string {
+	if n == 1 {
+		return "task"
+	}
+	return "tasks"
+}
+
+// Overview renders the product's Overview: the product as its heading, a
+// badge naming each container in flight, and one primary action when
+// there is something escalated to act on.
+templ Overview(page OverviewPage) {
+	<section id={ OverviewAnchor } data-krill="overview" class="space-y-6">
+		<header class="flex flex-wrap items-start justify-between gap-4">
+			<div class="min-w-0">
+				<h1 class="text-2xl font-bold" data-krill="page-title">{ page.Product.Name }</h1>
+				if page.Product.Vision != "" {
+					<p class="mt-1 text-sm text-base-content/70 max-w-3xl">{ page.Product.Vision }</p>
+				}
+				<div class="mt-3">
+					if page.InFlightError != "" {
+						<div data-krill="overview-in-flight-error">
+							@htmxui.Alert(htmxui.AlertError, page.InFlightError, nil)
+						</div>
+					} else if len(page.InFlight) == 0 {
+						<p class="text-sm text-base-content/70" data-krill="overview-no-in-flight">
+							Nothing is in flight. No milestone is in design or in progress.
+						</p>
+					} else {
+						@inFlightBadges(page.InFlight)
+					}
+				</div>
+			</div>
+			if page.EscalatedReadable && page.Escalated > 0 {
+				<a href={ templ.URL(page.EscalatedHref) } class="btn btn-primary btn-sm"
+				   data-krill="overview-primary-action">
+					Review { page.Escalated } escalated { overviewTaskWord(page.Escalated) }
+				</a>
+			} else if page.EscalatedReadable {
+				<p class="text-sm text-base-content/70" data-krill="overview-nothing-escalated">
+					Nothing is escalated.
+				</p>
+			}
+		</header>
+		// The stat tiles, the Needs-attention panel and the in-flight
+		// milestones panel render into the slots below once they ship.
+	</section>
+}

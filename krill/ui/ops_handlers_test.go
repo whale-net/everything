@@ -66,6 +66,13 @@ func (f *fakeOpsTasks) checkToken(scopeID uuid.UUID, page store.PageParams) erro
 	return err
 }
 
+// CountEscalatedTasks is the sidebar's Needs-attention badge read, which
+// every page the views render carries. Zero: no badge, and the views
+// these tests are about never assert on it.
+func (f *fakeOpsTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
+}
+
 func (f *fakeOpsTasks) ListClaimedTasks(_ context.Context, p store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
 	if err := f.checkToken(p.ScopeID, p.Page); err != nil {
 		return store.Page[store.ClaimedTaskRow]{}, err

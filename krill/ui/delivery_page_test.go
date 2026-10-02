@@ -75,6 +75,9 @@ type deliveryPair struct {
 // fail exactly one container's breakdown, so a test can prove one bad
 // container does not take down the page.
 type fakeSpecReader struct {
+	// products is what Products answers, so a test that renders the
+	// chrome can name the product the sidebar's hrefs will carry.
+	products    []store.Product
 	product     store.Product
 	productErr  error
 	listing     slice.DeliveryListing
@@ -120,7 +123,7 @@ func (f *fakeSpecReader) Product(context.Context, uuid.UUID) (store.Product, err
 }
 
 func (f *fakeSpecReader) Products(context.Context) ([]store.Product, error) {
-	return nil, nil
+	return f.products, nil
 }
 
 // deliveryReadMux mounts the real delivery handler on a bare mux. The
@@ -128,7 +131,7 @@ func (f *fakeSpecReader) Products(context.Context) ([]store.Product, error) {
 // database and no other store accessor is needed; the shell chrome is
 // rendered regardless, which is what the empty/404 cases assert.
 func deliveryReadMux(reader specReadClient) *http.ServeMux {
-	app := &App{spec: reader}
+	app := &App{spec: reader, scopes: chromeScopes{}, tasks: chromeTaskCounter{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /spec/products/{id}/delivery", app.handleSpecDelivery)
 	return mux

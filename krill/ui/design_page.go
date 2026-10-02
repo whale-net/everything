@@ -247,7 +247,7 @@ func (app *App) handleDesignSessionList(w http.ResponseWriter, r *http.Request) 
 	// that turns out to be outside the scope is simply dropped when the
 	// cookie is read back, so this page needs no scope check of its own.
 	setLastViewedProductCookie(w, productID)
-	renderShell(w, r, "Design sessions", designPath, pages.DesignSessionList(page))
+	app.renderShell(w, r, "Design sessions", r.URL.Path, pages.DesignSessionList(page))
 }
 
 // handleDesignSessionDetail renders one session's full ordered
@@ -274,7 +274,7 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		return
 	}
 	r, _ = app.rememberUnprefixedProduct(w, r)
-	renderShell(w, r, "Design session", designPath, pages.DesignSessionDetail(detail))
+	app.renderShell(w, r, "Design session", r.URL.Path, pages.DesignSessionDetail(detail))
 }
 
 // isHXRequest reports whether the caller is htmx. One route serves both

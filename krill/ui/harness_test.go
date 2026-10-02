@@ -353,7 +353,8 @@ func (f fakeScopeStore) GetSole(context.Context) (store.Scope, error)           
 // newTestApp builds the App every harness test drives. spec lists one
 // product because the shell's un-prefixed pages resolve one to record it in
 // the last-viewed cookie; without it those pages nil-panic on the interface
-// call rather than rendering.
+// call rather than rendering. scopes and tasks are the two stores the
+// chrome reads for its Needs-attention badge on every page it renders.
 func newTestApp(t *testing.T, authenticator *htmxauth.Authenticator, issuer, apiURL string) *App {
 	t.Helper()
 
@@ -365,6 +366,7 @@ func newTestApp(t *testing.T, authenticator *htmxauth.Authenticator, issuer, api
 		oidcIssuer: issuer,
 		writes:     writes,
 		scopes:     fakeScopeStore{scope: store.Scope{ID: testScopeID}},
+		tasks:      chromeTaskCounter{},
 		spec: scopedProductsReader{products: []store.Product{
 			{ID: testScopeID, Name: "krill"},
 		}},
@@ -446,6 +448,14 @@ func (f *fakeFragmentTasks) ListClaimedTasks(context.Context, store.ListClaimedT
 
 func (f *fakeFragmentTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
 	return store.Page[store.EscalatedTaskRow]{Items: f.escalated}, nil
+}
+
+// CountEscalatedTasks is the chrome's Needs-attention badge read, which
+// every page renders. The escalated slice above is a fixture a test chose,
+// not the deployment's queue, so it is not a count: zero, which renders no
+// badge, keeps these tests about the write path they were written for.
+func (f *fakeFragmentTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
 }
 
 // newHtmxInterventionApp wires a signed-in operator to a fake api AND to the
