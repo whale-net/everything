@@ -173,6 +173,14 @@ func GetProductTaskProgressHandler(tasks store.TaskStore, products store.Product
 				writeJSONError(w, http.StatusNotFound, "milestone not found in this product")
 				return
 			}
+			// The product was resolved above, so a not-found from the read
+			// is the row vanishing mid-request -- an internal inconsistency,
+			// not a client mistake. writeConsoleQueryError's 404 would claim
+			// "product not found" for a lookup this handler did itself.
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSONError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
 			writeConsoleQueryError(w, err)
 			return
 		}
