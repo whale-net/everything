@@ -23,6 +23,9 @@ type TaskBadge struct {
 
 // TaskRow is one task row. ClaimID and LeaseExpiresAt are the observed
 // claim identity, kept so a later write can be claim-guarded.
+//
+// Milepebble and Quiet are the board card's two extras, which the list row
+// has no use for and leaves empty and false. See board.templ's card.
 type TaskRow struct {
 	ID             string
 	Title          string
@@ -32,6 +35,15 @@ type TaskRow struct {
 	LeaseExpiresAt string // RFC3339, empty when unclaimed
 	DetailPath     string
 	Badges         []TaskBadge
+
+	// Milepebble names the milepebble a cut milestone's task came from,
+	// empty for the milestone's own task and for an uncut milestone.
+	Milepebble string
+
+	// Quiet is FR f6b62cc7's carve-out for the board card: a Done-lane
+	// task with nothing outstanding shows only its title and its
+	// milepebble, so finished work does not read as work still to do.
+	Quiet bool
 }
 
 // TaskMilepebbleLink links a cut milestone to one milepebble's views.

@@ -698,7 +698,7 @@ the operator is already on, not a navigation.
 
 The region renders the scope it resolved to, the total behind it, and its
 own answer: the Tasks view's table of rows, an empty state naming the active
-filters, or an inline failure. The board's swimlanes are a later phase.
+filters, or an inline failure.
 
 **The rows are the read's order, never a re-sort.** The store's keyset
 sort (milestone position descending, then id, then creation, then id) is
@@ -738,6 +738,45 @@ not the per-container form. This table is not scoped to a container, so the
 per-container link would name the wrong milestone for every row but one.
 That route resolves the task's own container and checks it against the
 product's listing; the per-container detail URL keeps serving alongside it.
+
+The **Board** view (`product_board_page.go`, `pages/board.templ`) renders
+one swimlane per milestone that has tasks (FR cf000440): five counted
+columns per lane, a horizontal scroller inside the board rather than a grid
+that spills across the page, and a header naming the container, its own
+status badge and the progress read's "N of M done".
+
+### Board cards
+
+A card (FR f6b62cc7) shows the title linking to task detail, the milepebble
+it came from when the milestone is cut, a state badge per live state,
+"n of cap attempts", and — when it holds a claim — its lease. It sits only
+in the column of its own lane, and carries the observed claim id and lease
+expiry as `data-krill-*` attributes on the card element itself.
+
+Two rules are load-bearing:
+
+- **The lease is an absolute instant; the countdown is the client's.** The
+  card renders `<time data-krill="task-lease" datetime="<RFC3339>">` whose
+  text is that same instant. `leaseCountdownScript` — in the document head,
+  never in a fragment — rewrites the text to "Lease in 18 min" or "Lease
+  expired 6 min ago". A relative string rendered by the server would be as
+  old as the response and would differ between two identical reads of
+  unchanged state; the board is a fragment Refresh re-requests, so that
+  difference would be visible (NFR 7b497d92). With JavaScript off, the
+  absolute instant is what the operator sees.
+- **A Done card with nothing outstanding is quiet.** It shows its title
+  and its milepebble and nothing else — no state badge, no attempts, no
+  lease — because a finished task badging "3 of 3" reads as work still to
+  do. The carve-out is about the *absence* of live state, not the lane: a
+  Done task that is escalated or cancelled still says so, or the board
+  would hide work needing a human in the very lane that claims it is done.
+
+State badges come from the one mapper (`components.TaskStateStyle`), the
+same one the list and the detail use, over the same derivation the Tasks
+table makes — so a lapsed lease reads `lease-expired` on every view and
+never `claimed`. Claim identity is all-or-nothing: a row carrying a claim
+id without a lease expiry would claim a lease the read did not report.
+
 <!-- END product-task-scope section -->
 
 <!-- BEGIN task-detail section (task 9599fc1f) -->

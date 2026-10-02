@@ -19,14 +19,22 @@ import (
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
+// The two views' own names. They are the region's heading and its nav key
+// as well as the choice between two templates, so they are named once here
+// rather than spelled at each call site.
+const (
+	productTasksView = "Tasks"
+	productBoardView = "Board"
+)
+
 // handleProductTasks serves the product-wide Tasks region.
 func (app *App) handleProductTasks(w http.ResponseWriter, r *http.Request) {
-	app.serveProductTaskRegion(w, r, "Tasks")
+	app.serveProductTaskRegion(w, r, productTasksView)
 }
 
 // handleProductBoard serves the Board view of the same scope.
 func (app *App) handleProductBoard(w http.ResponseWriter, r *http.Request) {
-	app.serveProductTaskRegion(w, r, "Board")
+	app.serveProductTaskRegion(w, r, productBoardView)
 }
 
 // serveProductTaskRegion is the one handler behind both views: resolve the
@@ -80,14 +88,14 @@ func (app *App) serveProductTaskRegion(w http.ResponseWriter, r *http.Request, v
 		// it must never be mistaken for.
 		logger.Error("product task read failed", "product", product.ID.String(), "error", err)
 		region.Error = "The tasks could not be read. See the logs."
-		app.renderProductTaskRegion(w, r, view, region, http.StatusInternalServerError)
+		app.renderProductTaskView(w, r, product, region, resolved, nil, http.StatusInternalServerError)
 		return
 	}
 	region.Total = page.Total
 	region.Rows = productTaskRowsOf(product.ID, page.Rows, readAt)
 	region.UpdatedAt = readAt.UTC().Format(time.RFC3339)
 	region.Empty = len(page.Rows) == 0
-	app.renderProductTaskRegion(w, r, view, region, http.StatusOK)
+	app.renderProductTaskView(w, r, product, region, resolved, page.Rows, http.StatusOK)
 }
 
 // productTaskRowsOf is the read's page as the table's rows.
@@ -319,8 +327,48 @@ func productTaskLaneOf(scope resolvedProductTaskScope) string {
 	return string(*scope.Parsed.Lane)
 }
 
-// renderProductTaskRegion writes the region, as a bare fragment for an
-// htmx request and inside the shell otherwise. The nav key is the
+// renderProductTaskView writes whichever of the two views the URL named:
+// the Tasks table's rows, or the Board's swimlanes. rows is nil for the
+// scope problems that are ordinary empty answers, which render as the
+// empty state in whichever view was asked for.
+//
+// The two views share one scope, one control and one anchor, and this is
+// the only place that chooses between their bodies -- so a URL can never
+// serve the Tasks view under the Board path or the other way round.
+func (app *App) renderProductTaskView(w http.ResponseWriter, r *http.Request, product store.Product, region pages.ProductTaskRegion, resolved resolvedProductTaskScope, rows []store.ProductTaskRow, status int) {
+	if region.View != productBoardView {
+		app.renderProductTaskRegion(w, r, region.View, region, status)
+		return
+	}
+
+	// The progress read is only asked for once there are rows to hang it
+	// on. An empty scope has nothing for it to describe, and a scope whose
+	// tasks could not be read has already said so -- asking again would
+	// only risk replacing one failure sentence with another.
+	var progress store.ProductTaskProgress
+	var progressErr error
+	if len(rows) > 0 && region.Error == "" {
+		progress, progressErr = app.boardProgressRead(r.Context(), product.ID, resolved)
+		if progressErr != nil {
+			logger.Error("board progress read failed", "product", product.ID.String(), "error", progressErr)
+		}
+	}
+	board := productBoardPageOf(product, region, resolved, rows, progress, progressErr,
+		boardTasksPath(product.ID, r.URL.Query()), time.Now())
+	if region.Error != "" {
+		board.Error = region.Error
+	}
+
+	body := pages.ProductBoard(board)
+	if r.Header.Get("HX-Request") != "" {
+		renderFragment(w, r, body)
+		return
+	}
+	app.renderShellStatus(w, r, region.View, r.URL.Path, body, status)
+}
+
+// renderProductTaskRegion writes the Tasks region, as a bare fragment for
+// an htmx request and inside the shell otherwise. The nav key is the
 // request's own path, which is the Tasks or Board item's own URL -- the
 // two views are separate nav items, so each marks itself.
 func (app *App) renderProductTaskRegion(w http.ResponseWriter, r *http.Request, view string, region pages.ProductTaskRegion, status int) {
@@ -350,7 +398,7 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 		// operator's way out of this page is the control, not a back link,
 		// so a control that disappeared here would be the one case where
 		// they cannot leave.
-		app.renderProductTaskRegion(w, r, view, pages.ProductTaskRegion{
+		app.renderProductTaskView(w, r, product, pages.ProductTaskRegion{
 			Product:    productHeaderOf(product),
 			View:       view,
 			Path:       r.URL.Path,
@@ -360,7 +408,7 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 				Path:  r.URL.Path,
 				Modes: productTaskScopeModes(""),
 			},
-		}, http.StatusOK)
+		}, resolved, nil, http.StatusOK)
 		return
 	}
 
@@ -370,7 +418,7 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 		// is how the operator picks a cut one -- is exactly what must not
 		// disappear here. So the control is built from the resolved scope,
 		// which carries the product's milestones and the one named.
-		app.renderProductTaskRegion(w, r, view, pages.ProductTaskRegion{
+		app.renderProductTaskView(w, r, product, pages.ProductTaskRegion{
 			Product:    productHeaderOf(product),
 			View:       view,
 			Path:       r.URL.Path,
@@ -379,7 +427,7 @@ func (app *App) renderProductTaskScopeProblem(w http.ResponseWriter, r *http.Req
 			Lane:       productTaskLaneOf(resolved),
 			OnlyStuck:  resolved.Parsed.OnlyStuck,
 			Scope:      productTaskScopeControlOf(r.URL.Path, resolved),
-		}, http.StatusOK)
+		}, resolved, nil, http.StatusOK)
 		return
 	}
 
