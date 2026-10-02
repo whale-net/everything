@@ -309,6 +309,60 @@ in sync. `krill/ui/components/status.go` is a `.go` rather than a
 `libs/go/htmxui`'s own `templ_library` carries a `# keep` marker so
 gazelle does not collapse it. The app-level ones do not.
 
+## Product-scoped URLs
+
+`product_scope.go` resolves which product a request is about. A page
+reached under `/products/{pid}/...` names its product in the path, so a
+copied link opens on the same product for whoever follows it. A page
+reached without one — the legacy `/ops/*` routes, the pre-redesign task
+and board URLs, `/`, and the credentials page — resolves one
+server-side, so no shell page ever asks for a typed product id.
+
+The two resolutions are separate functions on purpose:
+
+- `resolveProductFromPath` treats the `{pid}` as authoritative. An
+  unknown or out-of-scope one is an **in-shell 404** through
+  `renderShellStatus`, never a bare `http.Error` — a link an operator
+  followed has to land somewhere they can navigate back out of.
+- `resolveProductForUnprefixed` never 404s. It takes the
+  `krill_last_viewed_product` cookie when that product is still in scope,
+  otherwise the first product in scope. A stale cookie is the ordinary
+  case for a legacy link, and failing there would break every one of them.
+
+Two wrappers sit on the un-prefixed resolution, and which one a page
+calls is the design decision:
+
+- **`resolveUnprefixedProduct`** is for a page that cannot render a body
+  without a product — today only `/design`, whose whole job is to link to
+  one product's session list. It writes the cookie and answers an empty
+  scope with a designed empty state at 200, not a 404: the URL resolved
+  fine, there is simply nothing behind it yet.
+- **`rememberUnprefixedProduct`** is for a page whose body is the same
+  whichever product is current — `/`, `/ops`, the ops read views, the
+  credentials page. It writes the cookie and never writes a response, so
+  neither a failed product read nor an empty scope can take down a page
+  that was already serviceable. The credentials page in particular must
+  still mint a token when the scope holds no product: blocking it would
+  lock an operator out of the very tool they need to fix things.
+
+The cookie is a **non-authoritative hint**: written on every page render
+that resolved a product, and read only by the un-prefixed path — never by
+a prefixed one. A value naming a product that has left the scope is
+discarded on the way back in, so writing it from a page that did not
+itself check scope costs nothing. A cookie naming product B can never
+override a prefixed URL for product A.
+
+A page that serves both modes writes the cookie only on the full-page
+render: an htmx fragment swap is not a page view, and setting the cookie
+on one would make the last-viewed product depend on which pane the
+operator happened to page.
+
+Both resolve against `app.spec.Products`, which lists the deployment's
+sole scope — a browser cannot pick a scope. Adding a product-scoped page
+means registering `productPathPrefix + <suffix>` in `mountShellRoutes`
+and calling `resolveProductFromPath` first, so an out-of-scope link is
+rejected before any content is built.
+
 ## Task views
 
 `/spec/products/{id}/milestones/{mid}/tasks` (task_page.go,

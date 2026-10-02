@@ -39,6 +39,11 @@ const (
 
 // specProductID validates the {id} path value as a product id, writing a
 // shell-rendered 400 and returning ok=false when it is not a UUID.
+//
+// A valid id also becomes the last-viewed product, so the operator's next
+// un-prefixed page lands on the product they were just reading. The cookie
+// is a hint -- an id from another scope is discarded on the way back in --
+// so writing it here costs these pages nothing they would not have paid.
 func specProductID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -50,6 +55,7 @@ func specProductID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		})
 		return uuid.Nil, false
 	}
+	setLastViewedProductCookie(w, id)
 	return id, true
 }
 
