@@ -756,14 +756,18 @@ func cardOf(t *testing.T, lane, taskID string) string {
 
 // TestTasksViewIsUntouchedByTheBoard pins review target 6: this task owns
 // the board's structure, and pages.ProductTasks -- the Tasks table's
-// template -- belongs to the sibling task (891d750a) running on its own
-// branch.
+// template -- belongs to the sibling task (891d750a).
 //
 // The board and the table are two templates behind one anchor, so a
 // change to the board that leaked into the shared region would show up
 // here as the Tasks view rendering swimlanes. Asserting the Tasks view
-// carries the table's own pending sentence and none of the board's
-// structure is what keeps the two from drifting into each other.
+// carries the table's own rows and none of the board's structure is what
+// keeps the two from drifting into each other.
+//
+// The table's pending sentence is gone: 891d750a has landed the real
+// rows, so the Tasks view renders a table. The guard's subject is
+// unchanged, so the assertion moved with the template rather than being
+// dropped.
 func TestTasksViewIsUntouchedByTheBoard(t *testing.T) {
 	mux, _ := boardMux(t, []store.ProductTaskRow{
 		boardRow(productTaskNewestMilestone, "Newest milestone", "a card", store.LaneScaffold),
@@ -776,8 +780,9 @@ func TestTasksViewIsUntouchedByTheBoard(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	table := rec.Body.String()
 
-	// The table is still the table's own template, pending its own task.
-	assert.Contains(t, table, "The task rows for this scope are not rendered yet.")
+	// The Tasks view is the table's own template, rendering its own rows.
+	assert.Contains(t, table, `data-krill="task-table"`)
+	assert.Contains(t, table, `data-krill="task-row"`)
 	// And none of the board's structure has leaked into it.
 	for _, boardOnly := range []string{
 		`data-krill="product-board-empty"`, `data-krill="swimlane"`,

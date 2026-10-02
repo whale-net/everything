@@ -151,7 +151,7 @@ if(!isNaN(t)){nodes[i].textContent='Updated '+ago(t)+' ago';}
 }
 }
 document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
-document.body&&document.body.addEventListener('htmx:afterSwap',function(e){upgrade(e.target);});
+document.addEventListener('htmx:afterSwap',function(e){upgrade(e.target);});
 })();`
 
 // renderShell writes one signed-in page: the workspace chrome plus body,
