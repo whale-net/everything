@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -26,6 +27,8 @@ import (
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/components"
+	"github.com/whale-net/everything/krill/ui/pages"
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
 // ---------------------------------------------------------------------------
@@ -54,6 +57,13 @@ type overviewCounter struct {
 
 	progress    store.ProductTaskProgress
 	progressErr error
+
+	// escalated is what the Needs-attention panel's own read returns,
+	// and escalations records the params it was called with so a test can
+	// assert the narrowing and the page size the panel asks for.
+	escalated    []store.EscalatedTaskRow
+	escalatedErr error
+	escalations  []store.ListEscalatedTasksParams
 }
 
 func (c *overviewCounter) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
@@ -94,8 +104,20 @@ func (*overviewCounter) CountConsoleOverview(context.Context, store.ConsoleOverv
 	return store.ConsoleOverviewCounts{}, nil
 }
 
-func (*overviewCounter) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
-	return store.Page[store.EscalatedTaskRow]{}, nil
+func (c *overviewCounter) ListEscalatedTasks(_ context.Context, p store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	c.escalations = append(c.escalations, p)
+	if c.escalatedErr != nil {
+		return store.Page[store.EscalatedTaskRow]{}, c.escalatedErr
+	}
+	// The store applies ResolvePageSize and returns only the first page;
+	// the fixture truncates the same way so a panel reading a page it did
+	// not ask for fails here rather than in production.
+	page := store.Page[store.EscalatedTaskRow]{Items: c.escalated}
+	if size := store.ResolvePageSize(p.Page.PageSize); len(page.Items) > size {
+		page.Items = page.Items[:size]
+		page.NextToken = "more"
+	}
+	return page, nil
 }
 
 func (*overviewCounter) ListCancelledTasks(context.Context, store.ListCancelledTasksParams) (store.Page[store.CancelledTaskRow], error) {
@@ -1212,5 +1234,329 @@ func TestInFlightPanelAndHeaderListTheSameContainers(t *testing.T) {
 		if n := strings.Count(panel, `data-krill="overview-in-flight-row"`); n != len(inFlightOf(listing)) {
 			t.Errorf("GET %s: the panel has %d rows for %d header badges", path, n, len(inFlightOf(listing)))
 		}
+	}
+}
+
+
+// the Needs-attention panel
+// ---------------------------------------------------------------------------
+
+// overviewNow is the instant the panel's fixtures are anchored to. It is
+// the wall clock at test start, because the panel measures against the
+// real clock -- so anchoring to a fixed date would render every row
+// "N days ago". The relative wording is written out below regardless, so
+// what is asserted is the unit, not a recomputation of the arithmetic.
+var overviewNow = time.Now()
+
+// overviewEscalationTitles are the seven fixtures' titles, newest first --
+// seven so the panel's limit of five has something to cut, and the two
+// cut rows (the two oldest) are the ones that must not appear.
+var overviewEscalationTitles = []string{
+	"Escalate newest",
+	"Escalate second",
+	"Escalate third",
+	"Escalate fourth",
+	"Escalate fifth",
+	"Escalate sixth is cut",
+	"Escalate oldest is cut",
+}
+
+// overviewEscalationAges is how long before overviewNow each row
+// escalated, parallel to overviewEscalationTitles. Distinct values in
+// distinct units so a row landing in the wrong slot is visible as the
+// wrong wording rather than as a count that still matches.
+var overviewEscalationAges = []time.Duration{
+	12 * time.Minute,
+	1 * time.Hour,
+	3 * time.Hour,
+	30 * time.Second,
+	5 * time.Minute,
+	2 * time.Hour,
+	26 * time.Hour,
+}
+
+// escalatedFixtures builds n escalation rows, newest first, carrying the
+// titles and ages above. The ids and container are derived from the index
+// rather than random, so a failing href assertion names the same id every
+// run.
+func escalatedFixtures(n int) []store.EscalatedTaskRow {
+	rows := make([]store.EscalatedTaskRow, 0, n)
+	for i := 0; i < n; i++ {
+		rows = append(rows, store.EscalatedTaskRow{
+			TaskID:      uuid.MustParse(fmt.Sprintf("66666666-6666-6666-6666-00000000000%d", i+1)),
+			Title:       overviewEscalationTitles[i],
+			DeliveryRef: store.EscalatedTaskDeliveryRef{ID: overviewMilestone, Kind: store.MilestoneKindMilepebble, Title: "P1"},
+			EscalationID: uuid.MustParse(
+				fmt.Sprintf("77777777-7777-7777-7777-00000000000%d", i+1)),
+			Reason:      store.EscalationReasonThrashCap,
+			Lane:        store.LaneTesting,
+			EscalatedAt: overviewNow.Add(-overviewEscalationAges[i]),
+		})
+	}
+	return rows
+}
+
+// wantRelative is the wording each age in overviewEscalationAges must
+// produce -- the panel's own units, written out.
+var wantRelative = []string{
+	"12 min ago", "1 h ago", "3 h ago", "just now", "5 min ago", "2 h ago", "1 day ago",
+}
+
+// attentionMux serves the Overview with n escalations waiting in the
+// fixture. The count is set to n as well, so the header's action and the
+// panel agree the way they must in production.
+func attentionMux(t *testing.T, n int) (*http.ServeMux, *overviewCounter) {
+	t.Helper()
+	counter := &overviewCounter{
+		count:     n,
+		readable:  true,
+		escalated: escalatedFixtures(n),
+	}
+	return overviewMux(t, overviewListing(), nil, counter), counter
+}
+
+// TestNeedsAttentionListsFiveMostRecentInOrder is the panel's own case:
+// seven escalations exist and the panel renders five, newest first, with
+// each row's reason badge, title and time. Titles and expected wording
+// are literals -- a panel checked against its own fixture would pass an
+// implementation that dropped rows or reordered them.
+func TestNeedsAttentionListsFiveMostRecentInOrder(t *testing.T) {
+	mux, _ := attentionMux(t, 7)
+
+	for _, path := range overviewPaths() {
+		body := fetch(t, mux, path).Body.String()
+
+		list := overviewRegion(body, "needs-attention-list")
+		if list == "" {
+			t.Errorf("GET %s rendered no needs-attention list at N=7", path)
+			continue
+		}
+
+		// The panel's own limit: the two oldest rows must not appear.
+		if n := strings.Count(list, `data-krill="needs-attention-task"`); n != 5 {
+			t.Errorf("GET %s: panel rendered %d rows, want exactly 5", path, n)
+		}
+		for _, cut := range overviewEscalationTitles[5:] {
+			if strings.Contains(list, cut) {
+				t.Errorf("GET %s: panel listed %q, which is past its 5-row limit", path, cut)
+			}
+		}
+
+		// Descending order: each title must appear before the next one's.
+		prev := -1
+		for i, title := range overviewEscalationTitles[:5] {
+			at := strings.Index(list, title)
+			if at < 0 {
+				t.Errorf("GET %s: panel omitted %q (row %d of 5)", path, title, i+1)
+				continue
+			}
+			if at < prev {
+				t.Errorf("GET %s: %q appears after a newer row; the panel is not in descending time order", path, title)
+			}
+			prev = at
+		}
+
+		for i, want := range wantRelative[:5] {
+			if !strings.Contains(collapsed(list), want) {
+				t.Errorf("GET %s: panel rendered no %q for row %d", path, want, i+1)
+			}
+		}
+
+		if n := strings.Count(list, `data-krill="needs-attention-reason"`); n != 5 {
+			t.Errorf("GET %s: %d reason badges rendered, want one per row (5)", path, n)
+		}
+		if !strings.Contains(collapsed(list), "thrash cap") {
+			t.Errorf("GET %s: no human-readable reason label in the panel", path)
+		}
+	}
+}
+
+// TestNeedsAttentionAsksTheStoreForItsOwnFive pins the narrowing and the
+// page size rather than trusting the rendering: the panel must ask for
+// this product across all its milestones, and for five rows, so it never
+// renders a stale sixth-instead-of-fifth row from a default-size page.
+func TestNeedsAttentionAsksTheStoreForItsOwnFive(t *testing.T) {
+	mux, counter := attentionMux(t, 7)
+	fetch(t, mux, overviewPaths()[0])
+
+	var panel *store.ListEscalatedTasksParams
+	for i := range counter.escalations {
+		if counter.escalations[i].Page.PageSize == pages.NeedsAttentionMax {
+			panel = &counter.escalations[i]
+		}
+	}
+	if panel == nil {
+		t.Fatalf("no escalated read asked for a page of %d rows; the panel read a default page instead",
+			pages.NeedsAttentionMax)
+	}
+	if panel.ConsoleFilter.ProductID == nil || *panel.ConsoleFilter.ProductID != overviewProduct {
+		t.Errorf("panel read product %v, want the current product %s -- the badge and the panel would describe different tasks",
+			panel.ConsoleFilter.ProductID, overviewProduct)
+	}
+	if panel.ConsoleFilter.MilestoneID != nil {
+		t.Errorf("panel narrowed to milestone %s; it must cover the product across all its milestones",
+			panel.ConsoleFilter.MilestoneID)
+	}
+}
+
+// TestNeedsAttentionRowsCarryAbsoluteTimeOnHover is what makes the
+// relative figure trustworthy: the exact instant is reachable on hover,
+// and it is the same instant the relative figure was derived from.
+func TestNeedsAttentionRowsCarryAbsoluteTimeOnHover(t *testing.T) {
+	mux, _ := attentionMux(t, 3)
+
+	body := fetch(t, mux, overviewPaths()[0]).Body.String()
+	list := overviewRegion(body, "needs-attention-list")
+
+	for i := range 3 {
+		want := overviewNow.Add(-overviewEscalationAges[i]).Format(time.RFC3339)
+		if !strings.Contains(list, `title="`+want+`"`) {
+			t.Errorf("row %d carries no %q title attribute; the exact time is unreachable from the page", i+1, want)
+		}
+	}
+}
+
+// TestNeedsAttentionRowsLinkToTaskDetail checks the drill-in is the task's
+// own page, under the current product and the container the escalation
+// belongs to.
+func TestNeedsAttentionRowsLinkToTaskDetail(t *testing.T) {
+	mux, rows := attentionMux(t, 3)
+
+	body := fetch(t, mux, overviewPaths()[0]).Body.String()
+	if !strings.Contains(body, `data-krill="needs-attention-list"`) {
+		t.Fatalf("no needs-attention list rendered")
+	}
+	for _, row := range rows.escalated[:3] {
+		want := taskDetailPath(overviewProduct, row.DeliveryRef.ID, row.TaskID)
+		if !strings.Contains(body, `href="`+want+`"`) {
+			t.Errorf("no row links to task detail %s", want)
+		}
+	}
+}
+
+// TestNeedsAttentionEmptyStateIsDesigned is the "none escalated" case:
+// a designed empty state, a See all that still works, and never the word
+// "0" standing in for an answer.
+func TestNeedsAttentionEmptyStateIsDesigned(t *testing.T) {
+	mux, _ := attentionMux(t, 0)
+
+	for _, path := range overviewPaths() {
+		body := fetch(t, mux, path).Body.String()
+
+		panel := overviewRegion(body, "needs-attention-panel")
+		if panel == "" {
+			t.Errorf("GET %s rendered no needs-attention panel at all; an absent panel is not an empty state", path)
+			continue
+		}
+		empty := overviewRegion(body, "needs-attention-empty")
+		if empty == "" {
+			t.Errorf("GET %s rendered a panel with no empty state and no rows -- a blank card", path)
+			continue
+		}
+		text := collapsed(empty)
+		if !strings.Contains(text, "Nothing needs attention") {
+			t.Errorf("GET %s: empty state reads %q, want it to say nothing is escalated", path, text)
+		}
+		if strings.Contains(collapsed(panel), "0 escalated") {
+			t.Errorf("GET %s: empty state shows a count of 0 in place of a message", path)
+		}
+		if tag := elementTag(body, "needs-attention-see-all"); !strings.Contains(tag, `href="`+escalatedTabHref+`"`) {
+			t.Errorf("GET %s: See all tag %q does not link to the Escalated tab", path, tag)
+		}
+	}
+}
+
+// TestNeedsAttentionFailedReadShowsAnErrorNotAnEmptyList is the panel's
+// half of the per-region failure rule: a failed read must not render as
+// "nothing is escalated", which is the one claim an operator would act
+// on. The rest of the page still renders.
+func TestNeedsAttentionFailedReadShowsAnErrorNotAnEmptyList(t *testing.T) {
+	counter := &overviewCounter{count: 2, readable: true, escalatedErr: store.ErrNotFound}
+	mux := overviewMux(t, overviewListing(), nil, counter)
+
+	for _, path := range overviewPaths() {
+		rec := fetch(t, mux, path)
+		body := rec.Body.String()
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s: status %d, want 200 -- one failed region must not fail the page", path, rec.Code)
+		}
+		if errRegion := overviewRegion(body, "needs-attention-error"); errRegion == "" {
+			t.Errorf("GET %s: failed panel read rendered no inline error", path)
+		}
+		if empty := overviewRegion(body, "needs-attention-empty"); empty != "" {
+			t.Errorf("GET %s: a failed read rendered the empty state, claiming nothing is escalated", path)
+		}
+		if inFlight := overviewRegion(body, "overview-in-flight"); inFlight == "" {
+			t.Errorf("GET %s: the failed panel read cost the page its in-flight list", path)
+		}
+	}
+}
+
+// TestRelativeTimeWordsEveryUnit pins the panel's wording per unit --
+// including the singular forms, which are the ones that go wrong when a
+// plural is built by appending an "s" to a shared branch.
+func TestRelativeTimeWordsEveryUnit(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{d: 0, want: "just now"},
+		{d: 59 * time.Second, want: "just now"},
+		{d: time.Minute, want: "1 min ago"},
+		{d: 2 * time.Minute, want: "2 min ago"},
+		{d: 59 * time.Minute, want: "59 min ago"},
+		{d: time.Hour, want: "1 h ago"},
+		{d: 2 * time.Hour, want: "2 h ago"},
+		{d: 23 * time.Hour, want: "23 h ago"},
+		{d: 24 * time.Hour, want: "1 day ago"},
+		{d: 72 * time.Hour, want: "3 days ago"},
+	} {
+		if got := relativeTime(overviewNow.Add(-tc.d), overviewNow); got != tc.want {
+			t.Errorf("relativeTime(-%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+// TestEscalationReasonTableCoversEveryValidReason closes the same hole
+// the reason table cannot see alone: a fourth reason added to the store
+// would fall through the default branch and never appear here. Comparing
+// against the store's exported reasons, not against the style function,
+// makes a new reason fail instead.
+func TestEscalationReasonTableCoversEveryValidReason(t *testing.T) {
+	want := map[store.EscalationReason]struct{ label, variant string }{
+		store.EscalationReasonThrashCap:  {"thrash cap", "badge-error"},
+		store.EscalationReasonAttemptCap: {"attempt cap", "badge-error"},
+		store.EscalationReasonManual:     {"manual", "badge-warning"},
+	}
+	for _, reason := range []store.EscalationReason{
+		store.EscalationReasonThrashCap,
+		store.EscalationReasonAttemptCap,
+		store.EscalationReasonManual,
+	} {
+		tc, ok := want[reason]
+		if !ok {
+			t.Errorf("reason %q has no row in the reason table; add one", reason)
+			continue
+		}
+		if got := components.EscalationReasonLabel(string(reason)); got != tc.label {
+			t.Errorf("EscalationReasonLabel(%q) = %q, want %q", reason, got, tc.label)
+		}
+		style := components.EscalationReasonStyle(string(reason))
+		if string(style.Variant) != tc.variant {
+			t.Errorf("EscalationReasonStyle(%q) variant = %q, want %q", reason, style.Variant, tc.variant)
+		}
+		if !style.Soft {
+			t.Errorf("EscalationReasonStyle(%q) is not soft; the wireframe's badges are", reason)
+		}
+	}
+
+	// An unknown reason must still render something: a blank badge is the
+	// failure the style function's default arm exists to prevent.
+	if got := components.EscalationReasonLabel("something-new"); got != "something-new" {
+		t.Errorf("an unknown reason must pass through as its own label, got %q", got)
+	}
+	if v := components.EscalationReasonStyle("something-new").Variant; v != htmxui.BadgeNeutral {
+		t.Errorf("an unknown reason rendered as %q, want a neutral badge", v)
 	}
 }

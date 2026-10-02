@@ -91,6 +91,14 @@ func (chromeTaskCounter) CountEscalatedTasks(context.Context, store.ListEscalate
 	return 0, nil
 }
 
+// ListEscalatedTasks backs the Overview's Needs-attention panel. These
+// fixtures are about the chrome, not the queue, so an empty page is the
+// right answer: the panel renders its empty state and the assertion under
+// test is still about the sidebar or the switcher.
+func (chromeTaskCounter) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{}, nil
+}
+
 // CountConsoleOverview is the Overview stat tiles' read. Every page here
 // renders the chrome, and the Overview home renders the tiles too, so this
 // fake owes it -- zero figures, which is a real answer for an idle
@@ -217,4 +225,3 @@ var (
 	_ store.DesignSessionStore = emptyDesignSessions{}
 	_ store.RevisionEventStore = emptyRevisionEvents{}
 )
-

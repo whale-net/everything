@@ -126,8 +126,27 @@ numbers happen. Each tile carries its own figures and its own failure, so a
 read that fails costs that tile alone rather than the whole strip — and a
 queue that could not be counted renders as a message, never as a `0`.
 
-The Needs-attention panel and the in-flight panel are separate work and
-render their slots on this page empty until they land.
+**The Needs-attention panel** lists at most 5 of this product's
+escalated tasks, most recent first, each with its escalation-reason
+badge, its title linking to task detail, and a relative time carrying the
+exact RFC3339 instant on hover (`title`) — relative is right here because
+the operator is scanning for *what* stopped, and the absolute value has
+to stay reachable for the "how long exactly" follow-up. Ordering and the
+limit come from the read itself (`PageSize: pages.NeedsAttentionMax`),
+not from trimming a default page down to five.
+
+It narrows by `ConsoleFilter{ProductID: &pid}` and nothing else — the
+same filter `needsAttentionBadge` counts through, and both share the
+store's one `escalatedTasksQuery` builder, so the panel and the sidebar
+badge describe one row set across all of the product's milestones. A
+product with nothing escalated gets a designed `htmxui.EmptyState`, never
+a blank card and never a "0"; a failed read gets an inline
+`htmxui.Alert`, because an empty list beside a failed read would claim
+nothing is escalated when nothing was checked.
+
+Reason badges go through `components.EscalationReasonStyle`, the sibling
+of `MilestoneStatusStyle` for the reason vocabulary, so a fourth reason
+cannot render as a blank badge.
 
 **Why the body is buffered before `WriteHeader`.** `renderShellStatus`
 renders the component into a buffer *first*, then commits the status. A
