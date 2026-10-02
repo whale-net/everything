@@ -439,8 +439,8 @@ func TestWorkspaceNavHrefResolves(t *testing.T) {
 	} {
 		for _, g := range workspaceNav(targets, "/") {
 			for _, item := range g.Items {
-				if rec := fetch(t, mux, item.Href); rec.Code == http.StatusNotFound {
-					t.Errorf("nav item %q href %s = 404 (dead nav link)", item.Label, item.Href)
+				if rec := fetch(t, mux, item.Href); rec.Code != http.StatusOK {
+					t.Errorf("nav item %q href %s = %d (dead nav link)", item.Label, item.Href, rec.Code)
 				}
 			}
 		}
@@ -491,29 +491,122 @@ func TestWorkspaceNavHrefCarriesTheCallersProduct(t *testing.T) {
 // TestWorkspaceShellDataBuildsEveryHrefFromTheProduct covers the seam a
 // route actually calls: the ShellData it gets back carries hrefs built
 // from the product id it supplied, not from one the chrome picked.
+//
+// Every product-scoped item is checked rather than a sample: the seam is
+// only worth having if it is total, and a second product id is threaded
+// through to prove the hrefs track the argument instead of coinciding
+// with it.
 func TestWorkspaceShellDataBuildsEveryHrefFromTheProduct(t *testing.T) {
-	pid := uuid.New()
+	pid, other := uuid.New(), uuid.New()
 
 	data := workspaceShellData(navTargets{Product: pid}, deliveryPath(pid), "Delivery", "developer")
 	if data.Title != "Delivery" || data.UserLabel != "developer" {
 		t.Errorf("shell data = %+v, want the caller's title and identity", data.LayoutData)
 	}
-	var sawDelivery bool
-	for _, g := range data.NavGroups {
+
+	// The flat top-bar nav the shell does not yet replace is the same for
+	// every product, so the product-scoped claim covers the sidebar only.
+	byLabel := sidebarHrefsByLabel(data.NavGroups)
+	for label, href := range byLabel {
+		switch label {
+		case "Overview", "Needs attention", "Credentials":
+			continue
+		}
+		if !strings.Contains(href, pid.String()) {
+			t.Errorf("sidebar item %q href %s does not carry product %s", label, href, pid)
+		}
+	}
+
+	// A different product must move the sidebar's hrefs with it, or the
+	// assertion above would pass on a table that hardcoded one id.
+	otherData := workspaceShellData(navTargets{Product: other}, deliveryPath(other), "Delivery", "developer")
+	otherByLabel := sidebarHrefsByLabel(otherData.NavGroups)
+	for label, href := range otherByLabel {
+		switch label {
+		case "Overview", "Needs attention", "Credentials":
+			continue
+		}
+		if !strings.Contains(href, other.String()) {
+			t.Errorf("sidebar item %q href %s does not carry product %s", label, href, other)
+		}
+		if byLabel[label] == href {
+			t.Errorf("sidebar item %q is %s for both products; hrefs must track the caller's id", label, href)
+		}
+	}
+
+	if item := navItemByLabel(t, data.NavGroups, "Milestones"); !item.Active {
+		t.Error("Milestones is the current page and must be marked active")
+	}
+}
+
+// sidebarHrefsByLabel flattens the sidebar to label -> href.
+func sidebarHrefsByLabel(groups []components.NavGroup) map[string]string {
+	out := make(map[string]string)
+	for _, g := range groups {
 		for _, item := range g.Items {
-			if item.Label == "Milestones" {
-				sawDelivery = true
-				if item.Href != deliveryPath(pid) {
-					t.Errorf("Milestones href = %s, want %s", item.Href, deliveryPath(pid))
-				}
-				if !item.Active {
-					t.Error("Milestones is the current page and must be marked active")
-				}
+			out[item.Label] = item.Href
+		}
+	}
+	return out
+}
+
+// TestWorkspaceShellDataIsNotMountedOnAnyRoute guards the additive
+// claim: nothing serves the drawer yet, so no route's rendering changed
+// when it landed. The shell becomes the chrome in the cutover task, and
+// this is the assertion that says the seam was not crossed early.
+func TestWorkspaceShellDataIsNotMountedOnAnyRoute(t *testing.T) {
+	mux := navMux(t)
+
+	for _, g := range workspaceNav(navTargets{Product: uuid.New()}, "/") {
+		for _, item := range g.Items {
+			body := fetch(t, mux, item.Href).Body.String()
+			if strings.Contains(body, "workspace-shell") {
+				t.Errorf("GET %s renders the workspace shell; the cutover task owns that seam", item.Href)
 			}
 		}
 	}
-	if !sawDelivery {
-		t.Error("shell data has no Milestones item")
+}
+
+// TestPrimaryNavScanIgnoresTheProductSubNav proves the data-krill hook is
+// load-bearing rather than decorative. Every per-product spec page
+// renders two navs -- the shell's and its own cross-nav -- and each marks
+// its own current page, so a page carries two aria-current="page"
+// anchors. An unscoped scan would report two active links and every
+// "exactly one" assertion built on it would be counting the sub-nav too.
+func TestPrimaryNavScanIgnoresTheProductSubNav(t *testing.T) {
+	mux := navMux(t)
+	pid := uuid.New()
+
+	// Pages that render their own product cross-nav, and pages that do
+	// not. The first group is where an unscoped scan would go wrong.
+	withSubNav := []string{productPath(pid), decisionsPath(pid), deliveryPath(pid)}
+	withoutSubNav := []string{milestoneTasksPath(pid, navMilestoneID)}
+
+	for _, path := range withSubNav {
+		body := fetch(t, mux, path).Body.String()
+
+		if region := primaryNavRegion(body); region == "" {
+			t.Errorf("GET %s rendered no %q region", path, `data-krill="primary-nav"`)
+			continue
+		}
+		if got := activeLabels(body); len(got) != 1 {
+			t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
+		}
+		// The unscoped count is what makes this a real test rather than a
+		// restatement: it has to exceed the scoped one here, or the hook
+		// was never exercised on this page.
+		total := strings.Count(body, `aria-current="page"`)
+		if total <= 1 {
+			t.Errorf("GET %s carries %d aria-current anchors in total; the "+
+				"product sub-nav is not marking itself, so this page cannot "+
+				"prove the hook excludes it", path, total)
+		}
+	}
+
+	for _, path := range withoutSubNav {
+		if got := activeLabels(fetch(t, mux, path).Body.String()); len(got) != 1 {
+			t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
+		}
 	}
 }
 

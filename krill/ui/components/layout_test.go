@@ -224,6 +224,72 @@ func shellDrawerCheckboxIDs(body string) []string {
 	}
 }
 
+// TestShell_SidebarIsPersistentAtLg is the other half of the drawer
+// contract: below lg the sidebar is an overlay, but at lg it sits beside
+// the content. Only the toggle button is responsive (lg:hidden); the
+// sidebar itself must not be, or a wide viewport would find it collapsed
+// away behind a hamburger.
+func TestShell_SidebarIsPersistentAtLg(t *testing.T) {
+	region := shellDrawerSideRegion(renderShell(t, shellGroups))
+
+	// A bare `hidden` hides the sidebar at every width, and a responsive
+	// `lg:hidden` hides it above lg -- the opposite of the contract. Both
+	// are matched here, the second as a word rather than a substring, since
+	// `lg:hidden` legitimately appears on the toggle button elsewhere.
+	assert.NotRegexp(t, `(^|[\s"])hidden([\s"]|$)`, region,
+		"the sidebar must not carry a bare `hidden` class")
+	assert.NotContains(t, region, "lg:hidden",
+		"the sidebar must stay visible at lg; only the toggle is responsive")
+	// It is the aside inside drawer-side that carries the width, so an
+	// operator at lg sees the w-56 column beside the content.
+	assert.Contains(t, region, "w-56", "the sidebar is a fixed-width column beside the content")
+	// The drawer starts closed: daisyUI opens it at lg through
+	// lg:drawer-open, not through a checked checkbox, so shipping one
+	// would slam the overlay open over the content on a narrow viewport.
+	assert.NotContains(t, renderShell(t, shellGroups), "drawer-toggle\" checked",
+		"the drawer must ship closed; lg:drawer-open is what makes it persistent")
+}
+
+// shellDrawerSideRegion slices the drawer's side panel out of a rendered
+// page, keyed on daisyUI's own class so it cannot wander into the content.
+func shellDrawerSideRegion(body string) string {
+	start := strings.Index(body, `class="drawer-side`)
+	if start < 0 {
+		return ""
+	}
+	rest := body[start:]
+	if end := strings.Index(rest, "</aside>"); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+// TestShell_NavItemsArePlainNavigation is why clicking a nav item closes
+// the drawer: the items are ordinary anchors, so activating one navigates
+// and the fresh page starts with the checkbox unticked. An htmx swap or
+// any JS-driven handler would leave the drawer standing over the page it
+// swapped in.
+func TestShell_NavItemsArePlainNavigation(t *testing.T) {
+	region := shellNavRegion(renderShell(t, shellGroups))
+
+	anchors := strings.Count(region, "<a ")
+	assert.Equal(t, len(shellGroups[0].Items)+
+		countItems(shellGroups[1:]), anchors,
+		"every sidebar item is one plain anchor")
+	for _, forbidden := range []string{"hx-get", "hx-post", "hx-target", "onclick"} {
+		assert.NotContains(t, region, forbidden,
+			"%q would swap a nav item in place instead of navigating, leaving the drawer open", forbidden)
+	}
+}
+
+func countItems(groups []NavGroup) int {
+	n := 0
+	for _, g := range groups {
+		n += len(g.Items)
+	}
+	return n
+}
+
 func TestShell_ShipsNoScriptBeyondTheThemeSwitchers(t *testing.T) {
 	body := renderShell(t, shellGroups)
 
