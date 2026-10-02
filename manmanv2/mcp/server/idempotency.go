@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +10,7 @@ import (
 )
 
 // IdempotencyKeyArg is the optional argument write tools accept.
-const IdempotencyKeyArg = "idempotency_key"
+const IdempotencyKeyArg = ArgIdempotencyKey
 
 // Errors for idempotent write calls. Neither triggers a backend call.
 var (
@@ -74,8 +72,9 @@ func Idempotency(reg *Registry, store IdempotencyStore) mcp.Middleware {
 
 			res, err := next(ctx, method, req)
 			cr, _ := res.(*mcp.CallToolResult)
-			if err != nil || cr == nil || cr.IsError {
-				// Failures aren't recorded: a retry should re-attempt the call.
+			if err != nil || cr == nil || cr.IsError || isUnappliedGateResult(cr) {
+				// Failures and unapplied previews aren't recorded: a retry or the
+				// confirming call under the same key must re-run.
 				_ = store.Release(context.WithoutCancel(ctx), k)
 				return res, err
 			}
@@ -100,18 +99,37 @@ func splitIdempotency(raw json.RawMessage) (key, hash string, err error) {
 			return "", "", fmt.Errorf("mcp: invalid arguments: %w", err)
 		}
 	}
-	if v, ok := m[IdempotencyKeyArg]; ok {
+	if v, ok := m[ArgIdempotencyKey]; ok {
 		s, isStr := v.(string)
 		if !isStr {
 			return "", "", fmt.Errorf("mcp: %s must be a string", IdempotencyKeyArg)
 		}
 		key = s
-		delete(m, IdempotencyKeyArg)
 	}
-	canon, err := json.Marshal(m) // map keys are sorted
+	// HashArgs is the single source of truth for which keys are excluded.
+	hash, err = HashArgs(raw)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("mcp: invalid arguments: %w", err)
 	}
-	sum := sha256.Sum256(canon)
-	return key, hex.EncodeToString(sum[:]), nil
+	return key, hash, nil
+}
+
+// isUnappliedGateResult reports whether cr is a gate preview (token issued) or
+// a declined confirmation, neither of which completes the keyed operation.
+func isUnappliedGateResult(cr *mcp.CallToolResult) bool {
+	if len(cr.Content) == 0 {
+		return false
+	}
+	tc, ok := cr.Content[0].(*mcp.TextContent)
+	if !ok {
+		return false
+	}
+	var o struct {
+		Token    string `json:"confirmation_token"`
+		Declined bool   `json:"declined"`
+	}
+	if json.Unmarshal([]byte(tc.Text), &o) != nil {
+		return false
+	}
+	return o.Token != "" || o.Declined
 }
