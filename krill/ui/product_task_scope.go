@@ -46,6 +46,39 @@ const (
 	productTaskMilestoneParam = pages.ProductTaskMilestoneQueryParam
 )
 
+// productTaskScopeQuery is the scope query that names one container on a
+// product-wide Tasks or Board URL -- the single-container mode the
+// container's kind calls for, plus the container itself.
+//
+// It exists so a link that has to arrive already scoped spells that scope
+// through the same names the parser and the control do. A retired
+// per-container URL redirecting here and the detail page's way back are
+// both links built rather than submitted, so neither goes through the
+// control's form -- and a redirect that spelled the scope itself would be a
+// second, silently-drifting vocabulary for the same three lines of query.
+//
+// The mode is read off the container's own kind rather than assumed to be a
+// milestone: the pre-redesign per-container URL served a milepebble's tasks
+// at the same path a milestone's used, so a redirect that always said
+// "milestone" would land a milepebble link on a scope that refuses its id.
+func productTaskScopeQuery(c taskContainer) url.Values {
+	mode := store.ProductTaskScopeMilestone
+	if c.Kind == string(store.MilestoneKindMilepebble) {
+		mode = store.ProductTaskScopeMilepebble
+	}
+	return url.Values{
+		productTaskScopeParam:     []string{string(mode)},
+		productTaskContainerParam: []string{c.ID.String()},
+	}
+}
+
+// productTaskContainerHref is the product-wide Tasks or Board URL scoped to
+// one container -- what an operator should be sent to when they asked for
+// that container's work.
+func productTaskContainerHref(pid uuid.UUID, suffix string, c taskContainer) string {
+	return productHref(pid, suffix) + "?" + productTaskScopeQuery(c).Encode()
+}
+
 // productTaskScope is the Tasks/Board scope control's state, parsed from
 // one request's query string and nowhere else.
 //

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -65,6 +67,30 @@ func (l legacyTasks) ListTasksByMilestone(_ context.Context, id uuid.UUID) ([]st
 		return nil, nil
 	}
 	return []store.TaskSummary{{ID: l.taskID, Title: "Test task"}}, nil
+}
+
+// The per-milestone list and board URLs now redirect into the product-wide
+// views, so the walk lands on a page whose read is the product-wide one
+// rather than the milestone's. Answering it with the same single task is
+// what makes the walk check the redirect and the page behind it together:
+// the successor renders a real row, not a well-chromed empty table.
+func (l legacyTasks) ListProductTasks(_ context.Context, params store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
+	if params.Scope.Kind != store.ProductTaskScopeMilestone || params.Scope.ContainerID != l.milestoneID {
+		return store.Page[store.ProductTaskRow]{}, nil
+	}
+	return store.Page[store.ProductTaskRow]{Items: []store.ProductTaskRow{{
+		TaskID:       l.taskID,
+		Title:        "Test task",
+		Milestone:    store.ProductTaskMilestoneRef{ID: l.milestoneID, Name: "Test milestone", Status: store.MilestoneStatusInProgress},
+		CurrentLane:  store.LaneImplementation,
+		AttemptCount: 1,
+		AttemptCap:   store.DefaultAttemptCap,
+	}}}, nil
+}
+
+func (l legacyTasks) CountProductTasks(_ context.Context, params store.ListProductTasksParams) (int, error) {
+	page, err := l.ListProductTasks(context.Background(), params)
+	return len(page.Items), err
 }
 
 func (l legacyTasks) GetTaskByID(_ context.Context, id uuid.UUID) (store.Task, error) {
@@ -233,6 +259,135 @@ func TestPreRedesignURLsResolve(t *testing.T) {
 			assertShellChrome(t, url, final, body)
 		})
 	}
+}
+
+// TestLegacyListAndBoardRedirectScopedToTheirContainer is FR f41a352d's
+// legacy-URL rule at the level of the redirect itself: the two retired
+// per-container URLs answer 302, and the Location is the product-wide view
+// of the same area SCOPED to the container the old URL named.
+//
+// The scope is the part worth asserting. A redirect that merely changed the
+// page would resolve, would render, and would still be wrong -- an operator
+// who bookmarked one milestone's board would land on every incomplete
+// milestone's, with nothing on the page to say which view they had left.
+func TestLegacyListAndBoardRedirectScopedToTheirContainer(t *testing.T) {
+	f := newLegacyFixture(t)
+	p := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String()
+
+	for _, tc := range []struct {
+		legacy string
+		suffix string
+	}{
+		{legacy: p + "/tasks", suffix: tasksSuffix},
+		{legacy: p + "/board", suffix: boardSuffix},
+	} {
+		t.Run(tc.legacy, func(t *testing.T) {
+			rec := fetch(t, f.mux, tc.legacy)
+			if rec.Code != http.StatusFound {
+				t.Fatalf("GET %s = %d, want 302: the product-wide view replaces this page", tc.legacy, rec.Code)
+			}
+			loc, err := url.Parse(rec.Header().Get("Location"))
+			if err != nil {
+				t.Fatalf("GET %s redirected to an unparseable Location: %v", tc.legacy, err)
+			}
+			if want := productHref(f.pid, tc.suffix); loc.Path != want {
+				t.Errorf("GET %s redirected to %s, want the product-wide %s", tc.legacy, loc.Path, want)
+			}
+			// Spelled as literals rather than read back through the
+			// parser's constants: a redirect that built its query with the
+			// same constant the parser reads would agree with itself even
+			// if both were misspelled, and pinning the two to each other
+			// is what this assertion is for.
+			q := loc.Query()
+			if got := q.Get("scope"); got != "milestone" {
+				t.Errorf("GET %s redirected with scope=%q, want milestone", tc.legacy, got)
+			}
+			if got := q.Get("container_id"); got != f.mid.String() {
+				t.Errorf("GET %s redirected with container_id=%q, want the milestone the old URL named (%s)",
+					tc.legacy, got, f.mid)
+			}
+		})
+	}
+}
+
+// TestLegacyTaskDetailURLStillServes is the other half of FR f41a352d's
+// rule, and the half a redirect-everything change gets wrong: the
+// per-container task DETAIL keeps serving its own page rather than
+// redirecting.
+//
+// The detail is the one URL of the three where redirecting would lose the
+// operator something. A list and a board both exist in the product-wide
+// view, so sending the old URL there changes which page answers. A task
+// detail does not: its replacement has not shipped, so a redirect would
+// trade a page that answers for one that does not.
+func TestLegacyTaskDetailURLStillServes(t *testing.T) {
+	f := newLegacyFixture(t)
+	detail := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String() +
+		"/tasks/" + f.tid.String()
+
+	rec := fetch(t, f.mux, detail)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200: the task detail still serves its own page", detail, rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Errorf("GET %s answered a redirect to %q: the detail keeps serving until its successor ships", detail, loc)
+	}
+	// And it is the task's own page rather than an in-shell status page:
+	// the fixture's one task's title is what the region carries.
+	if body := rec.Body.String(); !strings.Contains(body, "Test task") {
+		t.Errorf("GET %s did not render the task itself", detail)
+	}
+}
+
+// TestProductWideTaskTitleLinksResolve is the "no dead href" half of FR
+// f41a352d: every title link in the product-wide Tasks table resolves.
+//
+// The table is not scoped to a container, so a row's detail link cannot be
+// derived from the row's milestone -- it has to be the product-scoped
+// detail URL, and that URL has to be one the mux actually serves. Both
+// halves are driven through the real registrations: a link built from a
+// route nobody mounts, or one naming the wrong container, is what this
+// catches, and neither shows up in a test that only reads the string.
+func TestProductWideTaskTitleLinksResolve(t *testing.T) {
+	f := newLegacyFixture(t)
+
+	body := fetch(t, f.mux, productHref(f.pid, tasksSuffix)+
+		"?scope=milestone&container_id="+f.mid.String()).Body.String()
+
+	links := taskTitleLinksIn(body)
+	if len(links) == 0 {
+		t.Fatalf("the product-wide Tasks table rendered no title link, so this proves nothing")
+	}
+	for _, href := range links {
+		t.Run(href, func(t *testing.T) {
+			if code, _ := followRedirect(t, f, href); code != http.StatusOK {
+				t.Errorf("title link %s resolved to %d, want 200: a dead href in the Tasks table", href, code)
+			}
+		})
+	}
+}
+
+// taskTitleLinksIn is every rendered Tasks row's title href, unescaped and
+// in the order they appear.
+//
+// It matches the whole anchor and then reads its href rather than pinning
+// an attribute order, so it keeps finding the row's title link if the
+// markup's attribute order changes -- and it keys on the row's own
+// data-krill hook, so what it returns is the table's links rather than the
+// chrome's.
+func taskTitleLinksIn(body string) []string {
+	anchors := regexp.MustCompile(`<a\s[^>]*>`).FindAllString(body, -1)
+	href := regexp.MustCompile(`href="([^"]+)"`)
+	var out []string
+	for _, a := range anchors {
+		if !strings.Contains(a, `data-krill="task-title"`) {
+			continue
+		}
+		if m := href.FindStringSubmatch(a); m != nil {
+			out = append(out, strings.ReplaceAll(m[1], "&amp;", "&"))
+		}
+	}
+	return out
 }
 
 // assertShellChrome asserts a resolved legacy URL renders the whole

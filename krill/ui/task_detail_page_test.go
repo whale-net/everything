@@ -119,6 +119,14 @@ func (f *detailFixture) add(t store.Task) store.Task {
 	return t
 }
 
+// htmlEscapedURL is an href as it reads in the rendered markup: templ
+// escapes it on the way out, so a query's "&" is "&amp;" in the page. An
+// assertion that compares against the raw URL would fail against a link
+// that is exactly right.
+func htmlEscapedURL(raw string) string {
+	return strings.ReplaceAll(raw, "&", "&amp;")
+}
+
 func (f *detailFixture) get(tid string, hx bool) (int, string) {
 	req := httptest.NewRequest(http.MethodGet, "/spec/products/"+f.pid.String()+"/milestones/"+f.mid.String()+"/tasks/"+tid, nil)
 	if hx {
@@ -156,7 +164,14 @@ func TestTaskDetailFieldsReachPage(t *testing.T) {
 		`data-krill-lease-expires-at="` + lease.Format(time.RFC3339) + `"`,
 		`data-krill="loaded-at"`,
 		`data-krill="task-badge-claimed"`,
-		milestoneTasksPath(f.pid, f.mid), milestoneBoardPath(f.pid, f.mid),
+		// The way back is the product-wide list and board scoped to this
+		// task's own container, not the retired per-container URLs. The
+		// href is HTML-escaped in the markup, so the query's "&" reads
+		// as "&amp;" -- asserted through the escape rather than around it.
+		`href="` + htmlEscapedURL(productTaskContainerHref(f.pid, tasksSuffix,
+			taskContainer{ID: f.mid, Kind: string(store.MilestoneKindMilestone)})) + `"`,
+		`href="` + htmlEscapedURL(productTaskContainerHref(f.pid, boardSuffix,
+			taskContainer{ID: f.mid, Kind: string(store.MilestoneKindMilestone)})) + `"`,
 	} {
 		assert.Contains(t, html, want)
 	}

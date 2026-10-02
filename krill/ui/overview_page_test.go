@@ -795,7 +795,7 @@ func TestToastHostLandsOutsideMain(t *testing.T) {
 	mux := overviewMux(t, overviewListing(), nil, readableCount(1))
 
 	for _, path := range shellPagePaths(overviewProduct) {
-		body := fetch(t, mux, path).Body.String()
+		body := fetchPage(t, mux, path).Body.String()
 
 		host := strings.Index(body, `id="`+components.ToastHostID+`"`)
 		if host < 0 {

@@ -320,7 +320,7 @@ func TestNoShellPageAsksForATypedProductID(t *testing.T) {
 	app.mountShellRoutes(mux)
 
 	for _, path := range shellPagePaths(pid) {
-		rec := fetch(t, mux, path)
+		rec := fetchPage(t, mux, path)
 		if rec.Code != http.StatusOK {
 			t.Errorf("GET %s: status = %d, want 200", path, rec.Code)
 			continue
