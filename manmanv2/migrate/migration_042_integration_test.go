@@ -132,8 +132,8 @@ func migrateTo41ThenSeedAndApply42(ctx context.Context, t *testing.T, db *dbtest
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 46 {
-		t.Fatalf("expected the latest migration source version to be 46, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 47 {
+		t.Fatalf("expected the latest migration source version to be 47, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Migrate(41); err != nil {
