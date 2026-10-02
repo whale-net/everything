@@ -11,6 +11,7 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -189,19 +190,166 @@ func TestScopeControlMilepebbleModeRevealsOnlyThatMilestonesMilepebbles(t *testi
 	}
 }
 
-// TestScopeControlMilepebbleModeRefusesADisagreeingPair: naming a
-// milepebble that is NOT under the named milestone is refused rather than
-// read. The two selects disagree, and answering with either one's tasks
-// would show rows the URL did not unambiguously ask for.
-func TestScopeControlMilepebbleModeRefusesADisagreeingPair(t *testing.T) {
-	tasks := &recordingProductTasks{rows: nil, total: 1}
+// TestScopeControlChangingTheMilestoneSelectLandsOnTheNewMilestonesMilepebbles
+// is the interaction the `milestone` parameter exists for: the operator
+// changes the Milestone select, and the second select's options change to
+// that milestone's own.
+//
+// A plain GET form submits BOTH selects at once, and a select cannot be
+// emptied by choosing something else in it -- so the browser necessarily
+// sends the OLD milepebble alongside the NEW milestone. That disagreeing
+// pair is what the operator's own click produces, so it must resolve: the
+// named milestone is the one the operator just chose, and its first
+// milepebble is the answer (the same no-id rule the mode applies one level
+// down). Refusing it instead 404s the one interaction that can only ever
+// be performed from this page, and htmx -- which does not swap on a 4xx --
+// leaves the operator clicking a control that appears to do nothing.
+func TestScopeControlChangingTheMilestoneSelectLandsOnTheNewMilestonesMilepebbles(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+
+	// The operator is in milepebble mode on the middle milestone, with its
+	// milepebble chosen.
+	start := fetch(t, mux, productTaskTasksURL("scope=milepebble&milestone="+
+		productTaskMilestone.String()))
+	require.Equal(t, http.StatusOK, start.Code, "body: %s", start.Body.String())
+	require.Equal(t, productTaskMilepebble.String(),
+		selectedOption(t, start.Body.String(), `data-krill="scope-milepebble-select"`),
+		"the starting point is a milepebble of the middle milestone")
+
+	// They change ONLY the Milestone select. The form still carries the
+	// middle milepebble, because that is what the second select holds.
+	replay := "scope=milepebble&milestone=" + productTaskNewestMilestone.String() +
+		"&container_id=" + productTaskMilepebble.String()
+
+	for _, tc := range []struct {
+		name string
+		get  func(string) *httptest.ResponseRecorder
+	}{
+		// The no-JS path: a full submit of the same form.
+		{name: "a full-page submit", get: func(q string) *httptest.ResponseRecorder {
+			return fetch(t, mux, productTaskTasksURL(q))
+		}},
+		// The htmx path: the control's own hx-get, which must not 404 --
+		// htmx is configured noSwap on 4xx, so a refusal here is a dead
+		// control, not a visible error.
+		{name: "an in-place swap", get: func(q string) *httptest.ResponseRecorder {
+			return htmxGet(mux, productTaskTasksURL(q))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tc.get(replay)
+			require.Equal(t, http.StatusOK, rec.Code,
+				"changing the Milestone select must not be refused: %s", rec.Body.String())
+			body := rec.Body.String()
+
+			assert.Equal(t, "milepebble", checkedRadioValue(t, body), "the mode is unchanged")
+			assert.Equal(t, productTaskNewestMilestone.String(),
+				selectedOption(t, body, `data-krill="scope-milestone-select"`),
+				"the milestone select shows what the operator chose")
+			assert.Equal(t, productTaskNewestMilepebble.String(),
+				selectedOption(t, body, `data-krill="scope-milepebble-select"`),
+				"the milepebble select re-offers the NEW milestone's, and takes its first")
+
+			options := body[strings.Index(body, `data-krill="scope-milepebble-select"`):]
+			options = options[:strings.Index(options, "</select>")]
+			assert.Contains(t, options, productTaskNewestMilepebble.String())
+			assert.NotContains(t, options, productTaskMilepebble.String(),
+				"the previous milestone's milepebble is no longer on offer")
+		})
+	}
+}
+
+// TestScopeControlSurvivesTheOwnersDisagreeingPairReachesTheRegion: the
+// same replay over htmx must still leave the operator a way out. A refusal
+// that replaces the region with an alert takes the control with it -- and
+// the control is the only way off a page scoped to a container.
+func TestScopeControlSurvivesTheOwnersDisagreeingPairReachesTheRegion(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+
+	rec := htmxGet(mux, productTaskTasksURL("scope=milepebble&milestone="+
+		productTaskNewestMilestone.String()+"&container_id="+productTaskMilepebble.String()))
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `data-krill="scope-control"`,
+		"the answer to a scope change must carry the control that produced it")
+}
+
+// TestScopeControlMilepebbleModeOnAnUncutMilestoneKeepsAMilestoneSelect:
+// milepebble mode pointed at a milestone that has no milepebbles is an
+// ordinary empty result, not the loss of the control.
+//
+// It is reachable by one click from the mode's own milestone select, and
+// the operator who lands there has named a real milestone of a real
+// product -- so answering "No milestones yet" is wrong twice over: the
+// product has milestones, and the select that would let them pick a cut
+// one is the very thing that disappeared.
+func TestScopeControlMilepebbleModeOnAnUncutMilestoneKeepsAMilestoneSelect(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{total: 3}, productTaskListing(), nil)
+
+	rec := fetch(t, mux, productTaskTasksURL("scope=milepebble&milestone="+productTaskOldestMilestone.String()))
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	body := rec.Body.String()
+
+	assert.Contains(t, body, `data-krill="scope-control"`, "the operator's way out stays")
+	assert.Equal(t, "milepebble", checkedRadioValue(t, body),
+		"the mode the URL named is the mode that stays marked")
+	assert.Contains(t, body, `data-krill="scope-milestone-select"`,
+		"the milestone select is how the operator picks a cut milestone, so it stays")
+	assert.Equal(t, productTaskOldestMilestone.String(),
+		selectedOption(t, body, `data-krill="scope-milestone-select"`),
+		"and it shows the milestone the operator named")
+	assert.NotContains(t, body, "No milestones yet",
+		"the product has three milestones; the chosen one simply has none cut")
+}
+
+// TestScopeControlMilepebbleModeResolvesADisagreeingPairToTheNamedMilestone:
+// naming a milepebble that is not under the named milestone resolves to
+// that milestone's own first milepebble rather than being refused.
+//
+// This SUPERSEDES an earlier case here that asserted a 404, and the spec
+// decides it: FR 7191dba1 requires the URL to carry the mode and the
+// selected ids, and the control is a plain GET form over two selects. A
+// select cannot be emptied by choosing something else in it, so the
+// operator's own click on the Milestone select necessarily submits the
+// previous milepebble alongside the new milestone. A 404 for that pair
+// would break the one interaction the `milestone` parameter exists to
+// enable -- and htmx is configured noSwap on 4xx, so it would break
+// silently. The named milestone is the more specific statement of what the
+// operator is looking at, and the no-id rule the mode already applies one
+// level down settles the milepebble.
+//
+// A milepebble from ANOTHER product is still a 404 -- that is the
+// membership check, and it is unchanged. What is narrowed here is only the
+// pair a control interaction necessarily produces.
+func TestScopeControlMilepebbleModeResolvesADisagreeingPairToTheNamedMilestone(t *testing.T) {
+	tasks := &recordingProductTasks{total: 1}
 	mux := productTaskMux(t, tasks, productTaskListing(), nil)
 
 	rec := fetch(t, mux, productTaskTasksURL("scope=milepebble&milestone="+
 		productTaskMilestone.String()+"&container_id="+productTaskNewestMilepebble.String()))
 
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	require.Len(t, tasks.listed, 1, "the scope resolves rather than being refused")
+	assert.Equal(t, store.ProductTaskScope{
+		Kind:        store.ProductTaskScopeMilepebble,
+		ContainerID: productTaskMilepebble,
+	}, tasks.listed[0].Scope,
+		"the read follows the named milestone, not the stale container")
+}
+
+// TestScopeControlMilepebbleModeStillRefusesAnotherProductsMilepebble: the
+// narrowing above must not weaken the membership check. A milepebble the
+// product does not own is still a 404, and the store is still never asked.
+func TestScopeControlMilepebbleModeStillRefusesAnotherProductsMilepebble(t *testing.T) {
+	tasks := &recordingProductTasks{rows: nil, total: 1}
+	mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+	rec := fetch(t, mux, productTaskTasksURL("scope=milepebble&milestone="+
+		productTaskMilestone.String()+"&container_id="+productTaskOtherMilestone.String()))
+
 	assert.Equal(t, http.StatusNotFound, rec.Code)
-	assert.Empty(t, tasks.listed, "the store must never be asked for a scope the URL contradicts")
+	assert.Empty(t, tasks.listed, "the store must never be asked for another product's container")
 }
 
 // TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble: the
