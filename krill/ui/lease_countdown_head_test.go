@@ -93,26 +93,43 @@ func receiverBefore(script string, at int) (string, int) {
 
 // guardBefore returns the conditional expression standing between the
 // start of the statement holding the call and the call's receiver, or ""
-// when the call is unconditional. Both spellings of a conditional are
-// covered: a short-circuit in the same statement, and an enclosing
+// when the call is the whole statement. Both spellings of a conditional
+// are covered: a short-circuit in the same statement, and an enclosing
 // `if (...) {` block.
 func guardBefore(script string, recvStart int) string {
-	for j := recvStart - 1; j >= 0; j-- {
+	j := recvStart - 1
+	for ; j >= 0; j-- {
 		switch script[j] {
 		case ' ', '\t', '\n', '\r':
 			continue
-		case '{':
-			// The call is the first thing in a block; the block is only a
-			// guard if an `if (...)` opened it.
-			if cond, ok := ifConditionOpening(script, j); ok {
-				return cond
-			}
-			return ""
-		case ';', '}':
-			return ""
+		}
+		break
+	}
+	if j < 0 {
+		return ""
+	}
+	switch script[j] {
+	case ';', '}':
+		// The call opens its own statement: unconditional.
+		return ""
+	case '{':
+		// The call is the first thing in a block; the block is only a
+		// guard if an `if (...)` opened it.
+		if cond, ok := ifConditionOpening(script, j); ok {
+			return cond
+		}
+		return ""
+	}
+	// Anything else sits between the statement boundary and the call, so
+	// the call is only reached when that expression evaluates truthy --
+	// `a && a.addEventListener(...)` being the shipped one. Report the
+	// whole expression, from the boundary up to the call.
+	for k := j; k >= 0; k-- {
+		if script[k] == ';' || script[k] == '{' || script[k] == '}' {
+			return strings.TrimSpace(script[k+1 : recvStart])
 		}
 	}
-	return ""
+	return strings.TrimSpace(script[:recvStart])
 }
 
 // ifConditionOpening returns the condition of the `if (...)` whose block
