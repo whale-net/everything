@@ -74,6 +74,7 @@ func run(logger *slog.Logger) error {
 	tools = append(tools, server.SessionActionTools...)
 	tools = append(tools, server.EditTools(apiClient)...)
 	tools = append(tools, admin.Tools(apiClient)...)
+	tools = append(tools, server.WorkshopTools...)
 	reg := server.NewRegistry(tools...)
 	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}, server.SQLIdempotencyStore{DB: db})
 	server.AddReadTools(srv, apiClient)
@@ -82,6 +83,7 @@ func run(logger *slog.Logger) error {
 	server.AddSessionActionTools(srv, apiClient, server.SQLActionAllowlist{DB: db})
 	server.AddEditTools(srv, &server.Gate{Store: server.SQLConfirmationStore{DB: db}}, apiClient)
 	admin.Register(srv, apiClient, &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
+	server.AddWorkshopTools(srv, manmanpb.NewWorkshopServiceClient(conn.GetConnection()), &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	mux := http.NewServeMux()
