@@ -169,6 +169,12 @@ type emptyDesignSessions struct {
 	session store.DesignSession
 }
 
+// SummarizeByProduct answers the Overview's Blocking-questions tile. The
+// seeded session holds no open questions, so both figures are zero.
+func (d emptyDesignSessions) SummarizeByProduct(_ context.Context, productID uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	return store.ProductDesignSessionsSummary{ProductID: productID}, nil
+}
+
 func (d emptyDesignSessions) ListByProduct(context.Context, uuid.UUID) ([]store.DesignSession, error) {
 	if d.session.ID == uuid.Nil {
 		return nil, nil

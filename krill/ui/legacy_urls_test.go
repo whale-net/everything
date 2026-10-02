@@ -49,6 +49,17 @@ func (legacyTasks) ListOpenNotes(context.Context, store.ListOpenNotesParams) (st
 	return store.Page[store.OpenNoteRow]{}, nil
 }
 
+// The Overview home renders its stat tiles and in-flight panel, so a
+// fixture reaching "/" owes both reads. Empty figures are a real answer
+// for a scope with nothing in flight.
+func (legacyTasks) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	return store.ConsoleOverviewCounts{}, nil
+}
+
+func (legacyTasks) SummarizeProductTaskProgress(_ context.Context, params store.ProductTaskProgressParams) (store.ProductTaskProgress, error) {
+	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
+}
+
 func (l legacyTasks) ListTasksByMilestone(_ context.Context, id uuid.UUID) ([]store.TaskSummary, error) {
 	if id != l.milestoneID {
 		return nil, nil
