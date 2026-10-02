@@ -174,8 +174,8 @@ func TestMigration046_DropsRiverTablesWhenPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 46 {
-		t.Fatalf("expected the latest migration source version to be 46, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 47 {
+		t.Fatalf("expected the latest migration source version to be 47, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Migrate(45); err != nil {
@@ -227,8 +227,8 @@ func TestMigration046_NoopOnDatabaseThatNeverRanRiver(t *testing.T) {
 	if dirty {
 		t.Fatalf("expected clean state after Up, got dirty")
 	}
-	if version != 46 {
-		t.Fatalf("expected version 46 after Up, got %d", version)
+	if version != 47 {
+		t.Fatalf("expected version 47 after Up, got %d", version)
 	}
 
 	assertRiverObjectsAbsent046(ctx, t, db)

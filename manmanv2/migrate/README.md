@@ -28,7 +28,7 @@ manmanv2 was the last domain still keeping its embed inside `package main`.
 ## Migrations
 
 `schema/migrations/` holds numbered `NNN_name.up.sql` / `NNN_name.down.sql`
-pairs, `001_initial_schema` through `046_*`. Migration numbers must be unique:
+pairs, `001_initial_schema` through `047_*`. Migration numbers must be unique:
 golang-migrate fails on a duplicate version at **deploy** time, not build time,
 so a collision is invisible to CI.
 
@@ -45,3 +45,18 @@ bazel test //manmanv2/migrate:migration_046_integration_test --test_output=all
 
 Each applies the real embedded migration history through
 `migrate.NewRunner`, so these tests also cover the `schema` package's embed.
+
+## MCP allowlists (migration 047)
+
+`mcp_gamer_start_allowlist` and `mcp_gamer_action_allowlist` are empty by
+default and changed by admins outside MCP tools. `deployment_id` is an
+`sgc_id`. Grant / revoke (SCD2: close the current row, never delete):
+
+```sql
+INSERT INTO mcp_gamer_start_allowlist (deployment_id, granted_by) VALUES (42, 'admin@example.com');
+UPDATE mcp_gamer_start_allowlist SET valid_to = NOW() WHERE deployment_id = 42 AND valid_to IS NULL;
+
+INSERT INTO mcp_gamer_action_allowlist (deployment_id, action_name, granted_by) VALUES (42, 'say', 'admin@example.com');
+UPDATE mcp_gamer_action_allowlist SET valid_to = NOW()
+WHERE deployment_id = 42 AND action_name = 'say' AND valid_to IS NULL;
+```
