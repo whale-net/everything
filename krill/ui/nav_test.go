@@ -100,7 +100,7 @@ func TestNavExposesRequiredAreas(t *testing.T) {
 	mux := navMux(t)
 
 	for _, path := range shellPagePaths(navProductID) {
-		body := fetch(t, mux, path).Body.String()
+		body := fetchPage(t, mux, path).Body.String()
 		for _, want := range requiredAreas(navProductID) {
 			if !strings.Contains(body, `href="`+want+`"`) {
 				t.Errorf("GET %s does not link to required area %s", path, want)
@@ -135,7 +135,7 @@ func TestShellRendersOnEveryRoute(t *testing.T) {
 	mux := navMux(t)
 
 	for _, path := range shellPagePaths(navProductID) {
-		rec := fetch(t, mux, path)
+		rec := fetchPage(t, mux, path)
 		body := rec.Body.String()
 
 		if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
@@ -192,6 +192,7 @@ func TestActiveLinkPerRoute(t *testing.T) {
 	for _, tc := range []struct {
 		path       string
 		wantActive string // "" means no item should be marked
+		redirect   bool   // the path is pre-redesign and answers a 302
 	}{
 		{path: "/", wantActive: "Overview"},
 		{path: productHref(pid, overviewSuffix), wantActive: "Overview"},
@@ -201,15 +202,18 @@ func TestActiveLinkPerRoute(t *testing.T) {
 		{path: productPath(pid), wantActive: "Capabilities"},
 		{path: decisionsPath(pid), wantActive: "Decisions"},
 		{path: deliveryPath(pid), wantActive: "Milestones"},
-		{path: milestoneTasksPath(pid, navMilestoneID), wantActive: "Tasks"},
-		{path: milestoneBoardPath(pid, navMilestoneID), wantActive: "Board"},
+		// The per-milestone task list and board are pre-redesign URLs that
+		// now redirect into the product-wide views, so the walk follows the
+		// hop the way a browser does and asks what the operator lands on.
+		{path: milestoneTasksPath(pid, navMilestoneID), wantActive: "Tasks", redirect: true},
+		{path: milestoneBoardPath(pid, navMilestoneID), wantActive: "Board", redirect: true},
 		{path: credentialsPath, wantActive: "Credentials"},
 		// The two legacy area roots no sidebar item owns: both are static
 		// landings a later phase retires, and neither is a nav item's page.
 		{path: designPath},
 		{path: specPath},
 	} {
-		body := fetch(t, mux, tc.path).Body.String()
+		body := navPageBody(t, mux, tc.path, tc.redirect)
 
 		marked := activeLabels(body)
 		switch {
@@ -565,7 +569,12 @@ func TestWorkspaceNavHrefResolves(t *testing.T) {
 	} {
 		for _, g := range workspaceNav(targets, "/") {
 			for _, item := range g.Items {
-				if rec := fetch(t, mux, item.Href); rec.Code != http.StatusOK {
+				// fetchPage, not fetch: a nav href that redirects into the
+				// page that replaced it is not a dead link, and this test
+				// is about dead links. Following the redirect keeps it
+				// proving the href lands on a page that renders rather than
+				// merely proving it does not 404.
+				if rec := fetchPage(t, mux, item.Href); rec.Code != http.StatusOK {
 					t.Errorf("nav item %q href %s = %d (dead nav link)", item.Label, item.Href, rec.Code)
 				}
 			}
@@ -703,7 +712,7 @@ func TestWorkspaceShellCarriesTheSwitcherAndToastHost(t *testing.T) {
 	mux := navMux(t)
 
 	for _, path := range shellPagePaths(navProductID) {
-		body := fetch(t, mux, path).Body.String()
+		body := fetchPage(t, mux, path).Body.String()
 		for _, want := range []string{productSwitchPath, `id="` + components.ToastHostID + `"`} {
 			if !strings.Contains(body, want) {
 				t.Errorf("GET %s missing %q from the chrome", path, want)
@@ -748,8 +757,11 @@ func TestPrimaryNavScanIgnoresTheProductSubNav(t *testing.T) {
 		}
 	}
 
+	// The per-milestone task list is pre-redesign and redirects into the
+	// product-wide Tasks, so the scan runs on the page the operator lands
+	// on rather than on the 302's empty body.
 	for _, path := range withoutSubNav {
-		if got := activeLabels(fetch(t, mux, path).Body.String()); len(got) != 1 {
+		if got := activeLabels(fetchPage(t, mux, path).Body.String()); len(got) != 1 {
 			t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
 		}
 	}
@@ -1006,6 +1018,19 @@ func anchorTags(body string) []string {
 	}
 }
 
+// navPageBody is fetch for the paths the active-mark table marks as
+// redirect: it follows the hop and answers with the body of the page the
+// operator lands on. Asking the 302 for a body instead would read the
+// scan off an empty response and report nothing marked, whatever the nav
+// actually says.
+func navPageBody(t *testing.T, mux *http.ServeMux, path string, redirect bool) string {
+	t.Helper()
+	if redirect {
+		return fetchPage(t, mux, path).Body.String()
+	}
+	return fetch(t, mux, path).Body.String()
+}
+
 func fetch(t *testing.T, mux *http.ServeMux, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	method := http.MethodGet
@@ -1015,6 +1040,33 @@ func fetch(t *testing.T, mux *http.ServeMux, target string) *httptest.ResponseRe
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
 	return rec
+}
+
+// fetchPage fetches target and follows any redirect, which is what a
+// browser does with the href it is handed.
+//
+// It is here because two of the shell pages this file walks -- the
+// per-milestone task list and board -- are now pre-redesign URLs that
+// redirect into the product-wide Tasks and Board. A walk whose subject is
+// "this URL renders the chrome" has to keep saying so through the redirect;
+// one whose subject is a status or an href must keep using fetch and see
+// the 302 itself.
+func fetchPage(t *testing.T, mux *http.ServeMux, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	const maxHops = 5
+	for range maxHops {
+		rec := fetch(t, mux, target)
+		if rec.Code != http.StatusFound && rec.Code != http.StatusMovedPermanently {
+			return rec
+		}
+		next := rec.Header().Get("Location")
+		if next == "" {
+			t.Fatalf("%s redirected with no Location", target)
+		}
+		target = next
+	}
+	t.Fatalf("%s redirected more than %d times", target, maxHops)
+	return nil
 }
 
 // Under AUTH_MODE=none the synthetic dev user is admitted to read routes,
