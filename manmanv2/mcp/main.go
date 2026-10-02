@@ -67,11 +67,12 @@ func run(logger *slog.Logger) error {
 	}
 	defer conn.Close()
 
-	reg := server.NewRegistry(append([]server.Tool{server.WhoamiTool, server.ConnectAddressTool}, server.ReadTools...)...)
-	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}, server.SQLIdempotencyStore{DB: db})
 	apiClient := manmanpb.NewManManAPIClient(conn.GetConnection())
+	reg := server.NewRegistry(append(append([]server.Tool{server.WhoamiTool, server.ConnectAddressTool}, server.ReadTools...), server.ActionDefinitionTools(apiClient)...)...)
+	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}, server.SQLIdempotencyStore{DB: db})
 	server.AddReadTools(srv, apiClient)
 	server.AddConnectAddressTool(srv, apiClient)
+	server.AddActionDefinitionTools(srv, apiClient, &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	mux := http.NewServeMux()
