@@ -21,6 +21,7 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/manmanv2/mcp/admin"
 	"github.com/whale-net/everything/manmanv2/mcp/server"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
@@ -71,12 +72,14 @@ func run(logger *slog.Logger) error {
 	tools := append([]server.Tool{server.WhoamiTool, server.ConnectAddressTool}, server.ReadTools...)
 	tools = append(tools, server.SessionActionTools...)
 	tools = append(tools, server.EditTools(apiClient)...)
+	tools = append(tools, admin.Tools(apiClient)...)
 	reg := server.NewRegistry(tools...)
 	srv := server.NewServer(reg, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}, server.SQLIdempotencyStore{DB: db})
 	server.AddReadTools(srv, apiClient)
 	server.AddConnectAddressTool(srv, apiClient)
 	server.AddSessionActionTools(srv, apiClient, server.SQLActionAllowlist{DB: db})
 	server.AddEditTools(srv, &server.Gate{Store: server.SQLConfirmationStore{DB: db}}, apiClient)
+	admin.Register(srv, apiClient, &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	mux := http.NewServeMux()
