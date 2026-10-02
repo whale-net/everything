@@ -129,5 +129,6 @@ The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 
 | `PG_DATABASE_URL` | yes | Postgres for `mcp_idempotency_record` (write-tool idempotency keys) |
 | `PORT` | no | Listen port (default `8081`) |
 | `MCP_RESOURCE_METADATA_URL` | no | RFC 9728 metadata URL advertised in 401 challenges |
+| `CONTROL_API_URL` | yes | Control API gRPC address; caller token is forwarded on every call |
 
 There is no unauthenticated mode: the server refuses to start without the OIDC settings. Callers need a `gamer`, `server-manager`, or `admin` realm role; any other caller is refused every tool.
