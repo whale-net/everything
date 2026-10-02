@@ -171,6 +171,12 @@ func CountProductTasksHandler(tasks store.TaskStore, products store.ProductStore
 			return
 		}
 
+		// The shared parser reads the paging pair so both endpoints accept
+		// the same query string; a count is of the whole filtered set, so it
+		// drops the page here rather than relying on the store to ignore
+		// it. The same rule the four console count endpoints apply.
+		params.Page = store.PageParams{}
+
 		count, err := tasks.CountProductTasks(r.Context(), params)
 		if err != nil {
 			if errors.Is(err, store.ErrMilestoneOutsideProduct) {

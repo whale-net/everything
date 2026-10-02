@@ -75,6 +75,11 @@ func RegisterCountProductTasks(reg *server.Registry, tasks store.TaskStore, prod
 		if err != nil {
 			return nil, zero, err
 		}
+		// The shared parser reads the paging pair so the two tools accept
+		// the same arguments; a count is of the whole filtered set, so it
+		// drops the page here rather than trusting the store to ignore it.
+		// The same rule the four console count tools apply.
+		params.Page = store.PageParams{}
 
 		count, err := tasks.CountProductTasks(ctx, params)
 		if err != nil {

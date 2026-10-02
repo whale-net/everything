@@ -180,6 +180,12 @@ func CountClaimedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 			writeParamParseError(w, err)
 			return
 		}
+		// The shared parser reads the paging pair so the count and the list
+		// accept the same query string; a count is of the whole filtered
+		// set, so it drops the page here rather than relying on the store
+		// to ignore it.
+		params.Page = store.PageParams{}
+
 		count, err := tasks.CountClaimedTasks(r.Context(), params)
 		if err != nil {
 			writeConsoleQueryError(w, err)
@@ -198,6 +204,12 @@ func CountCancelledTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 			writeParamParseError(w, err)
 			return
 		}
+		// The shared parser reads the paging pair so the count and the list
+		// accept the same query string; a count is of the whole filtered
+		// set, so it drops the page here rather than relying on the store
+		// to ignore it.
+		params.Page = store.PageParams{}
+
 		count, err := tasks.CountCancelledTasks(r.Context(), params)
 		if err != nil {
 			writeConsoleQueryError(w, err)
@@ -216,6 +228,12 @@ func CountEscalatedTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 			writeParamParseError(w, err)
 			return
 		}
+		// The shared parser reads the paging pair so the count and the list
+		// accept the same query string; a count is of the whole filtered
+		// set, so it drops the page here rather than relying on the store
+		// to ignore it.
+		params.Page = store.PageParams{}
+
 		count, err := tasks.CountEscalatedTasks(r.Context(), params)
 		if err != nil {
 			writeConsoleQueryError(w, err)
@@ -236,6 +254,12 @@ func CountOpenNotesHandler(tasks store.TaskStore) http.HandlerFunc {
 			writeParamParseError(w, err)
 			return
 		}
+		// The shared parser reads the paging pair so the count and the list
+		// accept the same query string; a count is of the whole filtered
+		// set, so it drops the page here rather than relying on the store
+		// to ignore it.
+		params.Page = store.PageParams{}
+
 		count, err := tasks.CountOpenNotes(r.Context(), params)
 		if err != nil {
 			writeConsoleQueryError(w, err)
@@ -271,6 +295,14 @@ func ConsoleOverviewHandler(tasks store.TaskStore) http.HandlerFunc {
 			writeParamParseError(w, err)
 			return
 		}
+
+		// The Overview's four figures are whole-set counts, so the page each
+		// shared parser read is dropped here rather than relied on to be
+		// ignored downstream.
+		escalated.Page = store.PageParams{}
+		claimed.Page = store.PageParams{}
+		cancelled.Page = store.PageParams{}
+		notes.Page = store.PageParams{}
 
 		counts, err := tasks.CountConsoleOverview(r.Context(), store.ConsoleOverviewParams{
 			Escalated: escalated,

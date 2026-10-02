@@ -733,6 +733,35 @@ go_test(
     ],
 )
 
+# No-database unit test for the parts of the console count MCP surface
+# console_filter_registration_test.go does not already pin: that each count
+# tool returns its HTTP twin's exact document and declares its twin's wire
+# shape (LB7), that paging changes nothing observable, and the whole of
+# count_product_tasks. In-memory store fakes over real in-memory MCP
+# client/server connections, like :task_product_list_test, so it needs no
+# Docker and is part of `bazel test //...`. The real COUNT(*) queries and
+# their agreement with the lists are covered by
+# //krill/store:task_console_integration_test,
+# //krill/store:task_note_console_integration_test and
+# //krill/store:task_integration_test; the shared-SQL guard is
+# //krill/store:console_count_clause_test.
+go_test(
+    name = "console_counts_test",
+    srcs = ["console_counts_parity_test.go"],
+    deps = [
+        ":tools",
+        "//krill/api/handlers",
+        "//krill/mcp/server",
+        "//krill/store",
+        "//libs/go/auth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # No-database unit tests for the two product-wide task reads' MCP surfaces:
 # list_product_tasks (task_product_list.go, FR cfcd1104) -- its argument
 # validation, its param plumbing into store.ListProductTasksParams, and the

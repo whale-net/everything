@@ -396,32 +396,53 @@ func (f *fakeTaskStore) AmendNote(ctx context.Context, params store.AmendNotePar
 // -- and that a store-side failure reaches the client as a 500 rather than
 // as a rendered 0.
 
+// pagedFakeCount models a count that wrongly honoured the page it was
+// handed: a store returning min(pageSize, total) rather than the whole
+// filtered set. The real store never does (its shared clauses carry no
+// LIMIT), but a fake that always returned its scripted total would let a
+// handler hand the page down and get away with it -- so this fake makes
+// that mistake visible rather than hiding it.
+func pagedFakeCount(total int, page store.PageParams) int {
+	if page.PageSize > 0 && page.PageSize < total {
+		return page.PageSize
+	}
+	return total
+}
+
 func (f *fakeTaskStore) CountClaimedTasks(ctx context.Context, params store.ListClaimedTasksParams) (int, error) {
 	f.gotCountClaimedTasksParams = params
-	return f.countClaimedTasksResult, f.countClaimedTasksErr
+	return pagedFakeCount(f.countClaimedTasksResult, params.Page), f.countClaimedTasksErr
 }
 
 func (f *fakeTaskStore) CountCancelledTasks(ctx context.Context, params store.ListCancelledTasksParams) (int, error) {
 	f.gotCountCancelledTasksParams = params
-	return f.countCancelledTasksResult, f.countCancelledTasksErr
+	return pagedFakeCount(f.countCancelledTasksResult, params.Page), f.countCancelledTasksErr
 }
 
 func (f *fakeTaskStore) CountEscalatedTasks(ctx context.Context, params store.ListEscalatedTasksParams) (int, error) {
 	f.gotCountEscalatedTasksParams = params
-	return f.countEscalatedTasksResult, f.countEscalatedTasksErr
+	return pagedFakeCount(f.countEscalatedTasksResult, params.Page), f.countEscalatedTasksErr
 }
 
 func (f *fakeTaskStore) CountOpenNotes(ctx context.Context, params store.ListOpenNotesParams) (int, error) {
 	f.gotCountOpenNotesParams = params
-	return f.countOpenNotesResult, f.countOpenNotesErr
+	return pagedFakeCount(f.countOpenNotesResult, params.Page), f.countOpenNotesErr
 }
 
 func (f *fakeTaskStore) CountProductTasks(ctx context.Context, params store.ListProductTasksParams) (int, error) {
 	f.gotCountProductTasksParams = params
-	return f.countProductTasksResult, f.countProductTasksErr
+	return pagedFakeCount(f.countProductTasksResult, params.Page), f.countProductTasksErr
 }
 
 func (f *fakeTaskStore) CountConsoleOverview(ctx context.Context, params store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
 	f.gotCountConsoleOverviewParams = params
-	return f.countConsoleOverviewResult, f.countConsoleOverviewErr
+	if f.countConsoleOverviewErr != nil {
+		return store.ConsoleOverviewCounts{}, f.countConsoleOverviewErr
+	}
+	counts := f.countConsoleOverviewResult
+	counts.Escalated = pagedFakeCount(counts.Escalated, params.Escalated.Page)
+	counts.Claimed = pagedFakeCount(counts.Claimed, params.Claimed.Page)
+	counts.Cancelled = pagedFakeCount(counts.Cancelled, params.Cancelled.Page)
+	counts.OpenNotes = pagedFakeCount(counts.OpenNotes, params.Notes.Page)
+	return counts, nil
 }
