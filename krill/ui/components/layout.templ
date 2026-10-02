@@ -10,6 +10,13 @@ type NavLink struct {
 	Label  string
 	Href   string
 	Active bool
+
+	// Count is the item's badge figure, or "" for no badge at all.
+	// It is a string so the caller decides what a count means before
+	// this type sees it: a zero and a count that could not be read both
+	// arrive as "", because a badge reading 0 tells an operator nothing
+	// is wrong when in fact nothing was read.
+	Count string
 }
 
 // LayoutData is krill's app-owned chrome data.
@@ -44,11 +51,27 @@ templ nav(links []NavLink) {
 templ navLink(l NavLink) {
 	<li>
 		if l.Active {
-			<a href={ templ.URL(l.Href) } class="menu-active" aria-current="page">{ l.Label }</a>
+			<a href={ templ.URL(l.Href) } class="menu-active" aria-current="page">
+				{ l.Label }
+				@navCount(l.Count)
+			</a>
 		} else {
-			<a href={ templ.URL(l.Href) }>{ l.Label }</a>
+			<a href={ templ.URL(l.Href) }>
+				{ l.Label }
+				@navCount(l.Count)
+			</a>
 		}
 	</li>
+}
+
+// navCount renders an item's badge beside its label. An empty count is
+// the absence of a badge, not a badge of zero -- the caller has already
+// folded "nothing escalated" and "could not read how many are escalated"
+// into that one value.
+templ navCount(count string) {
+	if count != "" {
+		<span class="badge badge-error badge-sm" data-krill="nav-count">{ count }</span>
+	}
 }
 
 // SubNav is the per-product cross-nav the spec and delivery pages share.
