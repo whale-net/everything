@@ -10,6 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/slice"
+	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
@@ -211,6 +214,503 @@ func TestNavIsActive(t *testing.T) {
 			t.Errorf("navIsActive(%s, %q) = %v, want %v", ops.Path, tc.path, got, tc.want)
 		}
 	}
+}
+
+// ── the workspace shell's grouped nav ───────────────────────────────────────
+
+// requiredNavGroups is the grouped sidebar's contract spelled out as
+// literals, deliberately not derived from navGroupTable -- the same
+// self-referential trap requiredAreas above describes. Shrinking the
+// table would shrink this and still pass, which is how a whole group
+// could vanish from the sidebar unnoticed.
+//
+// The group set and the order are both asserted: the Work/Delivery/Design/
+// Spec/Admin ordering is what puts Tasks before the Delivery item it
+// currently shares an href with.
+var requiredNavGroups = []struct {
+	title string
+	items []string
+}{
+	{title: "", items: []string{"Overview"}},
+	{title: "Work", items: []string{"Needs attention", "Tasks", "Board"}},
+	{title: "Delivery", items: []string{"Milestones"}},
+	{title: "Design", items: []string{"Design sessions"}},
+	{title: "Spec", items: []string{"Capabilities", "Decisions", "Personas", "Non-goals"}},
+	{title: "Admin", items: []string{"Credentials"}},
+}
+
+// navMilestoneID is the one container the stub delivery listing below
+// holds. A milestone-scoped nav href has to name a container the product
+// actually has, or the task page correctly 404s and the test would be
+// measuring the stub's emptiness rather than the href.
+var navMilestoneID = uuid.MustParse("22222222-2222-2222-2222-222222222222")
+
+// navMux mounts the shell's own routes against an app whose stores are
+// in-memory stubs, so every href the grouped nav builds can actually be
+// requested. A nil store would panic inside a handler rather than answer,
+// so the stubs are what make "does not 404" a statement about routing
+// rather than about the test's own nil dereference.
+func navMux(t *testing.T) *http.ServeMux {
+	t.Helper()
+	app := newTestApp(t)
+	app.spec = &fakeSpecReader{listing: slice.DeliveryListing{
+		Milestones: []slice.MilestoneListingEntry{{ID: navMilestoneID, Name: "Shipped shell"}},
+	}}
+	app.credentials = &fakeCredentials{}
+	app.tasks = &fakeTaskLister{}
+	app.designSessions = navStubDesignSessions{}
+	app.revisionEvents = navStubRevisionEvents{}
+	mux := http.NewServeMux()
+	app.mountShellRoutes(mux)
+	return mux
+}
+
+// navStubDesignSessions and navStubRevisionEvents are the minimum the
+// design-session list page reads. The session list belongs to
+// design_page_test.go's own target, so these two are declared here rather
+// than shared: this test only needs the route to answer, not the page's
+// contents.
+type navStubDesignSessions struct{}
+
+func (navStubDesignSessions) Open(context.Context, uuid.UUID, uuid.UUID, string, store.SessionID) (store.DesignSession, error) {
+	return store.DesignSession{}, nil
+}
+
+func (navStubDesignSessions) GetByID(context.Context, uuid.UUID) (store.DesignSession, error) {
+	return store.DesignSession{}, store.ErrNotFound
+}
+
+func (navStubDesignSessions) ListByProduct(context.Context, uuid.UUID) ([]store.DesignSession, error) {
+	return nil, nil
+}
+
+func (navStubDesignSessions) SummarizeByProduct(context.Context, uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	return store.ProductDesignSessionsSummary{}, nil
+}
+
+type navStubRevisionEvents struct{}
+
+func (navStubRevisionEvents) Append(context.Context, store.NewRevisionEvent) (store.RevisionEvent, error) {
+	return store.RevisionEvent{}, nil
+}
+
+func (navStubRevisionEvents) ListBySession(context.Context, uuid.UUID) ([]store.RevisionEvent, error) {
+	return nil, nil
+}
+
+func (navStubRevisionEvents) ListOpenQuestions(context.Context, uuid.UUID) ([]store.OpenQuestion, error) {
+	return nil, nil
+}
+
+func (navStubRevisionEvents) ListLatestSignoffBySessionIDs(context.Context, []uuid.UUID) (map[uuid.UUID]store.SignoffStatus, error) {
+	return nil, nil
+}
+
+// TestWorkspaceNav_HasEveryRequiredGroupAndItem is the first half of the
+// acceptance matrix: every group renders, and each renders exactly the
+// items the FR names, in order.
+func TestWorkspaceNav_HasEveryRequiredGroupAndItem(t *testing.T) {
+	groups := workspaceNav(navTargets{Product: uuid.New()}, "/")
+
+	if len(groups) != len(requiredNavGroups) {
+		t.Fatalf("sidebar has %d groups, want %d: %+v", len(groups), len(requiredNavGroups), groupTitles(groups))
+	}
+	for i, want := range requiredNavGroups {
+		got := groups[i]
+		if got.Title != want.title {
+			t.Errorf("group %d is %q, want %q", i, got.Title, want.title)
+		}
+		if len(got.Items) != len(want.items) {
+			t.Errorf("group %q has %d items, want %d: %v", got.Title, len(got.Items), len(want.items), linkLabels(got.Items))
+			continue
+		}
+		for j, label := range want.items {
+			if got.Items[j].Label != label {
+				t.Errorf("group %q item %d is %q, want %q", got.Title, j, got.Items[j].Label, label)
+			}
+		}
+	}
+}
+
+// TestWorkspaceNav_MarksExactlyOneItemPerPage is the second half: for a
+// given activePath exactly one item is marked, and none is on the
+// Overview root while another area is showing.
+//
+// The expectations are literals rather than a derived match, so a rule
+// change that marks nothing -- or two items -- fails here instead of
+// silently redefining what "correct" means.
+func TestWorkspaceNav_MarksExactlyOneItemPerPage(t *testing.T) {
+	pid, mid := uuid.New(), uuid.New()
+
+	// Every case names the product in scope explicitly rather than leaving
+	// targets zero: the paths and the ids they carry are the same product
+	// only if the caller supplied it, so a case that forgot to would be
+	// asserting against uuid.Nil's hrefs.
+	for _, tc := range []struct {
+		name       string
+		targets    navTargets
+		activePath string
+		want       string
+	}{
+		{name: "overview root", targets: navTargets{Product: pid}, activePath: "/", want: "Overview"},
+		{name: "ops root", targets: navTargets{Product: pid}, activePath: opsPath, want: "Needs attention"},
+		{name: "ops sub-page", targets: navTargets{Product: pid}, activePath: opsClaimedPath, want: "Needs attention"},
+		{
+			name: "design sessions", targets: navTargets{Product: pid},
+			activePath: designProductSessionsPath(pid), want: "Design sessions",
+		},
+		{
+			name: "milestone task list", targets: navTargets{Product: pid, Milestone: mid},
+			activePath: milestoneTasksPath(pid, mid), want: "Tasks",
+		},
+		{
+			name: "milestone board", targets: navTargets{Product: pid, Milestone: mid},
+			activePath: milestoneBoardPath(pid, mid), want: "Board",
+		},
+		{
+			name: "milestone task detail", targets: navTargets{Product: pid, Milestone: mid},
+			activePath: taskDetailPath(pid, mid, uuid.New()), want: "Tasks",
+		},
+		{name: "capability map", targets: navTargets{Product: pid}, activePath: productPath(pid), want: "Capabilities"},
+		{name: "decisions", targets: navTargets{Product: pid}, activePath: decisionsPath(pid), want: "Decisions"},
+		{name: "personas", targets: navTargets{Product: pid}, activePath: personasPath(pid), want: "Personas"},
+		{name: "non-goals", targets: navTargets{Product: pid}, activePath: nonGoalsPath(pid), want: "Non-goals"},
+		{name: "delivery", targets: navTargets{Product: pid}, activePath: deliveryPath(pid), want: "Milestones"},
+		{name: "credentials", targets: navTargets{Product: pid}, activePath: credentialsPath, want: "Credentials"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := activeGroupLabels(workspaceNav(tc.targets, tc.activePath))
+			if len(got) != 1 {
+				t.Fatalf("marked %v, want exactly one (%q)", got, tc.want)
+			}
+			if got[0] != tc.want {
+				t.Errorf("marked %q, want %q", got[0], tc.want)
+			}
+		})
+	}
+}
+
+// TestWorkspaceNav_NoItemActiveOffNav is the negative case: a path no item
+// owns marks nothing at all, rather than falling back to the first.
+func TestWorkspaceNav_NoItemActiveOffNav(t *testing.T) {
+	for _, path := range []string{"/opsarchive", "/does-not-exist", specPath} {
+		if got := activeGroupLabels(workspaceNav(navTargets{Product: uuid.New()}, path)); len(got) != 0 {
+			t.Errorf("path %s marked %v active, want none", path, got)
+		}
+	}
+}
+
+// TestWorkspaceNav_OverviewIsNotAPrefix is why Overview is Exact: a plain
+// prefix match would light it for every page, since "/" starts
+// everything.
+func TestWorkspaceNav_OverviewIsNotAPrefix(t *testing.T) {
+	for _, path := range []string{opsPath, specPath, deliveryPath(uuid.New()), credentialsPath} {
+		got := activeGroupLabels(workspaceNav(navTargets{Product: uuid.New()}, path))
+		for _, label := range got {
+			if label == "Overview" {
+				t.Errorf("path %s lit Overview; the home item must match the root alone", path)
+			}
+		}
+	}
+}
+
+// TestWorkspaceNav_SiblingSpecTabsDoNotStack is why the Spec items are
+// Exact: they are siblings hanging off the product path, so prefix
+// matching would leave Capabilities lit while an operator reads
+// Decisions.
+func TestWorkspaceNav_SiblingSpecTabsDoNotStack(t *testing.T) {
+	pid := uuid.New()
+	for _, path := range []string{decisionsPath(pid), personasPath(pid), nonGoalsPath(pid)} {
+		got := activeGroupLabels(workspaceNav(navTargets{Product: pid}, path))
+		if len(got) != 1 || got[0] == "Capabilities" {
+			t.Errorf("path %s marked %v, want the one spec tab it names", path, got)
+		}
+	}
+}
+
+// TestWorkspaceNavHrefResolves is the dead-link half: every href the
+// grouped nav builds must answer on this binary. It is asserted against
+// the real registrations via mountShellRoutes rather than a copy of the
+// route table, so a nav href pointing at a route nobody mounts fails
+// here.
+func TestWorkspaceNavHrefResolves(t *testing.T) {
+	mux := navMux(t)
+	pid := uuid.New()
+
+	for _, targets := range []navTargets{
+		{Product: pid}, // the chrome with no milestone in scope
+		{Product: pid, Milestone: navMilestoneID}, // a milestone-scoped page
+	} {
+		for _, g := range workspaceNav(targets, "/") {
+			for _, item := range g.Items {
+				if rec := fetch(t, mux, item.Href); rec.Code != http.StatusOK {
+					t.Errorf("nav item %q href %s = %d (dead nav link)", item.Label, item.Href, rec.Code)
+				}
+			}
+		}
+	}
+}
+
+// TestWorkspaceNav_DesignSessionsPointsAtTheProductsList pins the one
+// href with a specific trap behind it: the design root is a page the
+// operator types a product id into, so linking there would show the
+// product-id form instead of the sessions.
+func TestWorkspaceNav_DesignSessionsPointsAtTheProductsList(t *testing.T) {
+	pid := uuid.New()
+
+	item := navItemByLabel(t, workspaceNav(navTargets{Product: pid}, "/"), "Design sessions")
+	if want := designProductSessionsPath(pid); item.Href != want {
+		t.Errorf("Design sessions href = %s, want %s", item.Href, want)
+	}
+	if item.Href == designPath {
+		t.Error("Design sessions points at the typed-id design root")
+	}
+	if rec := fetch(t, navMux(t), item.Href); rec.Code == http.StatusNotFound {
+		t.Errorf("GET %s = 404", item.Href)
+	}
+}
+
+// TestWorkspaceNavHrefCarriesTheCallersProduct is the product-scoping
+// half: the chrome is handed an id and every href is built from it, so a
+// copied link lands on the same product whoever opens it.
+func TestWorkspaceNavHrefCarriesTheCallersProduct(t *testing.T) {
+	pid := uuid.New()
+
+	// Which items are product-scoped at all: the ones whose page lives
+	// under /spec/products/{id} or /design/products/{id}. Overview, Needs
+	// attention and Credentials are the same for every product.
+	for _, g := range workspaceNav(navTargets{Product: pid}, "/") {
+		for _, item := range g.Items {
+			switch item.Label {
+			case "Overview", "Needs attention", "Credentials":
+				continue
+			}
+			if !strings.Contains(item.Href, pid.String()) {
+				t.Errorf("nav item %q href %s does not carry product %s", item.Label, item.Href, pid)
+			}
+		}
+	}
+}
+
+// TestWorkspaceShellDataBuildsEveryHrefFromTheProduct covers the seam a
+// route actually calls: the ShellData it gets back carries hrefs built
+// from the product id it supplied, not from one the chrome picked.
+//
+// Every product-scoped item is checked rather than a sample: the seam is
+// only worth having if it is total, and a second product id is threaded
+// through to prove the hrefs track the argument instead of coinciding
+// with it.
+func TestWorkspaceShellDataBuildsEveryHrefFromTheProduct(t *testing.T) {
+	pid, other := uuid.New(), uuid.New()
+
+	data := workspaceShellData(navTargets{Product: pid}, deliveryPath(pid), "Delivery", "developer")
+	if data.Title != "Delivery" || data.UserLabel != "developer" {
+		t.Errorf("shell data = %+v, want the caller's title and identity", data.LayoutData)
+	}
+
+	// The flat top-bar nav the shell does not yet replace is the same for
+	// every product, so the product-scoped claim covers the sidebar only.
+	byLabel := sidebarHrefsByLabel(data.NavGroups)
+	for label, href := range byLabel {
+		switch label {
+		case "Overview", "Needs attention", "Credentials":
+			continue
+		}
+		if !strings.Contains(href, pid.String()) {
+			t.Errorf("sidebar item %q href %s does not carry product %s", label, href, pid)
+		}
+	}
+
+	// A different product must move the sidebar's hrefs with it, or the
+	// assertion above would pass on a table that hardcoded one id.
+	otherData := workspaceShellData(navTargets{Product: other}, deliveryPath(other), "Delivery", "developer")
+	otherByLabel := sidebarHrefsByLabel(otherData.NavGroups)
+	for label, href := range otherByLabel {
+		switch label {
+		case "Overview", "Needs attention", "Credentials":
+			continue
+		}
+		if !strings.Contains(href, other.String()) {
+			t.Errorf("sidebar item %q href %s does not carry product %s", label, href, other)
+		}
+		if byLabel[label] == href {
+			t.Errorf("sidebar item %q is %s for both products; hrefs must track the caller's id", label, href)
+		}
+	}
+
+	if item := navItemByLabel(t, data.NavGroups, "Milestones"); !item.Active {
+		t.Error("Milestones is the current page and must be marked active")
+	}
+}
+
+// sidebarHrefsByLabel flattens the sidebar to label -> href.
+func sidebarHrefsByLabel(groups []components.NavGroup) map[string]string {
+	out := make(map[string]string)
+	for _, g := range groups {
+		for _, item := range g.Items {
+			out[item.Label] = item.Href
+		}
+	}
+	return out
+}
+
+// TestWorkspaceShellDataIsNotMountedOnAnyRoute guards the additive
+// claim: nothing serves the drawer yet, so no route's rendering changed
+// when it landed. The shell becomes the chrome in the cutover task, and
+// this is the assertion that says the seam was not crossed early.
+func TestWorkspaceShellDataIsNotMountedOnAnyRoute(t *testing.T) {
+	mux := navMux(t)
+
+	for _, g := range workspaceNav(navTargets{Product: uuid.New()}, "/") {
+		for _, item := range g.Items {
+			body := fetch(t, mux, item.Href).Body.String()
+			if strings.Contains(body, "workspace-shell") {
+				t.Errorf("GET %s renders the workspace shell; the cutover task owns that seam", item.Href)
+			}
+		}
+	}
+}
+
+// TestPrimaryNavScanIgnoresTheProductSubNav proves the data-krill hook is
+// load-bearing rather than decorative. Every per-product spec page
+// renders two navs -- the shell's and its own cross-nav -- and each marks
+// its own current page, so a page carries two aria-current="page"
+// anchors. An unscoped scan would report two active links and every
+// "exactly one" assertion built on it would be counting the sub-nav too.
+func TestPrimaryNavScanIgnoresTheProductSubNav(t *testing.T) {
+	mux := navMux(t)
+	pid := uuid.New()
+
+	// Pages that render their own product cross-nav, and pages that do
+	// not. The first group is where an unscoped scan would go wrong.
+	withSubNav := []string{productPath(pid), decisionsPath(pid), deliveryPath(pid)}
+	withoutSubNav := []string{milestoneTasksPath(pid, navMilestoneID)}
+
+	for _, path := range withSubNav {
+		body := fetch(t, mux, path).Body.String()
+
+		if region := primaryNavRegion(body); region == "" {
+			t.Errorf("GET %s rendered no %q region", path, `data-krill="primary-nav"`)
+			continue
+		}
+		if got := activeLabels(body); len(got) != 1 {
+			t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
+		}
+		// The unscoped count is what makes this a real test rather than a
+		// restatement: it has to exceed the scoped one here, or the hook
+		// was never exercised on this page.
+		total := strings.Count(body, `aria-current="page"`)
+		if total <= 1 {
+			t.Errorf("GET %s carries %d aria-current anchors in total; the "+
+				"product sub-nav is not marking itself, so this page cannot "+
+				"prove the hook excludes it", path, total)
+		}
+	}
+
+	for _, path := range withoutSubNav {
+		if got := activeLabels(fetch(t, mux, path).Body.String()); len(got) != 1 {
+			t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
+		}
+	}
+}
+
+// TestWorkspaceNavItemIsActive pins the matching rule on its own, at the
+// level where the wildcard and the Exact flag are visible, so a change to
+// either is caught by the rule rather than by one lucky table row.
+func TestWorkspaceNavItemIsActive(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		item navItem
+		path string
+		want bool
+		note string
+	}{
+		{
+			name: "exact item matches its own path", item: navItem{Path: "/x", Exact: true},
+			path: "/x", want: true,
+		},
+		{
+			name: "exact item does not match a child", item: navItem{Path: "/x", Exact: true},
+			path: "/x/y", want: false, note: "the Spec tabs are siblings, not a chain",
+		},
+		{
+			name: "wildcard matches exactly one segment", item: navItem{Path: "/p/*/tasks"},
+			path: "/p/abc/tasks", want: true,
+		},
+		{
+			name: "wildcard matches only one segment", item: navItem{Path: "/p/*/tasks"},
+			path: "/p/abc/def/tasks", want: false,
+		},
+		{
+			name: "non-exact item owns its subtree", item: navItem{Path: "/ops"},
+			path: "/ops/claimed", want: true,
+		},
+		{
+			name: "prefix sibling is not owned", item: navItem{Path: "/ops"},
+			path: "/opsarchive", want: false,
+		},
+		{
+			name: "shorter page does not match", item: navItem{Path: "/a/b"},
+			path: "/a", want: false,
+		},
+		{
+			name: "root pattern matches only the root", item: navItem{Path: "/", Exact: true},
+			path: "/", want: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := navItemIsActive(tc.item, tc.path); got != tc.want {
+				t.Errorf("navItemIsActive(%q, %q) = %v, want %v %s", tc.item.itemPath(), tc.path, got, tc.want, tc.note)
+			}
+		})
+	}
+}
+
+// groupTitles lists the sidebar's group headings in render order.
+func groupTitles(groups []components.NavGroup) []string {
+	titles := make([]string, 0, len(groups))
+	for _, g := range groups {
+		titles = append(titles, g.Title)
+	}
+	return titles
+}
+
+// linkLabels lists one group's item labels in render order.
+func linkLabels(links []components.NavLink) []string {
+	labels := make([]string, 0, len(links))
+	for _, l := range links {
+		labels = append(labels, l.Label)
+	}
+	return labels
+}
+
+// activeGroupLabels flattens the sidebar to the labels it marked active.
+func activeGroupLabels(groups []components.NavGroup) []string {
+	var active []string
+	for _, g := range groups {
+		for _, item := range g.Items {
+			if item.Active {
+				active = append(active, item.Label)
+			}
+		}
+	}
+	return active
+}
+
+// navItemByLabel finds one sidebar item by its label, failing the test if
+// it is absent -- so a renamed or dropped item reports as a missing item
+// rather than as a silently skipped assertion.
+func navItemByLabel(t *testing.T, groups []components.NavGroup, label string) components.NavLink {
+	t.Helper()
+	for _, g := range groups {
+		for _, item := range g.Items {
+			if item.Label == label {
+				return item
+			}
+		}
+	}
+	t.Fatalf("no nav item labelled %q", label)
+	return components.NavLink{}
 }
 
 // TestCredentialsPageIsServerRendered guards the regression where the

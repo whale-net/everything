@@ -79,8 +79,8 @@ core.
 
 | Package | Owns |
 |---|---|
-| `krill/ui` (package `main`) | Routing, the `App` struct, the write path, the render seam, `nav.go`'s area table and active-path rule, and **every pure view-model builder**. |
-| `krill/ui/components` | The chrome: `Layout` (a wrapper around `htmxui.Shell`), `nav`, `navLink`, `SubNav`, and the `MilestoneStatusStyle` status vocabulary. |
+| `krill/ui` (package `main`) | Routing, the `App` struct, the write path, the render seam, `nav.go`'s two nav tables (the flat `navArea` list, and the workspace shell's grouped one) and their active-path rules, and **every pure view-model builder**. |
+| `krill/ui/components` | The chrome: `Layout` (a wrapper around `htmxui.Shell`), `nav`, `navLink`, `SubNav`, `Shell`/`sidebar` (the workspace shell's drawer sidebar and grouped nav), and the `MilestoneStatusStyle` status vocabulary. |
 | `krill/ui/pages` | Page bodies, one `.templ` per area, each declaring its own view-model struct. |
 
 **Builders stay in `package main`; only the structs and the components
