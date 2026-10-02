@@ -26,6 +26,17 @@ func taskDetailPath(pid, mid, tid uuid.UUID) string {
 	return milestoneTasksPath(pid, mid) + "/" + tid.String()
 }
 
+// productTaskDetailPath is one task's product-scoped detail URL, the one the
+// product-wide Tasks table's rows link to.
+//
+// It is spelled by the table rather than derived from a row's milestone: the
+// table is not scoped to a container, so a row in it may belong to any
+// milestone under the product, and the per-container form would name the
+// wrong one for every row but the first.
+func productTaskDetailPath(pid, tid uuid.UUID) string {
+	return productHref(pid, tasksSuffix) + "/" + tid.String()
+}
+
 // taskContainer is the milestone or milepebble a task view is scoped to,
 // resolved from the product's own delivery listing so an id that does not
 // belong to the URL's product can never resolve.
@@ -108,7 +119,19 @@ func taskStateBadges(t store.TaskSummary, now time.Time) []pages.TaskBadge {
 
 // taskAttemptsLabel is the attempt count against the cap, e.g. "2 of 3".
 func taskAttemptsLabel(n int) string {
-	return fmt.Sprintf("%d of %d", n, store.DefaultAttemptCap)
+	return taskAttemptsOf(n, store.DefaultAttemptCap)
+}
+
+// taskAttemptsOf is the same label against a cap the read supplied, for the
+// views that render rows the read built rather than rows this package
+// summarised. A cap of zero would render "2 of 0", so the default stands in
+// for it -- the store never reports one, and a "capped" badge off a cap of
+// zero would fire on every row.
+func taskAttemptsOf(n, cap int) string {
+	if cap <= 0 {
+		cap = store.DefaultAttemptCap
+	}
+	return fmt.Sprintf("%d of %d", n, cap)
 }
 
 // taskRowOf builds one list row, carrying the observed claim identity and
