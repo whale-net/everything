@@ -13,30 +13,13 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// scopedProductsReader is a fakeSpecReader whose Products call answers
-// with a fixed list, so the resolver's in-scope decision comes from the
-// test rather than a database. Every other read is inherited from
-// fakeSpecReader, which already satisfies the interface.
-type scopedProductsReader struct {
-	*fakeSpecReader
-	products    []store.Product
-	productsErr error
-}
-
-func (r scopedProductsReader) Products(context.Context) ([]store.Product, error) {
-	if r.productsErr != nil {
-		return nil, r.productsErr
-	}
-	return r.products, nil
-}
-
 // productScopeMux mounts the real product-scoped routes against a reader
 // holding the given products. The scope and task stores are stubbed too, so
 // the un-prefixed ops views mounted alongside can render without one.
 func productScopeMux(t *testing.T, products ...store.Product) *http.ServeMux {
 	t.Helper()
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{}, products: products}
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{}, products: products}
 	app.scopes = productScopeScopes{scope: store.Scope{ID: uuid.New()}}
 	app.tasks = productScopeTasks{}
 	mux := http.NewServeMux()
@@ -264,7 +247,7 @@ func TestEmptyScopeRendersAnEmptyStateNotA404(t *testing.T) {
 // need to fix things.
 func TestCredentialsPageStillRendersWithAnEmptyScope(t *testing.T) {
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{}}
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{}}
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
 
@@ -283,7 +266,7 @@ func TestCredentialsPageStillRendersWithAnEmptyScope(t *testing.T) {
 // own route table grew an id input back.
 func TestNoShellPageAsksForATypedProductID(t *testing.T) {
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{},
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{},
 		products: []store.Product{{ID: uuid.New(), Name: "krill"}}}
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
@@ -511,7 +494,7 @@ func TestUnreadableCookieFallsBackToFirstProductInScope(t *testing.T) {
 func TestPrefixedURLDoesNotFallBackWhenTheProductReadFails(t *testing.T) {
 	pid := uuid.New()
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{},
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{},
 		productsErr: errors.New("product list unavailable")}
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
@@ -539,7 +522,7 @@ func TestPrefixedURLDoesNotFallBackWhenTheProductReadFails(t *testing.T) {
 // particular must still mint a token.
 func TestUnprefixedPageSurvivesAFailedProductRead(t *testing.T) {
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{fakeSpecReader: &fakeSpecReader{},
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{},
 		productsErr: errors.New("product list unavailable")}
 	app.scopes = productScopeScopes{scope: store.Scope{ID: uuid.New()}}
 	app.tasks = productScopeTasks{}

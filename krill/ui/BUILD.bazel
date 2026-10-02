@@ -75,6 +75,7 @@ go_test(
     srcs = [
         "harness_test.go",
         "read_gate_test.go",
+        "shared_spec_readers_test.go",
         "writes_test.go",
     ],
     embed = [":ui_lib"],
@@ -99,6 +100,7 @@ go_test(
     srcs = [
         "design_write_test.go",
         "harness_test.go",
+        "shared_spec_readers_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
@@ -125,6 +127,7 @@ go_test(
     srcs = [
         "toast_test.go",
         "harness_test.go",
+        "shared_spec_readers_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
@@ -152,6 +155,7 @@ go_test(
         "writes_test.go",
         "interventions_test.go",
         "harness_test.go",
+        "shared_spec_readers_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
@@ -181,7 +185,7 @@ release_app(
 go_test(
     name = "ui_lib_test",
     srcs = [
-        "empty_scope_spec_test.go",
+        "shared_spec_readers_test.go",
         "nav_test.go",
         "spec_page_test.go",
         "spec_parity_test.go",
@@ -217,7 +221,7 @@ go_test(
 go_test(
     name = "ui_ops_test",
     srcs = [
-        "empty_scope_spec_test.go",
+        "shared_spec_readers_test.go",
         "ops_test.go",
         "ops_handlers_test.go",
         "failure_paths_test.go",
@@ -239,7 +243,7 @@ go_test(
 go_test(
     name = "design_test",
     srcs = [
-        "empty_scope_spec_test.go",
+        "shared_spec_readers_test.go",
         "design_page_test.go",
     ],
     embed = [":ui_lib"],

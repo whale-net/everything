@@ -350,6 +350,10 @@ type fakeScopeStore struct{ scope store.Scope }
 func (f fakeScopeStore) GetByID(context.Context, uuid.UUID) (store.Scope, error) { return f.scope, nil }
 func (f fakeScopeStore) GetSole(context.Context) (store.Scope, error)            { return f.scope, nil }
 
+// newTestApp builds the App every harness test drives. spec lists one
+// product because the shell's un-prefixed pages resolve one to record it in
+// the last-viewed cookie; without it those pages nil-panic on the interface
+// call rather than rendering.
 func newTestApp(t *testing.T, authenticator *htmxauth.Authenticator, issuer, apiURL string) *App {
 	t.Helper()
 
@@ -361,6 +365,9 @@ func newTestApp(t *testing.T, authenticator *htmxauth.Authenticator, issuer, api
 		oidcIssuer: issuer,
 		writes:     writes,
 		scopes:     fakeScopeStore{scope: store.Scope{ID: testScopeID}},
+		spec: scopedProductsReader{products: []store.Product{
+			{ID: testScopeID, Name: "krill"},
+		}},
 	}
 }
 
