@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -30,10 +31,22 @@ var (
 	// productTaskProduct is the product the Tasks/Board URLs name.
 	productTaskProduct = uuid.MustParse("77777777-7777-7777-7777-777777777777")
 
-	// productTaskMilestone is its first milestone, and
-	// productTaskMilepebble a cut milepebble under it.
-	productTaskMilestone  = uuid.MustParse("88888888-8888-8888-8888-888888888888")
-	productTaskMilepebble = uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	// The product's three milestones, named for the position order they
+	// occupy rather than for when they happen to be read. slice.
+	// ListProductDelivery returns them position-ASCENDING, so this is
+	// oldest-first -- which is the opposite end from the "highest
+	// position" a no-id mode defaults to (FR 7191dba1), and the reason a
+	// fallback that took the listing's head would be caught here.
+	productTaskOldestMilestone = uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	productTaskMilestone       = uuid.MustParse("bbbb3333-3333-3333-3333-333333333333")
+	productTaskNewestMilestone = uuid.MustParse("cccc4444-4444-4444-4444-444444444444")
+
+	// A cut milepebble under each of the two cut milestones, so the
+	// milepebble default is pinned to the highest-position milestone that
+	// has one rather than to the first milepebble the listing happens to
+	// carry.
+	productTaskMilepebble       = uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	productTaskNewestMilepebble = uuid.MustParse("99998888-8888-8888-8888-888888888888")
 
 	// productTaskOtherProduct is a second product, whose milestone is the
 	// id a cross-product link would carry.
@@ -41,18 +54,26 @@ var (
 	productTaskOtherMilestone = uuid.MustParse("aaaa2222-2222-2222-2222-222222222222")
 )
 
-// productTaskListing is the delivery listing the scope resolver reads: one
-// uncut milestone first, then a cut one, so a fallback that took the last
-// milestone instead of the first fails here.
+// productTaskListing is the delivery listing the scope resolver reads, in
+// the position-ASCENDING order slice.ListProductDelivery produces: an
+// uncut oldest milestone, then a cut middle one, then the cut newest one
+// that carries the highest position.
 func productTaskListing() slice.DeliveryListing {
 	return slice.DeliveryListing{
 		Milestones: []slice.MilestoneListingEntry{
-			{ID: productTaskMilestone, Name: "First milestone", Status: store.MilestoneStatusInProgress},
+			{ID: productTaskOldestMilestone, Name: "Oldest milestone", Status: store.MilestoneStatusInProgress},
 			{
-				ID:   uuid.MustParse("bbbb3333-3333-3333-3333-333333333333"),
-				Name: "Cut milestone",
+				ID:   productTaskMilestone,
+				Name: "Middle milestone",
 				Milepebbles: []slice.MilepebbleListingEntry{
-					{ID: productTaskMilepebble, Name: "Its milepebble", Status: store.MilestoneStatusInDesign},
+					{ID: productTaskMilepebble, Name: "Middle milepebble", Status: store.MilestoneStatusInDesign},
+				},
+			},
+			{
+				ID:   productTaskNewestMilestone,
+				Name: "Newest milestone",
+				Milepebbles: []slice.MilepebbleListingEntry{
+					{ID: productTaskNewestMilepebble, Name: "Newest milepebble", Status: store.MilestoneStatusInDesign},
 				},
 			},
 		},
@@ -238,9 +259,17 @@ func TestProductTaskScopeRefusalIsInlineForHTMX(t *testing.T) {
 }
 
 // TestProductTaskScopeDefaultsAModeWithNoID pins the fallback rule: a
-// single-container mode with no id selects the product's own first
-// milestone, in the listing's order -- not the last, and not another
-// product's.
+// single-container mode with no id selects the product's own highest-
+// position milestone (FR 7191dba1: "the first milestone in the Milestones
+// table order (highest position)"), and a milepebble mode the highest-
+// position milepebble of those.
+//
+// The fixture lists three milestones oldest-first, because
+// slice.ListProductDelivery returns position-ASC while both the spec's
+// default and the store's own read (ORDER BY m.position DESC) and the
+// board's swimlane order take the highest position first. So the expected
+// default here is the listing's LAST milestone, not its first -- which is
+// exactly the confusion this test exists to prevent.
 func TestProductTaskScopeDefaultsAModeWithNoID(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -248,14 +277,14 @@ func TestProductTaskScopeDefaultsAModeWithNoID(t *testing.T) {
 		want  store.ProductTaskScope
 	}{
 		{
-			name:  "milestone mode with no id",
+			name:  "milestone mode with no id takes the highest position",
 			query: "scope=milestone",
-			want:  store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: productTaskMilestone},
+			want:  store.ProductTaskScope{Kind: store.ProductTaskScopeMilestone, ContainerID: productTaskNewestMilestone},
 		},
 		{
-			name:  "milepebble mode with no id",
+			name:  "milepebble mode with no id takes the highest-position milepebble",
 			query: "scope=milepebble",
-			want:  store.ProductTaskScope{Kind: store.ProductTaskScopeMilepebble, ContainerID: productTaskMilepebble},
+			want:  store.ProductTaskScope{Kind: store.ProductTaskScopeMilepebble, ContainerID: productTaskNewestMilepebble},
 		},
 		{
 			name:  "no mode at all is the product-wide incomplete scope",
@@ -331,6 +360,33 @@ func TestProductTaskReadUsesOneFilterSetForPageAndCount(t *testing.T) {
 	}
 }
 
+// TestProductTaskScopeOffersContainersHighestPositionFirst pins the
+// order the region's container options are offered in, which is the same
+// order the no-id default resolves within: highest position first.
+//
+// The two have to agree, or a mode opened with no id would resolve to one
+// milestone while the control lists another first -- so a shared link
+// landing on the newest milestone would show the newest milestone selected
+// somewhere other than the top of the list. The listing arrives
+// position-ASC, so the options are the reverse of it.
+func TestProductTaskScopeOffersContainersHighestPositionFirst(t *testing.T) {
+	tasks := &recordingProductTasks{}
+	mux := productTaskMux(t, tasks, productTaskListing(), nil)
+
+	rec := fetch(t, mux, productTaskTasksURL("scope=milestone"))
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+
+	body := rec.Body.String()
+	newest := strings.Index(body, `data-krill-container-id="`+productTaskNewestMilestone.String()+`"`)
+	middle := strings.Index(body, `data-krill-container-id="`+productTaskMilestone.String()+`"`)
+	oldest := strings.Index(body, `data-krill-container-id="`+productTaskOldestMilestone.String()+`"`)
+	require.NotEqual(t, -1, newest, "every milestone is offered: %s", body)
+	require.NotEqual(t, -1, middle)
+	require.NotEqual(t, -1, oldest)
+	assert.Less(t, newest, middle, "the highest position is offered first")
+	assert.Less(t, middle, oldest)
+}
+
 // TestProductTaskRegionReportsScopeAndTotal checks the region says what it
 // read: the resolved scope by name, the total from the count read, and the
 // two views marking themselves as different views of the same scope.
@@ -352,7 +408,7 @@ func TestProductTaskRegionReportsScopeAndTotal(t *testing.T) {
 			require.Equal(t, http.StatusOK, tc.rec.Code)
 			body := tc.rec.Body.String()
 			assert.Contains(t, body, `data-krill-view="`+tc.view+`"`)
-			assert.Contains(t, body, "First milestone", "the resolved scope is named")
+			assert.Contains(t, body, "Middle milestone", "the resolved scope is named")
 			assert.Contains(t, body, ">9<", "the total from the count read is shown")
 		})
 	}
@@ -423,15 +479,37 @@ func TestProductTaskUnreadableListingIsA500(t *testing.T) {
 	assert.Empty(t, tasks.listed)
 }
 
-// TestProductTaskParseRejectsAContainerUnderTheProductWideScope: a
-// container id the product-wide scope cannot honour is refused rather than
-// silently read as a wider set than the URL asked for.
-func TestProductTaskParseRejectsAContainerUnderTheProductWideScope(t *testing.T) {
-	tasks := &recordingProductTasks{}
-	mux := productTaskMux(t, tasks, productTaskListing(), nil)
+// TestProductTaskIgnoresAContainerUnderTheProductWideScope: a container
+// id the product-wide scope cannot honour is inert, exactly as the store,
+// the api and the MCP tool all treat it.
+//
+// The store's contract is explicit that ContainerID is "Ignored for
+// ProductTaskScopeIncomplete"; the api's parser returns before it reads
+// the parameter, and count_product_tasks is pinned to the same. So the
+// console answers the identical query string with the same product-wide
+// read, rather than a 400 no other surface would give -- which is also
+// what an operator switching back to "All incomplete milestones" from a
+// link carrying a selected id actually needs.
+func TestProductTaskIgnoresAContainerUnderTheProductWideScope(t *testing.T) {
+	for _, query := range []string{
+		"scope=incomplete&container_id=" + productTaskMilestone.String(),
+		"container_id=" + productTaskMilestone.String(),
+		// A mistyped id is equally inert: the product-wide scope never
+		// reads it, so there is nothing to misread.
+		"scope=incomplete&container_id=not-a-uuid",
+	} {
+		t.Run(query, func(t *testing.T) {
+			tasks := &recordingProductTasks{total: 4}
+			mux := productTaskMux(t, tasks, productTaskListing(), nil)
 
-	rec := fetch(t, mux, productTaskTasksURL("scope=incomplete&container_id="+productTaskMilestone.String()))
+			rec := fetch(t, mux, productTaskTasksURL(query))
 
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Empty(t, tasks.listed)
+			require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+			require.Len(t, tasks.listed, 1)
+			// The read carries no container at all, which is what makes
+			// the id inert rather than a filter the store applied.
+			assert.Equal(t, store.ProductTaskScope{Kind: store.ProductTaskScopeIncomplete}, tasks.listed[0].Scope)
+			assert.Equal(t, uuid.Nil, tasks.listed[0].Scope.ContainerID)
+		})
+	}
 }

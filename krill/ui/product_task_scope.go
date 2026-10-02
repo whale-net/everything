@@ -189,14 +189,16 @@ func parseProductTaskScope(q url.Values) (productTaskScope, productTaskScopeProb
 			}
 			scope.ContainerID = parsed
 		}
-	} else if id := strings.TrimSpace(q.Get(productTaskContainerParam)); id != "" {
-		// A container id under the product-wide scope is a filter that
-		// cannot mean anything: the store's incomplete scope spans every
-		// incomplete container. Refusing it -- whether or not the id parses
-		// -- keeps the mode and its id from disagreeing, rather than reading
-		// a wider set than the URL asked for.
-		return productTaskScope{}, productTaskScopeInvalid
 	}
+	// A container id under the product-wide scope is left inert rather than
+	// refused: the store's own contract says so ("Ignored for
+	// ProductTaskScopeIncomplete, which names no container"), the api's
+	// parser returns before it ever reads the parameter, and the MCP tool
+	// is pinned to the same. Refusing it here would make one query string
+	// mean a 400 in the console and a 200 everywhere else, and would break
+	// the ordinary case of an operator switching back to the product-wide
+	// mode from a link that still carries the id they had selected, which
+	// the control cannot un-ask for them.
 
 	if rawLane := q.Get(productTaskLaneParam); rawLane != "" {
 		lane, ok := canonicalLaneOf(rawLane)
@@ -250,11 +252,17 @@ func canonicalLaneOf(raw string) (store.Lane, bool) {
 // ErrMilestoneOutsideProduct guard stays: this layer is the UI's first
 // line, not a replacement for the read's.
 //
-// A single-container mode with no id picks the product's first container
-// of that kind in the listing's own order -- the order
-// slice.ListProductDelivery produces, which is the Milestones table's
-// position order. The product-wide mode names no container and reads no
-// listing at all.
+// A single-container mode with no id picks the product's HIGHEST-position
+// container of that kind, which is what FR 7191dba1 means by "the first
+// milestone in the Milestones table order (highest position)".
+//
+// That is the listing's LAST milestone, not its first:
+// slice.ListProductDelivery returns position-ASCENDING, while the spec's
+// default, the store's own product-wide read (ORDER BY m.position DESC)
+// and the board's swimlane order (FR cf000440) all take the highest
+// position first. So the listing is walked from the end, and a milepebble
+// comes from the highest-position milestone that has one. The product-wide
+// mode names no container and reads no listing at all.
 func (app *App) resolveProductTaskScope(ctx context.Context, productID uuid.UUID, parsed productTaskScope) (resolvedProductTaskScope, productTaskScopeProblem) {
 	out := resolvedProductTaskScope{
 		Parsed: parsed,
@@ -294,23 +302,28 @@ func (app *App) resolveProductTaskScope(ctx context.Context, productID uuid.UUID
 	return out, productTaskScopeOK
 }
 
-// taskContainersOf is the listing's milestones as containers, in the
-// listing's own order -- the position order the Milestones table reads in.
+// taskContainersOf is the listing's milestones as containers, highest
+// position first -- the order the Milestones table and the scope control's
+// own milestone select read in, so the default a no-id mode resolves to is
+// the first option the operator is offered. That is the reverse of the
+// listing's own position-ASCENDING order.
 func taskContainersOf(listing slice.DeliveryListing) []taskContainer {
 	out := make([]taskContainer, 0, len(listing.Milestones))
-	for _, m := range listing.Milestones {
+	for i := len(listing.Milestones) - 1; i >= 0; i-- {
+		m := listing.Milestones[i]
 		out = append(out, taskContainer{ID: m.ID, Name: m.Name, Kind: string(store.MilestoneKindMilestone)})
 	}
 	return out
 }
 
 // firstContainerOfKind is the container a single-container mode with no id
-// falls back to: the first of that kind in the listing, which is already in
-// the Milestones table's position order. uuid.Nil means the product has
-// none of that kind, which the caller reports as its own empty result
-// rather than as a not-found.
+// falls back to: the highest-position one of that kind (see
+// resolveProductTaskScope's own note on why that is the listing's last
+// entry). uuid.Nil means the product has none of that kind, which the
+// caller reports as its own empty result rather than as a not-found.
 func firstContainerOfKind(listing slice.DeliveryListing, kind store.ProductTaskScopeKind) uuid.UUID {
-	for _, m := range listing.Milestones {
+	for i := len(listing.Milestones) - 1; i >= 0; i-- {
+		m := listing.Milestones[i]
 		if kind == store.ProductTaskScopeMilestone {
 			return m.ID
 		}
