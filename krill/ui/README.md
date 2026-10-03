@@ -1183,6 +1183,42 @@ panel that owns them, so the failure costs that panel alone and the header,
 rail and other panels still render. The tab's empty state is a real "No
 notes." and a failed read must never render as it.
 
+#### The Notes and Dependencies panels (FR 7e463e31)
+
+**Both panels list EVERY row, in the store's order.** Notes render in
+`ListNotesForTask`'s ascending `created_at, id` and dependencies in
+`ListDependencies`' declaration order — neither panel re-sorts. A note list
+an operator reads as a log is only a log if the page does not reshuffle it,
+and declaration order is the order someone debugging a blocked task needs.
+
+**Every note carries two badges, through the shared components.** A note is
+two things at once — what it *is* (kind) and where it sits in its lifecycle
+(status) — and both are vocabulary the store owns, so both go through
+`components.NoteKindStyle` / `components.NoteLifecycleStyle` in
+`//krill/ui/components`, the same rule `TaskLaneStyle` follows. The page's
+own `TaskNoteBadges` renders that pair, and both this panel and the
+Overview panel's latest notes go through it, so the two facets cannot
+disagree about what a note is. An unrecognised value falls through to a
+neutral badge rather than rendering blank.
+
+**One dependency list, two places.** The rail's "Depends on" card and this
+panel both render `taskDepList`, so the card really is a shortcut to the
+same list rather than a second rendering that could drift — one entry per
+dependency, each a link plus its lane as a `TaskLaneBadge`. A dependency
+whose own task could not be read still renders, as a link to its id, and
+carries no lane badge: an empty badge would claim a lane the page never
+learned.
+
+**A dependency links to the product-scoped detail**, `productTaskDetailPath`
+(`/products/{pid}/tasks/{tid}`), the address the Tasks table's rows link to
+— not the retired per-container form, which would have to name a container
+the dependency need not live in and would cost a 302 to reach the same page.
+
+**Empty is `htmxui.EmptyState`, failure is `htmxui.Alert`.** Neither is bare
+text, and the empty state is only ever the rendering of a read that
+**succeeded** with nothing — that is the distinction these panels exist to
+keep.
+
 #### The raw slice sits behind a closed disclosure (FR 73ec4525)
 
 **The Spec slice panel hosts one disclosure and nothing else.** The panel

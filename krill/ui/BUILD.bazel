@@ -202,6 +202,7 @@ go_test(
         "task_detail_page_test.go",
         "task_detail_slice_test.go",
         "task_detail_rail_test.go",
+"task_detail_panels_test.go",
         "task_detail_overview_test.go",
         "task_detail_fragment_root_test.go",
         "task_detail_tabs_test.go",

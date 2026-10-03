@@ -261,6 +261,10 @@ func TestTaskDetailRailMarksAnExpiredClaimNotLive(t *testing.T) {
 // one entry per dependency, each a link to its own detail carrying its
 // lane as a badge, in the order ListDependencies returned (declaration
 // order -- the order an operator reading a blocked task needs).
+//
+// The card renders through the same list the Dependencies tab does, which
+// is why it carries the tab's item hook rather than one of its own: two
+// components would be two lists that could drift.
 func TestTaskDetailDependsOnCardListsEachDependency(t *testing.T) {
 	f := newDetailFixture(t)
 	first := f.add(store.Task{Title: "first-dep", CurrentLane: store.Lane("Done")})
@@ -277,11 +281,14 @@ func TestTaskDetailDependsOnCardListsEachDependency(t *testing.T) {
 	card := regionBetween(t, html, `data-krill="task-depends-on"`, "</ul>")
 	assert.Less(t, strings.Index(card, ">first-dep</a>"), strings.Index(card, ">second-dep</a>"),
 		"declaration order is the order the store returned")
-	assert.Contains(t, card, `href="`+htmlEscapedURL(taskDetailPath(f.pid, first.MilestoneID, first.ID))+`"`)
-	assert.Contains(t, card, `href="`+htmlEscapedURL(taskDetailPath(f.pid, second.MilestoneID, second.ID))+`"`)
+	// The product-scoped detail, the same address the Tasks table's rows
+	// link to -- not the retired per-container form, which would name a
+	// container the dependency need not live in.
+	assert.Contains(t, card, `href="`+htmlEscapedURL(productTaskDetailPath(f.pid, first.ID))+`"`)
+	assert.Contains(t, card, `href="`+htmlEscapedURL(productTaskDetailPath(f.pid, second.ID))+`"`)
 	assert.Contains(t, card, `data-krill="task-lane">Done</span>`)
 	assert.Contains(t, card, `data-krill="task-lane">Testing</span>`)
-	assert.Equal(t, 2, strings.Count(card, `data-krill="task-depends-on-item"`),
+	assert.Equal(t, 2, strings.Count(card, `data-krill="task-dep"`),
 		"one entry per dependency, never one per link plus one for the list")
 }
 
@@ -727,7 +734,7 @@ func TestTaskDetailRailDependsOnCardRendersOnADepsReadFailure(t *testing.T) {
 
 	card := regionBetween(t, html, `data-krill="task-depends-on"`, "</aside>")
 	assert.Contains(t, card, "The dependencies could not be read")
-	assert.NotContains(t, card, `data-krill="task-depends-on-item"`,
+	assert.NotContains(t, card, `data-krill="task-dep"`,
 		"a failed read lists nothing; an empty list would read as 'no dependencies'")
 	assert.NotContains(t, html, "deps-read-boom", "the store's error is not the operator's to read")
 	// The rest of the rail is unaffected: one failed read is one clause of
