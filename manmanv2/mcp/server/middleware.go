@@ -18,6 +18,9 @@ func Middleware(reg *Registry, audit Auditor) mcp.Middleware {
 			if extra := req.GetExtra(); extra != nil {
 				caller = callerFromExtra(extra.TokenInfo)
 			}
+			if caller == nil {
+				caller = CallerFromContext(ctx)
+			}
 			switch method {
 			case "tools/call":
 				return handleCall(ctx, reg, audit, caller, next, method, req)
