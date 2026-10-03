@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
@@ -117,14 +118,14 @@ type legacyURL struct {
 // resolving, in one table the next phases extend rather than a set of
 // ad-hoc handlers.
 //
-// Every entry serves its existing page today, and that is deliberate
-// rather than unfinished. A redesigned page that has not shipped renders a
-// placeholder, so redirecting to one would send an operator who followed a
-// working link -- "what is escalated?" -- to a page saying nothing is there
-// yet. The Overview is the one redesigned page this milestone ships, and it
-// does not replace an old URL: "/" and /products/{pid}/overview are both its
-// own addresses. The rest of the table moves from Serve to Successor in the
-// phase that ships each page's replacement.
+// An entry serves its existing page while its replacement has not shipped,
+// and that is deliberate rather than unfinished: a redesigned page that has
+// not landed renders a placeholder, so redirecting to one would send an
+// operator who followed a working link -- "what is escalated?" -- to a page
+// saying nothing is there yet. Once the replacement ships, the entry moves
+// from Serve to Successor and the old URL redirects into it. The per-
+// milestone task list and board are the first to move, because the
+// product-wide Tasks and Board have replaced them (FR f41a352d).
 func legacyURLs() []legacyURL {
 	return []legacyURL{
 		// The ops console. "/" is named by c4bd4bf8 among the un-prefixed
@@ -144,9 +145,14 @@ func legacyURLs() []legacyURL {
 		{Pattern: specProductPath + "/personas", Serve: (*App).handleSpecPersonas},
 		{Pattern: specProductPath + "/non-goals", Serve: (*App).handleSpecNonGoals},
 		{Pattern: specProductPath + "/delivery", Serve: (*App).handleSpecDelivery},
-		{Pattern: specProductPath + "/milestones/{mid}/tasks", Serve: (*App).handleTaskList},
+		// The per-container list and board have been replaced by the
+		// product-wide Tasks and Board, scoped to the container this URL
+		// named (FR f41a352d). Both retire the same way: a 302 into the
+		// new view carrying that container, so a bookmarked milestone URL
+		// still opens that milestone's work.
+		{Pattern: specProductPath + "/milestones/{mid}/tasks", Successor: legacyTaskSuccessor(tasksSuffix)},
 		{Pattern: specProductPath + "/milestones/{mid}/tasks/{tid}", Serve: (*App).handleTaskDetail},
-		{Pattern: specProductPath + "/milestones/{mid}/board", Serve: (*App).handleTaskBoard},
+		{Pattern: specProductPath + "/milestones/{mid}/board", Successor: legacyTaskSuccessor(boardSuffix)},
 
 		// The design-session browser.
 		{Pattern: designPath, Serve: (*App).handleDesign},
@@ -216,6 +222,63 @@ func (app *App) serveLegacy(l legacyURL) http.HandlerFunc {
 		}
 		http.Redirect(w, r, target, http.StatusFound)
 	}
+}
+
+// legacyTaskSuccessor is the successor for a pre-redesign per-container
+// tasks or board URL: the product-wide view of the same area, scoped to the
+// container the old URL named.
+//
+// So a bookmarked milestone URL keeps opening that milestone's work rather
+// than the whole product's -- the redirect carries the scope, it does not
+// merely change the page. The per-container task DETAIL URL is deliberately
+// not one of these: it still serves its own page (its successor stays nil
+// until the redesigned detail ships), so an operator following an old task
+// link reads the task rather than landing on a list.
+func legacyTaskSuccessor(suffix string) func(*App, *http.Request) (string, bool) {
+	return func(app *App, r *http.Request) (string, bool) {
+		// specProductPath's own wildcard is {id}, and the container is
+		// {mid}: the two the legacy pattern declares.
+		pid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			return "", false
+		}
+		container, ok := legacyTaskContainer(app, r, pid)
+		if !ok {
+			return "", false
+		}
+		return productTaskContainerHref(pid, suffix, container), true
+	}
+}
+
+// legacyTaskContainer is the container a pre-redesign per-container URL
+// named, in the form the product-wide scope query needs: its id, and which
+// of the two single-container modes it belongs to.
+//
+// The kind is read from the product's own delivery listing rather than
+// assumed, because the legacy URL served a milepebble's tasks at the same
+// path a milestone's used and only the id says which. A listing that cannot
+// be read, or an id it does not carry, answers as a milestone: the scope
+// query is then one the product-wide page resolves or refuses in its own
+// right -- an in-shell 404 for an id this product does not own -- which is
+// a better answer than a redirect with nowhere honest to go.
+func legacyTaskContainer(app *App, r *http.Request, pid uuid.UUID) (taskContainer, bool) {
+	mid, err := uuid.Parse(r.PathValue("mid"))
+	if err != nil {
+		return taskContainer{}, false
+	}
+	asMilestone := taskContainer{ID: mid, Kind: string(store.MilestoneKindMilestone)}
+
+	listing, err := app.spec.Delivery(r.Context(), pid, nil)
+	if err != nil {
+		logger.Warn("legacy task URL: delivery listing read failed; redirecting as a milestone scope",
+			"product", pid.String(), "container", mid.String(), "error", err)
+		return asMilestone, true
+	}
+	container, found := resolveTaskContainer(listing, mid)
+	if !found {
+		return asMilestone, true
+	}
+	return container, true
 }
 
 // The area handlers below own the shell's per-area roots. Each renders the

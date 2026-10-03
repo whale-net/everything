@@ -4,14 +4,14 @@ import "github.com/whale-net/everything/libs/go/htmxui"
 
 // The product-wide Tasks/Board region's view model. The pure builder that
 // populates it lives in //krill/ui (product_task_scope.go); this file owns
-// only the shape and the rendering.
+// only the shape and the rendering, and the shared scope control lives
+// beside it in product_task_scope.templ.
 //
-// It is deliberately the smallest honest region the read layer can serve:
-// the scope the URL resolved to, the total behind it, and a sentence when
-// there is nothing to list. The rows, the board's columns and the scope
-// control itself are the later pages' work -- so what renders today says
-// what it read and names what it is scoped to, rather than pretending to
-// be a table with no rows.
+// Rows arrive in the store read's own order and are rendered in it: the
+// read's sort (milestone position descending, then id, then creation, then
+// id) is the one order every consumer of the pagination token agrees on, so
+// re-sorting here would put the table's rows in an order no continuation
+// token can resume.
 
 // ProductTasksAnchor is the DOM id of the region's content: the id the
 // scope control's and Refresh's hx-target points at, and the root id of the
@@ -30,13 +30,61 @@ type ProductTaskScopeLabel struct {
 	Active bool
 }
 
-// ProductTaskContainerOption is one selectable milestone or milepebble. The
-// control renders these once it ships; the region carries them now so the
-// resolved scope is a member of the set it was chosen from.
+// ProductTaskContainerOption is one selectable milestone or milepebble.
 type ProductTaskContainerOption struct {
-	ID      string
-	Name    string
+	ID       string
+	Name     string
 	Selected bool
+
+	// OutOfScopeSuffix marks a container the product-wide all-incomplete
+	// scope would NOT have included -- shipped or abandoned. FR 7191dba1
+	// still lets the operator pick one explicitly, so it stays in the list
+	// rather than disappearing; saying so is what stops it reading as a
+	// contradiction. Empty for every container that scope would include.
+	OutOfScopeSuffix string
+}
+
+// ProductTaskRow is one task in the Tasks table (FR f41a352d).
+//
+// ClaimID and LeaseExpiresAt are the identity the READ observed, kept on
+// the row as data attributes so a later write can be claim-guarded against
+// a claim that has since changed. They are set together or not at all --
+// store.ProductTaskRow guarantees the two agree.
+type ProductTaskRow struct {
+	// ID is the task's own id, the row's data-krill-task-id.
+	ID string
+
+	// Title links to the task's detail. DetailPath is the PRODUCT-scoped
+	// detail URL, not the per-container one: this table is not scoped to a
+	// container, so a row in it may belong to any milestone under the
+	// product, and a link that named a container would name the wrong one
+	// for every row but one.
+	Title      string
+	DetailPath string
+
+	// Milestone is the row's own milestone name. A milepebble's task
+	// carries its PARENT milestone here, because that is the container the
+	// operator chose a scope by.
+	Milestone string
+
+	// Milepebble is the row's own milepebble's name, empty for a task
+	// scoped to a milestone directly (an uncut milestone has none).
+	Milepebble string
+
+	// Lane and Badges render through the shared TaskLaneBadge /
+	// TaskStateBadge components, so this table cannot drift from the board
+	// or the detail on either value's colour.
+	Lane   string
+	Badges []TaskBadge
+
+	// Attempts is the count against the cap, e.g. "2 of 3".
+	Attempts string
+
+	// ClaimID and LeaseExpiresAt are what the read observed. Empty
+	// LeaseExpiresAt means the row holds no claim, which is what keeps the
+	// cell from claiming a lease it does not have.
+	ClaimID        string
+	LeaseExpiresAt string
 }
 
 // ProductTaskRegion is the Tasks/Board region's view model.
@@ -51,13 +99,15 @@ type ProductTaskRegion struct {
 	// Path is this region's own URL, so the swap control can re-request it.
 	Path string
 
-	// ScopeModes are the three modes, in the order the control offers them.
-	ScopeModes []ProductTaskScopeLabel
+	// RefreshPath is Path plus this request's own query, so a manual
+	// Refresh re-reads the scope and filters the URL currently names rather
+	// than silently resetting them to the product-wide default.
+	RefreshPath string
 
-	// Milestones and Milepebbles are the product's own containers. The
-	// second is non-empty only for the selected milestone's children.
-	Milestones  []ProductTaskContainerOption
-	Milepebbles []ProductTaskContainerOption
+	// Scope is the control both views share. It is the same value on the
+	// Tasks page and the Board page for the same URL, because both build
+	// it from the same resolved scope rather than each describing its own.
+	Scope ProductTaskScopeControl
 
 	// ScopeLabel is the scope this request resolved to, read back in prose:
 	// "All incomplete milestones", or a container's own name.
@@ -73,59 +123,127 @@ type ProductTaskRegion struct {
 	// footer will read beside the rows it has not rendered yet.
 	Total int
 
+	// Rows are the page's tasks, in the read's own order. A cut milestone's
+	// tasks are already aggregated by the read (ProductTaskScopeMilestone
+	// means the milestone AND its milepebbles), so every row here names the
+	// milepebble it came from rather than the table hiding a milestone's
+	// work behind a link.
+	Rows []ProductTaskRow
+
 	// Empty is set when the scope resolved and holds no tasks, so the region
 	// says so instead of reading as a page that failed.
 	Empty bool
 
+	// EmptyDetail is that empty state's second sentence, and it NAMES the
+	// active filters rather than saying "nothing matches" (FR 61d7fb7b).
+	// "No tasks" alone is ambiguous between a scope with no work and a
+	// filter that excluded everything the operator can see; naming the
+	// scope and the lane is what tells them which control to change.
+	EmptyDetail string
+
+	// UpdatedAt is the read instant as an absolute RFC3339 string. It is
+	// what the region renders and what the relative "Updated N ago" text is
+	// derived from client-side: the server never emits a now-derived string
+	// inside a fragment htmx may re-swap, because that string would go stale
+	// the moment it is written and the region gives no way to notice.
+	UpdatedAt string
+
 	// Error is a read failure in the operator's words, empty on success.
 	// Distinct from Empty: one is an answer, the other is a failure.
 	Error string
+
+	// PageError is a continuation token the store refused -- issued for
+	// another scope or another filter set (FR 7bff09fe). It is its own
+	// field, not Error, because it is a different fact: the read may be
+	// perfectly healthy and the URL is what cannot be honoured. Folding it
+	// into Error would answer "the tasks could not be read" to a request
+	// whose only fault is a stale link, and would point an operator at the
+	// logs instead of at the one control that fixes it.
+	PageError string
+
+	// PageRecoveryHref and PageRecoveryText are the way back out of a
+	// refused token: the same view and the same filters with the token
+	// dropped. Empty when there is nothing to recover to.
+	PageRecoveryHref  string
+	PageRecoveryText string
+
+	// Paging is the table's footer, or nil when this region has no table
+	// to page -- a failed read, or the empty outcomes the scope resolver
+	// renders without ever asking the store. A table with no footer would
+	// be a silently truncated one, which is the one outcome FR 7bff09fe
+	// rules out; an error or an empty scope has nothing to truncate.
+	Paging *ProductTaskPaging
 }
 
-// scopeModeVariant marks the active mode in the control's own vocabulary,
-// which is ghost for the chosen one and quiet for the rest.
-func scopeModeVariant(active bool) htmxui.BadgeVariant {
-	if active {
-		return htmxui.BadgePrimary
-	}
-	return htmxui.BadgeGhost
+// ProductTaskPaging is the Tasks table's own footer state (FR 7bff09fe):
+// how much of the filtered set is on screen, and the one link that moves
+// forward.
+//
+// Shown and Total are separate numbers on purpose. Total is the count the
+// store answered for the SAME parameters the rows were read with, so the
+// two cannot describe different filter sets; Shown is how many rows this
+// page actually rendered. A footer that derived either from the rows would
+// claim a table is complete when it is not.
+type ProductTaskPaging struct {
+	// Shown is how many rows this page rendered.
+	Shown int
+
+	// Total is the count read for this page's filters -- the whole set
+	// behind the rows, however many pages that is.
+	Total int
+
+	// Summary is the footer's sentence, built from Shown and Total in Go so
+	// the markup is one string rather than text interleaved with numbers:
+	// templ separates adjacent text and expressions with HTML comments,
+	// which would split "Showing 25 of 100 tasks" into pieces no reader
+	// -- and no assertion -- sees as one sentence.
+	Summary string
+
+	// NextHref is the following page, empty on the last one. The store
+	// issues a token exactly when rows remain, so its presence IS the
+	// existence of a following page rather than a guess from a row count.
+	NextHref string
+
+	// PrevHref is the preceding page, empty when none can be named. See
+	// PrevNote for why it is empty in practice.
+	PrevHref string
+
+	// PrevNote and NextNote are the disabled control's title: they say WHY
+	// the button is inert, so an operator reaching for it is not left to
+	// conclude the control is broken.
+	PrevNote string
+	NextNote string
 }
 
 // ProductTasks renders the product-wide Tasks/Board region: the scope it
-// resolved to, the total behind it, and -- while the rows are still to come
-// -- an honest sentence saying so.
+// resolved to, the shared scope control, the total behind it, and the
+// region's own answer -- a table of rows, an empty state, or a failure.
+//
+// The control is inside the region, not beside it, so the hx-get that
+// changes the scope swaps both the answer and the control that produced it
+// in one move: after the swap the marked mode and the selected option are
+// the ones the new URL resolved to, never the ones the old URL did.
 templ ProductTasks(d ProductTaskRegion) {
 	<section id={ ProductTasksAnchor } data-krill="product-tasks" data-krill-view={ d.View }>
-		<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
-		<p class="mt-1 text-sm text-base-content/70">
-			Scoped to
-			<span data-krill="scope-label">{ d.ScopeLabel }</span>
-		</p>
-		<ul class="mt-3 flex flex-wrap items-center gap-2" data-krill="scope-modes">
-			for _, mode := range d.ScopeModes {
-				<li data-krill="scope-mode">
-					@htmxui.Badge(mode.Label, scopeModeVariant(mode.Active), htmxui.BadgeSizeSM, true, templ.Attributes{
-						"data-krill-mode": mode.Mode,
-					})
-				</li>
-			}
-		</ul>
-		<ul class="mt-2 flex flex-wrap items-center gap-2 text-sm" data-krill="scope-containers">
-			for _, c := range d.Milestones {
-				<li data-krill="scope-milestone" data-krill-container-id={ c.ID }>
-					@htmxui.Badge(c.Name, scopeModeVariant(c.Selected), htmxui.BadgeSizeSM, true, templ.Attributes{
-						"data-krill": "scope-milestone-badge",
-					})
-				</li>
-			}
-			for _, c := range d.Milepebbles {
-				<li data-krill="scope-milepebble" data-krill-container-id={ c.ID }>
-					@htmxui.Badge(c.Name, scopeModeVariant(c.Selected), htmxui.BadgeSizeSM, true, templ.Attributes{
-						"data-krill": "scope-milepebble-badge",
-					})
-				</li>
-			}
-		</ul>
+		<div class="flex flex-wrap items-start justify-between gap-4">
+			<div>
+				<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
+				<p class="mt-1 text-sm text-base-content/70">
+					Scoped to
+					<span data-krill="scope-label">{ d.ScopeLabel }</span>
+				</p>
+			</div>
+			<div class="flex items-center gap-3">
+				@ProductTasksFreshness(d.UpdatedAt)
+				<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
+					hx-get={ templ.URL(d.RefreshPath) }
+					hx-target={ "#" + ProductTasksAnchor }
+					hx-swap="outerHTML">
+					Refresh
+				</button>
+			</div>
+		</div>
+		@ProductTaskScopeForm(d.Scope)
 		<p class="mt-2 text-sm text-base-content/70">
 			<span data-krill="task-count">{ itoa(d.Total) }</span>
 			tasks in scope
@@ -136,7 +254,19 @@ templ ProductTasks(d ProductTaskRegion) {
 				<span data-krill="only-stuck">that are stuck</span>
 			}
 		</p>
-		if d.Error != "" {
+		if d.PageError != "" {
+			<div class="mt-3" data-krill="product-tasks-page-error">
+				@htmxui.Alert(htmxui.AlertError, d.PageError, templ.Attributes{
+					"data-krill": "product-tasks-page-error-alert",
+				})
+				if d.PageRecoveryHref != "" && d.PageRecoveryText != "" {
+					<div class="mt-3">
+						<a href={ templ.URL(d.PageRecoveryHref) } class="btn btn-secondary btn-sm"
+							data-krill="product-tasks-page-recovery">{ d.PageRecoveryText }</a>
+					</div>
+				}
+			</div>
+		} else if d.Error != "" {
 			<div class="mt-3" data-krill="product-tasks-error">
 				@htmxui.Alert(htmxui.AlertError, d.Error, templ.Attributes{
 					"data-krill": "product-tasks-error-alert",
@@ -146,16 +276,120 @@ templ ProductTasks(d ProductTaskRegion) {
 			<div class="mt-3" data-krill="product-tasks-empty">
 				@htmxui.EmptyState(
 					"No tasks in this scope",
-					"Nothing matches the active scope and filters.",
+					d.EmptyDetail,
 					"", "", templ.Attributes{},
 				)
 			</div>
 		} else {
-			<p class="mt-3 text-sm text-base-content/70" data-krill="product-tasks-pending">
-				The task rows for this scope are not rendered yet.
-			</p>
+			@ProductTaskTable(d.Rows)
+			if d.Paging != nil {
+				@ProductTaskPagingFooter(*d.Paging)
+			}
 		}
 	</section>
+}
+
+// ProductTaskPagingFooter is the Tasks table's own footer: the explicit
+// "Showing X of Y tasks" and the one control that moves through the pages
+// (FR 7bff09fe).
+//
+// It is a real <a> for the enabled direction, not a button that swaps: a
+// page position is a URL, and a URL is what a reload, a shared link and the
+// browser's own Back button all have to agree with. A swap-only control
+// would leave all three pointing at a page the operator is no longer on.
+//
+// Previous renders as an explicitly disabled control rather than being
+// omitted. The store's keyset paging issues tokens forward only -- a token
+// names a position to resume AFTER, and nothing in the read layer can name
+// the position before the one being shown -- so a Previous that appeared
+// only when a preceding token happened to be in hand would be absent on
+// almost every page and look like a rendering bug. A control that is always
+// there and says why it is inert is the honest shape; what must never
+// happen is a Previous that guesses a position and lands on a page the
+// operator did not ask for.
+templ ProductTaskPagingFooter(p ProductTaskPaging) {
+	<div class="mt-3 flex flex-wrap items-center justify-between gap-2" data-krill="task-paging">
+		<span class="text-sm text-base-content/70" data-krill="paging-summary">{ p.Summary }</span>
+		<div class="flex items-center gap-2">
+			if p.PrevHref != "" {
+				<a href={ templ.URL(p.PrevHref) } class="btn btn-ghost btn-sm" data-krill="paging-previous">Previous</a>
+			} else {
+				<button type="button" class="btn btn-ghost btn-sm" disabled data-krill="paging-previous"
+					title={ p.PrevNote }>Previous</button>
+			}
+			if p.NextHref != "" {
+				<a href={ templ.URL(p.NextHref) } class="btn btn-ghost btn-sm" data-krill="paging-next">Next</a>
+			} else {
+				<button type="button" class="btn btn-ghost btn-sm" disabled data-krill="paging-next"
+					title={ p.NextNote }>Next</button>
+			}
+		</div>
+	</div>
+}
+
+// ProductTaskTable is the Tasks view's rows, in the order the read returned
+// them.
+//
+// The whole table is one horizontal-scroll container rather than a fixed
+// grid, so a narrow viewport scrolls the table and not the page -- the same
+// rule the Board follows for its five columns.
+templ ProductTaskTable(rows []ProductTaskRow) {
+	<div class="mt-3 overflow-x-auto">
+		<table class="table table-zebra" data-krill="task-table">
+			<thead class="sticky top-0 bg-base-100">
+				<tr>
+					<th>Task</th>
+					<th>Milestone</th>
+					<th>Milepebble</th>
+					<th>Lane</th>
+					<th>State</th>
+					<th class="text-right">Attempts</th>
+					<th>Lease</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, t := range rows {
+					<tr class="hover" data-krill="task-row"
+						data-krill-task-id={ t.ID }
+						data-krill-claim-id={ t.ClaimID }
+						data-krill-lease-expires-at={ t.LeaseExpiresAt }>
+						<td>
+							<a href={ templ.URL(t.DetailPath) } class="link font-medium" data-krill="task-title">{ t.Title }</a>
+						</td>
+						<td data-krill="task-milestone">{ t.Milestone }</td>
+						<td data-krill="task-milepebble">{ t.Milepebble }</td>
+						<td>@TaskLaneBadge(t.Lane)</td>
+						<td>@TaskBadges(t.Badges)</td>
+						<td class="text-right" data-krill="task-attempts">{ t.Attempts }</td>
+						<td data-krill="task-lease">
+							if t.LeaseExpiresAt != "" {
+								<time data-krill="task-lease" datetime={ t.LeaseExpiresAt } title={ t.LeaseExpiresAt }>
+									{ t.LeaseExpiresAt }
+								</time>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// ProductTasksFreshness is the region's single "Updated N ago" element
+// (NFR 7b497d92).
+//
+// The markup carries the read instant and nothing else: the relative text
+// is derived in the browser by the shell's own upgrade script, which lives
+// in the document head rather than in this fragment. A server-rendered "8
+// seconds ago" would be wrong the moment htmx swapped the region in, and
+// nothing inside the region would ever reveal it -- the fragment carries no
+// clock of its own. The absolute instant stays in the title attribute, so
+// the exact read time survives whether or not the script ran.
+templ ProductTasksFreshness(updatedAt string) {
+	<span class="text-sm text-base-content/70" data-krill="updated-at"
+		data-krill-updated-at={ updatedAt } title={ updatedAt }>
+		Updated { updatedAt }
+	</span>
 }
 
 // ProductTasksInlineError is the fragment an htmx caller gets when the
@@ -165,11 +399,18 @@ templ ProductTasks(d ProductTaskRegion) {
 //
 // It keeps the region's anchor id for the same reason SpecInlineError does
 // -- a fragment without it deletes its own swap target.
+//
+// Its own marker is product-tasks-scope-error rather than the region's
+// product-tasks-error: both are alerts, but one is a scope the URL named
+// that this product does not own and the other is a read that failed, and
+// FR 61d7fb7b requires the three states never be confused. Sharing the
+// marker would make them indistinguishable in the markup even though the
+// sentences differ.
 templ ProductTasksInlineError(anchor, message string) {
 	<section id={ anchor } data-krill="product-tasks">
-		<div data-krill="product-tasks-error">
+		<div data-krill="product-tasks-scope-error">
 			@htmxui.Alert(htmxui.AlertError, message, templ.Attributes{
-				"data-krill": "product-tasks-error-alert",
+				"data-krill": "product-tasks-scope-error-alert",
 			})
 		</div>
 	</section>

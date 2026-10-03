@@ -48,8 +48,57 @@ document.documentElement.setAttribute('data-theme',t);})();
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
 <style>%s</style>
-<style>%s</style>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS)
+<style>%s</style>
+<script>%s</script>
+<script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS, relativeAgeScript, leaseCountdownScript)
 }
+
+// leaseCountdownScript rewrites every board card's lease <time> into the
+// relative form FR f6b62cc7 asks for -- "Lease in 18 min" while the claim
+// holds, "Lease expired 6 min ago" once it does not.
+//
+// It reads the absolute instant off the element's `datetime` attribute,
+// never off text the server rendered, for the reason NFR 7b497d92 gives:
+// the board is a fragment the Refresh button and the scope control
+// re-request, so a relative string inside it would be as old as the
+// response and would differ between two identical reads. Deriving it here
+// -- in the document head, outside every fragment -- also means one
+// implementation for all three task views, and re-running after each swap
+// picks up a Refresh's new instants without a reload.
+//
+// Without JavaScript the element keeps the absolute instant the server
+// put in it, which is why that instant is the element's own content rather
+// than an empty node: the operator still sees when the lease runs out.
+//
+// Both listeners hang off `document`, never `document.body`: htmxbase
+// renders this from CustomHead, so a classic inline script here runs while
+// the parser is still inside <head> and document.body is still null. htmx
+// events bubble, so document sees every swap regardless.
+//
+// The swap listener is named `htmx:after:swap` -- the event htmx 4.0.0
+// actually dispatches. htmx 4 renamed its lifecycle events to the colon
+// form, so the 1.x camelCase name binds a listener that never fires.
+const leaseCountdownScript = `
+(function(){
+function span(ms){
+var s=Math.max(1,Math.round(ms/1000));
+if(s<60){return s+' second'+(s===1?'':'s');}
+var m=Math.round(s/60);if(m<60){return m+' minute'+(m===1?'':'s');}
+var h=Math.round(m/60);if(h<24){return h+' hour'+(h===1?'':'s');}
+return Math.round(h/24)+' days';
+}
+function upgrade(root){
+var nodes=(root||document).querySelectorAll('time[data-krill="task-lease"][datetime]');
+for(var i=0;i<nodes.length;i++){
+var t=Date.parse(nodes[i].getAttribute('datetime'));
+if(isNaN(t)){continue;}
+var left=t-Date.now();
+nodes[i].textContent=left>=0?('Lease in '+span(left)):('Lease expired '+span(-left)+' ago');
+}
+}
+document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
+document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
+})();`
 
 // markdownCSS gives goldmark-rendered markdown (pages/markdown.go's
 // renderMarkdown, wrapped in a ".krill-md" element at every call site) sane
@@ -74,6 +123,51 @@ const markdownCSS = `
 .krill-md :where(a) { text-decoration: underline; }
 .krill-md :where(h1, h2, h3, h4, h5, h6) { font-weight: 700; margin: 0.5em 0 0.25em; }
 `
+
+// relativeAgeScript upgrades every [data-krill-updated-at] element's text to
+// "Updated N ago", read off the absolute RFC3339 instant the server put in
+// the attribute (NFR 7b497d92).
+//
+// It lives in the document head, never in a fragment: the regions htmx swaps
+// carry the instant and nothing else, so a relative string rendered by the
+// server would be as old as the response and there would be nothing inside
+// the region to say so. Deriving it here also means one implementation for
+// every page rather than one per view, and it re-runs after each swap so a
+// Refresh's new instant is picked up without a reload.
+//
+// It degrades to the instant the server rendered, which is why that text is
+// the element's server-side content rather than an empty node: with
+// JavaScript off the operator still sees when the page was read.
+//
+// Both listeners are on document, never on document.body: this script is
+// emitted into the head, where <body> does not exist yet, so a
+// document.body guard would evaluate false and bind nothing -- the
+// swap upgrade would then never fire, and every in-place swap on the
+// Tasks region (a filter change, a Refresh) would leave the element
+// showing the absolute instant the server rendered.
+//
+// The swap listener is named `htmx:after:swap`, the event htmx 4.0.0
+// dispatches; the 1.x camelCase name is never dispatched and would bind a
+// listener that never fires.
+const relativeAgeScript = `
+(function(){
+function ago(then){
+var s=Math.max(0,Math.round((Date.now()-then)/1000));
+if(s<60){return s+' second'+(s===1?'':'s');}
+var m=Math.round(s/60); if(m<60){return m+' minute'+(m===1?'':'s');}
+var h=Math.round(m/60); if(h<24){return h+' hour'+(h===1?'':'s');}
+var d=Math.round(h/24); return d+' day'+(d===1?'':'s');
+}
+function upgrade(root){
+var nodes=(root||document).querySelectorAll('[data-krill-updated-at]');
+for(var i=0;i<nodes.length;i++){
+var t=Date.parse(nodes[i].getAttribute('data-krill-updated-at'));
+if(!isNaN(t)){nodes[i].textContent='Updated '+ago(t)+' ago';}
+}
+}
+document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
+document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
+})();`
 
 // renderShell writes one signed-in page: the workspace chrome plus body,
 // at HTTP 200.
@@ -115,11 +209,10 @@ func (app *App) renderShellStatus(w http.ResponseWriter, r *http.Request, title,
 	}
 
 	productID, _ := currentProduct(r.Context())
-	_, milestoneID := shellPathTargets(r.URL.Path)
 
 	page := shellWithBody(
 		workspaceShellData(
-			app.shellNavTargets(r.Context(), productID.ID, milestoneID),
+			app.shellNavTargets(r.Context(), productID.ID),
 			activePath, title, userLabel,
 			// The switcher is read here, by the one seam every page goes
 			// through, rather than left to each route. Passing nil instead
@@ -175,9 +268,14 @@ func (app *App) withShellProduct(w http.ResponseWriter, r *http.Request) *http.R
 // id under that product's /milestones/ prefix.
 //
 // Both are uuid.Nil for a URL that names neither, which is the un-prefixed
-// case the resolvers answer. Reading the ids off the path is what lets the
-// Tasks and Board items link at the right container's pages on every
-// milestone-scoped page, with no per-page work to remember it.
+// case the resolvers answer.
+//
+// The container id is no longer read by the chrome: Tasks and Board link
+// at the product-wide pages, so no nav href depends on which milestone a
+// page happens to be scoped to. It is still parsed, and still covered by
+// overview_page_test.go, because the function's shape is a path reader
+// rather than a nav helper -- narrowing it to one return would leave the
+// next path-derived id with nowhere to go.
 func shellPathTargets(path string) (product, milestone uuid.UUID) {
 	segments := pathSegments(path)
 	// The id sits directly after "products", which is itself at the root

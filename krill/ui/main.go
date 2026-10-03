@@ -545,6 +545,12 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	// its own handler, both over the product-wide task read layer
 	// (product_task_scope.go, product_task_page.go).
 	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix, app.readerRoute(app.handleProductTasks))
+	// The product-scoped task detail the Tasks table's rows link to
+	// (FR f41a352d). It hangs beneath the tasks prefix so a copied row
+	// link resolves its product before the id is even looked at; the
+	// per-container detail URL keeps serving alongside it (FR f41a352d's
+	// legacy-URL rule).
+	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix+"/{tid}", app.readerRoute(app.handleProductTaskDetail))
 	mux.HandleFunc("GET "+productPathPrefix+boardSuffix, app.readerRoute(app.handleProductBoard))
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix, app.readerRoute(app.handleProductPlaceholder))
 	// Milestone detail ids hang beneath the milestones prefix, so a copied

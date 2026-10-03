@@ -608,6 +608,8 @@ page's own.
 
 ## Task views
 
+There are two generations of task view, and both serve.
+
 `/spec/products/{id}/milestones/{mid}/tasks` (task_page.go,
 `pages/tasks.templ`) is the read-only task list for a milestone or
 milepebble, linked from each delivery-page row (which also links the
@@ -618,6 +620,267 @@ tasks. `taskStateBadges` derives the live / lease-expired / capped /
 escalated / cancelled badges that the board and detail views reuse; rows
 carry the observed claim id and lease expiry as `data-krill-*` attributes so
 a later write can be claim-guarded.
+
+<!-- BEGIN product-task-scope section (task 18e3f591) -->
+### Product-wide Tasks and Board
+
+`/products/{pid}/tasks` and `/products/{pid}/board`
+(product_task_page.go, product_task_scope.go) are two views of **one
+scope**, served by one handler with the view's own name. They sit on the
+product-wide paged read (`store.ListProductTasks` /
+`CountProductTasks`), which is why the query parameter names are the same
+ones krill api's `GET /products/{id}/tasks` reads: one filter set has one
+spelling, so the link an operator copies is the request the api answers.
+
+**The scope control** (`pages/product_task_scope.templ`, one component
+rendered identically by both views) is a plain GET form carrying the mode
+and the selected ids:
+
+| Mode | URL | What the control reveals |
+|------|-----|-------------------------|
+| All incomplete milestones (default) | `scope=incomplete` | nothing — the mode names no container |
+| Milestone | `scope=milestone&container_id=<id>` | a milestone select |
+| Milepebble | `scope=milepebble&milestone=<id>&container_id=<id>` | a milestone select **and** a select of that milestone's milepebbles |
+
+The rules the control exists to keep:
+
+- **A no-id mode picks the product's highest-position container**, which
+  is the listing's *last* entry (`slice.ListProductDelivery` returns
+  position-ASCENDING). The store's own read and the board's swimlane order
+  take the highest position first, so the console does too.
+- **The two selects in milepebble mode submit different parameters.** Only
+  the milepebble is the read's container, so only it is `container_id`;
+  the milestone submits `milestone`, a UI-only parameter that never
+  reaches the store. A milepebble id alone cannot say which options the
+  second select should offer, which is why the parent is in the URL at all.
+  A named milepebble this product does not own is still a 404 — the
+  membership check is independent of the parent. A named milepebble the
+  product *does* own but that hangs under a **different** milestone
+  resolves to the named milestone's first milepebble instead: that
+  disagreeing pair is exactly what the control's own milestone change
+  necessarily submits, because the form is a plain GET over two selects
+  and a select cannot be emptied by choosing something else in it. Refusing
+  it would 404 the one interaction `milestone` exists to enable, and htmx
+  does not swap on a 4xx, so it would break silently. The named milestone
+  is the more specific statement of intent; the no-id rule settles the
+  milepebble one level down.
+- **Two empty outcomes, kept apart.** A product with no milestones at all
+  (`productTaskScopeNoContainers`) renders the modes and no select — there
+  is nothing to put in one. Milepebble mode over a milestone that simply
+  has nothing cut under it (`productTaskScopeNoMilepebbles`) keeps the
+  milestone select and the named mode marked, because that select is
+  exactly how the operator picks a cut one. Answering the second with the
+  first is what used to leave the page with no way back to a usable scope.
+- **Incomplete applies to the product-wide mode only.** It is judged per
+  container by `store.IsIncompleteContainerStatus`, the same predicate the
+  store's own query runs. A shipped or abandoned milestone is *excluded*
+  from that mode and *offered* (marked "outside the all-incomplete scope")
+  in the selects, because picking one explicitly shows its tasks whatever
+  its status.
+
+The form works with JavaScript off; htmx is layered on top
+(`hx-get` onto the same path, `hx-target` the region's own anchor,
+`hx-swap="outerHTML"`, `hx-push-url="true"`, `hx-trigger="change, submit"`).
+The control lives *inside* the region, so a swap moves the answer and the
+control that produced it together — the marked mode and selected option
+are always the ones the new URL resolved to. The `lane` and `only_stuck`
+filters ride along as hidden fields, so changing the scope does not
+silently drop them. **No field asks the operator to type an id**: every
+container is chosen from a select built from the product's own delivery
+listing.
+
+Failures split by request mode, as everywhere else here: a full page gets
+the in-shell status page (404 for a container outside the product, 400 for
+a malformed one), an htmx request gets a 200 carrying the sentence inline,
+because htmx does not swap on a non-2xx. The last-viewed-product cookie is
+written only for a real page view — a scope change is a swap inside a page
+the operator is already on, not a navigation.
+
+The region renders the scope it resolved to, the total behind it, and its
+own answer: the Tasks view's table of rows, an empty state naming the active
+filters, or an inline failure.
+
+**The table pages, and never truncates silently.** Under the table the
+Tasks view renders a footer reading `Showing X of Y tasks`, where Y is
+`CountProductTasks`'s answer for the *same* `store.ListProductTasksParams`
+the rows were read with (`readProductTasks` builds it once and hands the one
+value to both) and X is the page the store returned. Neither number is
+derived from the rows: a footer that counted what it had would read
+"Showing 25 of 25" on the first of four pages, which is the failure FR
+7bff09fe rules out. **Next is present exactly when `Page.NextToken` is** —
+the store's own answer that a row remains, not a comparison of X against Y,
+which gets an exactly-full final page wrong. **Previous is always disabled.**
+The store's keyset paging is forward-only: a token names a position to
+resume *after*, so nothing in this layer can name the position before the
+page being shown. The control is rendered inert with a `title` saying so
+rather than omitted (absent on some pages and present on others, it would
+read as a rendering bug) and rather than pointed at a guessed page (which
+would land the operator somewhere they did not ask for). The browser's Back
+button is the way back, and it works because the pages are real URLs.
+
+**A page move keeps every filter.** `productTaskPagePath` rebuilds the
+link from `r.URL.Query()` with only `page_token` replaced, so scope mode,
+`container_id`, the UI-only `milestone`, `lane`, `only_stuck` and
+`page_size` all survive by construction rather than by a re-derivation that
+could forget one. The risk this rules out is a parameter the rebuild drops,
+which would silently change what the next page shows.
+
+**A refused token is a fourth state, kept apart from the other three.**
+`store.ErrTokenScopeMismatch`, `ErrTokenFilterMismatch` and
+`ErrInvalidContinuationToken` are all the caller's own stale link — the
+token is URL-carried, so this is a genuinely reachable case — and none of
+them is a read failure. They render `product-tasks-page-error` plus a
+recovery link, at 400 for a browser and 200 inline for htmx. Folding them
+into `product-tasks-error` would answer "see the logs" to someone whose
+database is fine, and answering them with rows would show tasks the URL does
+not ask for. The recovery link **keeps** every filter and drops only the
+token: a token goes stale when the scope or the filters *change*, which is
+what the operator just did, so resetting them would discard the thing that
+caused the refusal. A page that comes back empty while the count for the
+same filters is non-zero is a fourth thing again — a position past the end
+of a set that has since shrunk — and the empty state says so rather than
+blaming the filters (see `productTaskPastEndDetailOf`). The footer renders
+on the Tasks view only; the Board's own requirement about exceeding one
+render is FR cf000440's, not this footer's.
+
+**The rows are the read's order, never a re-sort.** The store's keyset
+sort (milestone position descending, then id, then creation, then id) is
+what a continuation token is bound to; a table that ordered its rows any
+other way would leave the next page starting from a row this one did not
+end on. `productTaskRowsOf` passes `page.Rows` straight through.
+
+**A cut milestone aggregates.** `store.ProductTaskScopeMilestone` already
+means the milestone *and* its milepebbles, so both kinds of row arrive
+together; each names the milepebble it came from in its own column, and a
+task scoped to the milestone directly leaves that cell empty rather than
+inventing one. The empty state is therefore reachable only when the read
+returned nothing — never while a cut milestone still has tasks, which is
+what the pre-redesign list used to show.
+
+**Lane and state are the shared badges**, through `TaskLaneBadge` /
+`TaskBadges`, so the table cannot drift from the board or the detail. The
+table issues no write: no form but the scope control's plain GET, no
+`hx-post`/`hx-put`/`hx-delete`, and no lane move.
+
+**Claim identity is all-or-nothing.** `data-krill-claim-id` and
+`data-krill-lease-expires-at` are set together or not at all, and the
+claimed / lease-expired badge follows the same rule: a claim whose expiry
+the read did not report cannot be judged live or lapsed, so calling it
+"Claimed" would contradict the claim id the row does or does not carry.
+
+**Freshness is an instant, not a sentence.** The region renders
+`data-krill-updated-at` with the read's absolute RFC3339 value and nothing
+derived from it; `relativeAgeScript` (templ_render.go, in the document
+head) turns it into "Updated N ago" and re-runs on `htmx:after:swap`. A
+server-rendered relative string would be as old as the response and nothing
+inside the region would reveal it. Without JavaScript the operator sees the
+instant, which is why that is the element's server-side content.
+
+**The row's detail link is product-scoped**: `/products/{pid}/tasks/{tid}`,
+not the per-container form. This table is not scoped to a container, so the
+per-container link would name the wrong milestone for every row but one.
+That route resolves the task's own container and checks it against the
+product's listing; the per-container detail URL keeps serving alongside it.
+
+The **Board** view (`product_board_page.go`, `pages/board.templ`) renders
+one swimlane per milestone that has tasks (FR cf000440): five counted
+columns per lane, a horizontal scroller inside the board rather than a grid
+that spills across the page, and a header naming the container, its own
+status badge and the progress read's "N of M done".
+
+### Board cards
+
+A card (FR f6b62cc7) shows the title linking to task detail, the milepebble
+it came from when the milestone is cut, a state badge per live state,
+"n of cap attempts", and — when it holds a claim — its lease. It sits only
+in the column of its own lane, and carries the observed claim id and lease
+expiry as `data-krill-*` attributes on the card element itself.
+
+Two rules are load-bearing:
+
+- **The lease is an absolute instant; the countdown is the client's.** The
+  card renders `<time data-krill="task-lease" datetime="<RFC3339>">` whose
+  text is that same instant. `leaseCountdownScript` — in the document head,
+  never in a fragment — rewrites the text to "Lease in 18 min" or "Lease
+  expired 6 min ago". A relative string rendered by the server would be as
+  old as the response and would differ between two identical reads of
+  unchanged state; the board is a fragment Refresh re-requests, so that
+  difference would be visible (NFR 7b497d92). With JavaScript off, the
+  absolute instant is what the operator sees.
+- **A Done card with nothing outstanding is quiet.** It shows its title
+  and its milepebble and nothing else — no state badge, no attempts, no
+  lease — because a finished task badging "3 of 3" reads as work still to
+  do. The carve-out is about the *absence* of live state, not the lane: a
+  Done task that is escalated or cancelled still says so, or the board
+  would hide work needing a human in the very lane that claims it is done.
+
+State badges come from the one mapper (`components.TaskStateStyle`), the
+same one the list and the detail use, over the same derivation the Tasks
+table makes — so a lapsed lease reads `lease-expired` on every view and
+never `claimed`. Claim identity is all-or-nothing: a row carrying a claim
+id without a lease expiry would claim a lease the read did not report.
+
+### The List/Board toggle
+
+The two views are switched by a pair of links rendered **inside the shared
+scope control** (`pages/product_task_scope.templ`), not beside either
+region body. That placement is load-bearing: the Tasks region
+(`pages.ProductTasks`) and the Board region (`pages.ProductBoard`) are two
+separate templates behind one anchor, and the scope control is the one
+component both of them render. A toggle declared in either view's own
+template would be present on one view and silently absent from the other —
+which is exactly the drift the shared scope control exists to prevent.
+For the same reason the toggle is a sibling of the `<form>`, not a control
+inside it: switching view is navigation, not a value the scope submits.
+
+The toggle carries the request's **whole query** to the sibling view,
+because switching view changes which rendering of the scope the operator
+gets, not which scope they asked for. The sibling path is the request's own
+path with its trailing segment swapped (`tasks` ↔ `board`), so the two
+views stay one spelling wherever they are mounted.
+
+**One parameter is deliberately dropped: `page_token`.** A continuation
+token is a *position* in the keyset-paged read, not a filter. The two views
+do not page the same way — the Board's own contract (FR cf000440) is to show
+every task in scope, or to state "Showing X of Y" with a link to the filtered
+list — so a token issued for the Tasks table's page 3 names a row offset that
+means nothing on a board of swimlanes. Carrying it would land the operator on
+a board showing an arbitrary third of the work with nothing saying so. It is
+dropped, not refused: the destination starts at its own first page, which is
+the honest answer. `page_size` *does* survive — it is a filter.
+
+Because the toggle sits inside the region, an htmx scope swap brings it
+back with the marking and hrefs the new URL resolved to. A toggle rendered
+in the shell chrome would survive the swap while going stale, and nothing
+would reveal it.
+
+### The sidebar's Tasks and Board
+
+Both nav items link at the product-wide pages (`/products/{pid}/tasks`,
+`/products/{pid}/board`) and each marks active on its own view. They used to
+fall back to the delivery page, or to whatever milestone the current URL
+carried — which meant the same sidebar showed different links depending on
+which page it was rendered from, and on a page with no container in the URL
+neither item could build its own href at all.
+
+`navTargets` therefore has **no milestone id any more**. It existed only so
+those two items could build per-milestone hrefs, and it was a field the
+chrome could only sometimes fill. Every sidebar href is now a function of
+the product alone, so a request cannot produce a sidebar whose links
+disagree with the page it is on.
+
+Each item still **owns** the pre-redesign `/milestones/{mid}/tasks` subtree
+as its `AltPath`: that URL is a task view however it is reached, and an
+operator who followed a bookmarked one is on a Tasks page and must see the
+sidebar say so. The href moved to the product-wide page; the active marking
+did not. Under FR f41a352d's legacy rule the per-milestone **list and
+board** URLs become 302s into these very product-wide pages, so for those
+two the `AltPath` stops mattering — the operator arrives on a path `Path`
+already owns. The per-container task **detail** is the exception, and the
+reason the `AltPath` outlives the cutover: it keeps serving at the legacy
+URL, and an operator reading one of those still needs the sidebar to say
+Tasks.
+<!-- END product-task-scope section -->
 
 <!-- BEGIN task-detail section (task 9599fc1f) -->
 ### Task detail
