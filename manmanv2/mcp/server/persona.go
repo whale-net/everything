@@ -39,14 +39,14 @@ var (
 )
 
 // ResolvePersona maps realm_access.roles to one effective persona
-// (admin > server-manager > gamer; otherwise PersonaNone). It is the single
+// (manmanv2-admin > server-manager > gamer; otherwise PersonaNone). It is the single
 // place persona is decided so delegated-grant narrowing can slot in later.
 func ResolvePersona(roles []string) Persona {
 	p := PersonaNone
 	for _, r := range roles {
 		var rp Persona
 		switch r {
-		case "admin":
+		case "manmanv2-admin":
 			rp = PersonaAdmin
 		case "server-manager":
 			rp = PersonaServerManager

@@ -808,4 +808,4 @@ Items to address during implementation:
 
 ## MCP Server (`manmanv2/mcp`)
 
-MCP front for the control API. Authenticates the caller's bearer token, resolves one persona from `realm_access.roles` (admin > server-manager > gamer), filters `tools/list` and gates calls through a single tool registry, forwards the caller's own access token on every gRPC call, and audit-logs every call. Code in `mcp/server`.
+MCP front for the control API. Authenticates the caller's bearer token, resolves one persona from `realm_access.roles` (manmanv2-admin > server-manager > gamer), filters `tools/list` and gates calls through a single tool registry, forwards the caller's own access token on every gRPC call, and audit-logs every call. Code in `mcp/server`.

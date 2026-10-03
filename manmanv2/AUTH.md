@@ -71,7 +71,7 @@ func HasAdminRole(user *htmxauth.UserInfo) bool {
 		return false
 	}
 	for _, r := range user.Roles {
-		if r == "*" || r == "admin" || r == "server-manager" {
+		if r == "*" || r == "manmanv2-admin" || r == "server-manager" {
 			return true
 		}
 	}
@@ -79,7 +79,7 @@ func HasAdminRole(user *htmxauth.UserInfo) bool {
 }
 ```
 
-A user needs a realm role that is *exactly* `admin` or `server-manager`
+A user needs a realm role that is *exactly* `manmanv2-admin` or `server-manager`
 (or the dev-only `*` sentinel) — any other role (e.g. a plain viewer role)
 does not qualify. This is called from exactly one place today,
 `handleGameDetail` (`manmanv2/ui/handlers_games.go`), which sets
@@ -95,17 +95,19 @@ PR #2755: this used to be gated too, which was a bug — editing your own
 game's configuration is a routine ops task, not a destructive admin-only
 action).
 
-## Realm roles: admin, server-manager, gamer
+## Realm roles: manmanv2-admin, server-manager, gamer
 
-The MCP server resolves a persona from the realm roles `admin`,
+The MCP server resolves a persona from the realm roles `manmanv2-admin`,
 `server-manager`, and `gamer`. `gamer` is the lowest, MCP-only persona. The
 UI treats a `gamer`-only user as a plain viewer: `HasAdminRole` does not
 match it and `ui/components/roles.go` is unchanged.
 
-The role is created in Keycloak (realm `whalenet`, the realm in
-`OIDC_ISSUER` / `GRPC_OIDC_ISSUER`), not in this repo. It must be a realm
-role named exactly `gamer` and must appear in the access token's
-`realm_access.roles` claim (default realm-roles mapper).
+The roles are created in Keycloak (realm `whalenet`, the realm in
+`OIDC_ISSUER` / `GRPC_OIDC_ISSUER`), not in this repo. Each must be a realm
+role with exactly that name and must appear in the access token's
+`realm_access.roles` claim (default realm-roles mapper). The admin role is
+`manmanv2-admin`, not `admin`: `admin` is reserved in Keycloak, and a bare
+`admin` role grants nothing in manmanv2.
 
 ## What's actually enforced (read before adding a new admin-only feature)
 
@@ -133,7 +135,7 @@ enforce it in the handler/gRPC layer — don't rely on hiding the button.
 ## Checking or granting a role
 
 Realm roles are managed in Keycloak, not in this repo. To check what
-roles your own account has, or to request `admin`/`server-manager` be
+roles your own account has, or to request `manmanv2-admin`/`server-manager` be
 added, ask whoever administers the realm configured in `GRPC_OIDC_ISSUER`
 (see `ENV.md`) — this repo has no self-service role management.
 

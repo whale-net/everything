@@ -5,7 +5,7 @@ import (
 )
 
 // HasAdminRole reports whether the user holds an administrative role:
-// "admin", "server-manager", or the dev wildcard "*".
+// "manmanv2-admin", "server-manager", or the dev wildcard "*".
 // If user is nil, or user.Roles is nil or empty, or contains only viewer/player
 // roles, HasAdminRole returns false.
 func HasAdminRole(user *htmxauth.UserInfo) bool {
@@ -13,7 +13,7 @@ func HasAdminRole(user *htmxauth.UserInfo) bool {
 		return false
 	}
 	for _, r := range user.Roles {
-		if r == "*" || r == "admin" || r == "server-manager" {
+		if r == "*" || r == "manmanv2-admin" || r == "server-manager" {
 			return true
 		}
 	}

@@ -32,8 +32,9 @@ func TestResolvePersona(t *testing.T) {
 		{[]string{"viewer"}, PersonaNone},
 		{[]string{"gamer"}, PersonaGamer},
 		{[]string{"gamer", "server-manager"}, PersonaServerManager},
-		{[]string{"admin", "gamer"}, PersonaAdmin},
-		{[]string{"server-manager", "admin"}, PersonaAdmin},
+		{[]string{"manmanv2-admin", "gamer"}, PersonaAdmin},
+		{[]string{"server-manager", "manmanv2-admin"}, PersonaAdmin},
+		{[]string{"admin"}, PersonaNone},
 	}
 	for _, c := range cases {
 		if got := ResolvePersona(c.roles); got != c.want {
@@ -176,7 +177,7 @@ func claims(sub string, roles ...string) *grpcauth.Claims {
 }
 
 func TestUnauthenticatedRejectedBeforeAnyCall(t *testing.T) {
-	h := newHarness(t, fakeVerifier{"good": claims("u1", "admin")})
+	h := newHarness(t, fakeVerifier{"good": claims("u1", "manmanv2-admin")})
 	for _, tok := range []string{"", "bogus"} {
 		if s, err := h.connect(t, tok); err == nil {
 			s.Close()
@@ -193,7 +194,7 @@ func TestPersonaGatingListAndCall(t *testing.T) {
 		"none":  claims("u0", "viewer"),
 		"gamer": claims("u1", "gamer"),
 		"mgr":   claims("u2", "server-manager"),
-		"adm":   claims("u3", "admin"),
+		"adm":   claims("u3", "manmanv2-admin"),
 	})
 	ctx := context.Background()
 	cases := []struct {
