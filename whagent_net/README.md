@@ -305,6 +305,27 @@ first (upsert by `name`, not versioned) and reference its `id` via
 `model_definition_id` — exactly one of `model` / `model_definition_id` is
 set per `agent_definition` row.
 
+### Deploying manmanv2-ops to dev and prod (operator runbook)
+
+Applied by hand per environment; nothing here is run by CI. Do dev first.
+
+1. Pick `<MCP_URL>` = that env's manmanv2 MCP `MCP_PUBLIC_URL`, verbatim
+   (trailing slash included). whagent-net mints `aud` equal to the
+   `tool_set` `server_url` (`worker/tools/keys.go`), so it must match
+   exactly. The manmanv2 MCP also needs `MCP_WHAGENT_JWKS_URL` /
+   `MCP_WHAGENT_ISSUER` set (see `manmanv2/ENV.md`).
+2. In the whagent-net Postgres, find the next version:
+   `SELECT COALESCE(MAX(version),0)+1 FROM agent_definition WHERE agent_id='manmanv2-ops';`
+3. Run the `manmanv2-ops` INSERT above with that version and `<MCP_URL>`
+   as `server_url`. Never UPDATE an existing row.
+4. In that env's Keycloak realm: create realm role
+   `whagent-manmanv2-ops` (a realm role, not a client role), add it to a
+   group, and add the intended operators to the group.
+5. Verify: `SELECT agent_id, version, tool_set, required_role FROM agent_definition WHERE agent_id='manmanv2-ops';`
+   shows the row, a user with the role can start a `manmanv2-ops`
+   session, and a user without it is refused.
+6. Record env, version and `server_url` in the krill task summary.
+
 ## Keycloak role
 
 FR9's authorization check (`api`'s `StartSession` handler) requires the
