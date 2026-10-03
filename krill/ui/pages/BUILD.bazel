@@ -40,5 +40,10 @@ go_test(
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        # The tab tests parse the rendered fragment with a real HTML
+        # parser: the top-level-element invariant is the one that decides
+        # whether a tab click is repeatable, and it is exactly the thing a
+        # hand-rolled tag scanner gets wrong.
+        "@org_golang_x_net//html",
     ],
 )

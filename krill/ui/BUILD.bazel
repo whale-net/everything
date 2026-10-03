@@ -202,6 +202,7 @@ go_test(
         "task_detail_page_test.go",
         "task_detail_rail_test.go",
         "task_detail_fragment_root_test.go",
+        "task_detail_tabs_test.go",
         "task_lease_time_element_test.go",
         "board_page_test.go",
         "task_badge_parity_test.go",

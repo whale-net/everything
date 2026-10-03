@@ -314,8 +314,37 @@ func TestDoneTaskWithNoLiveStateShowsNoStateBadgeOnAnyView(t *testing.T) {
 		"the detail's state <dd> must be empty rather than say \"active\"")
 	assert.Equal(t, pair.lane, strings.TrimSpace(ddInner(t, "detail", pages["detail"], detailLaneDD)),
 		"a Done task still badges its lane")
-	for _, page := range []string{"list", "board", "detail"} {
+	// The detail is checked by TestDetailTabStripDoesNotReadAsABareTextState
+	// instead: its tab strip carries daisyUI's own `tab-active`, so a
+	// whole-page substring scan there can only ever fail.
+	for _, page := range []string{"list", "board"} {
 		assert.NotContains(t, pages[page], "active",
 			"%s must not fall back to a bare-text state for an unstate'd task", page)
 	}
+}
+
+// TestDetailTabStripDoesNotReadAsABareTextState: the whole-page scan above
+// is right for the list and the board, but the detail page now carries a
+// tab strip whose active tab is marked with daisyUI's own `tab-active`
+// class -- so on THAT page the substring "active" is a structural fact
+// about a control and says nothing about how the task's state is
+// presented.
+//
+// This is the same check scoped to the region it is actually about. It is
+// here rather than left to fail because a whole-page substring guard on a
+// page that has since grown a `tab-active` control is a guard that has
+// stopped guarding: it can now only fail, never catch.
+func TestDetailTabStripDoesNotReadAsABareTextState(t *testing.T) {
+	f := newParityFixture(t)
+	seeded := f.seed(store.TaskSummary{CurrentLane: store.LaneDone})
+	page := f.pages(t, seeded.ID)["detail"]
+
+	// The tab strip does mark a tab active -- that is what a tab strip is.
+	assert.Contains(t, page, "tab-active")
+	// And nothing in the state region does.
+	state := ddInner(t, "detail", page, detailStateDD)
+	assert.NotContains(t, state, "active",
+		"the detail's state region must not present the word as a state for an unstate'd task")
+	assert.Equal(t, "", strings.TrimSpace(state),
+		"a Done task with nothing outstanding has no state region content at all")
 }

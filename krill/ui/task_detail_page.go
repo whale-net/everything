@@ -70,6 +70,94 @@ type taskDetailInputs struct {
 	LastClaim *store.Claim
 }
 
+// taskDetailTabKeys is the fixed, ordered set of facet tabs. It is a
+// literal, not a map's keys, because the strip's ORDER is part of the
+// page: Overview, Notes, Dependencies, Spec slice.
+var taskDetailTabKeys = []string{
+	pages.TaskTabOverview,
+	pages.TaskTabNotes,
+	pages.TaskTabDependencies,
+	pages.TaskTabSlice,
+}
+
+// taskDetailTabLabels is each tab's operator-facing name. "Spec slice"
+// rather than the URL value "slice", which is the wire spelling and not
+// what a reader is shown.
+var taskDetailTabLabels = map[string]string{
+	pages.TaskTabOverview:     "Overview",
+	pages.TaskTabNotes:        "Notes",
+	pages.TaskTabDependencies: "Dependencies",
+	pages.TaskTabSlice:        "Spec slice",
+}
+
+// taskDetailTabOf resolves the request's ?tab= to one of the four tab
+// keys.
+//
+// An ABSENT value and an UNRECOGNISED one both resolve to overview. That
+// is the whole degradation rule: the tab is URL-carried, so a hand-edited
+// or stale link reaches this page as readily as a copied one, and a
+// value this build does not know must render the page rather than 404 or
+// render an empty panel. Nothing here errors.
+func taskDetailTabOf(r *http.Request) string {
+	tab := r.URL.Query().Get("tab")
+	for _, known := range taskDetailTabKeys {
+		if tab == known {
+			return known
+		}
+	}
+	return pages.TaskTabOverview
+}
+
+// taskDetailTabHref is one tab's own URL: the page's own path with the
+// tab applied.
+//
+// Overview's href is the bare path, with no ?tab= at all -- the default
+// state is the page's own address rather than a parameter that spells out
+// the absence of a choice, so the address an operator shares, bookmarks
+// or copies is the shortest true one.
+//
+// path is the request's own path, so this works for both detail routes
+// (the product-scoped one and the pre-redesign per-container one) without
+// either being named here.
+func taskDetailTabHref(path, tab string) string {
+	if tab == pages.TaskTabOverview {
+		return path
+	}
+	return path + "?tab=" + tab
+}
+
+// taskDetailTabsOf builds the strip over the request's own path, marking
+// active the tab the URL resolved to.
+//
+// The Notes and Dependencies counts are the lengths of the lists the
+// panels render -- the SAME reads, already taken once by the caller. A
+// second read here would be a second number that could disagree with the
+// list an operator is about to click into, and the whole point of the
+// count is to agree with it.
+//
+// A failed read carries NO count rather than zero. Zero is a claim about
+// the list, and we could not read the list; a tab with no badge says
+// nothing, which is the honest state (README's "never render a read
+// failure as an empty view", applied to a count).
+func taskDetailTabsOf(path, active string, notes []pages.TaskNoteRow, notesErr string, deps []pages.TaskDepLink, depsErr string) []pages.TaskTab {
+	tabs := make([]pages.TaskTab, 0, len(taskDetailTabKeys))
+	for _, key := range taskDetailTabKeys {
+		tab := pages.TaskTab{Key: key, Label: taskDetailTabLabels[key], Href: taskDetailTabHref(path, key), Active: key == active}
+		switch key {
+		case pages.TaskTabNotes:
+			if notesErr == "" {
+				tab.Count, tab.HasCount = len(notes), true
+			}
+		case pages.TaskTabDependencies:
+			if depsErr == "" {
+				tab.Count, tab.HasCount = len(deps), true
+			}
+		}
+		tabs = append(tabs, tab)
+	}
+	return tabs
+}
+
 // taskDetailPageOf assembles the detail view model. now is injected so a
 // lease's expiry is judged against the read time.
 //
@@ -405,12 +493,41 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 	// per-container detail: both routes reach here, and only the request
 	// knows which one the operator is on.
 	page.Path = r.URL.Path
+	// The tab is resolved from the URL, and the strip is built over the
+	// page's own path with it applied -- so a tab survives a reload, a
+	// shared link and Back, and an unknown value renders the Overview
+	// rather than failing (FR 7e463e31).
+	page.Tab = taskDetailTabOf(r)
+	page.Tabs = taskDetailTabsOf(r.URL.Path, page.Tab, page.Notes, page.NotesError, page.Deps, page.DepsError)
+	// A tab click and a Refresh are the same route asked for different
+	// things. HX-Target is what tells them apart: the tabs target the
+	// panel region, the Refresh button targets the whole detail section.
+	// Reading the target rather than guessing from the URL keeps the two
+	// unambiguous -- a Refresh on ?tab=notes must re-render the whole
+	// section, not splice a bare panel into it.
+	if r.Header.Get("HX-Request") != "" && tabSwapRequested(r) {
+		renderFragment(w, r, pages.TaskDetailTabs(page))
+		return
+	}
 	body := pages.TaskDetail(page)
 	if r.Header.Get("HX-Request") != "" {
 		renderFragment(w, r, body)
 		return
 	}
 	app.renderShell(w, r, "Task", r.URL.Path, body)
+}
+
+// tabSwapRequested reports whether this htmx request asked for the tab
+// panel region specifically.
+//
+// htmx sends the resolved target's id in HX-Target, so the target is the
+// request's own statement of which region it is replacing. A tab names
+// the panel; the Refresh button names the whole section. Deciding on
+// anything else -- the presence of ?tab=, say -- would make a Refresh
+// taken while a non-default tab is open serve a bare panel, which the
+// section swap would then splice in beside the page.
+func tabSwapRequested(r *http.Request) bool {
+	return r.Header.Get("HX-Target") == pages.TaskPanelAnchor
 }
 
 // renderProductTaskDetailNotFound is the in-shell 404 for a task detail

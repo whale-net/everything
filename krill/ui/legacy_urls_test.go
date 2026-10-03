@@ -858,10 +858,19 @@ func TestPreRedesignURLsRenderNoReadFailure_HasTeeth(t *testing.T) {
 	// The product-scoped detail, not the pre-redesign URL: that one is a
 	// 302 now, so fetching it here would assert on a redirect body rather
 	// than on the page a failing slice read actually degrades.
-	body := fetch(t, mux, productTaskDetailPath(pid, tid)).Body.String()
+	//
+	// The slice read now renders inside the task detail's Spec slice tab,
+	// and the tab is URL-carried (FR 7e463e31), so the walk above -- which
+	// requests each URL's DEFAULT address, the Overview panel -- does not
+	// reach the slice failure at all. This check follows the tab for that
+	// reason: it proves the marker list still catches a degraded panel
+	// where the panel is actually rendered. Without it, the slice read
+	// would be one this file can no longer see fail.
+	detail := productTaskDetailPath(pid, tid) + "?tab=slice"
+	body := fetch(t, mux, detail).Body.String()
 	if !strings.Contains(body, `alert-error`) {
-		t.Fatalf("a task detail page whose slice read failed rendered no error alert: " +
-			"the honesty check has nothing to catch and is vacuous")
+		t.Fatalf("a task detail page whose slice read failed rendered no error alert at %s: "+
+			"the honesty check has nothing to catch and is vacuous", detail)
 	}
 }
 
