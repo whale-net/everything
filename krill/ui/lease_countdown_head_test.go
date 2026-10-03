@@ -7,7 +7,7 @@
 //
 // The earlier assertions on this script were substring checks, which
 // cannot tell an attached listener from an unattached one -- the script
-// carried its htmx:afterSwap registration verbatim while the && guard in
+// carried its htmx:after:swap registration verbatim while the && guard in
 // front of it short-circuited every execution, and the suite stayed green.
 // So this file resolves where each addEventListener is actually attached
 // and whether anything conditional stands in front of it.
@@ -207,7 +207,7 @@ func TestLeaseCountdownAttachesItsHtmxListenerWhereItCanRun(t *testing.T) {
 	// The re-upgrade has to look at what the swap brought in, not at the
 	// document as a whole, or a partially-swapped page keeps stale text on
 	// the part that was not replaced.
-	assert.Contains(t, head, "htmx:afterSwap',function(e){upgrade(e.target);}",
+	assert.Contains(t, head, "htmx:after:swap',function(e){upgrade(e.target);}",
 		"the swap handler must upgrade the swapped subtree")
 }
 
@@ -218,9 +218,9 @@ func TestLeaseCountdownAttachesItsHtmxListenerWhereItCanRun(t *testing.T) {
 // shipped bug, asserted to be unreachable, plus the fix asserted reachable.
 func TestListenerReachabilityAnalyzerBitesOnTheBugItWasWrittenFor(t *testing.T) {
 	unreachable := map[string]string{
-		"short-circuit guard": `document.body&&document.body.addEventListener('htmx:afterSwap',up);`,
-		"if-block guard":      `if(document.body){document.addEventListener('htmx:afterSwap',up);}`,
-		"body receiver":       `document.body.addEventListener('htmx:afterSwap',up);`,
+		"short-circuit guard": `document.body&&document.body.addEventListener('htmx:after:swap',up);`,
+		"if-block guard":      `if(document.body){document.addEventListener('htmx:after:swap',up);}`,
+		"body receiver":       `document.body.addEventListener('htmx:after:swap',up);`,
 	}
 	for name, script := range unreachable {
 		t.Run(name, func(t *testing.T) {
@@ -232,7 +232,7 @@ func TestListenerReachabilityAnalyzerBitesOnTheBugItWasWrittenFor(t *testing.T) 
 	}
 
 	t.Run("the fix", func(t *testing.T) {
-		calls := listenerCalls(`document.addEventListener('htmx:afterSwap',up);`)
+		calls := listenerCalls(`document.addEventListener('htmx:after:swap',up);`)
 		require.Len(t, calls, 1)
 		assert.True(t, calls[0].headParseReachable(),
 			"a listener on document is reachable during head parsing")

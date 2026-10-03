@@ -509,7 +509,7 @@ func TestTasksRegionCarriesTheFreshnessInstantNotARelativeString(t *testing.T) {
 	assert.NotContains(t, region, "<script")
 	assert.Contains(t, body, "data-krill-updated-at",
 		"the head script keys off the attribute the region renders")
-	assert.Contains(t, body, "htmx:afterSwap",
+	assert.Contains(t, body, "htmx:after:swap",
 		"a Refresh's new instant is picked up without a reload")
 }
 
