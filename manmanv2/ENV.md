@@ -137,6 +137,19 @@ The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 
 
 Tilt: opt-in via `ENABLE_MANMANV2_MCP=true` with `MCP_OIDC_ISSUER` and `MCP_OIDC_CLIENT_ID` (required), optional `MCP_RESOURCE_METADATA_URL` and `MCP_CONTROL_API_URL`; forwarded to `localhost:8081`. Image `manmanv2-mcp` is also in the `manmanv2_chart` Helm composition. Helm: set `apps.manmanv2-mcp.env.{OIDC_ISSUER,OIDC_CLIENT_ID,PG_DATABASE_URL,CONTROL_API_URL}` (plus optional `MCP_RESOURCE_METADATA_URL`) in the deployment's values; the chart does not default them. Verified with `helm template --set apps.manmanv2-mcp.env.*`.
 
+**Deployed envs (dev, prod) run in grant mode with the whagent verifier.** Values live in the deployment's values (outside this repo; the chart does not default them). Per env, set under `apps.manmanv2-mcp.env`:
+
+| Key | Value |
+|---|---|
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `PG_DATABASE_URL`, `CONTROL_API_URL` | As before |
+| `MCP_PUBLIC_URL` | Exact audience whagent-net mints for manmanv2 MCP (also the RFC 9728 resource) |
+| `UI_PUBLIC_URL` | The env's manmanv2 UI URL |
+| `GRANT_CLIENT_ID` / `GRANT_CLIENT_SECRET` / `GRANT_REDIRECT_URI` / `GRANT_ENCRYPTION_KEY` | Identical to the UI's values (same secret refs) |
+| `MCP_WHAGENT_JWKS_URL` | `http://whagent-net-api.<ns>.svc:8090/.well-known/jwks.json` (api's `additionalPorts` JWKS port, `WHAGENT_JWKS_ADDR`) |
+| `MCP_WHAGENT_ISSUER` | The env's whagent-net api `iss` value (must match what `WHAGENT_ISSUER`-style config on whagent-net-api mints) |
+
+Operator check after release: `helm template` renders all keys; the pod starts with no "requires grant mode" error and logs the whagent verifier as configured; an opaque-credential client (`claude mcp add mm2 <url> --transport http`) still connects. Apply dev first, then prod via the release action.
+
 **OAuth (same model as krill, ASS, whagent-net).** The UI hosts `libs/go/auth`'s Provider (`/register`, `/authorize`, `/token`) using its own Keycloak session; the MCP verifies the opaque credential it issues (`mcp_credential`, migration 048). Because the control API needs the user's Keycloak token, `/authorize` first runs a one-time Keycloak consent (`libs/go/grpcauth/grantflow`) that stores the user's offline grant; the MCP exchanges it for a fresh token per request, so persona and `aud`/roles are the user's. Plain `claude mcp add mm2 <url> --transport http` then works with no `--client-id`.
 
 UI env (when `MCP_PUBLIC_URL` is set; requires `AUTH_MODE=oidc` and `PG_DATABASE_URL`): `MCP_PUBLIC_URL`, `UI_PUBLIC_URL`, and the same `GRANT_*` as the MCP. `GRANT_CLIENT_ID`/`GRANT_CLIENT_SECRET` are the UI's existing `OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`; `GRANT_REDIRECT_URI` is `<UI_PUBLIC_URL>/mcp/consent/callback` (add it to that Keycloak client, with the `offline_access` scope enabled). `GRANT_ENCRYPTION_KEY` must match in both apps.
