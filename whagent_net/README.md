@@ -262,6 +262,25 @@ system-role instruction, `NULL` by default. When set, `worker/activities.go`'s
 `CallModel` prepends it to the request as a `RoleSystem` message on every
 model call this agent definition makes.
 
+The `manmanv2-ops` definition (read + deployment-lifecycle tools only,
+requires realm role `whagent-manmanv2-ops`), as version 1:
+
+```sql
+INSERT INTO agent_definition
+  (agent_id, scope, version, model, tool_set, max_turns, max_cost_usd, required_role, tool_loading_mode)
+VALUES (
+  'manmanv2-ops',
+  'manmanv2',
+  1,
+  'anthropic/claude-sonnet-4.5',
+  '[{"server_url": "http://manmanv2-mcp.manmanv2-local-dev.svc.cluster.local:8081/", "allowed_tools": ["whoami","list_servers","get_server","list_deployments","get_deployment","get_connect_address","list_pending_restarts","get_session_actions","list_action_definitions","get_action_definition","start_deployment","stop_deployment","restart_deployment","execute_action"]}]',
+  100,
+  1.0,
+  'whagent-manmanv2-ops',
+  'bulk'
+);
+```
+
 To further constrain that same agent to only two of the server's tools
 (C22 — e.g. a research-only agent that must never call a write tool the
 `/mcp/research` endpoint still happens to expose), set `allowed_tools`
@@ -298,6 +317,9 @@ definition (`config/agents.yaml`) requires:
 ```
 whagent-audience-score-system-research
 ```
+
+The `manmanv2-ops` definition requires the realm role
+`whagent-manmanv2-ops`; create and grant it the same way.
 
 **To create and grant it** (see `libs/go/grpcauth/KEYCLOAK.md` §§ 2, 5
 for the full mental model — realm roles are global to the realm, so this
