@@ -11,6 +11,7 @@ package pages
 import (
 	"strconv"
 
+	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
@@ -60,6 +61,16 @@ type OverviewPage struct {
 	// containers the header names, each carrying the task progress the
 	// one product-wide read returned for it (FR 8ef82053).
 	InFlightPanel OverviewInFlightPanel
+
+	// NeedsAttention is this product's most recently escalated tasks, at
+	// most NeedsAttentionMax of them. Empty is a real answer -- it renders
+	// as a designed empty state, not as a blank card.
+	NeedsAttention []OverviewEscalation
+
+	// NeedsAttentionError is set when the escalated read failed, in place
+	// of the list. It is never both: an empty list beside a failed read
+	// would claim nothing is escalated when nothing was checked.
+	NeedsAttentionError string
 }
 
 // OverviewStatTile is one headline figure and the link behind it.
@@ -199,6 +210,39 @@ templ inFlightPanelRows(rows []OverviewInFlightRow) {
 			</li>
 		}
 	</ul>
+
+	// NeedsAttention is this product's most recently escalated tasks, at
+	// most NeedsAttentionMax of them. Empty is a real answer -- it renders
+	// as a designed empty state, not as a blank card.
+	NeedsAttention []OverviewEscalation
+
+	// NeedsAttentionError is set when the escalated read failed, in place
+	// of the list. It is never both: an empty list beside a failed read
+	// would claim nothing is escalated when nothing was checked.
+	NeedsAttentionError string
+}
+
+// NeedsAttentionMax is how many escalated tasks the panel lists. The FR's
+// "at most the 5 most recently escalated" bounds what an operator skims
+// before following See all, so the read asks the store for exactly this
+// many rather than fetching a default page and truncating it.
+const NeedsAttentionMax = 5
+
+// OverviewEscalation is one escalated task in the Needs-attention panel:
+// why it escalated, what it is, and when. EscalatedAtExact carries the
+// same instant as the relative EscalatedAt so hovering can surface the
+// precise time, which the relative figure alone cannot answer.
+type OverviewEscalation struct {
+	TaskID string
+	Title  string
+	Href   string
+
+	// Reason is the store's wire value; the badge renders its human
+	// wording through components.EscalationReasonLabel.
+	Reason string
+
+	EscalatedAt      string
+	EscalatedAtExact string
 }
 
 // inFlightBadges renders one badge per in-flight container, through the
@@ -223,6 +267,54 @@ func overviewTaskWord(n int) string {
 		return "task"
 	}
 	return "tasks"
+}
+
+// escalationReasonBadge renders one escalation reason through the shared
+// reason vocabulary, so a reason added to the store later cannot render
+// as a blank badge.
+templ escalationReasonBadge(e OverviewEscalation) {
+	{{ s := components.EscalationReasonStyle(e.Reason) }}
+	@htmxui.Badge(components.EscalationReasonLabel(e.Reason), s.Variant, s.Size, s.Soft,
+		templ.Attributes{"data-krill": "needs-attention-reason"})
+}
+
+// NeedsAttentionPanel lists this product's most recently escalated tasks,
+// the answer to "is anything stuck" on the page whose first job is that.
+//
+// The empty state is a designed one rather than an absent list: an
+// operator opening the panel to confirm nothing is wrong should be told
+// so, not left reading a blank card and wondering whether the read
+// happened.
+templ NeedsAttentionPanel(page OverviewPage) {
+	<div class="card bg-base-100 border border-base-300" data-krill="needs-attention-panel">
+		<div class="card-body">
+			<h2 class="card-title text-base">Needs attention</h2>
+			if page.NeedsAttentionError != "" {
+				<div data-krill="needs-attention-error">
+					@htmxui.Alert(htmxui.AlertError, page.NeedsAttentionError, nil)
+				</div>
+			} else if len(page.NeedsAttention) == 0 {
+				<div data-krill="needs-attention-empty">
+					@htmxui.EmptyState("Nothing needs attention.", "No task in this product carries an active escalation.", "", "", nil)
+				</div>
+			} else {
+				<ul class="divide-y divide-base-300" data-krill="needs-attention-list">
+					for _, e := range page.NeedsAttention {
+						<li class="py-2 flex items-center gap-2">
+							@escalationReasonBadge(e)
+							<a class="link flex-1" href={ templ.URL(e.Href) } data-krill="needs-attention-task">{ e.Title }</a>
+							<span class="text-sm text-base-content/70" title={ e.EscalatedAtExact }>{ e.EscalatedAt }</span>
+						</li>
+					}
+				</ul>
+			}
+			<div class="card-actions justify-end">
+				<a href={ templ.URL(page.EscalatedHref) } class="btn btn-ghost btn-sm" data-krill="needs-attention-see-all">
+					See all
+				</a>
+			</div>
+		</div>
+	</div>
 }
 
 // Overview renders the product's Overview: the product as its heading, a
@@ -264,8 +356,6 @@ templ Overview(page OverviewPage) {
 		if len(page.StatTiles) > 0 {
 			@overviewStatTiles(page.StatTiles)
 		}
-		// The Needs-attention panel renders into the second slot of this
-		// grid once it ships.
 		<div class="grid gap-6 lg:grid-cols-2">
 			<div class="card bg-base-100 border border-base-300" data-krill="overview-in-flight-panel">
 				<div class="card-body">
@@ -281,6 +371,7 @@ templ Overview(page OverviewPage) {
 					}
 				</div>
 			</div>
+			@NeedsAttentionPanel(page)
 		</div>
 	</section>
 }

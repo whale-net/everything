@@ -116,6 +116,15 @@ func (f *tileFixtureTasks) CountEscalatedTasks(context.Context, store.ListEscala
 	return f.escalatedCount, nil
 }
 
+// ListEscalatedTasks is the Needs-attention panel's read, and it is
+// unimplemented by design here for the same reason as the progress read
+// below: the tile fixture models a deployment with nothing escalated, so
+// the panel takes its empty state. The nil embed would panic rather than
+// fabricate, which is the honest failure.
+func (f *tileFixtureTasks) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{}, nil
+}
+
 // SummarizeProductTaskProgress is the in-flight panel's read. It is
 // unimplemented by design here: the tile fixture models a deployment with
 // no milestones, so the panel takes its empty state. Implementing it with a

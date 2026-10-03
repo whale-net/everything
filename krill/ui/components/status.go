@@ -112,3 +112,40 @@ func TaskStateStyle(state string) StatusStyle {
 		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
 	}
 }
+
+// EscalationReasonLabel is the human wording for one escalation reason.
+// The store's values are hyphenated wire strings; a badge an operator
+// reads is not one, so the two live apart here rather than being spelled
+// apart at each call site.
+func EscalationReasonLabel(reason string) string {
+	switch reason {
+	case "thrash-cap":
+		return "thrash cap"
+	case "attempt-cap":
+		return "attempt cap"
+	case "manual":
+		return "manual"
+	default:
+		return reason
+	}
+}
+
+// EscalationReasonStyle maps an escalation reason onto a daisyUI badge,
+// the sibling of MilestoneStatusStyle for the reason vocabulary rather
+// than the status one.
+//
+// An escalation is something that stopped working on its own, so the two
+// automatic counter-driven reasons are error-soft; a manual escalation is
+// a person having decided the task needs a human, which is attention
+// rather than failure. The default arm is what keeps a fourth reason from
+// rendering as a blank badge.
+func EscalationReasonStyle(reason string) StatusStyle {
+	switch reason {
+	case "thrash-cap", "attempt-cap":
+		return StatusStyle{htmxui.BadgeError, htmxui.BadgeSizeSM, true}
+	case "manual":
+		return StatusStyle{htmxui.BadgeWarning, htmxui.BadgeSizeSM, true}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}

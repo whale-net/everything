@@ -57,6 +57,14 @@ func (fakeDetailStore) SummarizeProductTaskProgress(_ context.Context, params st
 	return store.ProductTaskProgress{ProductID: params.ProductID, Containers: []store.ContainerTaskProgress{}}, nil
 }
 
+// ListEscalatedTasks is the read the Overview's Needs-attention panel makes.
+// An empty page is the honest answer for a fixture whose subject is the task
+// detail: the panel renders its empty state and these assertions stay about
+// the detail.
+func (fakeDetailStore) ListEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	return store.Page[store.EscalatedTaskRow]{}, nil
+}
+
 // CountConsoleOverview is the read the Overview's stat tiles make. Zero
 // figures, no error: an idle deployment is the honest answer for a fixture
 // whose subject is the task detail.

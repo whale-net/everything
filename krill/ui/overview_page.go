@@ -3,14 +3,16 @@
 // flight (FR c3e1c276).
 //
 // It is served at two URLs, /products/{pid}/overview and the un-prefixed
-// "/", which resolves a product and then serves the same page. The
-// frame lives here, along with the Milestones-in-flight panel; the stat
-// tiles are built in overview_tiles.go, and the Needs-attention panel is
-// separate pages' own work and its slot renders empty until it lands.
+// "/", which resolves a product and then serves the same page. The frame
+// lives here, along with the Milestones-in-flight and Needs-attention
+// panels; the stat tiles are built in overview_tiles.go.
 package main
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -83,7 +85,7 @@ func (app *App) renderOverview(w http.ResponseWriter, r *http.Request, product s
 
 // buildOverview assembles the Overview's view model from the reads the
 // page makes beyond the escalated count it is handed: the product's
-// containers in flight.
+// containers in flight, and its most recently escalated tasks.
 func (app *App) buildOverview(r *http.Request, product store.Product, badge navBadge) pages.OverviewPage {
 	page := pages.OverviewPage{
 		Product:           productHeaderOf(product),
@@ -96,15 +98,30 @@ func (app *App) buildOverview(r *http.Request, product store.Product, badge navB
 	listing, err := app.spec.Delivery(r.Context(), product.ID, inFlightStatuses)
 	if err != nil {
 		logger.Error("overview in-flight read failed", "product", product.ID.String(), "error", err)
-		// The header is the one thing this page cannot do without, so it
-		// says what could not be read rather than claiming no milestone
-		// is in flight.
+		// The header says what could not be read rather than claiming no
+		// milestone is in flight, but it does not stop the panel: the two
+		// read different stores and share no state, so one failing must
+		// not cost the operator the other's answer.
 		page.InFlightError = "Which milestones are in flight could not be read. See the logs."
 	} else {
 		page.InFlight = inFlightOf(listing)
 	}
 
 	page.InFlightPanel = app.inFlightPanel(r, product.ID)
+
+	// The attention panel is a second region rather than part of the
+	// header: its read failing must not cost the operator the in-flight
+	// answer the header just rendered, and its success must not be
+	// reported alongside an in-flight failure. So the in-flight panel is
+	// already assigned above and this branch returns a page that carries
+	// everything the reads that did succeed established.
+	escalated, err := app.needsAttentionRows(r.Context(), product.ID, time.Now())
+	if err != nil {
+		logger.Error("overview needs-attention read failed", "product", product.ID.String(), "error", err)
+		page.NeedsAttentionError = "Which tasks are escalated could not be read. See the logs."
+		return page
+	}
+	page.NeedsAttention = escalated
 	return page
 }
 
@@ -178,6 +195,80 @@ func inFlightRows(productID uuid.UUID, containers []store.ContainerTaskProgress)
 // milepebble is a milestone_ref row too, so the same path serves it.
 func milestoneDetailHref(productID, containerID uuid.UUID) string {
 	return productHref(productID, milestonesSuffix+"/"+containerID.String())
+}
+
+// needsAttentionRows reads the panel's rows: this product's most recently
+// escalated tasks, at most the panel's own limit.
+//
+// The narrowing is the ConsoleFilter the sidebar's badge counts through,
+// deliberately the same one: the FR requires the badge, the Escalated
+// tile and this panel to describe one set of tasks, and three reads
+// spelled three ways is how three numbers happen. MilestoneID stays unset
+// so the panel covers the product across all its milestones -- an
+// escalation in one container is exactly what an operator must not miss
+// while looking at another.
+//
+// The page size requested is the panel's limit rather than the store
+// default, so the store returns the five newest rows in order instead of
+// this trimming an arbitrary page down to five. Ordering is the query's
+// own (escalated_at DESC, task.id DESC), so nothing here re-sorts.
+func (app *App) needsAttentionRows(ctx context.Context, productID uuid.UUID, now time.Time) ([]pages.OverviewEscalation, error) {
+	scopeID, err := app.soleScopeID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := app.tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{ProductID: &productID},
+		Page:          store.PageParams{PageSize: pages.NeedsAttentionMax},
+	})
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]pages.OverviewEscalation, 0, len(result.Items))
+	for _, row := range result.Items {
+		rows = append(rows, pages.OverviewEscalation{
+			TaskID:           row.TaskID.String(),
+			Title:            row.Title,
+			Href:             taskDetailPath(productID, row.DeliveryRef.ID, row.TaskID),
+			Reason:           string(row.Reason),
+			EscalatedAt:      relativeTime(row.EscalatedAt, now),
+			EscalatedAtExact: row.EscalatedAt.Format(time.RFC3339),
+		})
+	}
+	return rows, nil
+}
+
+// relativeTime renders how long ago t was, in the coarse units an
+// operator scans a panel for.
+//
+// now is passed rather than read from the clock so a rendering is a
+// function of its inputs: a panel whose timestamps move with wall time is
+// a panel whose test can only assert "some number of minutes".
+func relativeTime(t, now time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		m := int(d.Minutes())
+		if m == 1 {
+			return "1 min ago"
+		}
+		return fmt.Sprintf("%d min ago", m)
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		if h == 1 {
+			return "1 h ago"
+		}
+		return fmt.Sprintf("%d h ago", h)
+	default:
+		days := int(d.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
+	}
 }
 
 // inFlightOf flattens a delivery listing down to its in-flight containers.
