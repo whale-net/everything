@@ -102,7 +102,7 @@ func setup(t *testing.T) (*fakeAPI, func(token string) *mcp.ClientSession) {
 	Register(srv, api, &server.Gate{Store: &server.MemoryConfirmationStore{}})
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	ts := httptest.NewServer(server.HTTPAuth(verifier{
-		"adm": {Subject: "a", Roles: []string{"admin"}},
+		"adm": {Subject: "a", Roles: []string{"manmanv2-admin"}},
 		"mgr": {Subject: "m", Roles: []string{"server-manager"}},
 	}, "")(h))
 	t.Cleanup(ts.Close)

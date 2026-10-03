@@ -108,6 +108,39 @@ type TaskNoteRow struct {
 	Body   string
 }
 
+// LatestNotesLimit is how many of a task's most recent notes the Overview
+// panel shows. The Overview answers "what has been said about this lately",
+// not "everything ever said about it" -- the Notes tab owns the whole list,
+// and the FR is explicit that the Overview's list is a subset of it.
+const LatestNotesLimit = 3
+
+// The three callout keys -- the states the Overview panel explains. They
+// are also what the markup carries as data-krill-callout, so a callout that
+// quietly stopped explaining one of those states fails a test rather than
+// passing as "some alert is present".
+const (
+	TaskCalloutEscalated    = "escalated"
+	TaskCalloutCapped       = "capped"
+	TaskCalloutLeaseExpired = "lease-expired"
+)
+
+// TaskCallout is one explanation the Overview panel gives about a task
+// that is not simply in flight: why it was escalated, that it is at its
+// attempt cap, or that its lease has lapsed.
+//
+// Key is one of the three constants above and is the hook the markup
+// carries, so each state is individually assertable. Variant is carried
+// rather than chosen in the component because severity is a property of
+// the STATE, not of the box: it follows the same mapping the task's state
+// badge uses (components.TaskStateStyle), so an escalated task's banner
+// and its badge are the same colour instead of two independent decisions
+// about how alarmed to look.
+type TaskCallout struct {
+	Key     string
+	Message string
+	Variant htmxui.AlertVariant
+}
+
 // TaskNoteBadges renders one note's two badges -- what it IS (kind) and
 // where it sits in its lifecycle (status).
 //
@@ -218,12 +251,44 @@ type TaskDetailPage struct {
 	// All three are empty when the task carries no escalation: a task that
 	// was never escalated has no reason to show, and a blank row would read
 	// as one whose reason could not be read.
-	Escalation        string
-	EscalationReason  string
-	EscalatedAt       string // RFC3339
-	TasksPath         string
-	BoardPath         string
-	ContainerName     string
+	Escalation       string
+	EscalationReason string
+	EscalatedAt      string // RFC3339
+
+	// EscalationCounter/EscalationCap are the event's own counter and cap
+	// at the moment it fired, present only when HasEscalationCounter is
+	// true. They are the two automatic reasons' triggering numbers; a
+	// manual escalation has neither, and the store's CHECK refuses a
+	// mismatched pair, so one flag covers both or neither.
+	EscalationCounter     int
+	EscalationCap         int
+	HasEscalationCounter  bool
+
+	// AttemptCount/AttemptCap are the task's attempt bookkeeping, carried
+	// unformatted beside the rail's "n of m" label so the Overview callout
+	// can judge the cap against the same numbers the rail prints.
+	AttemptCount int
+	AttemptCap   int
+
+	// LatestNotes is the TAIL of Notes -- the most recent
+	// LatestNotesLimit of them -- and NotesTotal is how many the read
+	// returned in all. The Overview shows the tail; the Notes tab shows
+	// every note. The two counts are carried so the Overview can say which
+	// it is showing rather than presenting a truncated list as the whole
+	// one.
+	LatestNotes []TaskNoteRow
+	NotesTotal  int
+
+	// Callouts are the explanations of why this task is not simply in
+	// flight, in a fixed order: escalation first, then the attempt cap,
+	// then a lapsed lease. It is EMPTY for a healthy task, which renders
+	// no banner at all -- a neutral "nothing is wrong" box beside a real
+	// one is how an operator learns to ignore the box.
+	Callouts []TaskCallout
+
+	TasksPath     string
+	BoardPath     string
+	ContainerName string
 
 	// Tab is the resolved tab key -- one of the four constants above, and
 	// never a raw ?tab= value: the handler resolves an unknown one to
@@ -617,18 +682,116 @@ func taskTabSelected(active bool) string {
 	return "false"
 }
 
-// taskOverviewPanel is the Overview host. The escalated / capped /
-// lease-expired callout belongs to task 870883ea, which owns this
-// panel's contents; the region and its data-krill marker are this task's,
-// so a sibling fills the panel without touching the strip, the swap
-// mechanics, or the URL state.
+// taskOverviewPanel is the Overview facet, in the order an operator reads
+// it: why this task is stuck (if it is), what it asks for, and what has
+// been said about it lately.
+//
+// The strip, the swap mechanics and the URL state belong to FR 7e463e31
+// and are untouched here -- this panel is one region a fill-in owns.
 templ taskOverviewPanel(page TaskDetailPage) {
-	<div data-krill="task-panel-overview" data-krill-panel-host="overview">
-		if page.Body != "" {
-			<h2 class="text-lg font-semibold">Description</h2>
-			<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ page.Body }</pre>
-		}
+	<div class="space-y-4" data-krill="task-panel-overview" data-krill-panel-host="overview">
+		@taskOverviewCallouts(page.Callouts)
+		@taskDescriptionCard(page.Body)
+		@taskLatestNotesCard(page)
 	</div>
+}
+
+// taskOverviewCallouts is the explanation banner for a task that is not
+// simply in flight -- one Alert per state, in the order the builder fixed
+// (escalation, attempt cap, lapsed lease).
+//
+// It renders NOTHING for a healthy task. A task with nothing wrong gets no
+// banner at all rather than a neutral one: an operator who sees the box
+// appear for every task learns to read past it, and the one escalation it
+// does carry would be read past too.
+templ taskOverviewCallouts(callouts []TaskCallout) {
+	for _, c := range callouts {
+		@htmxui.Alert(c.Variant, c.Message, templ.Attributes{"data-krill": "task-callout", "data-krill-callout": c.Key})
+	}
+}
+
+// taskDescriptionCard is the task's own body, whitespace preserved.
+//
+// The card is omitted entirely for a task with no body. An empty card
+// titled "Description" is a claim that there is a description and it is
+// blank -- a different and untrue statement from "this task has none".
+templ taskDescriptionCard(body string) {
+	if body != "" {
+		<div class="card bg-base-100 border border-base-300" data-krill="task-description">
+			<div class="card-body gap-2 p-4">
+				<h2 class="card-title text-sm font-semibold">Description</h2>
+				<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ body }</pre>
+			</div>
+		</div>
+	}
+}
+
+// taskLatestNotesCard is the tail of the task's notes: the most recent
+// few, with each one's kind and status badges.
+//
+// The card names its own count, because it is a SUBSET. When notes were
+// dropped to fit, it says so; a truncated list presented as "Latest notes"
+// with no visible boundary is how an operator concludes there are three
+// notes when there are thirty.
+//
+// A failed notes read renders no card rather than an empty one. The Notes
+// tab owns that alert -- the same rule the tab's own panel follows, and
+// for the same reason: an unreadable list must never render as a read one.
+templ taskLatestNotesCard(page TaskDetailPage) {
+	if page.NotesError == "" && len(page.LatestNotes) > 0 {
+		<div class="card bg-base-100 border border-base-300" data-krill="task-latest-notes">
+			<div class="card-body gap-2 p-4">
+				<div class="flex flex-wrap items-baseline justify-between gap-2">
+					<h2 class="card-title text-sm font-semibold">Latest notes</h2>
+					@taskLatestNotesCount(page)
+				</div>
+				<ul class="space-y-3">
+					for _, n := range page.LatestNotes {
+						<li data-krill="task-latest-note">
+							@TaskNoteBadges(n)
+							<pre class="whitespace-pre-wrap text-sm" data-krill="note-body">{ n.Body }</pre>
+						</li>
+					}
+				</ul>
+			</div>
+		</div>
+	}
+}
+
+// taskLatestNotesCount is the card's honest count: "All n notes" when the
+// tail is the whole list, and "Showing the k most recent of n" when it is
+// not.
+//
+// Without this line the card's title ("Latest notes") is the only signal
+// that it is a subset, and it is the kind of signal nobody reads twice.
+templ taskLatestNotesCount(page TaskDetailPage) {
+	<span class="text-xs text-base-content/70" data-krill="task-latest-notes-count">{ taskLatestNotesCountText(page) }</span>
+}
+
+// taskLatestNotesCountText is the card's count, stated so it cannot be
+// misread: "All 4 notes." when the tail IS the whole list, and "Showing
+// the 3 most recent of 12. The Notes tab has all of them." when it is not.
+//
+// The two arms differ in more than wording. "All" is a claim that the read
+// returned everything; the other arm is a claim that it did not, with the
+// number that says so. A single phrasing for both would be a lie in one of
+// them.
+func taskLatestNotesCountText(page TaskDetailPage) string {
+	shown := len(page.LatestNotes)
+	if shown < page.NotesTotal {
+		return "Showing the " + strconv.Itoa(shown) + " most recent of " +
+			strconv.Itoa(page.NotesTotal) + ". The Notes tab has all of them."
+	}
+	return "All " + strconv.Itoa(page.NotesTotal) + " " + taskNotesNoun(page.NotesTotal) + "."
+}
+
+// taskNotesNoun is the count's noun, so a single note does not render "All
+// 1 notes".
+func taskNotesNoun(n int) string {
+	if n == 1 {
+		return "note"
+	}
+	return "notes"
 }
 
 // taskNotesPanel lists EVERY note on the task, each with its kind badge
@@ -689,13 +852,31 @@ templ taskDependenciesPanel(page TaskDetailPage) {
 
 // taskSlicePanel is the Spec slice host (task b70e8d21 owns its contents,
 // including the closed disclosure the raw JSON sits behind).
+//
+// The document is the raw wire get_task returns -- machine-readable, and
+// far too long to be the page's first impression. So it sits behind a
+// disclosure that is CLOSED on arrival: an operator reading the task wants
+// the description, the notes and the claim, and wants the JSON only when
+// they are checking what an agent was actually handed. The disclosure's
+// own label is the panel's label, which is why this host carries no
+// heading of its own -- a "Spec slice" <h2> directly above a "Spec slice
+// (raw JSON)" summary would name one thing twice.
+//
+// It is the ONLY place on the page the document renders. A read failure
+// alerts here instead of an empty disclosure, because a closed disclosure
+// with nothing in it reads as "this task has no slice" -- a claim about
+// the task that a failed read is not entitled to make.
 templ taskSlicePanel(page TaskDetailPage) {
 	<div data-krill="task-panel-slice" data-krill-panel-host="slice">
-		<h2 class="text-lg font-semibold">Spec slice</h2>
 		if page.SliceError != "" {
 			@htmxui.Alert(htmxui.AlertError, page.SliceError, nil)
 		} else {
-			<pre class="overflow-x-auto text-xs">{ page.SliceJSON }</pre>
+			<details class="collapse collapse-arrow bg-base-100 border border-base-300" data-krill="task-slice-disclosure">
+				<summary class="collapse-title font-semibold">Spec slice (raw JSON)</summary>
+				<div class="collapse-content">
+					<pre class="overflow-x-auto text-xs" data-krill="task-slice-json">{ page.SliceJSON }</pre>
+				</div>
+			</details>
 		}
 	</div>
 }

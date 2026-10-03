@@ -123,9 +123,17 @@ type fakeSliceSpec struct {
 	*fakeSpecReader
 	doc slice.Document
 	err error
+
+	// askedMilestoneIDs records the milestone each slice read was asked
+	// for, so a test can pin that the page reads the slice for the TASK's
+	// own container -- the same milestone_id work.Assemble passes to
+	// slice.Querier.GetMilestoneDeliversSlice -- rather than a product or
+	// a sibling's.
+	askedMilestoneIDs []uuid.UUID
 }
 
-func (f *fakeSliceSpec) MilestoneDeliversSlice(context.Context, uuid.UUID) (slice.Document, error) {
+func (f *fakeSliceSpec) MilestoneDeliversSlice(_ context.Context, milestoneID uuid.UUID) (slice.Document, error) {
+	f.askedMilestoneIDs = append(f.askedMilestoneIDs, milestoneID)
 	return f.doc, f.err
 }
 

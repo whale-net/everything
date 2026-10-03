@@ -140,4 +140,4 @@ Tilt: opt-in via `ENABLE_MANMANV2_MCP=true` with `MCP_OIDC_ISSUER` and `MCP_OIDC
 
 UI env (when `MCP_PUBLIC_URL` is set; requires `AUTH_MODE=oidc` and `PG_DATABASE_URL`): `MCP_PUBLIC_URL`, `UI_PUBLIC_URL`, and the same `GRANT_*` as the MCP. `GRANT_CLIENT_ID`/`GRANT_CLIENT_SECRET` are the UI's existing `OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`; `GRANT_REDIRECT_URI` is `<UI_PUBLIC_URL>/mcp/consent/callback` (add it to that Keycloak client, with the `offline_access` scope enabled). `GRANT_ENCRYPTION_KEY` must match in both apps.
 
-There is no unauthenticated mode: the server refuses to start without the OIDC settings. Callers need a `gamer`, `server-manager`, or `admin` realm role; any other caller is refused every tool.
+There is no unauthenticated mode: the server refuses to start without the OIDC settings. Callers need a `gamer`, `server-manager`, or `manmanv2-admin` realm role; any other caller is refused every tool.

@@ -1218,6 +1218,41 @@ the dependency need not live in and would cost a 302 to reach the same page.
 text, and the empty state is only ever the rendering of a read that
 **succeeded** with nothing — that is the distinction these panels exist to
 keep.
+
+#### The raw slice sits behind a closed disclosure (FR 73ec4525)
+
+**The Spec slice panel hosts one disclosure and nothing else.** The panel
+carries no heading of its own: the disclosure's `<summary>` reads exactly
+`Spec slice (raw JSON)` and *is* the panel's label, so a `Spec slice` `<h2>`
+above it would name one thing twice. The `<details>` ships with **no
+`open` attribute** — the document is the page's technical detail, not its
+first impression, and an operator reads the description, the notes and the
+claim by default and opens the raw wire only when checking what an agent
+was actually handed. Note that `open=""` is *not* a closed disclosure; the
+attribute is absent.
+
+**The document renders on the page exactly once.** The disclosure is its
+only home — the tab strip hosts the *tab*, not the document, and no other
+panel, region or the rail carries it. A second rendering beside the
+disclosure is two things that can drift, and it puts a wire document in
+front of the operator who came for the task.
+
+**A failed slice read alerts in the disclosure's place**, never as an empty
+disclosure: a closed box with nothing in it reads as "this task has no
+slice", which is a claim about the task that a failed read is not entitled
+to make. This is the same rule the notes and dependencies panels follow,
+and for the same reason.
+
+**The document is the one `get_task` embeds.** The page reads
+`MilestoneDeliversSlice(ctx, task.MilestoneID)` — the same call
+`work.Assembler.Assemble` makes (`krill/work/payload.go:166`) — through the
+`taskSliceReader` seam, and never a product slice or a hand-assembled
+document. `krill/ui/task_detail_slice_test.go` pins both halves of that
+claim: the page asks for the task's *own* milestone id, and the rendered
+text is byte-equal both to the pretty-printed document and to the `slice`
+member of `work.Payload`'s own marshalled wire, so a JSON-tag or
+`omitempty` difference in the payload would go red there rather than
+silently reshaping what the page shows.
 <!-- END task-detail section -->
 
 ## Read gate

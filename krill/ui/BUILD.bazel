@@ -200,8 +200,10 @@ go_test(
         "delivery_page_test.go",
         "task_page_test.go",
         "task_detail_page_test.go",
+        "task_detail_slice_test.go",
         "task_detail_rail_test.go",
-        "task_detail_panels_test.go",
+"task_detail_panels_test.go",
+        "task_detail_overview_test.go",
         "task_detail_fragment_root_test.go",
         "task_detail_tabs_test.go",
         "task_detail_swap_test.go",
@@ -236,6 +238,10 @@ go_test(
         "//krill/store",
         "//krill/ui/components",
         "//krill/ui/pages",
+        # The slice-disclosure parity test marshals a real work.Payload, so
+        # the task detail's document is checked against the one get_task
+        # embeds rather than against a re-statement of it.
+        "//krill/work",
         "//libs/go/htmxauth",
         "//libs/go/htmxui",
         "@com_github_a_h_templ//:templ",

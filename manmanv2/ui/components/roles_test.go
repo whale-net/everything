@@ -33,9 +33,14 @@ func TestHasAdminRole(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "admin role",
-			user: &htmxauth.UserInfo{Roles: []string{"admin"}},
+			name: "manmanv2-admin role",
+			user: &htmxauth.UserInfo{Roles: []string{"manmanv2-admin"}},
 			want: true,
+		},
+		{
+			name: "bare admin role does not qualify",
+			user: &htmxauth.UserInfo{Roles: []string{"admin"}},
+			want: false,
 		},
 		{
 			name: "server-manager role",
@@ -48,8 +53,8 @@ func TestHasAdminRole(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "mixed roles containing admin",
-			user: &htmxauth.UserInfo{Roles: []string{"player", "admin"}},
+			name: "mixed roles containing manmanv2-admin",
+			user: &htmxauth.UserInfo{Roles: []string{"player", "manmanv2-admin"}},
 			want: true,
 		},
 	}
