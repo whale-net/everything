@@ -113,7 +113,7 @@ func run(logger *slog.Logger) error {
 			return server.WhagentHTTPAuth(verify, cfg, metaURL)
 		}
 		// Added last, so it runs outermost: the Caller exists before persona gating.
-		srv.AddReceivingMiddleware(server.WhagentMiddleware(*ex))
+		srv.AddReceivingMiddleware(server.WhagentMiddleware(*ex, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}))
 		logger.Info("whagent-net credentials accepted", "issuer", whagentEnv.Issuer)
 	}
 	handler := server.NewHandler(mcpHandler, verify, authServer, os.Getenv("MCP_PUBLIC_URL"), os.Getenv("MCP_RESOURCE_METADATA_URL"), wrap)

@@ -137,7 +137,9 @@ func WhagentHTTPAuth(existing CallerVerifier, cfg WhagentAuthConfig, resourceMet
 // protocol layer; mount it outermost. Requests without a whagent claim pass
 // through unchanged. Resolution failure is a tool-call error for tools/call
 // and a protocol error carrying the same text for tools/list; other methods pass through.
-func WhagentMiddleware(ex grantflow.Exchanger) mcp.Middleware {
+//
+// An optional auditor records the unresolved-user rejection of a tools/call.
+func WhagentMiddleware(ex grantflow.Exchanger, audit ...Auditor) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			// Only tool methods need a user; initialize/ping must still open the connection.
@@ -156,6 +158,19 @@ func WhagentMiddleware(ex grantflow.Exchanger) mcp.Middleware {
 			if err != nil || claims == nil {
 				slog.Warn("whagent identity could not be resolved", "subject", claim.Subject, "whagent_session_id", claim.WhagentSessionID, "error", err)
 				if method == "tools/call" {
+					if len(audit) > 0 && audit[0] != nil {
+						rec := AuditRecord{
+							Subject:       claim.Subject,
+							Outcome:       OutcomeRefused,
+							Reason:        ErrWhagentUnresolved,
+							SubjectIssuer: claim.SubjectIssuer,
+							Agent:         &Agent{Subject: claim.Actor.Subject, AgentID: claim.Actor.AgentID, SessionID: claim.WhagentSessionID},
+						}
+						if p, ok := req.GetParams().(*mcp.CallToolParamsRaw); ok && p != nil {
+							rec.Tool = p.Name
+						}
+						audit[0].Record(ctx, rec)
+					}
 					return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: ErrWhagentUnresolved}}}, nil
 				}
 				return nil, errors.New(ErrWhagentUnresolved)
