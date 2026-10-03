@@ -96,6 +96,10 @@ type overviewCounter struct {
 	escalated    []store.EscalatedTaskRow
 	escalatedErr error
 	escalations  []store.ListEscalatedTasksParams
+
+	// overviewErr fails the console read behind the Claimed and Open-notes
+	// tiles, so the stat-tiles region can be made to fail on its own.
+	overviewErr error
 }
 
 func (c *overviewCounter) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
@@ -132,7 +136,10 @@ func (*overviewCounter) ListClaimedTasks(context.Context, store.ListClaimedTasks
 // header, so the tiles' figures are a constant zero here -- which renders
 // four tiles reading "0" rather than leaving the strip out, and keeps the
 // header assertions about the header.
-func (*overviewCounter) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+func (c *overviewCounter) CountConsoleOverview(context.Context, store.ConsoleOverviewParams) (store.ConsoleOverviewCounts, error) {
+	if c.overviewErr != nil {
+		return store.ConsoleOverviewCounts{}, c.overviewErr
+	}
 	return store.ConsoleOverviewCounts{}, nil
 }
 

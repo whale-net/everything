@@ -99,10 +99,26 @@ is a product being built.
 The escalated count is read once and carried on the request
 (`withEscalationBadge`), so the primary action and the sidebar's badge are
 one read rather than two that could disagree. An unreadable count renders
-no action and says nothing about escalation at all — "nothing is
-escalated" would be a second unverified claim. The action points at the
-console's escalated view, which is the Escalated tab Needs attention
-serves today.
+no action and an inline error rather than "nothing is escalated", which
+would be a second unverified claim. The action points at the console's
+escalated view, which is the Escalated tab Needs attention serves today.
+
+**Every region fails alone.** The header, the four tiles, the
+Needs-attention panel and the in-flight panel each carry their own
+`Error`/`Err`, and `buildOverview` gives every read its own statement with
+no early return: one region's failed read must never suppress another
+region's answer, nor let it render its empty state. A failed read renders
+the alert and *nothing else* — no `0`, no empty-state sentence, no panel
+heading over nothing — because `0 escalated` and `no milestones in flight`
+are both reassuring statements and a read failure is neither (NFR
+cfadc9c7: the store's own error text is logged, never rendered). Every one
+of these paths answers **200**; an error status would leave htmx showing an
+unchanged page with no explanation.
+
+The one deliberate exception is the sidebar's Needs-attention **badge**,
+whose unreadable count is *omitted* rather than alerted. A red 0 would be
+a false alarm on every page; an Overview panel is explicitly about
+reporting, so it says it could not read.
 
 The four stat tiles (`overview_tiles.go`) sit under the header: Escalated,
 Claimed, Open notes and Blocking questions, each a link to whatever it
