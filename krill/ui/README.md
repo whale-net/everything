@@ -617,10 +617,14 @@ page's own.
 
 ## Task views
 
-There are two generations of task view, and both serve.
+There were two generations of task view. The per-container one is retired —
+its list and board 302 into the product-wide pair (FR f41a352d) and its
+detail into the product-scoped detail (FR 0c03eac1) — so what follows is
+what it did, kept for the handlers and templates that are still built and
+reachable only from tests.
 
 `/spec/products/{id}/milestones/{mid}/tasks` (task_page.go,
-`pages/tasks.templ`) is the read-only task list for a milestone or
+`pages/tasks.templ`) was the read-only task list for a milestone or
 milepebble, linked from each delivery-page row (which also links the
 `.../board` route). The container is resolved through the product's own
 delivery listing, so an id outside the product is an in-shell 404. A
@@ -898,8 +902,8 @@ marked correctly too, and the wildcard costs nothing when nothing does.
 
 `/products/{pid}/tasks/{tid}` (task_detail_page.go, `pages/task_detail.templ`)
 is the task detail, and the only URL that serves it. `serveTaskDetail` is
-the one read-and-render both detail routes reach; only the container check
-differs, and only the product-scoped one is mounted.
+the one read-and-render both detail handlers reach — only the container
+check differs, and only the product-scoped handler is mounted.
 
 **The pre-redesign per-container detail is retired.** Its
 `legacyURLs` entry names `legacyTaskDetailSuccessor` rather than serving
@@ -914,6 +918,20 @@ the old URL's `{mid}` would strand any task that had since moved between
 containers. A `{pid}`, `{mid}` or `{tid}` that does not parse has no such
 target, and `serveLegacy` renders the product index rather than redirecting
 nowhere.
+
+The redirect is 302 for every method, because its target is registered
+GET-only and 302 is the status a client may re-issue as a GET — see
+`serveLegacy`. Its `Location` is built from the parsed UUID, so every
+spelling of one task id redirects to the same canonical URL. No other
+spelling of the per-container URL serves the page: the pattern was never a
+subtree, so a trailing slash or a sub-page under it has always 404'd, and
+`TestNoPerContainerTaskURLRendersTheDetail` pins that none of them starts
+serving.
+
+Two places still *link* the retired URL and so cost a hop: the product-wide
+Board's task cards (`product_board_page.go`) and the detail page's own
+"Depends on" links. Both resolve — that is what the redirect is for — so
+repointing them is a separate change, not part of the retirement.
 
 **The frame is built before its contents.** Top to bottom: a breadcrumb
 (product → milestone → milepebble when the task sits on one → the task's
@@ -1012,12 +1030,15 @@ So, when adding a write surface:
 ## Task board
 
 `/spec/products/{id}/milestones/{mid}/board` (`board_page.go`,
-`pages/board.templ`) is the read-only five-lane board for a milestone or
-milepebble. It reuses the task list's read (`ListTasksByMilestone`), route
-scoping, badges and cut-milestone milepebble links. Columns are always
-Scaffold, Implementation, Testing, Validation, Done (with counts, empty
-ones included); a task is a card only in its current-lane column. Cards
-link to task detail and carry the observed claim id and lease expiry as
-`data-krill-*` attributes. The region (`BoardAnchor`) is the `HX-Request`
-fragment and the Refresh target; there is no polling and no write control.
+`pages/board.templ`) was the read-only five-lane board for a milestone or
+milepebble. **It is retired** (FR f41a352d): the URL 302s into the
+product-wide Board scoped to the `{mid}` it named, so the page this section
+describes is unmounted. What it did: it reused the task list's read
+(`ListTasksByMilestone`), route scoping, badges and cut-milestone
+milepebble links. Columns are always Scaffold, Implementation, Testing,
+Validation, Done (with counts, empty ones included); a task is a card only
+in its current-lane column. Cards link to task detail and carry the observed
+claim id and lease expiry as `data-krill-*` attributes. The region
+(`BoardAnchor`) is the `HX-Request` fragment and the Refresh target; there
+is no polling and no write control.
 <!-- END task board section -->

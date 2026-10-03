@@ -25,9 +25,10 @@ func milestoneBoardPath(pid, mid uuid.UUID) string {
 // taskDetailPath is the pre-redesign per-container detail URL. It is no
 // longer served: legacyURLs retires it into productTaskDetailPath (FR
 // 0c03eac1), so a link spelled here costs one 302 before it resolves. The
-// board cards and the milestone-scoped list still spell it, which is why
-// the redirect carries the tid alone — those pages resolve the row's own
-// milestone, so pinning the URL's container could strand a task that moved.
+// product-wide Board's task cards and the detail page's own Depends-on
+// links still spell it, which is why the redirect carries the tid alone —
+// those pages resolve the row's own milestone, so pinning the URL's
+// container could strand a task that moved.
 func taskDetailPath(pid, mid, tid uuid.UUID) string {
 	return milestoneTasksPath(pid, mid) + "/" + tid.String()
 }

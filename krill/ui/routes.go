@@ -124,8 +124,10 @@ type legacyURL struct {
 // operator who followed a working link -- "what is escalated?" -- to a page
 // saying nothing is there yet. Once the replacement ships, the entry moves
 // from Serve to Successor and the old URL redirects into it. The per-
-// milestone task list and board are the first to move, because the
-// product-wide Tasks and Board have replaced them (FR f41a352d).
+// milestone task list and board were the first to move, because the
+// product-wide Tasks and Board have replaced them (FR f41a352d), and the
+// per-milestone task detail followed, because the product-scoped detail has
+// replaced it (FR 0c03eac1).
 func legacyURLs() []legacyURL {
 	return []legacyURL{
 		// The ops console. "/" is named by c4bd4bf8 among the un-prefixed
@@ -188,10 +190,11 @@ func (app *App) mountLegacyRoutes(mux *http.ServeMux) {
 // mountLegacyTable registers one table of pre-redesign URLs, and is
 // mountLegacyRoutes with the table as an argument.
 //
-// Every entry currently serves, so no live route takes the Successor
-// branch and a test cannot reach it through the production registrations.
-// Taking the table as a parameter lets one mount a doctored copy and
-// drive the branch a phase gets the moment it names a successor.
+// Entries that name a successor take the redirect branch, so the branch is
+// live in production and reached by the production registrations — the
+// retired per-milestone list, board and detail all answer through it.
+// Taking the table as a parameter additionally lets a test mount a
+// doctored copy and drive a successor for a URL that has not retired yet.
 func (app *App) mountLegacyTable(mux *http.ServeMux, table []legacyURL) {
 	for _, l := range table {
 		switch {
@@ -213,6 +216,12 @@ func (app *App) mountLegacyTable(mux *http.ServeMux, table []legacyURL) {
 // is 302 rather than 301: a pre-redesign URL is a live link an operator
 // may keep following, and 302 is the one that does not let a browser pin
 // the old URL in its cache past the page it now names.
+//
+// It is 302 rather than 307 or 308 for the same reason from the other side:
+// a successor is a page, registered for GET alone, and 302 is the status a
+// client may re-issue as a GET, so a request that arrived carrying another
+// method still lands on the page. 307 and 308 preserve the method and would
+// land it on a 405.
 func (app *App) serveLegacy(l legacyURL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		target, ok := l.Successor(app, r)
