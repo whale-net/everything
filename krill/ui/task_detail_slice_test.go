@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -307,4 +309,141 @@ func TestTaskDetailSpecSliceJSONIsTheDocumentGetTaskEmbeds(t *testing.T) {
 	require.NoError(t, json.Indent(&embedded, payload.Slice, "", "  "))
 	assert.Equal(t, string(pretty), embedded.String(),
 		"the page's document must equal the one get_task embeds, for the same task")
+}
+
+// TestTaskDetailSpecSliceReaderWithoutTheSeamAlertsRatherThanRenderingAn
+// EmptyDocument (FR 73ec4525) covers the OTHER way the panel can come up
+// with no document: not a read that failed, but a spec reader that has no
+// slice read to offer at all.
+//
+// serveTaskDetail reaches the document through an optional interface
+// (`app.spec.(taskSliceReader)`), so "this deployment's reader cannot
+// answer" is a real runtime state -- not a hypothetical. If that branch
+// ever stopped setting SliceErr, the page would render the disclosure with
+// an EMPTY body: a closed box that reads as "this task has no spec slice",
+// which is the exact false claim the alert exists to avoid. So the branch
+// is asserted through the served page, not by calling the seam.
+//
+// The fake here is deliberately a specReadClient WITHOUT the extra method,
+// which is what makes the type assertion fail.
+func TestTaskDetailSpecSliceReaderWithoutTheSeamAlertsRatherThanRenderingAnEmptyDocument(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.addOnMilepebble(store.Task{Title: "seamless"})
+
+	// A reader that satisfies specReadClient but NOT taskSliceReader: the
+	// same fakeSpecReader the fixture builds, without the fakeSliceSpec
+	// wrapper whose MilestoneDeliversSlice is the seam's method.
+	app := &App{
+		spec:   seamlessSpecReader{specReadClient: f.spec.fakeSpecReader},
+		tasks:  f.store,
+		scopes: chromeScopes{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /products/{pid}/tasks/{tid}", app.handleProductTaskDetail)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/products/"+f.pid.String()+"/tasks/"+task.ID.String()+"?tab="+pages.TaskTabSlice, nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	html := rec.Body.String()
+	require.Equal(t, 200, rec.Code, "body: %s", html)
+
+	assert.Contains(t, html, "The spec slice could not be read")
+	assert.Equal(t, 0, countElementsWithHook(t, html, "task-slice-disclosure"),
+		"a reader with no slice read must alert, not leave a closed, empty disclosure")
+	assert.Equal(t, 0, countElementsWithHook(t, html, "task-slice-json"))
+}
+
+// seamlessSpecReader is a specReadClient that deliberately does NOT
+// implement taskSliceReader, standing in for a deployment whose spec read
+// side has no milestone-delivers read. Embedding the interface (rather than
+// a concrete fake) is what keeps MilestoneDeliversSlice off its method set.
+type seamlessSpecReader struct{ specReadClient }
+
+var _ specReadClient = seamlessSpecReader{}
+
+// TestTaskDetailSpecSliceDocumentIsRenderedAsTextNotMarkup (FR 73ec4525):
+// the raw document goes into a <pre> as ESCAPED TEXT, and what the
+// operator reads back out of the box is the document itself.
+//
+// This is the clause the byte-for-byte equality above cannot see on its
+// own: that assertion parses the served HTML with a parser, so it would
+// pass whether templ escaped the document or emitted it raw, as long as
+// the round trip recovered the text. What it would NOT catch is a
+// document whose own content looks like markup -- and real ones do, since
+// a requirement body can quote an HTML snippet or write a comparison with
+// `<`. Emitted unescaped, those characters would become real elements
+// inside the disclosure: the raw wire would inject nodes into the page,
+// and the text an operator copies out would no longer be the document.
+//
+// So the fixture carries characters that MEAN something to an HTML parser,
+// and the assertion is that they arrive as the characters they were.
+func TestTaskDetailSpecSliceDocumentIsRenderedAsTextNotMarkup(t *testing.T) {
+	// Each of these is inert in a <pre> when escaped and a live token when
+	// it is not.
+	const hostile = `<b>not bold</b> & "quoted" 'single' <script>x</script>`
+
+	doc := taskDetailSliceDocument("markup-safety-marker")
+	doc.Requirements[0].Body = ptr("a body that quotes markup: " + hostile)
+
+	f := newDetailFixture(t)
+	f.spec.doc = doc
+	task := f.addOnMilepebble(store.Task{Title: "hostile"})
+
+	code, html := f.getFullAt(task.ID.String(), "?tab="+pages.TaskTabSlice)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	// Nothing in the document became a node: the payload's only elements
+	// are the ones the panel itself renders.
+	pre := firstElementWithHook(t, html, "task-slice-json")
+	for c := pre.FirstChild; c != nil; c = c.NextSibling {
+		assert.Equal(t, xhtml.TextNode, c.Type,
+			"the document must be one escaped text node, not parsed markup (child <%s>)", c.Data)
+	}
+
+	// And the text is the document, character for character -- so what an
+	// operator selects in the box is what get_task embedded.
+	pretty, err := json.MarshalIndent(doc, "", "  ")
+	require.NoError(t, err)
+	assert.Equal(t, string(pretty), disclosureText(t, html, "task-slice-json"),
+		"escaping must round-trip: the operator reads back the document itself")
+}
+
+// TestTaskDetailSpecSliceDocumentWithNoEntitiesStillRendersBehindTheClosed
+// Disclosure (FR 73ec4525) is the boundary the alert must not swallow: a
+// read that SUCCEEDS and returns a genuinely empty document is not a read
+// failure, and must not be rendered as one.
+//
+// A milestone that delivers nothing assembles to a real Document carrying
+// its schema_version and no entities. Showing an alert there would tell an
+// operator the read failed when it did not -- and, worse, the disclosure
+// the FR asks for would vanish for exactly the tasks whose slice is
+// shortest. So the closed box is still there, and it still says exactly
+// "Spec slice (raw JSON)".
+func TestTaskDetailSpecSliceDocumentWithNoEntitiesStillRendersBehindTheClosedDisclosure(t *testing.T) {
+	f := newDetailFixture(t)
+	f.spec.doc = slice.Document{SchemaVersion: slice.SchemaVersion}
+	task := f.addOnMilepebble(store.Task{Title: "empty slice"})
+
+	code, html := f.getFullAt(task.ID.String(), "?tab="+pages.TaskTabSlice)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	assert.NotContains(t, html, "could not be read",
+		"an empty document is a successful read, not a failed one")
+	assert.Equal(t, 1, countElementsWithHook(t, html, "task-slice-disclosure"),
+		"a task with no delivered entities still gets the disclosure")
+	details := firstElementWithHook(t, html, "task-slice-disclosure")
+	for _, a := range details.Attr {
+		assert.NotEqual(t, "open", a.Key, "the disclosure stays closed on arrival")
+	}
+	var summary *xhtml.Node
+	for c := details.FirstChild; c != nil && summary == nil; c = c.NextSibling {
+		if c.Type == xhtml.ElementNode && c.Data == "summary" {
+			summary = c
+		}
+	}
+	require.NotNil(t, summary)
+	assert.Equal(t, "Spec slice (raw JSON)", summaryText(summary),
+		"the label is the design's, whether or not there is anything behind it")
+	assert.Equal(t, 1, countElementsWithHook(t, html, "task-slice-json"))
 }
