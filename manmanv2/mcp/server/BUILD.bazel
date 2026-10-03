@@ -12,6 +12,7 @@ go_library(
         "confirm.go",
         "confirm_store.go",
         "connect_address.go",
+        "discovery.go",
         "edit_tools.go",
         "lifecycle_tools.go",
         "middleware.go",
@@ -24,6 +25,7 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/mcp/server",
     visibility = ["//manmanv2/mcp:__subpackages__"],
     deps = [
+        "//libs/go/auth",
         "//libs/go/grpcauth",
         "//manmanv2/connectaddr",
         "//manmanv2/protos:manmanpb",

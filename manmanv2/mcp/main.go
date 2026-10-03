@@ -88,15 +88,16 @@ func run(logger *slog.Logger) error {
 	server.AddWorkshopTools(srv, manmanpb.NewWorkshopServiceClient(conn.GetConnection()), &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.Handle("/", server.HTTPAuth(verifier, os.Getenv("MCP_RESOURCE_METADATA_URL"))(mcpHandler))
+	handler := server.NewHandler(mcpHandler, verifier, issuer, os.Getenv("MCP_PUBLIC_URL"), os.Getenv("MCP_RESOURCE_METADATA_URL"))
+	if os.Getenv("MCP_PUBLIC_URL") == "" {
+		logger.Warn("MCP_PUBLIC_URL unset: no protected-resource metadata served, clients cannot discover OAuth")
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8081"
 	}
-	httpSrv := &http.Server{Addr: ":" + port, Handler: otelhttp.NewHandler(mux, "manmanv2-mcp"), ReadHeaderTimeout: 10 * time.Second}
+	httpSrv := &http.Server{Addr: ":" + port, Handler: otelhttp.NewHandler(handler, "manmanv2-mcp"), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
