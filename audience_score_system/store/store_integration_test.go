@@ -2717,6 +2717,13 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+
+	// Head is derived from the embedded migrations dir, so landing a new
+	// migration needs no edit here.
+	latest, err := runner.LatestVersion()
+	require.NoError(t, err)
+	require.NotZero(t, latest, "expected at least one embedded migration")
+
 	require.NoError(t, runner.Up(), "first up")
 	require.NoError(t, runner.Down(), "down")
 	require.NoError(t, runner.Up(), "second up")
@@ -2724,7 +2731,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(21), version, "highest migration in schema.Migrations is 021_link_assertion_ledger")
+	assert.Equal(t, latest, version, "second Up() must land clean at the head migration")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",

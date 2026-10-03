@@ -87,14 +87,6 @@ func TestMigration044_BackfillsExistingRowsToUnknownAndEnforcesCheck(t *testing.
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
-	latest, err := runner.LatestVersion()
-	if err != nil {
-		t.Fatalf("LatestVersion: %v", err)
-	}
-	if latest != 47 {
-		t.Fatalf("expected the latest migration source version to be 47, got %d -- update this test if a newer migration has since landed", latest)
-	}
-
 	// Apply everything up to but excluding 044, seed a pre-existing backups
 	// row, then apply 044 -- this is what actually proves the DEFAULT clause
 	// backfills existing rows rather than just new inserts picking it up.

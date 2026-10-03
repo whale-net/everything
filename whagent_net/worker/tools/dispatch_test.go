@@ -376,3 +376,19 @@ func TestDispatch_ValidArguments_AreUnaffected(t *testing.T) {
 	assert.False(t, result.IsError, "a valid call must dispatch normally: %s", result.Content)
 	assert.Contains(t, result.Content, "chan-1")
 }
+
+// TestDispatch_BulkMode_ToolOutsideAllowedTools_Refused proves a tool the
+// server exposes but the ref's allowed_tools omits is not callable, even in
+// bulk mode.
+func TestDispatch_BulkMode_ToolOutsideAllowedTools_Refused(t *testing.T) {
+	ctx := context.Background()
+	serverURL, _, readCalls := newDispatchTestServerCounting(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+	in.ToolSet = []session.ToolServerRef{{ServerURL: serverURL, AllowedTools: []string{"write_probe"}}}
+	in.Turn = 1
+	in.Call = llm.ToolCall{ID: "call-1", Name: "read_probe", Arguments: `{"channel_id":"chan-1"}`}
+
+	_, err := dispatcher.Dispatch(ctx, in)
+	require.Error(t, err)
+	assert.Equal(t, int32(0), atomic.LoadInt32(readCalls))
+}
