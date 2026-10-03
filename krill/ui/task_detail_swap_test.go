@@ -246,9 +246,11 @@ func TestTaskDetailRefreshOnANonDefaultTabReturnsTheWholeSectionNotABarePanel(t 
 
 	for _, tab := range []string{pages.TaskTabNotes, pages.TaskTabDependencies, pages.TaskTabSlice} {
 		t.Run(tab, func(t *testing.T) {
-			// The button's own address: the page's path with the tab the
-			// operator is on, which is what the served Refresh button's
-			// hx-get actually is.
+			// Driven at the tab-qualified URL on purpose: this asserts the
+			// HANDLER's answer, not the button's reachability. That the
+			// operator's finger can get there is
+			// TestTaskDetailTheServedRefreshButtonReRequestsTheTabItIsServing,
+			// which reads the served button instead of assuming its URL.
 			code, frag := f.getDetailAt(base+"?tab="+tab, pages.TaskDetailAnchor)
 			require.Equal(t, 200, code, "body: %s", frag)
 
@@ -269,6 +271,107 @@ func TestTaskDetailRefreshOnANonDefaultTabReturnsTheWholeSectionNotABarePanel(t 
 			require.NotEmpty(t, hosts, "a Refresh must keep the tab the operator was on")
 		})
 	}
+}
+
+// servedRefreshRequest is the request the SERVED Refresh button actually
+// issues, read off the bytes the handler returned: its hx-get, plus the
+// value of the input its hx-include names, as htmx would assemble them.
+//
+// The point of reading it rather than composing one is that a test which
+// builds the URL it WISHES the button sent proves nothing about the
+// button: it passes whether or not the control can ever issue that
+// request, which is exactly how a button pinned to the bare path survived
+// a whole pass of validation.
+func servedRefreshRequest(t *testing.T, buttonMarkup, regionMarkup string) string {
+	t.Helper()
+	buttons := elementsWithHook(t, buttonMarkup, "refresh")
+	require.Len(t, buttons, 1, "the served fragment must offer exactly one Refresh: %s", buttonMarkup)
+	target, ok := attrOfNode(buttons[0], "hx-get")
+	require.True(t, ok, "the Refresh button carries no hx-get: %s", buttonMarkup)
+
+	include, hasInclude := attrOfNode(buttons[0], "hx-include")
+	if !hasInclude {
+		return target
+	}
+	require.NotEmpty(t, include, "hx-include names nothing, so the button cannot read the tab")
+	// The include names the carried input; its value is the tab the panel
+	// region was last rendered with, which is the tab the operator is on.
+	// Overview carries none, and an include that matches nothing
+	// contributes no parameter -- so the request is the bare path.
+	carried := elementsWithHook(t, regionMarkup, "task-tab-state")
+	if len(carried) == 0 {
+		return target
+	}
+	require.Len(t, carried, 1,
+		"the region must carry at most one tab state, or the button's include is ambiguous: %s", regionMarkup)
+	value, _ := attrOfNode(carried[0], "value")
+	return target + "?" + pages.TaskTabQueryParam + "=" + value
+}
+
+// TestTaskDetailTheServedRefreshButtonReRequestsTheTabItIsServing walks
+// the operator's own path to the defect, and is the test whose premise is
+// the served button rather than a hand-built URL.
+//
+// The sequence is the one an operator actually performs, and the order is
+// the whole point: load the BARE page, click a tab, THEN press Refresh.
+// The button is served by the full-page load and is not a descendant of
+// the panel region, so the tab click's swap never re-renders it -- the
+// button in the DOM is still the one the bare load produced. That is why
+// asserting the handler's answer to ?tab=notes is not enough: it proves
+// the handler would behave, not that the operator's finger can reach it.
+func TestTaskDetailTheServedRefreshButtonReRequestsTheTabItIsServing(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{
+		Title:        "tabbed",
+		CurrentLane:  store.LaneTesting,
+		LaneSequence: []store.Lane{store.LaneImplementation, store.LaneTesting, store.LaneValidation, store.LaneDone},
+	})
+
+	// Step 1: the operator loads the bare page, which is what serves the
+	// Refresh button. A full request, not a fragment: this is the load
+	// that puts the button in the DOM.
+	code, page := f.getFullAt(task.ID.String(), "")
+	require.Equal(t, 200, code, "body: %s", page)
+
+	for _, tab := range []string{pages.TaskTabNotes, pages.TaskTabDependencies, pages.TaskTabSlice} {
+		t.Run(tab, func(t *testing.T) {
+			// Step 2: the operator clicks a tab. The address bar follows
+			// and the panel swaps; the button is outside the swap region,
+			// so it is untouched -- exactly as it is in the browser.
+			code, swapped := f.getTabAt(task.ID.String(), "?tab="+tab)
+			require.Equal(t, 200, code, "body: %s", swapped)
+			require.NotEmpty(t, elementsWithHook(t, swapped, "task-panel-"+tab))
+
+			// Step 3: the operator presses the button the page actually
+			// served, which reads the tab from the region the click
+			// actually re-rendered.
+			request := servedRefreshRequest(t, page, swapped)
+			assert.Contains(t, request, pages.TaskTabQueryParam+"="+tab,
+				"a Refresh taken on a non-default tab must re-request that tab, or it re-renders Overview behind an address bar still reading ?tab=%s", tab)
+
+			// And the request it does issue must keep the tab and return
+			// the whole section.
+			code, refreshed := f.getDetailAt(request, pages.TaskDetailAnchor)
+			require.Equal(t, 200, code, "body: %s", refreshed)
+			root := topLevelElement(t, refreshed)
+			require.Equal(t, "section", root.Data,
+				"a Refresh must return the whole section, not a bare panel spliced into it")
+			assert.NotEmpty(t, elementsWithHook(t, refreshed, "task-panel-"+tab),
+				"a Refresh must keep the tab the operator was on")
+		})
+	}
+
+	// The default is the bare address, so Overview carries no tab at all:
+	// a Refresh there must re-request the bare path rather than a URL
+	// spelling out the absence of a choice.
+	t.Run("overview carries no tab", func(t *testing.T) {
+		code, swapped := f.getTabAt(task.ID.String(), "")
+		require.Equal(t, 200, code, "body: %s", swapped)
+		assert.Empty(t, elementsWithHook(t, swapped, "task-tab-state"),
+			"Overview renders no carried tab: the default state is the bare address")
+		assert.Equal(t, f.detailPathAt(task.ID.String()), servedRefreshRequest(t, page, swapped),
+			"a Refresh taken on Overview re-requests the bare path")
+	})
 }
 
 // TestTaskDetailRepeatedTabClicksDoNotSpliceDuplicates is the in-place

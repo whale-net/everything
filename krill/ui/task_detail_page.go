@@ -492,6 +492,13 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 	// Refresh re-requests whatever URL served this page, not the
 	// per-container detail: both routes reach here, and only the request
 	// knows which one the operator is on.
+	//
+	// The path alone, deliberately: the tab is NOT baked in here. The
+	// button sits outside the panel region, so a tab click never
+	// re-renders it, and a value fixed at page-load time is the value
+	// the page was LOADED with -- not the tab the operator is on. The
+	// button takes the tab from the panel region at press time instead
+	// (see the refresh button's hx-include).
 	page.Path = r.URL.Path
 	// The tab is resolved from the URL, and the strip is built over the
 	// page's own path with it applied -- so a tab survives a reload, a

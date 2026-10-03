@@ -35,6 +35,22 @@ func TaskTabID(key string) string {
 	return "krill-task-tab-" + key
 }
 
+// TaskTabQueryParam is the query parameter the tab travels in, and the
+// name the region's carried input uses to hand it to the Refresh button.
+const TaskTabQueryParam = "tab"
+
+// TaskTabStateID is the DOM id of the hidden input inside the panel region
+// that carries the selected tab.
+//
+// It exists because the Refresh button is OUTSIDE the swap region: a tab
+// click re-renders this region and nothing else, so a tab fixed into the
+// button's own markup at page-load time is the tab the page was LOADED
+// with, not the one the operator is on. The button includes this input
+// instead, so it reads the tab from the live region at press time -- the
+// same carried-state pattern the Tasks scope form uses for the filters it
+// re-reads.
+const TaskTabStateID = "krill-task-tab-state"
+
 // TaskCrumb is one breadcrumb entry: where the operator has been on the
 // way to this task. Href is empty for the task's own title, which is the
 // page they are already on and so is the one crumb that is not a link.
@@ -188,6 +204,7 @@ templ TaskDetail(page TaskDetailPage) {
 			<div class="flex-1"></div>
 			<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
 				hx-get={ templ.URL(page.Path) }
+				hx-include={ "#" + TaskTabStateID }
 				hx-target={ "#" + TaskDetailAnchor }
 				hx-swap="outerHTML">
 				Refresh
@@ -472,6 +489,7 @@ func taskLaneStepHook(s TaskLaneStep) string {
 templ TaskDetailTabs(page TaskDetailPage) {
 	<div id={ TaskPanelAnchor } data-krill="task-panel" data-krill-task-tab={ page.Tab }>
 		@taskDetailTabStrip(page.Tabs)
+		@taskDetailTabState(page.Tab)
 		<div id={ TaskDetailPanelAnchor } role="tabpanel" aria-labelledby={ TaskTabID(page.Tab) } class="mt-4 space-y-4" data-krill="task-panel-body">
 			if page.Tab == TaskTabOverview {
 				@taskOverviewPanel(page)
@@ -484,6 +502,26 @@ templ TaskDetailTabs(page TaskDetailPage) {
 			}
 		</div>
 	</div>
+}
+
+// taskDetailTabState is the region's carried tab: a hidden input naming
+// the tab this fragment rendered.
+//
+// It is rendered INSIDE the swap region, which is the whole point. The
+// Refresh button lives outside that region, so nothing a tab click swaps
+// re-renders the button -- a tab written into the button's own hx-get at
+// page-load time describes the page as LOADED, and a tab click changes
+// the address bar and the panel without touching it. An input the region
+// re-renders on every click is the one place the current tab is
+// readable from the button at press time.
+//
+// Overview renders NO input: the default state is the bare address, so a
+// Refresh taken there re-requests the bare path rather than a URL
+// spelling out the absence of a choice.
+templ taskDetailTabState(tab string) {
+	if tab != TaskTabOverview {
+		<input type="hidden" id={ TaskTabStateID } name={ TaskTabQueryParam } value={ tab } data-krill="task-tab-state" />
+	}
 }
 
 // taskDetailTabStrip is the tablist: four real links, each carrying the

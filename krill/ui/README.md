@@ -1130,6 +1130,21 @@ keeps them unambiguous — a Refresh taken while a non-default tab is open
 must re-render the whole section and stay on that tab, not serve a bare
 panel for htmx to splice in beside the page.
 
+**The Refresh button reads the tab from the region, not from its own
+markup.** The button lives in the header, *outside* the panel region, so a
+tab click never re-renders it: a tab written into its `hx-get` at
+page-load time is the tab the page was **loaded** with, not the tab the
+operator is on, and pressing Refresh then re-renders Overview behind an
+address bar still reading `?tab=notes`. So the region carries the tab in a
+hidden input (`#krill-task-tab-state`) and the button `hx-include`s it,
+the same carried-state pattern the Tasks scope form uses for the filters
+it re-reads. Overview renders **no** input, so a Refresh there re-requests
+the bare path. Note what this rules out: `r.URL.RequestURI()` in the
+button is *not* sufficient, because on the reachable path — load the bare
+page, click a tab, press Refresh — the request that served the button had
+no `?tab=` to carry. Same rule as the Tasks region's Refresh, which
+carries this request's query.
+
 **The tab counts come from the panel's own read.** The Notes and
 Dependencies badges are `len(TaskNoteRow)` / `len(TaskDepLink)` over the
 lists already read for the page; a second read would be a second number
