@@ -99,7 +99,7 @@ templ TaskDetail(page TaskDetailPage) {
 				} else {
 					{ page.ClaimSummary }
 					if page.LeaseExpiresAt != "" {
-						<span data-krill="task-lease">lease until { page.LeaseExpiresAt }</span>
+						<span data-krill="task-lease">lease until <time data-krill="task-lease" datetime={ page.LeaseExpiresAt } title={ page.LeaseExpiresAt }>{ page.LeaseExpiresAt }</time></span>
 					}
 				}
 			</dd>
