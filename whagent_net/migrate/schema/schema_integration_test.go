@@ -70,9 +70,11 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
+	// The head version is derived from the embedded migrations dir, so landing
+	// a new migration needs no edit here.
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(15), latest, "expected the latest migration source version to be 15 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition + 007_agent_definition_domain, issue #2424 + 008_delegated_grant, issue #2426 + 009_mcpauth_cutover, issue #2434 + 010_agent_definition_scope + 011_agent_definition_surrogate_key + 012_agent_definition_max_tool_iterations + 013_agent_definition_tool_loading_mode + 014_turn_tool_defs + 015_agent_definition_system_prompt) -- update this test if a later migration has since landed")
+	require.NotZero(t, latest, "expected at least one embedded migration")
 
 	// -- Up: every table must exist, version must land clean at the latest --
 	require.NoError(t, runner.Up(), "apply every migration")
@@ -80,7 +82,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(15), version)
+	assert.Equal(t, latest, version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist after Up()", table)
@@ -107,7 +109,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(15), version)
+	assert.Equal(t, latest, version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist again after the second Up()", table)
