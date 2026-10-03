@@ -642,13 +642,31 @@ templ taskDependenciesPanel(page TaskDetailPage) {
 
 // taskSlicePanel is the Spec slice host (task b70e8d21 owns its contents,
 // including the closed disclosure the raw JSON sits behind).
+//
+// The document is the raw wire get_task returns -- machine-readable, and
+// far too long to be the page's first impression. So it sits behind a
+// disclosure that is CLOSED on arrival: an operator reading the task wants
+// the description, the notes and the claim, and wants the JSON only when
+// they are checking what an agent was actually handed. The disclosure's
+// own label is the panel's label, which is why this host carries no
+// heading of its own -- a "Spec slice" <h2> directly above a "Spec slice
+// (raw JSON)" summary would name one thing twice.
+//
+// It is the ONLY place on the page the document renders. A read failure
+// alerts here instead of an empty disclosure, because a closed disclosure
+// with nothing in it reads as "this task has no slice" -- a claim about
+// the task that a failed read is not entitled to make.
 templ taskSlicePanel(page TaskDetailPage) {
 	<div data-krill="task-panel-slice" data-krill-panel-host="slice">
-		<h2 class="text-lg font-semibold">Spec slice</h2>
 		if page.SliceError != "" {
 			@htmxui.Alert(htmxui.AlertError, page.SliceError, nil)
 		} else {
-			<pre class="overflow-x-auto text-xs">{ page.SliceJSON }</pre>
+			<details class="collapse collapse-arrow bg-base-100 border border-base-300" data-krill="task-slice-disclosure">
+				<summary class="collapse-title font-semibold">Spec slice (raw JSON)</summary>
+				<div class="collapse-content">
+					<pre class="overflow-x-auto text-xs" data-krill="task-slice-json">{ page.SliceJSON }</pre>
+				</div>
+			</details>
 		}
 	</div>
 }
