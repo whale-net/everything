@@ -272,13 +272,29 @@ templ taskPropertiesCard(page TaskDetailPage) {
 				<div>
 					<dt class="text-base-content/70">Task id</dt>
 					<dd data-krill="task-properties-id">
-						// Markup only: the clipboard behaviour is a later
-						// task's, so this is an accessible control carrying
-						// the id and not yet a button that does anything.
-						<button type="button" class="badge badge-ghost font-mono"
-							aria-label="Copy task id" data-krill="copy-task-id" data-task-id={ page.ID }>
+						// Ships disabled: the clipboard is a client API, so
+						// without the head's copyTaskIdScript this button is
+						// guaranteed to do nothing, and a control that
+						// cannot work must not look live. The script removes
+						// disabled and swaps the title for what it does once
+						// it has. With scripting off the id is still the
+						// chip's own text -- readable and selectable.
+						<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
+							aria-label="Copy task id" data-krill="copy-task-id" data-task-id={ page.ID }
+							disabled title="Copying the task id needs JavaScript">
 							{ page.ID }
 						</button>
+						// The confirmation lands here, beside the chip and
+						// never over it, so the id is still on screen while
+						// the operator reads the result. It is a polite live
+						// region, so it announces without stealing focus and
+						// without interrupting. Empty on arrival and empty
+						// again after the confirmation clears: a live region
+						// must exist before its content changes to be
+						// announced, so this is the one span here that is
+						// legitimately blank -- it is not a property row and
+						// says nothing about the task.
+						<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
 					</dd>
 				</div>
 			</dl>
