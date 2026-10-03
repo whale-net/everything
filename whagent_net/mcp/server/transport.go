@@ -10,40 +10,9 @@ import (
 	"github.com/whale-net/everything/libs/go/auth"
 )
 
-// ResourceMetadataConfig configures NewHTTPHandler's RFC 9728
-// protected-resource discovery surface (FR9/C27, issue #2249's Scaffold
-// phase): `mcp` is the OAuth2 protected resource in whagent-net's
-// two-binary split, `ui` is the authorization server
-// (whagent_net/ui/auth.go's setupMCPAuth, issue #2245) -- mirrors
-// audience_score_system/mcp/server/transport.go's own
-// ResourceMetadataConfig exactly in shape, since that domain's `mcp`/`web`
-// split is the same resource-server/authorization-server shape
-// whagent-net's `mcp`/`ui` split is.
-type ResourceMetadataConfig struct {
-	// Resource is this `mcp` instance's own externally reachable URL
-	// (WHAGENT_MCP_PUBLIC_URL) -- must be byte-identical to `ui`'s
-	// auth.ProviderConfig.Resource (also WHAGENT_MCP_PUBLIC_URL,
-	// whagent_net/ui/auth.go's setupMCPAuth) -- a mismatch silently
-	// breaks an MCP client's RFC 9728 discovery chain
-	// (audience_score_system/mcp/server/transport.go and main.go carry
-	// the same warning).
-	Resource string
-
-	// AuthorizationServer is the issuer identifier of the OAuth2
-	// authorization server protecting Resource -- `ui`'s own
-	// auth.ProviderConfig.Issuer (WHAGENT_UI_PUBLIC_URL).
-	AuthorizationServer string
-
-	// ResourceName is the metadata's human-readable `resource_name`.
-	ResourceName string
-}
-
-// enabled reports whether cfg carries enough to serve RFC 9728
-// protected-resource metadata at all -- see NewHTTPHandler's doc comment
-// for why a zero-valued ResourceMetadataConfig is not an error.
-func (cfg ResourceMetadataConfig) enabled() bool {
-	return cfg.Resource != "" && cfg.AuthorizationServer != ""
-}
+// ResourceMetadataConfig configures the RFC 9728 protected-resource
+// metadata this `mcp` serves; see auth.ProtectedResourceMetadataConfig.
+type ResourceMetadataConfig = auth.ProtectedResourceMetadataConfig
 
 // NewHTTPHandler builds the mux `mcp`'s main.go binds to its listen
 // address: an unauthenticated GET /healthz (k8s liveness/readiness), RFC
@@ -83,7 +52,7 @@ func NewHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, resourceM
 	opts := &sdkauth.RequireBearerTokenOptions{
 		AllowMissingExpiration: true,
 	}
-	if resourceMeta.enabled() {
+	if resourceMeta.Enabled() {
 		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
 	}
 	requireBearer := sdkauth.RequireBearerToken(NewVerifier(credentials), opts)

@@ -60,6 +60,12 @@ type ProtectedResourceMetadataConfig struct {
 	ScopesSupported []string
 }
 
+// Enabled reports whether cfg carries enough to serve protected-resource
+// metadata: both Resource and AuthorizationServer are set.
+func (cfg ProtectedResourceMetadataConfig) Enabled() bool {
+	return cfg.Resource != "" && cfg.AuthorizationServer != ""
+}
+
 // NewProtectedResourceMetadataHandler serves RFC 9728 protected-resource
 // metadata naming cfg.AuthorizationServer as the sole entry in
 // `authorization_servers`. Mount it at
@@ -182,7 +188,7 @@ func (p *Provider) authServerMetadataHandler() http.Handler {
 // so 401 challenges point at it, or "" (nothing mounted) when cfg.Resource
 // or cfg.AuthorizationServer is empty.
 func MountProtectedResourceMetadata(mux *http.ServeMux, cfg ProtectedResourceMetadataConfig) string {
-	if cfg.Resource == "" || cfg.AuthorizationServer == "" {
+	if !cfg.Enabled() {
 		return ""
 	}
 	mux.Handle(ProtectedResourceMetadataPath, NewProtectedResourceMetadataHandler(cfg))

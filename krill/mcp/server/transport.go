@@ -80,29 +80,9 @@ const workMountPath = "/mcp/work"
 // is the one place the Swarm Operator restriction lives.
 const opsMountPath = "/mcp/ops"
 
-// ResourceMetadataConfig configures NewHTTPHandler's RFC 9728
-// protected-resource discovery surface: `mcp` is the OAuth2 protected
-// resource, mirroring audience_score_system/mcp/server/transport.go's own
-// ResourceMetadataConfig exactly in shape.
-type ResourceMetadataConfig struct {
-	// Resource is this `mcp` instance's own externally reachable URL --
-	// must equal the OAuth2 authorization server's own configured
-	// resource value exactly, or MCP client discovery breaks (RFC 9728).
-	Resource string
-
-	// AuthorizationServer is the issuer identifier of the OAuth2
-	// authorization server protecting Resource.
-	AuthorizationServer string
-
-	// ResourceName is the metadata's human-readable `resource_name`.
-	ResourceName string
-}
-
-// enabled reports whether cfg carries enough to serve RFC 9728
-// protected-resource metadata at all.
-func (cfg ResourceMetadataConfig) enabled() bool {
-	return cfg.Resource != "" && cfg.AuthorizationServer != ""
-}
+// ResourceMetadataConfig configures the RFC 9728 protected-resource
+// metadata this `mcp` serves; see auth.ProtectedResourceMetadataConfig.
+type ResourceMetadataConfig = auth.ProtectedResourceMetadataConfig
 
 // mcpHandlerFor adapts srv to a streamable-HTTP handler that always serves
 // that one *mcp.Server -- the per-mount unit both NewHTTPHandler and
@@ -128,7 +108,7 @@ func mcpHandlerFor(srv *mcp.Server) http.Handler {
 // NewHTTPHandler/NewDualAuthHTTPHandler split).
 func NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials auth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
 	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
-	if resourceMeta.enabled() {
+	if resourceMeta.Enabled() {
 		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
 	}
 	guard := func(srv *mcp.Server) http.Handler {
@@ -148,7 +128,7 @@ func NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials
 // forward to opsMountPath and workMountPath by later tasks).
 func NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials auth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
 	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
-	if resourceMeta.enabled() {
+	if resourceMeta.Enabled() {
 		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
 	}
 
