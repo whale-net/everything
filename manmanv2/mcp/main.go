@@ -25,6 +25,7 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth/grantflow"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/whagent"
 	"github.com/whale-net/everything/manmanv2/mcp/admin"
 	"github.com/whale-net/everything/manmanv2/mcp/server"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
@@ -43,6 +44,11 @@ func run(logger *slog.Logger) error {
 	issuer, clientID := os.Getenv("OIDC_ISSUER"), os.Getenv("OIDC_CLIENT_ID")
 	if issuer == "" || clientID == "" {
 		return errors.New("OIDC_ISSUER and OIDC_CLIENT_ID are required: the MCP server has no unauthenticated mode")
+	}
+	_, grantSet := grantflow.ConfigFromEnv(os.Getenv, issuer)
+	whagentEnv, err := server.WhagentEnvFromEnv(os.Getenv, grantSet)
+	if err != nil {
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -92,11 +98,25 @@ func run(logger *slog.Logger) error {
 	server.AddWorkshopTools(srv, manmanpb.NewWorkshopServiceClient(conn.GetConnection()), &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
-	verify, authServer, err := callerVerifier(ctx, logger, dbURL, verifier, issuer)
+	verify, authServer, ex, err := callerVerifier(ctx, logger, dbURL, verifier, issuer)
 	if err != nil {
 		return err
 	}
-	handler := server.NewHandler(mcpHandler, verify, authServer, os.Getenv("MCP_PUBLIC_URL"), os.Getenv("MCP_RESOURCE_METADATA_URL"))
+	var wrap func(string) func(http.Handler) http.Handler
+	if whagentEnv.Enabled() {
+		wv, err := whagent.NewVerifier(ctx, whagentEnv.JWKSURL, whagentEnv.Issuer)
+		if err != nil {
+			return fmt.Errorf("whagent verifier: %w", err)
+		}
+		cfg := server.WhagentAuthConfig{Verifier: wv, Audience: os.Getenv("MCP_PUBLIC_URL"), UserIssuer: issuer, WhagentIssuer: whagentEnv.Issuer}
+		wrap = func(metaURL string) func(http.Handler) http.Handler {
+			return server.WhagentHTTPAuth(verify, cfg, metaURL)
+		}
+		// Added last, so it runs outermost: the Caller exists before persona gating.
+		srv.AddReceivingMiddleware(server.WhagentMiddleware(*ex))
+		logger.Info("whagent-net credentials accepted", "issuer", whagentEnv.Issuer)
+	}
+	handler := server.NewHandler(mcpHandler, verify, authServer, os.Getenv("MCP_PUBLIC_URL"), os.Getenv("MCP_RESOURCE_METADATA_URL"), wrap)
 	if os.Getenv("MCP_PUBLIC_URL") == "" {
 		logger.Warn("MCP_PUBLIC_URL unset: no protected-resource metadata served, clients cannot discover OAuth")
 	}
@@ -124,28 +144,28 @@ func run(logger *slog.Logger) error {
 // credentials issued by the UI's authorization server (UI_PUBLIC_URL) and
 // the stored per-user grant yields the Keycloak token forwarded to the
 // control API. Without them it accepts Keycloak tokens directly.
-func callerVerifier(ctx context.Context, logger *slog.Logger, dbURL string, oidc grpcauth.TokenVerifier, issuer string) (server.CallerVerifier, string, error) {
+func callerVerifier(ctx context.Context, logger *slog.Logger, dbURL string, oidc grpcauth.TokenVerifier, issuer string) (server.CallerVerifier, string, *grantflow.Exchanger, error) {
 	grantCfg, ok := grantflow.ConfigFromEnv(os.Getenv, issuer)
 	if !ok {
 		logger.Warn("GRANT_* unset: accepting Keycloak tokens directly; clients need --client-id")
-		return server.OIDCCallerVerifier(oidc), issuer, nil
+		return server.OIDCCallerVerifier(oidc), issuer, nil, nil
 	}
 	uiURL := strings.TrimRight(os.Getenv("UI_PUBLIC_URL"), "/")
 	if uiURL == "" {
-		return nil, "", errors.New("UI_PUBLIC_URL is required with GRANT_*: it hosts the OAuth authorization server")
+		return nil, "", nil, errors.New("UI_PUBLIC_URL is required with GRANT_*: it hosts the OAuth authorization server")
 	}
 	pool, err := db.NewPool(ctx, dbURL)
 	if err != nil {
-		return nil, "", fmt.Errorf("grant database: %w", err)
+		return nil, "", nil, fmt.Errorf("grant database: %w", err)
 	}
 	creds, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
 	if err != nil {
-		return nil, "", fmt.Errorf("mcp credential store: %w", err)
+		return nil, "", nil, fmt.Errorf("mcp credential store: %w", err)
 	}
 	grants, err := grantflow.Build(ctx, grantCfg, pool)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	ex := grantflow.Exchanger{Source: grants.Source, Grant: grantflow.DefaultGrant, Verifier: oidc}
-	return server.CredentialCallerVerifier(creds, ex), uiURL, nil
+	return server.CredentialCallerVerifier(creds, ex), uiURL, &ex, nil
 }

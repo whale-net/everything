@@ -18,6 +18,9 @@ func Middleware(reg *Registry, audit Auditor) mcp.Middleware {
 			if extra := req.GetExtra(); extra != nil {
 				caller = callerFromExtra(extra.TokenInfo)
 			}
+			if caller == nil {
+				caller = CallerFromContext(ctx)
+			}
 			switch method {
 			case "tools/call":
 				return handleCall(ctx, reg, audit, caller, next, method, req)
@@ -45,6 +48,12 @@ func Middleware(reg *Registry, audit Auditor) mcp.Middleware {
 				return res, nil
 			default:
 				if caller == nil {
+					// A verified whagent identity is resolved only for tool methods.
+					if extra := req.GetExtra(); extra != nil && extra.TokenInfo != nil {
+						if _, ok := extra.TokenInfo.Extra[whagentClaimExtraKey]; ok {
+							return next(ctx, method, req)
+						}
+					}
 					return nil, ErrUnauthenticated
 				}
 				return next(ContextWithCaller(ctx, caller), method, req)

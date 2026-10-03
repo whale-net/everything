@@ -15,6 +15,8 @@ type Caller struct {
 	Persona Persona
 	// Token is the caller's own access token, forwarded on every backend call.
 	Token string
+	// Agent is set when a whagent-net agent acts as this user; nil otherwise.
+	Agent *Agent
 }
 
 // CallContext is what a tool Snapshot hook receives: the request context
