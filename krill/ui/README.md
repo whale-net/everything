@@ -952,14 +952,24 @@ Board's task cards (`product_board_page.go`) and the detail page's own
 "Depends on" links. Both resolve — that is what the redirect is for — so
 repointing them is a separate change, not part of the retirement.
 
+**The detail redirect carries a recognised `?tab=`.** The tab is the detail's
+own URL state (FR 7e463e31), so a shared `.../tasks/{tid}?tab=slice` names a
+facet; a successor built from the parsed UUIDs alone would drop it and land
+the operator on Overview behind an address bar that no longer says which
+facet they asked for. The tab is **resolved** through `taskDetailTabOf` and
+only a key the page knows is written, so a hand-edited `?tab=` cannot reach
+the successor's address — the same resolve-before-you-write rule the detail
+page's own tab handling enforces. `RawQuery` is never forwarded wholesale.
+
 **The frame is built before its contents.** Top to bottom: a breadcrumb
 (product → milestone → milepebble when the task sits on one → the task's
 own title, the only crumb with no href), the title as the page's one `h1`
 with the task's state badges beside it, then
 `grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]` — a main column and
-`<aside data-krill="task-properties-rail">`. The tab strip (Overview /
-Notes / Dependencies / Spec slice) is the later task that fills the main
-column; the rail is filled (see below). `page.Path` is set from `r.URL.Path`
+`<aside data-krill="task-properties-rail">`. Both regions are filled: the
+main column carries the facet tab strip (Overview / Notes / Dependencies /
+Spec slice) described below, and the rail carries its two cards.
+`page.Path` is set from `r.URL.Path`
 after the render, not from `taskDetailPath`, so Refresh re-requests whichever
 URL actually served the page.
 
@@ -969,7 +979,7 @@ whose rows are Lane (`TaskLaneBadge`, the shared component, not a copy of
 its markup), Attempts (`taskAttemptsLabel`, with the note that lease-lapse
 and abandon attempts count toward the cap), Claim, Escalated, Milepebble and
 Task id. These rows are the page's *only* rendering of those values — the
-content column carries the description, notes and spec slice, and the step
+tab panels carry the description, notes and spec slice, and the step
 strip is the one rendering of the lane sequence. Two renderings of one value
 are two things that can drift.
 
@@ -1090,6 +1100,72 @@ last-claim read costs it only the "last held by" clause — both are logged at
 the holder name and nothing else, and is also logged at `WARN`. The region carries
 `data-krill-claim-id` / `data-krill-lease-expires-at` for later
 claim-guarded writes; it has no form or `hx-post`.
+
+#### The facet tabs: `?tab=` and the in-place swap (FR 7e463e31)
+
+The frame's main column carries four facets — Overview,
+Notes, Dependencies, Spec slice — as daisyUI `tabs`/`tab` below the lane
+step strip, and **only the
+panel swaps**: the breadcrumb, header, lane steps and properties rail sit
+outside the swap region and are never re-derived by a tab click.
+
+- **The tab is URL state.** `?tab=` on the task detail's own URL, with
+  `overview` as the default and **absent from the URL** in that case — the
+  default state is the page's own address, not a parameter spelling out the
+  absence of a choice. Each tab's `href` is that tab's real address, so the
+  no-JS path, a reload, a shared link and Back all agree, the same rule the
+  paging links follow. An **unrecognised value resolves to overview** rather
+  than erroring: the tab is URL-carried, so a hand-edited or stale link
+  reaches this page as readily as a copied one. `taskDetailTabOf` is the
+  whole of that policy; it never returns an error.
+- **Both routes reach one render**, and the strip is built over
+  `r.URL.Path`, so a tab link off the pre-redesign URL does not send the
+  operator to the product-scoped one.
+
+**The tab strip is inside the swap region**, not beside it. That is a
+deliberate choice between the two ways the active marking can travel: a
+strip that is its own swap target needs the response to carry two top-level
+nodes (the panel and the re-marked strip), and htmx's `outerHTML` inserts
+**every** top-level node into the target, so each click would splice a
+duplicate strip into the page. One region keeps the fragment to exactly one
+root — the rule above, applied a second time — and the response carries a
+fresh, identically-marked strip, so the re-render is invisible.
+
+**One route, three modes, told apart by `HX-Target`.** A tab names
+`#krill-task-panel` and gets the panel region; the Refresh button names
+`#krill-task-detail` and gets the whole section; a plain request gets the
+whole page. Reading the target rather than the presence of `?tab=` is what
+keeps them unambiguous — a Refresh taken while a non-default tab is open
+must re-render the whole section and stay on that tab, not serve a bare
+panel for htmx to splice in beside the page.
+
+**The Refresh button reads the tab from the region, not from its own
+markup.** The button lives in the header, *outside* the panel region, so a
+tab click never re-renders it: a tab written into its `hx-get` at
+page-load time is the tab the page was **loaded** with, not the tab the
+operator is on, and pressing Refresh then re-renders Overview behind an
+address bar still reading `?tab=notes`. So the region carries the tab in a
+hidden input (`#krill-task-tab-state`) and the button `hx-include`s it,
+the same carried-state pattern the Tasks scope form uses for the filters
+it re-reads. Overview renders **no** input, so a Refresh there re-requests
+the bare path. Note what this rules out: `r.URL.RequestURI()` in the
+button is *not* sufficient, because on the reachable path — load the bare
+page, click a tab, press Refresh — the request that served the button had
+no `?tab=` to carry. Same rule as the Tasks region's Refresh, which
+carries this request's query.
+
+**The tab counts come from the panel's own read.** The Notes and
+Dependencies badges are `len(TaskNoteRow)` / `len(TaskDepLink)` over the
+lists already read for the page; a second read would be a second number
+that could disagree with the list the operator is about to open. **A failed
+read carries no badge at all**, not a `0` — zero is a claim about a list
+nobody could read.
+
+**A failed notes or dependencies read alerts inside its own panel.**
+`DepsError` and `NotesError` stay per-section and are read only by the
+panel that owns them, so the failure costs that panel alone and the header,
+rail and other panels still render. The tab's empty state is a real "No
+notes." and a failed read must never render as it.
 <!-- END task-detail section -->
 
 ## Read gate

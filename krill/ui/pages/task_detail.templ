@@ -3,11 +3,53 @@ package pages
 // The read-only task detail body. The pure builder that populates
 // TaskDetailPage lives in //krill/ui (task_detail_page.go).
 
-import "github.com/whale-net/everything/libs/go/htmxui"
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
 
 // TaskDetailAnchor is the DOM id of the detail's content region; the
 // Refresh button's hx-target and the served fragment's root id.
 const TaskDetailAnchor = "krill-task-detail"
+
+// TaskPanelAnchor is the DOM id of the tab panel region: the hx-target
+// every tab names, and the id the served panel fragment's ROOT carries.
+// The fragment has to carry it or htmx deletes the element it was asked
+// to replace and every later tab click is a no-op that never reaches the
+// server (README's swap-target rule).
+const TaskPanelAnchor = "krill-task-panel"
+
+// The tab keys -- the four ?tab= values. Overview is the default and is
+// therefore ABSENT from the URL, so its href is the page's own address.
+const (
+	TaskTabOverview     = "overview"
+	TaskTabNotes        = "notes"
+	TaskTabDependencies = "dependencies"
+	TaskTabSlice        = "slice"
+)
+
+// TaskTabID is the DOM id of one tab in the strip, which is also what its
+// panel's aria-labelledby points at.
+func TaskTabID(key string) string {
+	return "krill-task-tab-" + key
+}
+
+// TaskTabQueryParam is the query parameter the tab travels in, and the
+// name the region's carried input uses to hand it to the Refresh button.
+const TaskTabQueryParam = "tab"
+
+// TaskTabStateID is the DOM id of the hidden input inside the panel region
+// that carries the selected tab.
+//
+// It exists because the Refresh button is OUTSIDE the swap region: a tab
+// click re-renders this region and nothing else, so a tab fixed into the
+// button's own markup at page-load time is the tab the page was LOADED
+// with, not the one the operator is on. The button includes this input
+// instead, so it reads the tab from the live region at press time -- the
+// same carried-state pattern the Tasks scope form uses for the filters it
+// re-reads.
+const TaskTabStateID = "krill-task-tab-state"
 
 // TaskCrumb is one breadcrumb entry: where the operator has been on the
 // way to this task. Href is empty for the task's own title, which is the
@@ -26,6 +68,24 @@ type TaskLaneStep struct {
 	Label   string
 	Passed  bool
 	Current bool
+}
+
+// TaskTab is one tab of the detail's facet strip. Href is a REAL href on
+// the tab's own tab-qualified URL, so the no-JS path, a reload, a shared
+// link and the browser's Back button all agree with what htmx swaps --
+// the same rule README states for paging.
+//
+// Count is carried only when HasCount is true, which is only when the read
+// behind the count succeeded. A count of zero is a claim the read backed;
+// the absence of a badge is what a failed read renders, because "0" would
+// be a second unverified claim about a list we could not read.
+type TaskTab struct {
+	Key      string
+	Label    string
+	Href     string
+	Active   bool
+	Count    int
+	HasCount bool
 }
 
 // TaskDepLink is one dependency, linked to its own detail page.
@@ -110,7 +170,25 @@ type TaskDetailPage struct {
 	TasksPath         string
 	BoardPath         string
 	ContainerName     string
+
+	// Tab is the resolved tab key -- one of the four constants above, and
+	// never a raw ?tab= value: the handler resolves an unknown one to
+	// overview before the view model sees it, so a component never has to
+	// decide what an unrecognised tab means.
+	Tab string
+
+	// Tabs is the strip's four entries in order. It is on the view model
+	// rather than derived in the component because each entry's href is
+	// the page's own path with the tab applied, and only the request
+	// knows that path (both detail routes reach this render).
+	Tabs []TaskTab
 }
+
+// TaskDetailPanelAnchor is the DOM id of the panel body inside the swap
+// region -- what each tab's aria-controls points at. It is deliberately
+// NOT the swap target: the swap region wraps the strip and this, so a
+// swap brings the operator's controls back with the answer.
+const TaskDetailPanelAnchor = "krill-task-panel-body"
 
 // TaskDetail renders the task detail region: the breadcrumb, the title
 // with the task's state badges, and the two-column frame the properties
@@ -126,6 +204,7 @@ templ TaskDetail(page TaskDetailPage) {
 			<div class="flex-1"></div>
 			<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
 				hx-get={ templ.URL(page.Path) }
+				hx-include={ "#" + TaskTabStateID }
 				hx-target={ "#" + TaskDetailAnchor }
 				hx-swap="outerHTML">
 				Refresh
@@ -141,36 +220,7 @@ templ TaskDetail(page TaskDetailPage) {
 		<div class="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="task-detail-frame">
 			<section class="min-w-0 space-y-4" data-krill="task-detail-main">
 				@taskLaneSteps(page.Steps)
-				if page.Body != "" {
-					<h2 class="text-lg font-semibold">Description</h2>
-					<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ page.Body }</pre>
-				}
-				<h2 class="text-lg font-semibold">Notes</h2>
-				<div data-krill="task-notes">
-					if page.NotesError != "" {
-						@htmxui.Alert(htmxui.AlertError, page.NotesError, nil)
-					} else if len(page.Notes) == 0 {
-						<p class="text-sm text-base-content/70">No notes</p>
-					} else {
-						<ul class="space-y-2 text-sm">
-							for _, n := range page.Notes {
-								<li data-krill="task-note">
-									@htmxui.Badge(n.Kind, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-kind"})
-									@htmxui.Badge(n.Status, htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-status"})
-									<pre class="whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
-								</li>
-							}
-						</ul>
-					}
-				</div>
-				<h2 class="text-lg font-semibold">Spec slice</h2>
-				<div data-krill="task-slice">
-					if page.SliceError != "" {
-						@htmxui.Alert(htmxui.AlertError, page.SliceError, nil)
-					} else {
-						<pre class="overflow-x-auto text-xs">{ page.SliceJSON }</pre>
-					}
-				</div>
+				@TaskDetailTabs(page)
 			</section>
 			<aside data-krill="task-properties-rail">
 				@taskPropertiesCard(page)
@@ -416,4 +466,189 @@ func taskLaneStepHook(s TaskLaneStep) string {
 		return "task-step-passed"
 	}
 	return "task-step-upcoming"
+}
+
+// TaskDetailTabs is the detail's tabbed facet region: the strip and the
+// panel below it, together.
+//
+// The strip is INSIDE the swap region rather than outside it, which is the
+// second of the two ways the active tab can be re-marked (the first is an
+// out-of-band swap of the active class). It is chosen here because a
+// tab strip that is its own swap target needs the fragment to carry two
+// top-level nodes -- the panel and the re-marked strip -- and htmx's
+// outerHTML inserts EVERY top-level node of the response into the target.
+// Keeping both in one region keeps the served fragment to exactly one
+// root, which is what makes a tab click repeatable (README's swap-target
+// rule). The cost is that the operator's own controls are re-rendered
+// rather than left in the DOM, which is invisible because the response
+// carries a fresh, identically-marked strip.
+//
+// The whole rest of the page -- header, breadcrumbs, lane steps,
+// properties rail -- sits OUTSIDE this region, so a tab click swaps this
+// facet region alone and never re-derives the rest of the page.
+templ TaskDetailTabs(page TaskDetailPage) {
+	<div id={ TaskPanelAnchor } data-krill="task-panel" data-krill-task-tab={ page.Tab }>
+		@taskDetailTabStrip(page.Tabs)
+		@taskDetailTabState(page.Tab)
+		<div id={ TaskDetailPanelAnchor } role="tabpanel" aria-labelledby={ TaskTabID(page.Tab) } class="mt-4 space-y-4" data-krill="task-panel-body">
+			if page.Tab == TaskTabOverview {
+				@taskOverviewPanel(page)
+			} else if page.Tab == TaskTabNotes {
+				@taskNotesPanel(page)
+			} else if page.Tab == TaskTabDependencies {
+				@taskDependenciesPanel(page)
+			} else {
+				@taskSlicePanel(page)
+			}
+		</div>
+	</div>
+}
+
+// taskDetailTabState is the region's carried tab: a hidden input naming
+// the tab this fragment rendered.
+//
+// It is rendered INSIDE the swap region, which is the whole point. The
+// Refresh button lives outside that region, so nothing a tab click swaps
+// re-renders the button -- a tab written into the button's own hx-get at
+// page-load time describes the page as LOADED, and a tab click changes
+// the address bar and the panel without touching it. An input the region
+// re-renders on every click is the one place the current tab is
+// readable from the button at press time.
+//
+// Overview renders NO input: the default state is the bare address, so a
+// Refresh taken there re-requests the bare path rather than a URL
+// spelling out the absence of a choice.
+templ taskDetailTabState(tab string) {
+	if tab != TaskTabOverview {
+		<input type="hidden" id={ TaskTabStateID } name={ TaskTabQueryParam } value={ tab } data-krill="task-tab-state" />
+	}
+}
+
+// taskDetailTabStrip is the tablist: four real links, each carrying the
+// htmx attributes that swap the panel region in place and push the tab's
+// own URL.
+//
+// The href is the whole mechanism. htmx's hx-get takes the address, but
+// the href is what a reload, a shared link, a no-JS click and the
+// browser's Back button follow -- the same rule README states for paging.
+// Because the pushed URL is the tab's own href, the address bar, the
+// served page and the strip's active marking can never disagree.
+templ taskDetailTabStrip(tabs []TaskTab) {
+	<div role="tablist" class="tabs tabs-border" data-krill="task-tabs">
+		for _, t := range tabs {
+			<a role="tab" id={ TaskTabID(t.Key) } href={ templ.URL(t.Href) }
+				class={ taskTabClasses(t.Active) }
+				aria-selected={ taskTabSelected(t.Active) }
+				aria-controls={ TaskDetailPanelAnchor }
+				hx-get={ templ.URL(t.Href) }
+				hx-target={ "#" + TaskPanelAnchor }
+				hx-swap="outerHTML"
+				hx-push-url="true"
+				data-krill="task-tab" data-krill-task-tab={ t.Key }>
+				{ t.Label }
+				if t.HasCount {
+					@htmxui.Badge(strconv.Itoa(t.Count), htmxui.BadgeGhost, htmxui.BadgeSizeSM, false, templ.Attributes{"data-krill": "task-tab-count"})
+				}
+			</a>
+		}
+	</div>
+}
+
+// taskTabClasses is one tab's daisyUI class. The active tab is
+// tab-active; every other is not, so the strip has exactly one active
+// marking whichever tab the URL resolved to.
+func taskTabClasses(active bool) string {
+	if active {
+		return "tab tab-active"
+	}
+	return "tab"
+}
+
+// taskTabSelected is the tab's aria-selected, as the string the attribute
+// takes. It is emitted on both active and inactive tabs rather than
+// omitted when false: an omitted aria-selected on a role="tab" element
+// leaves its state undefined rather than false.
+func taskTabSelected(active bool) string {
+	if active {
+		return "true"
+	}
+	return "false"
+}
+
+// taskOverviewPanel is the Overview host. The escalated / capped /
+// lease-expired callout belongs to task 870883ea, which owns this
+// panel's contents; the region and its data-krill marker are this task's,
+// so a sibling fills the panel without touching the strip, the swap
+// mechanics, or the URL state.
+templ taskOverviewPanel(page TaskDetailPage) {
+	<div data-krill="task-panel-overview" data-krill-panel-host="overview">
+		if page.Body != "" {
+			<h2 class="text-lg font-semibold">Description</h2>
+			<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ page.Body }</pre>
+		}
+	</div>
+}
+
+// taskNotesPanel is the Notes host (task 27947a7e owns its contents). A
+// failed notes read alerts INSIDE this panel only: the header, the lane
+// steps and the properties rail are outside the swap region, and the
+// other panels are not rendered while this one is. An unreadable list
+// never renders as an empty one -- NotesError is what this panel reads.
+templ taskNotesPanel(page TaskDetailPage) {
+	<div data-krill="task-panel-notes" data-krill-panel-host="notes">
+		<h2 class="text-lg font-semibold">Notes</h2>
+		if page.NotesError != "" {
+			@htmxui.Alert(htmxui.AlertError, page.NotesError, nil)
+		} else if len(page.Notes) == 0 {
+			<p class="text-sm text-base-content/70">No notes</p>
+		} else {
+			<ul class="space-y-2 text-sm">
+				for _, n := range page.Notes {
+					<li data-krill="task-note">
+						@htmxui.Badge(n.Kind, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-kind"})
+						@htmxui.Badge(n.Status, htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-status"})
+						<pre class="whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
+					</li>
+				}
+			</ul>
+		}
+	</div>
+}
+
+// taskDependenciesPanel is the Dependencies host (task 27947a7e owns its
+// contents). DepsError is read here and nowhere else: a failed
+// dependencies read must cost this panel alone.
+templ taskDependenciesPanel(page TaskDetailPage) {
+	<div data-krill="task-panel-dependencies" data-krill-panel-host="dependencies">
+		<h2 class="text-lg font-semibold">Dependencies</h2>
+		if page.DepsError != "" {
+			@htmxui.Alert(htmxui.AlertError, page.DepsError, nil)
+		} else if len(page.Deps) == 0 {
+			<p class="text-sm text-base-content/70">No dependencies</p>
+		} else {
+			<ul class="list-disc pl-5 text-sm">
+				for _, d := range page.Deps {
+					<li data-krill="task-dep">
+						<a href={ templ.URL(d.DetailPath) } class="link link-primary">{ d.Title }</a>
+						if d.Lane != "" {
+							<span class="ml-2 text-base-content/70">{ d.Lane }</span>
+						}
+					</li>
+				}
+			</ul>
+		}
+	</div>
+}
+
+// taskSlicePanel is the Spec slice host (task b70e8d21 owns its contents,
+// including the closed disclosure the raw JSON sits behind).
+templ taskSlicePanel(page TaskDetailPage) {
+	<div data-krill="task-panel-slice" data-krill-panel-host="slice">
+		<h2 class="text-lg font-semibold">Spec slice</h2>
+		if page.SliceError != "" {
+			@htmxui.Alert(htmxui.AlertError, page.SliceError, nil)
+		} else {
+			<pre class="overflow-x-auto text-xs">{ page.SliceJSON }</pre>
+		}
+	</div>
 }

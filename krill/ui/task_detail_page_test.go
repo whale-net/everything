@@ -768,11 +768,12 @@ func TestTaskDetailFieldsReachPage(t *testing.T) {
 
 	code, html := f.get(task.ID.String(), true)
 	require.Equal(t, 200, code)
+	// The frame's own fields are on the page; the facet fields live in the
+	// tab panels below and are asserted on the tab that shows them, since
+	// only one panel renders at a time (FR 7e463e31).
 	for _, want := range []string{
 		"main-task", "the-task-body", "Testing", "Scaffold", "2 of 3", "current attempt: 2",
 		claim.String(), sessID.String(), lease.Format(time.RFC3339),
-		"dep-task", "/tasks/" + dep.ID.String(),
-		"scope-note", "noted", "note-body-x",
 		`data-krill-claim-id="` + claim.String() + `"`,
 		`data-krill-lease-expires-at="` + lease.Format(time.RFC3339) + `"`,
 		`data-krill="loaded-at"`,
@@ -789,6 +790,15 @@ func TestTaskDetailFieldsReachPage(t *testing.T) {
 		assert.Contains(t, html, want)
 	}
 	assert.NotContains(t, html, `data-krill="task-badge-lease-expired"`)
+
+	_, deps := f.getTabAt(task.ID.String(), "?tab=dependencies")
+	for _, want := range []string{"dep-task", "/tasks/" + dep.ID.String()} {
+		assert.Contains(t, deps, want)
+	}
+	_, notes := f.getTabAt(task.ID.String(), "?tab=notes")
+	for _, want := range []string{"scope-note", "noted", "note-body-x"} {
+		assert.Contains(t, notes, want)
+	}
 }
 
 func TestTaskDetailStuckStates(t *testing.T) {
@@ -844,13 +854,21 @@ func TestTaskDetailPartialReadFailuresAlert(t *testing.T) {
 	f.store.depsErr = errors.New("deps-boom")
 	f.store.notesErr = errors.New("notes-boom")
 	f.spec.err = errors.New("slice-boom")
-	code, html := f.get(task.ID.String(), true)
+	// A failed read alerts INSIDE its own panel, so each one is asserted
+	// on the tab that shows it -- and the panel must not fall back to the
+	// empty state that is indistinguishable from success.
+	_, notes := f.getTabAt(task.ID.String(), "?tab=notes")
+	assert.Contains(t, notes, "The notes could not be read")
+	assert.NotContains(t, notes, "No notes")
+	assert.NotContains(t, notes, "boom")
+	_, deps := f.getTabAt(task.ID.String(), "?tab=dependencies")
+	assert.Contains(t, deps, "The dependencies could not be read")
+	assert.NotContains(t, deps, "No dependencies")
+	assert.NotContains(t, deps, "boom")
+	code, slice := f.getTabAt(task.ID.String(), "?tab=slice")
 	require.Equal(t, 200, code)
-	assert.Contains(t, html, "The dependencies could not be read")
-	assert.Contains(t, html, "The notes could not be read")
-	assert.Contains(t, html, "The spec slice could not be read")
-	assert.NotContains(t, html, "No notes")
-	assert.NotContains(t, html, "boom")
+	assert.Contains(t, slice, "The spec slice could not be read")
+	assert.NotContains(t, slice, "boom")
 }
 
 // TestTaskDetailEmptySections: a task with no dependencies renders no
@@ -860,10 +878,20 @@ func TestTaskDetailPartialReadFailuresAlert(t *testing.T) {
 func TestTaskDetailEmptySections(t *testing.T) {
 	f := newDetailFixture(t)
 	task := f.add(store.Task{Title: "t"})
+	// The rail's Depends-on card is omitted outright for a task with no
+	// dependencies, and the rail sits outside the tab panels, so the whole
+	// section is the right place to look for its absence.
 	_, html := f.get(task.ID.String(), true)
 	assert.NotContains(t, html, `data-krill="task-depends-on"`)
-	assert.Contains(t, html, "No notes")
 	assert.NotContains(t, html, "could not be read")
+	// Each empty list lives in its own tab's panel (FR 7e463e31), so the
+	// empty state is asserted on the tab that shows it.
+	_, notes := f.getTabAt(task.ID.String(), "?tab=notes")
+	assert.Contains(t, notes, "No notes")
+	assert.NotContains(t, notes, "could not be read")
+	_, deps := f.getTabAt(task.ID.String(), "?tab=dependencies")
+	assert.Contains(t, deps, "No dependencies")
+	assert.NotContains(t, deps, "could not be read")
 }
 
 func TestTaskDetailFragmentShapeAndReadOnly(t *testing.T) {

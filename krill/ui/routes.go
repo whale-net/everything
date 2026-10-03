@@ -305,6 +305,15 @@ func legacyTaskContainer(app *App, r *http.Request, pid uuid.UUID) (taskContaine
 // The {mid} is still parsed, because an unparseable one is not a URL this
 // table kept alive, and serveLegacy renders the product index rather than
 // a redirect nowhere.
+//
+// A recognised ?tab= rides along, because the tab is the detail's own URL
+// state (FR 7e463e31) and a shared ".../tasks/{tid}?tab=slice" link that
+// silently lost its tab across the redirect would land the operator on
+// Overview behind an address bar that no longer says so. The value is
+// resolved through taskDetailTabOf rather than copied: only a key the
+// detail page itself knows survives, so a hand-edited ?tab= cannot reach
+// the successor's address. Overview resolves to the bare path, which is
+// already its own href, so nothing is appended for it.
 func legacyTaskDetailSuccessor(app *App, r *http.Request) (string, bool) {
 	pid, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -317,7 +326,11 @@ func legacyTaskDetailSuccessor(app *App, r *http.Request) (string, bool) {
 	if _, err := uuid.Parse(r.PathValue("mid")); err != nil {
 		return "", false
 	}
-	return productTaskDetailPath(pid, tid), true
+	target := productTaskDetailPath(pid, tid)
+	if tab := taskDetailTabOf(r); tab != pages.TaskTabOverview {
+		target += "?tab=" + tab
+	}
+	return target, true
 }
 
 // The area handlers below own the shell's per-area roots. Each renders the

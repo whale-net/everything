@@ -1007,10 +1007,19 @@ func TestTaskDetailPageStillCarriesWhatTheOverviewPanelReads(t *testing.T) {
 	require.Equal(t, 200, code, "body: %s", html)
 
 	// The Overview panel's three subjects are still rendered in the content
-	// column it will slot into.
+	// column it will slot into. The description is on the Overview tab
+	// itself; the latest notes are on the Notes tab, which is where the
+	// facet strip (FR 7e463e31) put them -- each still in the content
+	// column, at the tab that owns it.
 	main := regionBetween(t, html, `data-krill="task-detail-main"`, "</section>")
 	assert.Contains(t, main, `data-krill="task-body"`, "the description card's input")
-	assert.Contains(t, main, `data-krill="task-notes"`, "the latest-notes card's input")
+	// The notes hook is the panel's own now -- the facet strip gave the
+	// notes list a panel host rather than a bare content-column region.
+	_, notes := f.getTabAt(task.ID.String(), "?tab=notes")
+	assert.Contains(t, notes, `data-krill="task-panel-notes"`, "the latest-notes card's input")
+	for _, want := range []string{"newest", "older"} {
+		assert.Contains(t, notes, want, "the notes card's input, in the store's order")
+	}
 
 	// And the callout's facts are on the view model, which is what the
 	// callout will be built from -- reason, counter and cap, all of which

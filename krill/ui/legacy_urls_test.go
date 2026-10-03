@@ -631,6 +631,56 @@ func TestLegacyTaskDetailRedirectLocationIsCanonical(t *testing.T) {
 	}
 }
 
+// TestLegacyTaskDetailRedirectCarriesTheTab pins that the redirect keeps the
+// tab the shared link named.
+//
+// The task detail's tab is its own URL state (FR 7e463e31), so a copied
+// ".../tasks/{tid}?tab=slice" names a facet; a successor built from the
+// parsed UUIDs alone would drop it and land the operator on Overview behind
+// an address bar that no longer says which facet they asked for.
+//
+// The hostile half is the same rule the detail page's own tab resolver
+// enforces, and it is the half that makes the fix safe: the tab is resolved
+// against the keys the page knows and only a match is forwarded, so a
+// hand-edited ?tab= can never reach the successor's address. Copying
+// RawQuery instead would satisfy the first row and fail this one.
+func TestLegacyTaskDetailRedirectCarriesTheTab(t *testing.T) {
+	f := newLegacyFixture(t)
+	p := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String() + "/tasks/" + f.tid.String()
+	bare := productTaskDetailPath(f.pid, f.tid)
+
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "recognised tab survives", query: "?tab=slice", want: bare + "?tab=slice"},
+		{name: "each recognised tab survives", query: "?tab=notes", want: bare + "?tab=notes"},
+		// Overview's own href is the bare path, so resolving to it must
+		// append nothing rather than spell out the absence of a choice.
+		{name: "overview stays bare", query: "?tab=overview", want: bare},
+		{name: "no tab stays bare", query: "", want: bare},
+		// Unrecognised and hostile values both degrade to the bare
+		// successor: a tab the page does not know is resolved first, and
+		// only a match is ever written into an address.
+		{name: "unrecognised tab does not survive", query: "?tab=nope", want: bare},
+		{name: "hostile tab does not reach the address", query: "?tab=%3Cscript%3E", want: bare},
+		// A second parameter is not carried either -- the successor's
+		// address is the one the page owns, not the request's query.
+		{name: "other parameters are not carried", query: "?scope=milestone", want: bare},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := fetch(t, f.mux, p+tc.query)
+			if rec.Code != http.StatusFound {
+				t.Fatalf("GET %s%s = %d, want 302", p, tc.query, rec.Code)
+			}
+			if got := rec.Header().Get("Location"); got != tc.want {
+				t.Errorf("GET %s%s redirected to %q, want %q", p, tc.query, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestNoPerContainerTaskURLRendersTheDetail is the retirement's negative
 // half: no URL under the pre-redesign per-container task subtree serves the
 // task detail any more, and the one canonical form that does resolve is the
@@ -858,10 +908,19 @@ func TestPreRedesignURLsRenderNoReadFailure_HasTeeth(t *testing.T) {
 	// The product-scoped detail, not the pre-redesign URL: that one is a
 	// 302 now, so fetching it here would assert on a redirect body rather
 	// than on the page a failing slice read actually degrades.
-	body := fetch(t, mux, productTaskDetailPath(pid, tid)).Body.String()
+	//
+	// The slice read now renders inside the task detail's Spec slice tab,
+	// and the tab is URL-carried (FR 7e463e31), so the walk above -- which
+	// requests each URL's DEFAULT address, the Overview panel -- does not
+	// reach the slice failure at all. This check follows the tab for that
+	// reason: it proves the marker list still catches a degraded panel
+	// where the panel is actually rendered. Without it, the slice read
+	// would be one this file can no longer see fail.
+	detail := productTaskDetailPath(pid, tid) + "?tab=slice"
+	body := fetch(t, mux, detail).Body.String()
 	if !strings.Contains(body, `alert-error`) {
-		t.Fatalf("a task detail page whose slice read failed rendered no error alert: " +
-			"the honesty check has nothing to catch and is vacuous")
+		t.Fatalf("a task detail page whose slice read failed rendered no error alert at %s: "+
+			"the honesty check has nothing to catch and is vacuous", detail)
 	}
 }
 
