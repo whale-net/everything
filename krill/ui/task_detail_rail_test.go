@@ -538,6 +538,15 @@ func TestTaskDetailRailCopyChipIsAnAccessibleControlBoundFromTheHead(t *testing.
 	assert.NotContains(t, rail, "<script",
 		"a script inside the rail would be dropped by every htmx swap that re-renders it")
 
+	// Whole-fragment, not just the row: the test fetches the HX fragment
+	// (hx=true), which never renders buildHead, so the fragment carries no
+	// clipboard call of any kind and this holds without exception. A second
+	// inline clipboard handler on a DIFFERENT row -- an onclick, say, on the
+	// claim -- is exactly the defect the row-scoped check above cannot see
+	// and that no other test in this file catches.
+	assert.NotContains(t, html, "navigator.clipboard",
+		"the fragment carries no clipboard call at all: the behaviour is the head's, and the head is not in this fragment")
+
 	// The head really does carry it, so the assertions above are not
 	// satisfied by a page that simply has a dead chip. buildHead is the
 	// seam the shipped shell renders, and the fragment served above has no
