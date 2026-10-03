@@ -95,7 +95,7 @@ Not every domain has all five files — `ENV.md` is only present where runtime c
 
 ### Generated-doc carve-out: krill-rendered `PRODUCT.md` / `product/*`
 
-A domain whose product brief has been migrated into `krill/` (today: `krill/`, `friendly_computing_machine/`, `manmanv2/`, and `leaflab/`) has its `PRODUCT.md` and `product/*.md` files rendered by `krill/render`, not hand-authored — a hand edit is **silently lost** on the next re-render, since there's no reconciliation step. See `krill/render/README.md` for the full rule (why, and how to change these files correctly). Every other domain's `PRODUCT.md`, and every domain's `ARCHITECTURE.md`/`README.md`/`ENV.md`/`TOC.md` (even krill's own), stay ordinary hand-authored docs.
+A domain whose product brief has been migrated into `krill/` (today: `krill/`, `friendly_computing_machine/`, `manmanv2/`, `leaflab/`, and `whagent_net/`) has its `PRODUCT.md` and `product/*.md` files rendered by `krill/render`, not hand-authored — a hand edit is **silently lost** on the next re-render, since there's no reconciliation step. See `krill/render/README.md` for the full rule (why, and how to change these files correctly). Every other domain's `PRODUCT.md`, and every domain's `ARCHITECTURE.md`/`README.md`/`ENV.md`/`TOC.md` (even krill's own), stay ordinary hand-authored docs.
 
 ### Navigation Protocol
 
