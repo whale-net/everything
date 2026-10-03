@@ -38,7 +38,7 @@ func (app *App) taskDetailNotFound(w http.ResponseWriter, r *http.Request, c tas
 	app.renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
 		Title:    "Not found",
 		Detail:   "No task with that id belongs to this milestone or milepebble.",
-		BackHref: milestoneTasksPath(pid, c.ID),
+		BackHref: productTaskContainerHref(pid, tasksSuffix, c),
 		BackText: "Back to " + c.Name + " tasks",
 	})
 }
@@ -46,15 +46,15 @@ func (app *App) taskDetailNotFound(w http.ResponseWriter, r *http.Request, c tas
 // taskDetailInputs are the reads composed into one detail view; each
 // section carries its own error so a partial failure stays visible.
 type taskDetailInputs struct {
-	Task      store.Task
-	Claim     *store.Claim
-	Deps      []store.TaskDependency
-	DepTasks  map[uuid.UUID]store.Task
-	DepsErr   error
-	Notes     []store.Note
-	NotesErr  error
-	Slice     slice.Document
-	SliceErr  error
+	Task     store.Task
+	Claim    *store.Claim
+	Deps     []store.TaskDependency
+	DepTasks map[uuid.UUID]store.Task
+	DepsErr  error
+	Notes    []store.Note
+	NotesErr error
+	Slice    slice.Document
+	SliceErr error
 }
 
 // taskDetailPageOf assembles the detail view model. now is injected so a
@@ -67,15 +67,19 @@ func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now t
 		CurrentEscalationID: t.CurrentEscalationID, CancelledAt: t.CancelledAt,
 	}
 	page := pages.TaskDetailPage{
-		Path:          taskDetailPath(pid, c.ID, t.ID),
-		ID:            t.ID.String(),
-		Title:         t.Title,
-		Lane:          string(t.CurrentLane),
-		Attempts:      taskAttemptsLabel(t.AttemptCount),
-		LoadedAt:      now.UTC().Format(time.RFC3339),
-		Badges:        taskStateBadges(summary, now),
-		TasksPath:     milestoneTasksPath(pid, c.ID),
-		BoardPath:     milestoneBoardPath(pid, c.ID),
+		Path:     taskDetailPath(pid, c.ID, t.ID),
+		ID:       t.ID.String(),
+		Title:    t.Title,
+		Lane:     string(t.CurrentLane),
+		Attempts: taskAttemptsLabel(t.AttemptCount),
+		LoadedAt: now.UTC().Format(time.RFC3339),
+		Badges:   taskStateBadges(summary, now),
+		// The way back is the product-wide list scoped to this task's own
+		// container, which is where the list an operator reaches a detail
+		// from now lives. The per-container list URL still redirects there,
+		// so the old link and the new one open the same page.
+		TasksPath:     productTaskContainerHref(pid, tasksSuffix, c),
+		BoardPath:     productTaskContainerHref(pid, boardSuffix, c),
 		ContainerName: c.Name,
 	}
 	if t.Body != nil {
@@ -240,7 +244,12 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 		logger.Error("task slice read failed", "task", tid.String(), "error", in.SliceErr)
 	}
 
-	body := pages.TaskDetail(taskDetailPageOf(pid, c, in, time.Now()))
+	page := taskDetailPageOf(pid, c, in, time.Now())
+	// Refresh re-requests whatever URL served this page, not the
+	// per-container detail: both routes reach here, and only the request
+	// knows which one the operator is on.
+	page.Path = r.URL.Path
+	body := pages.TaskDetail(page)
 	if r.Header.Get("HX-Request") != "" {
 		renderFragment(w, r, body)
 		return
