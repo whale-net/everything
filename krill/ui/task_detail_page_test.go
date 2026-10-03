@@ -285,9 +285,41 @@ func TestTaskDetailBreadcrumbOnAnUncutMilestone(t *testing.T) {
 	crumbs := breadcrumbOf(t, html)
 	assert.Contains(t, crumbs, ">Detail product</a>")
 	assert.Contains(t, crumbs, ">Plain</a>")
+	// The milestone links at its own detail: a crumb that named a level
+	// without linking it would be a dead end in the path back.
+	assert.Contains(t, crumbs, `href="`+htmlEscapedURL(milestoneDetailHref(f.pid, f.mid))+`"`)
 	assert.Contains(t, crumbs, ">uncut-task<")
 	assert.NotContains(t, crumbs, "Cut milepebble")
 	assert.Equal(t, 3, strings.Count(crumbs, "<li"), "product, milestone, task -- and nothing between")
+}
+
+// TestTaskDetailDropsTheProductCrumbWhenTheProductReadFails is the
+// degraded half of the breadcrumb's first level. The pre-redesign URL
+// resolves its product by reading it, and a read that fails costs the
+// page its first crumb and nothing else: the task itself was read
+// separately, so the page is still answerable -- it just starts one level
+// down. What it must never do is render a crumb with an empty label, or
+// take the whole detail down over its banner.
+func TestTaskDetailDropsTheProductCrumbWhenTheProductReadFails(t *testing.T) {
+	f := newDetailFixture(t)
+	f.spec.productErr = errors.New("product-boom")
+	task := f.addOnMilepebble(store.Task{Title: "no-product-crumb", CurrentLane: store.LaneTesting})
+
+	code, html := f.getAt(taskDetailPath(f.pid, f.mp, task.ID), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	crumbs := breadcrumbOf(t, html)
+	assert.NotContains(t, crumbs, "Detail product", "a product that could not be read is not named")
+	assert.NotContains(t, crumbs, "product-boom", "the read's error is not the operator's to read")
+	// The levels below it are unaffected: they came off the delivery
+	// listing, which did read.
+	assert.Contains(t, crumbs, ">Cut milestone</a>")
+	assert.Contains(t, crumbs, ">Cut milepebble</a>")
+	assert.Contains(t, crumbs, ">no-product-crumb<")
+	assert.Equal(t, 3, strings.Count(crumbs, "<li"), "milestone, milepebble, task -- the page starts one level down")
+	for _, li := range strings.Split(crumbs, "<li")[1:] {
+		assert.NotContains(t, li, "<span></span>", "a crumb with no label is a hole in the path, not a level")
+	}
 }
 
 // TestTaskDetailHeaderTitleAndBadges is the h1 half of FR 0c03eac1: the
@@ -465,6 +497,30 @@ func TestTaskDetailEscalationReadFailsWithoutTakingThePageDown(t *testing.T) {
 	assert.Empty(t, page.EscalatedAt)
 }
 
+// TestTaskDetailEscalationReadFindingNothingKeepsThePage covers the one
+// error the handler separates out: an escalation that was resolved between
+// the task read and the event read. That is a race the store settles, not
+// a failure -- the task row no longer claims one and the next render says
+// so -- so it must not cost the operator the page, and must not be logged
+// as a read failure the on-call has to chase.
+func TestTaskDetailEscalationReadFindingNothingKeepsThePage(t *testing.T) {
+	f := newDetailFixture(t)
+	esc := uuid.New()
+	f.store.escalationErr = store.ErrNotFound
+	task := f.add(store.Task{Title: "resolved-underneath", CurrentLane: store.LaneTesting, CurrentEscalationID: &esc})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	assert.Equal(t, []uuid.UUID{esc}, f.store.asked, "the read was still made, once")
+	assert.Contains(t, html, `data-krill="task-badge-escalated"`)
+	assert.Contains(t, html, `data-krill="task-escalation"`,
+		"the task row names the escalation, so the row is still there")
+	assert.NotContains(t, html, `data-krill="task-escalated-at"`,
+		"there is no event, so there is no time to show beside it")
+	assert.NotContains(t, html, "not found", "the store's error is not the operator's to read")
+}
+
 // TestTaskDetailOfAnUnescalatedTaskCarriesNoEscalation: the three fields
 // are empty together, because a reason with no event behind it is a value
 // this page would have invented.
@@ -508,6 +564,122 @@ func TestProductScopedTaskDetailRefusesATaskFromAnotherProduct(t *testing.T) {
 	assert.NotContains(t, html, "another-products-task")
 }
 
+// TestProductScopedTaskDetailOfAnUnknownIdIsAnInShell404 is the other half
+// of the same clause, and the one a cross-product fixture cannot reach: an
+// id no task carries at all. The read fails with ErrNotFound rather than
+// refusing a container, so this is the branch that would render a 500, a
+// bare http.Error, or -- worst -- an empty detail frame under a URL that
+// names nothing. It also has to be the product-scoped 404 rather than the
+// per-container one: only the product's own task list is a page a detail
+// whose container the URL never named can go back to.
+func TestProductScopedTaskDetailOfAnUnknownIdIsAnInShell404(t *testing.T) {
+	f := newDetailFixture(t)
+
+	code, html := f.getProductScoped(uuid.NewString(), false)
+
+	assert.Equal(t, http.StatusNotFound, code)
+	assert.Contains(t, html, "<html", "the refusal renders inside the shell, not as a bare error")
+	assert.Contains(t, html, "No task with that id belongs to this product.")
+	assert.Contains(t, html, `href="`+htmlEscapedURL(productHref(f.pid, tasksSuffix))+`"`,
+		"the way back is the product's own task list")
+	assert.NotContains(t, html, `data-krill="task-detail"`,
+		"a 404 that renders the detail frame anyway leaves the operator reading an empty task")
+
+	// And it stays a 404 for an htmx Refresh too, rather than a 200 with an
+	// empty region spliced over the page the operator is on.
+	code, frag := f.getProductScoped(uuid.NewString(), true)
+	assert.Equal(t, http.StatusNotFound, code)
+	assert.NotContains(t, frag, `data-krill="task-detail"`)
+}
+
+// TestTaskDetailBreadcrumbIsNotAlsoAPropertiesRow pins the two rows the
+// redesign removed. "Lane sequence" spelled the same sequence out as prose
+// beside the step strip that now shows it, and "State" repeated the badges
+// the header already carries -- two renderings of one value, either of
+// which could drift from the strip and the badges.
+func TestTaskDetailBreadcrumbIsNotAlsoAPropertiesRow(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{
+		Title: "no-prose-row", CurrentLane: store.LaneTesting,
+		LaneSequence: []store.Lane{store.LaneScaffold, store.LaneTesting, store.LaneDone},
+	})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	main := regionBetween(t, html, `data-krill="task-detail-main"`, "</section>")
+	assert.NotContains(t, main, ">Lane sequence</dt>",
+		"the step strip is the one rendering of the sequence, not a prose row beside it")
+	assert.NotContains(t, main, ">State</dt>",
+		"the header badges are the one rendering of the state, not a properties row too")
+	// What replaced them is still there.
+	assert.Contains(t, main, `data-krill="task-lane-steps"`)
+	assert.Contains(t, regionBetween(t, html, `data-krill="task-detail-header"`, `data-krill="loaded-at"`),
+		`data-krill="task-state"`)
+}
+
+// TestTaskDetailLaneStepsMarkNoCurrentWhenTheLaneIsOffItsSequence is the
+// degenerate case the strip's lookup has to survive: a task whose
+// current_lane is somehow absent from its own lane_sequence. Nothing may
+// be marked current, because the alternative is marking whichever step
+// happened to sit at the same index in a sequence the task is not on.
+func TestTaskDetailLaneStepsMarkNoCurrentWhenTheLaneIsOffItsSequence(t *testing.T) {
+	steps := taskLaneSteps(
+		[]store.Lane{store.LaneScaffold, store.LaneValidation, store.LaneDone},
+		store.Lane("NotALane"))
+
+	for i, s := range steps {
+		assert.False(t, s.Current, "step %d is marked current for a lane the task is not in", i)
+		assert.False(t, s.Passed, "step %d is marked passed when nothing before it was reached", i)
+	}
+	assert.Len(t, steps, 3, "the strip still shows the task's own lanes")
+}
+
+// TestTaskLaneStepsOverAnEmptySequence: a task with no lane_sequence at
+// all gets no strip rather than one over the store's canonical order --
+// which would be the very re-derivation store/task.go NFR5 forbids, in
+// the shape where nothing on the page says the sequence was missing.
+func TestTaskLaneStepsOverAnEmptySequence(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "no-sequence", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	assert.NotContains(t, html, `data-krill="task-lane-steps"`,
+		"no sequence, no strip -- not a strip invented from the canonical lane order")
+	assert.NotContains(t, html, "CanonicalLane", "the store's canonical order is not this page's to reach for")
+}
+
+// TestResolveTaskContainerCarriesTheMilepebblesParent is the one read the
+// breadcrumb's milepebble level depends on. A milepebble is its own
+// milestone_ref row, so nothing else on the container says what it was cut
+// from -- a resolver that dropped the parent would leave the breadcrumb
+// with a milepebble crumb and no milestone above it, and the only way to
+// notice is to assert the parent is there.
+func TestResolveTaskContainerCarriesTheMilepebblesParent(t *testing.T) {
+	cutID, mpID := uuid.New(), uuid.New()
+	plainID := uuid.New()
+	listing := slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{
+		{ID: plainID, Name: "Plain"},
+		{ID: cutID, Name: "Cut", Milepebbles: []slice.MilepebbleListingEntry{{ID: mpID, Name: "Pebble"}}},
+	}}
+
+	pebble, found := resolveTaskContainer(listing, mpID)
+	require.True(t, found)
+	assert.Equal(t, cutID, pebble.ParentID)
+	assert.Equal(t, "Cut", pebble.ParentName)
+	assert.Equal(t, string(store.MilestoneKindMilepebble), pebble.Kind)
+
+	plain, found := resolveTaskContainer(listing, plainID)
+	require.True(t, found)
+	assert.Equal(t, uuid.Nil, plain.ParentID, "a milestone was cut from nothing")
+	assert.Empty(t, plain.ParentName)
+
+	_, found = resolveTaskContainer(listing, uuid.New())
+	assert.False(t, found, "a container the listing does not name is not resolved")
+}
+
 // TestTaskDetailBreadcrumbOnThePreRedesignURL is the same breadcrumb over
 // the per-container URL, which finds the product by reading it rather than
 // off the request. Both routes share serveTaskDetail, so this is the case
@@ -523,6 +695,36 @@ func TestTaskDetailBreadcrumbOnThePreRedesignURL(t *testing.T) {
 	assert.Contains(t, crumbs, ">Detail product</a>")
 	assert.Contains(t, crumbs, ">Cut milestone</a>")
 	assert.Contains(t, crumbs, ">Cut milepebble</a>")
+}
+
+// TestTaskDetailRefreshReRequestsTheURLThatServedIt: the Refresh button
+// moved into the header row, and the header row is inside the region the
+// button targets. Two things therefore have to hold at once -- the button
+// re-requests the route that actually served the page (both routes reach
+// this render, and only the request knows which one the operator is on),
+// and it targets the region whose id the served fragment's root carries.
+//
+// A Refresh that asked for the other route would still answer 200, so the
+// markup is the only place this is visible.
+func TestTaskDetailRefreshReRequestsTheURLThatServedIt(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.addOnMilepebble(store.Task{Title: "refreshed-task", CurrentLane: store.LaneTesting})
+
+	code, frag := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", frag)
+
+	button := regionBetween(t, frag, `data-krill="refresh"`, "</button>")
+	assert.Contains(t, button, `hx-get="/products/`+f.pid.String()+`/tasks/`+task.ID.String()+`"`,
+		"the product-scoped page refreshes the product-scoped URL")
+	assert.Contains(t, button, `hx-target="#`+pages.TaskDetailAnchor+`"`)
+	assert.Contains(t, button, `hx-swap="outerHTML"`)
+	assert.Contains(t, button, ">Refresh")
+
+	code, frag = f.getAt(taskDetailPath(f.pid, f.mp, task.ID), true)
+	require.Equal(t, 200, code, "body: %s", frag)
+	button = regionBetween(t, frag, `data-krill="refresh"`, "</button>")
+	assert.Contains(t, button, `hx-get="`+taskDetailPath(f.pid, f.mp, task.ID)+`"`,
+		"the pre-redesign page refreshes the pre-redesign URL, not the product-scoped one")
 }
 
 func TestTaskDetailFieldsReachPage(t *testing.T) {
