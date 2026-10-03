@@ -259,6 +259,22 @@ func TestStartSession_RequiredRoleParity(t *testing.T) {
 	})
 }
 
+// TestStartSession_ManmanV2Ops_RequiresRealmRole proves a manmanv2-ops
+// session is refused without the whagent-manmanv2-ops role.
+func TestStartSession_ManmanV2Ops_RequiresRealmRole(t *testing.T) {
+	srv, store, _ := newServiceAccountTestServer(t)
+	ctx := context.Background()
+	seedServiceTestAgent(t, ctx, store, "manmanv2-ops", strPtr2("whagent-manmanv2-ops"))
+
+	_, err := srv.StartSession(ctxAs(humanClaims("alice", "unrelated-role")), &pb.StartSessionRequest{AgentId: "manmanv2-ops"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+
+	resp, err := srv.StartSession(ctxAs(humanClaims("alice", "whagent-manmanv2-ops")), &pb.StartSessionRequest{AgentId: "manmanv2-ops"})
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.Session.SessionId)
+}
+
 // TestSessionLifecycle_ServiceAccountCaller_StartSendStopWithNoHumanTokenAnywhere
 // is FR6's named end-to-end integration test: start -> send turn -> stop,
 // entirely under a single service account's claims, over a real Postgres
