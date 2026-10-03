@@ -136,10 +136,14 @@ func WhagentHTTPAuth(existing CallerVerifier, cfg WhagentAuthConfig, resourceMet
 // WhagentMiddleware resolves a whagent claim to the user's Caller at the MCP
 // protocol layer; mount it outermost. Requests without a whagent claim pass
 // through unchanged. Resolution failure is a tool-call error for tools/call
-// and a protocol error carrying the same text for every other method.
+// and a protocol error carrying the same text for tools/list; other methods pass through.
 func WhagentMiddleware(ex grantflow.Exchanger) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			// Only tool methods need a user; initialize/ping must still open the connection.
+			if method != "tools/call" && method != "tools/list" {
+				return next(ctx, method, req)
+			}
 			extra := req.GetExtra()
 			if extra == nil || extra.TokenInfo == nil {
 				return next(ctx, method, req)
