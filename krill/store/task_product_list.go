@@ -43,19 +43,48 @@ const (
 	// ProductTaskScopeMilepebble is one milepebble of the product, whatever
 	// its status.
 	ProductTaskScopeMilepebble ProductTaskScopeKind = "milepebble"
+	// ProductTaskScopeAll walks every milestone and milepebble of the
+	// product whatever its status -- shipped and abandoned included. It is
+	// the scope a surface listing the WHOLE roadmap needs: a progress bar
+	// for a shipped milestone is a real answer, and dropping that container
+	// to keep it out of "what's still in flight" would leave it showing no
+	// bar at all, which reads as a stalled container rather than a
+	// finished one. The product's backlog bucket is excluded here too, for
+	// the same reason it is never one of the other three.
+	ProductTaskScopeAll ProductTaskScopeKind = "all"
 )
 
-// ValidProductTaskScopeKinds is the fixed set of the three values above --
-// the HTTP/MCP surfaces' 400 for anything else names these.
+// ValidProductTaskScopeKinds is the fixed set of the three container
+// selections ListProductTasks accepts -- the HTTP/MCP surfaces' 400 for
+// anything else names these.
+//
+// ProductTaskScopeAll is deliberately NOT in it. That list is what the
+// task-LIST surfaces (GET /console/product-tasks, list_product_tasks)
+// quote when refusing a scope they cannot answer, and both refuse "all":
+// paging a shipped milestone's finished tasks is not a question those
+// surfaces were built to answer. The kind belongs to the progress read,
+// which lists a product's whole roadmap rather than its open work.
 var ValidProductTaskScopeKinds = []ProductTaskScopeKind{
 	ProductTaskScopeIncomplete,
 	ProductTaskScopeMilestone,
 	ProductTaskScopeMilepebble,
 }
 
+// ValidProductProgressScopeKinds is the fixed set SummarizeProductTaskProgress
+// accepts: the three above plus ProductTaskScopeAll. It is a separate slice
+// from ValidProductTaskScopeKinds precisely because the two reads accept
+// different container sets -- the progress read's whole-roadmap scope has no
+// task-list counterpart -- and a caller that quotes the wrong one is told so.
+var ValidProductProgressScopeKinds = []ProductTaskScopeKind{
+	ProductTaskScopeIncomplete,
+	ProductTaskScopeMilestone,
+	ProductTaskScopeMilepebble,
+	ProductTaskScopeAll,
+}
+
 // ProductTaskScope is ListProductTasks' container selection: Kind above,
 // plus ContainerID, the milestone_ref id the two single-container kinds
-// name. Ignored for ProductTaskScopeIncomplete, which names no container.
+// name. Ignored for the two product-wide kinds, which name no container.
 type ProductTaskScope struct {
 	Kind        ProductTaskScopeKind
 	ContainerID uuid.UUID

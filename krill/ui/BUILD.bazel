@@ -24,6 +24,7 @@ go_library(
         "product_board_page.go",
         "product_task_page.go",
         "product_task_scope.go",
+        "milestones_page.go",
         "credentials_page.go",
         "design_page.go",
         "design_write.go",

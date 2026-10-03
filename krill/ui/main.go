@@ -551,7 +551,7 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	// copied row link resolves its product before the id is even looked at.
 	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix+"/{tid}", app.readerRoute(app.handleProductTaskDetail))
 	mux.HandleFunc("GET "+productPathPrefix+boardSuffix, app.readerRoute(app.handleProductBoard))
-	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix, app.readerRoute(app.handleProductPlaceholder))
+	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix, app.readerRoute(app.handleProductMilestones))
 	// Milestone detail ids hang beneath the milestones prefix, so a copied
 	// link to one resolves its product before the id is even looked at.
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}", app.readerRoute(app.handleProductPlaceholder))

@@ -1,0 +1,276 @@
+package pages
+
+// The Milestones table (FR 5aec68f6): a product's every milestone with
+// its status, its task progress, its FR budget and its outcome, plus the
+// status select that filters the rows in place.
+//
+// One region, one anchor, one GET: the select is a form whose action is
+// this page's own URL, so a reload, a shared link and a no-JavaScript
+// submit all land on the same filtered table. htmx layers an in-place swap
+// on top of that GET, so changing the select replaces the table without
+// reloading the page around it -- the working case never depends on
+// JavaScript, exactly as the shared scope control's own contract is.
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// MilestonesAnchor is the DOM id this page's region carries: the id the
+// status select's hx-get targets, and the root id of the fragment an htmx
+// request gets back. A fragment without it would delete its own swap
+// target on the next change, leaving the select inert.
+const MilestonesAnchor = "krill-milestones"
+
+// MilestoneStatusOption is one status the filter select offers.
+type MilestoneStatusOption struct {
+	// Value is the store's own wire value, so a status this select offers
+	// is a status the page's parser accepts.
+	Value string
+	// Label is what the operator reads. Equal to Value: the milestone
+	// status vocabulary has no display variant of its own.
+	Label string
+	// Selected marks the status this request filtered to.
+	Selected bool
+}
+
+// MilestoneRow is one milestone's row.
+//
+// The progress figures are Done and Total as the progress read returned
+// them, handed over whole rather than re-derived here: the read owns how
+// a cancelled task counts (store.CancelledTaskCounting), and a view that
+// summed the lanes itself could disagree with the breakdown rendered
+// beside it.
+type MilestoneRow struct {
+	// ID is the milestone's own id, carried so the row is addressable and
+	// so a detail link can be checked against it.
+	ID string
+
+	// Name links to the milestone's detail page.
+	Name       string
+	DetailPath string
+
+	// Status renders through the shared statusBadge, so this table shows
+	// the same colour for a status as the delivery page and the Board do.
+	Status string
+
+	// ProgressError is set when this row's progress figures could not be
+	// read. It renders in place of the bar, because a progress column
+	// showing nothing would read as "no tasks" rather than "not checked".
+	ProgressError string
+
+	Done  int
+	Total int
+
+	// FRBudget is the stored budget as the operator reads it, empty when
+	// the milestone declares none.
+	FRBudget string
+
+	// Outcome is the milestone's own outcome sentence, markdown-rendered
+	// the same way the delivery page renders it.
+	Outcome string
+}
+
+// HasTasks reports whether this row holds any task at all. A milestone
+// that does not says so rather than rendering "0 of 0", which reads as a
+// stalled milestone rather than a new one.
+func (r MilestoneRow) HasTasks() bool { return r.Total > 0 }
+
+// IsComplete reports whether every task this milestone holds is Done --
+// the state a shipped milestone's bar shows at full. It is what colours
+// the bar: a full bar is finished work, and a partial one is work in
+// flight, whatever else the status badge beside it says.
+func (r MilestoneRow) IsComplete() bool { return r.HasTasks() && r.Done == r.Total }
+
+// ProgressLabel is the bar's "N/M tasks done" sentence, built in Go so the
+// markup is one string rather than text interleaved with numbers: templ
+// separates adjacent text and expressions with HTML comments, which would
+// split the sentence into pieces no reader -- and no assertion -- sees as
+// one.
+func (r MilestoneRow) ProgressLabel() string {
+	if !r.HasTasks() {
+		return "No tasks yet"
+	}
+	return itoa(r.Done) + "/" + itoa(r.Total) + " tasks done"
+}
+
+// MilestonesPage is the whole region: the page header, the status filter
+// and the table.
+//
+// The two error fields are separate answers, never both set at once. An
+// empty table is a real answer -- this product has no milestone in that
+// status -- and a failed read is not, so the two never share a branch.
+type MilestonesPage struct {
+	Product ProductHeader
+
+	// Path is this page's own URL: the filter form's GET action and its
+	// hx-get, the same string either way, so the in-place swap and the
+	// full-page submit ask for exactly the same query.
+	Path string
+
+	// Statuses are the select's options, "All statuses" first, with the
+	// one this request filtered to marked.
+	Statuses []MilestoneStatusOption
+
+	// Rows are the milestones in the order the table renders them:
+	// highest roadmap position first, then id.
+	Rows []MilestoneRow
+
+	// Empty is set when the filter matched no milestone, so the region
+	// says so rather than reading as a table that failed.
+	Empty bool
+
+	// ProgressError is set when the progress read failed. The table still
+	// renders: a failed figure must not cost the operator the names,
+	// statuses and outcomes the other read answered, and each row carries
+	// the same sentence in its own cell.
+	ProgressError string
+}
+
+// milestoneProgress renders one row's progress cell: a bar and its
+// sentence, the sentence alone when the milestone holds no task, and the
+// failure sentence when the figures could not be read.
+//
+// The three are distinct answers and never share a branch -- "no tasks",
+// "some tasks", and "we did not check" are three different facts, and
+// rendering the second as either of the others is how an operator comes
+// to trust a number that was never read.
+templ milestoneProgress(row MilestoneRow) {
+	if row.ProgressError != "" {
+		<span class="text-sm text-base-content/70" data-krill="milestone-progress-error">{ row.ProgressError }</span>
+	} else if !row.HasTasks() {
+		<span class="text-sm text-base-content/70" data-krill="milestone-no-tasks">{ row.ProgressLabel() }</span>
+	} else {
+		<div class="flex items-center gap-2">
+			if row.IsComplete() {
+				<progress class="progress progress-success w-32" data-krill="milestone-progress"
+					value={ itoa(row.Done) } max={ itoa(row.Total) }></progress>
+			} else {
+				<progress class="progress progress-warning w-32" data-krill="milestone-progress"
+					value={ itoa(row.Done) } max={ itoa(row.Total) }></progress>
+			}
+			<span class="text-sm text-base-content/70" data-krill="milestone-progress-label">{ row.ProgressLabel() }</span>
+		</div>
+	}
+}
+
+// MilestoneStatusForm renders the status filter: the eight statuses plus
+// "All statuses", which swaps the table in place and records the choice in
+// the URL.
+//
+// It is a plain GET form carrying the status, with htmx layered on top --
+// so the state is the URL either way, and a shared link and the browser's
+// own Back button both work.
+templ MilestoneStatusForm(page MilestonesPage) {
+	<form method="get" action={ templ.URL(page.Path) } class="flex items-end gap-2"
+		data-krill="milestone-status-form"
+		hx-get={ templ.URL(page.Path) }
+		hx-target={ "#" + MilestonesAnchor }
+		hx-swap="outerHTML"
+		hx-trigger="change, submit"
+		hx-push-url="true">
+		<label class="fieldset">
+			<span class="fieldset-legend">Status</span>
+			<select name="status" class="select select-sm" aria-label="Filter by status"
+				data-krill="milestone-status-select">
+				for _, o := range page.Statuses {
+					<option value={ o.Value } selected?={ o.Selected } data-krill-status={ o.Value }>
+						{ o.Label }
+					</option>
+				}
+			</select>
+		</label>
+		<button type="submit" class="btn btn-primary btn-sm" data-krill="milestone-status-apply">
+			Apply
+		</button>
+	</form>
+}
+
+// MilestoneTable is the table itself, in the order buildMilestonesPage put
+// the rows in.
+//
+// The whole table is one horizontal-scroll container rather than a fixed
+// grid, so a narrow viewport scrolls the table and not the page.
+templ MilestoneTable(rows []MilestoneRow) {
+	<div class="overflow-x-auto rounded-lg border border-base-300 bg-base-100">
+		<table class="table table-zebra" data-krill="milestone-table">
+			<thead>
+				<tr>
+					<th>Milestone</th>
+					<th>Status</th>
+					<th>Progress</th>
+					<th class="text-right">FR budget</th>
+					<th>Outcome</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, m := range rows {
+					<tr class="hover" data-krill="milestone-row" data-krill-milestone-id={ m.ID }>
+						<td>
+							<a href={ templ.URL(m.DetailPath) } class="link font-medium" data-krill="milestone-name">{ m.Name }</a>
+						</td>
+						<td>@statusBadge(m.Status)</td>
+						<td>@milestoneProgress(m)</td>
+						<td class="text-right" data-krill="milestone-fr-budget">{ m.FRBudget }</td>
+						<td class="max-w-md" data-krill="milestone-outcome">
+							if m.Outcome != "" {
+								<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(m.Outcome))</div>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// Milestones renders the product's Milestones table: the page header, the
+// status filter, and the table itself.
+//
+// The region carries its own anchor id, so the select's swap replaces the
+// whole region -- filter and table together -- rather than only the table
+// beneath it. A swap that replaced only the table would leave the select
+// showing the filter it was changed away from, which is the one thing a
+// control must never do.
+templ Milestones(page MilestonesPage) {
+	<section id={ MilestonesAnchor } data-krill="milestones" class="space-y-4">
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div>
+				<h1 class="text-2xl font-bold" data-krill="page-title">Milestones</h1>
+				<p class="mt-1 text-sm text-base-content/70">
+					{ page.Product.Name } — every milestone, most recently added first.
+				</p>
+			</div>
+			@MilestoneStatusForm(page)
+		</div>
+		if page.ProgressError != "" {
+			<div data-krill="milestones-progress-error">
+				@htmxui.Alert(htmxui.AlertError, page.ProgressError, templ.Attributes{
+					"data-krill": "milestones-progress-error-alert",
+				})
+			</div>
+		}
+		if page.Empty {
+			<div data-krill="milestones-empty">
+				@htmxui.EmptyState(
+					"No milestones here",
+					"This product has no milestone in the selected status.",
+					"", "", templ.Attributes{},
+				)
+			</div>
+		} else {
+			@MilestoneTable(page.Rows)
+		}
+	</section>
+}
+
+// MilestonesRows is the fragment the status select's swap receives: the
+// same region the full page renders, without the shell around it.
+//
+// It is deliberately the WHOLE region rather than just the table -- see
+// Milestones' own note -- and it carries the anchor id for the reason
+// SpecInlineError does: htmx's outerHTML removes the swap target, so a
+// fragment without that id would leave the next change with nothing to
+// swap into.
+templ MilestonesRows(page MilestonesPage) {
+	@Milestones(page)
+}

@@ -409,6 +409,23 @@ const (
 	MilestoneStatusAbandoned         MilestoneStatus = "abandoned"
 )
 
+// MilestoneStatusOrder is the eight-value set above in its fixed display
+// order -- the progression an operator reads left to right, from not
+// started to given-up. It is the store's, not a UI copy of it, so a
+// surface that offers these statuses as options (a filter select, a
+// validation message) cannot come to disagree with the enumeration it is
+// selecting from, and a ninth status appears there without a second edit.
+var MilestoneStatusOrder = []MilestoneStatus{
+	MilestoneStatusNotStarted,
+	MilestoneStatusInDesign,
+	MilestoneStatusDesigned,
+	MilestoneStatusPlanned,
+	MilestoneStatusInProgress,
+	MilestoneStatusPartiallyComplete,
+	MilestoneStatusShipped,
+	MilestoneStatusAbandoned,
+}
+
 // MilestoneStatusEvent is one row of `milestone_status_event` (migration
 // 012, issue #2685, FR8, FR9, FR12). Single parent: MilestoneRef.ID (a
 // plain UUID column since migration 020, for the same reason
