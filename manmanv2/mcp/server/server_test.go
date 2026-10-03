@@ -289,3 +289,34 @@ func TestAuditorErrorLevelAndSnapshot(t *testing.T) {
 }
 
 func insecureCreds() grpc.DialOption { return grpc.WithTransportCredentials(insecure.NewCredentials()) }
+
+func TestAuditAgentFieldsOnWhagentCall(t *testing.T) {
+	buf := &bytes.Buffer{}
+	a := LogAuditor{Logger: slog.New(slog.NewTextHandler(buf, nil))}
+	ag := &Agent{Subject: "agent-1", AgentID: "a1", SessionID: "s1"}
+	for _, out := range []string{OutcomeAllowed, OutcomeRefused} {
+		buf.Reset()
+		a.Record(context.Background(), AuditRecord{Subject: "u", Persona: PersonaAdmin, Tool: "restart", TargetID: "d1", Outcome: out, Agent: ag})
+		for _, want := range []string{"subject=u", "persona=", "tool=restart", "target_id=d1", "outcome=" + out, "agent_subject=agent-1", "agent_id=a1", "whagent_session_id=s1"} {
+			if !strings.Contains(buf.String(), want) {
+				t.Errorf("%s: missing %q in %s", out, want, buf.String())
+			}
+		}
+	}
+	buf.Reset()
+	a.Record(context.Background(), AuditRecord{Tool: "restart", Outcome: OutcomeRefused, Agent: ag, SubjectIssuer: "https://iss"})
+	if !strings.Contains(buf.String(), "sub_iss=https://iss") || !strings.Contains(buf.String(), "agent_id=a1") {
+		t.Errorf("unresolved-user audit: %s", buf.String())
+	}
+}
+
+func TestAuditDirectCallerOutputUnchanged(t *testing.T) {
+	buf := &bytes.Buffer{}
+	a := LogAuditor{Logger: slog.New(slog.NewTextHandler(buf, nil))}
+	a.Record(context.Background(), AuditRecord{Subject: "u", Persona: PersonaAdmin, Tool: "t", TargetID: "x", Outcome: OutcomeAllowed})
+	for _, bad := range []string{"agent_", "whagent_session_id", "sub_iss"} {
+		if strings.Contains(buf.String(), bad) {
+			t.Errorf("direct audit contains %q: %s", bad, buf.String())
+		}
+	}
+}
