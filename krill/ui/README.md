@@ -1003,7 +1003,8 @@ conditions are:
   own container again, in the one place on the page where that is not also a
   link the breadcrumb already offers.
 - **Task id** is a copy chip — a `button` with `aria-label="Copy task id"`
-  carrying the id. Markup only; the clipboard behaviour is a later task's.
+  carrying the id as its own text, beside the live region a click confirms
+  into. See "The copy chip ships dead" below.
 
 Timestamps follow NFR 7b497d92: the lease is a
 `<time data-krill="task-lease" datetime title>` and the escalation instant
@@ -1031,6 +1032,48 @@ Two values on this page must not be re-derived:
   milestone always sits on one of its milepebbles, so "the container is a
   milepebble" and "the task sits on a cut milepebble" are one condition,
   decided from the container's own `Kind` rather than a second lookup.
+
+### The copy chip ships dead
+
+The chip is the only control on the page whose behaviour cannot be
+server-rendered, so it is the only one that ships in a state the server can
+justify. It renders **`disabled`**, with
+`title="Copying the task id needs JavaScript"`, and the head's
+`copyTaskIdScript` (templ_render.go, beside `relativeAgeScript` and
+`leaseCountdownScript`) is what removes `disabled` and revives it.
+
+An enabled button that cannot work is worse than no button: an operator who
+clicks it, sees nothing happen and gets no confirmation has been told the id
+is gone when it is not. Disabled plus a stated reason tells them the truth
+instead, and the id is still the chip's own text either way — readable and
+selectable with scripting off.
+
+The script lives in the document head, never in the rail, for the reason the
+other two do: the rail is a fragment Refresh and every tab swap re-request,
+so a script inside it dies with the swap while a head script survives. It
+binds on `DOMContentLoaded` and `htmx:after:swap` — both on `document`, since
+a head script runs before `<body>` exists — and marks each chip
+`data-krill-bound`, so a chip reachable from two nested swapped fragments
+does not collect two click listeners and announce twice per click.
+
+Three rules carry the rest of the behaviour:
+
+- **The confirmation is a polite live region, beside the chip.** Not an
+  `alert`, not a toast: either steals focus mid-task. The span is
+  `role="status" aria-live="polite"`, it sits in the same `<dd>` after the
+  button so it never covers the id, and it clears after ~2.5s. It is also
+  the one deliberately empty element on the card, because a live region has
+  to exist before its content changes or the change is never announced —
+  which is why the rail's no-empty-element sweep carves out exactly that one
+  span, matched by its hook rather than by "any empty span".
+- **A failed copy must not be silent.** `navigator.clipboard` is absent on
+  an insecure origin, and `writeText` rejects when the permission is denied,
+  so both paths land on the same branch: select the chip's own text and say
+  "Could not copy. The id is selected - press Ctrl+C." The next Ctrl+C
+  works, and the operator is never left believing the id is gone.
+- **Nothing is sent to krill.** The copy writes to the operator's own
+  clipboard. There is no form, no `hx-post` and no operator route on this
+  path — the page is read-only.
 
 It composes `GetTaskByID`, `ListDependencies`, `ListNotesForTask`, the
 current claim row, the task's most recent claim row when it holds none, the

@@ -490,16 +490,18 @@ func TestTaskDetailRailEscalatedTimeIsUpgradedNotJustCarried(t *testing.T) {
 	assert.Contains(t, row, ">"+escalatedAt.Format(time.RFC3339)+"</time>")
 }
 
-// TestTaskDetailRailCopyChipIsAnAccessibleControlWithNoBehaviourYet pins
-// the copy chip as an accessible control carrying the id, and -- the half a
-// reviewer will pull on -- as markup only.
+// TestTaskDetailRailCopyChipIsAnAccessibleControlBoundFromTheHead pins the
+// copy chip as an accessible control carrying the id whose behaviour comes
+// from the head, never from the markup.
 //
-// The clipboard behaviour belongs to a later task. Asserting its absence
-// here is what makes that later task's lane honest: if the behaviour had
-// landed early, or a stray onclick had crept in, the chip would be claiming
-// an affordance the page does not honour, which is worse than rendering no
-// affordance at all.
-func TestTaskDetailRailCopyChipIsAnAccessibleControlWithNoBehaviourYet(t *testing.T) {
+// The intent is the one this test always had: the chip must not claim an
+// affordance the page does not honour. It used to assert the behaviour was
+// entirely absent; it now asserts the same thing a year-scheme-correct way --
+// the clipboard write exists, but only as the head script that
+// copyTaskIdScript installs, and nothing here does it inline. An onclick, an
+// htmx verb, or a script inside the rail would each be a second copy of the
+// behaviour that dies with the next swap while the head's survives.
+func TestTaskDetailRailCopyChipIsAnAccessibleControlBoundFromTheHead(t *testing.T) {
 	f := newDetailFixture(t)
 	task := f.add(store.Task{Title: "chip-task", CurrentLane: store.LaneTesting})
 
@@ -512,7 +514,7 @@ func TestTaskDetailRailCopyChipIsAnAccessibleControlWithNoBehaviourYet(t *testin
 	row := regionBetween(t, html, `data-krill="task-properties-id"`, "</dd>")
 	// A real control: a button, explicitly type=button so it can never
 	// submit an enclosing form, with an accessible name and the id in both
-	// the attribute the behaviour will read and the text the operator reads.
+	// the attribute the behaviour reads and the text the operator reads.
 	assert.Contains(t, row, "<button type=\"button\"")
 	assert.Contains(t, row, `aria-label="Copy task id"`)
 	assert.Contains(t, row, `data-krill="copy-task-id"`)
@@ -520,21 +522,120 @@ func TestTaskDetailRailCopyChipIsAnAccessibleControlWithNoBehaviourYet(t *testin
 	assert.Contains(t, row, ">"+task.ID.String()+"</button>",
 		"the chip's own text is the id, so the control reads as what it copies")
 
-	// And no behaviour. A button that does nothing must not look like one
-	// that does: no inline handler, no htmx verb, and no script anywhere on
-	// the page that binds the chip.
-	assert.NotContains(t, row, "onclick", "an inline handler is the behaviour a later task owns")
+	// No behaviour IN the markup. It all lives in the head, so the chip
+	// survives a swap as dead markup the head re-wires, rather than carrying
+	// an inline handler the swap strips.
+	assert.NotContains(t, row, "onclick", "the clipboard write is the head script's, never inline")
+	assert.NotContains(t, row, "navigator.clipboard",
+		"the chip must not carry its own clipboard call alongside the head script's")
 	for _, verb := range []string{"hx-post", "hx-put", "hx-delete", "hx-trigger", "hx-get"} {
 		assert.NotContains(t, row, verb,
-			"the chip carries no htmx behaviour yet; a %s here is that task's work", verb)
+			"copying is a client-side clipboard write; a %s here would make this page a writer", verb)
 	}
-	assert.NotContains(t, html, "navigator.clipboard",
-		"the clipboard write is a later task's; nothing on this page may perform one")
-	// And the rail ships no script of its own, so the behaviour that will
-	// bind this chip has to arrive in the head rather than inline here.
+	// And the rail ships no script of its own, so the behaviour that binds
+	// this chip has to arrive in the head rather than inline here.
 	rail := regionBetween(t, html, `data-krill="task-properties-rail"`, "</aside>")
 	assert.NotContains(t, rail, "<script",
 		"a script inside the rail would be dropped by every htmx swap that re-renders it")
+
+	// The head really does carry it, so the assertions above are not
+	// satisfied by a page that simply has a dead chip. buildHead is the
+	// seam the shipped shell renders, and the fragment served above has no
+	// head of its own to check.
+	assert.Contains(t, buildHead(), "navigator.clipboard",
+		"the head must carry copyTaskIdScript, or this chip never copies anything")
+}
+
+// TestTaskDetailRailCopyChipIsDisabledUntilTheHeadEnablesIt is the
+// no-JavaScript half, and the reason the chip ships disabled.
+//
+// With scripting off the clipboard API is never reachable, so an enabled
+// button would be a control that looks live and cannot work: an operator
+// clicks it, nothing happens, and the absence of a confirmation reads as
+// "the id is gone" rather than "this page has no clipboard". Disabled with
+// the reason in the title states it, and the head's script is what removes
+// disabled -- so the assertion that matters is both halves together: the
+// server renders it dead, and the script revives it.
+func TestTaskDetailRailCopyChipIsDisabledUntilTheHeadEnablesIt(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "chip-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	row := regionBetween(t, html, `data-krill="task-properties-id"`, "</dd>")
+	// Anchored on the attribute's position in the tag, not on the bare word:
+	// the chip also carries a `disabled:opacity-50` utility class, and a
+	// looser containment check would match that and pass against a chip that
+	// is very much still live.
+	assert.Contains(t, row, `" disabled title="Copying the task id needs JavaScript"`,
+		"the chip ships disabled: without the head script it is guaranteed to do nothing, and a "+
+			"control that cannot work must not look live")
+	// The id survives the degradation as text -- which is the whole point of
+	// keeping it on the button rather than behind the clipboard.
+	assert.Contains(t, row, ">"+task.ID.String()+"</button>",
+		"with scripting off the id must still be readable on the page")
+
+	// And the head is what makes it work again. Without this half the chip
+	// is permanently dead and the disabled title becomes a lie.
+	assert.Contains(t, copyTaskIdScript, "btn.removeAttribute('disabled')",
+		"the head script must be what enables the chip, or the server-rendered disabled state "+
+			"is permanent: %s", copyTaskIdScript)
+}
+
+// TestTaskDetailRailCopyConfirmationIsAPoliteLiveRegion guards the
+// confirmation's accessibility contract: announced to a screen reader
+// without interrupting whatever the operator was doing, positioned beside
+// the chip rather than over the id it confirms, and blank until there is
+// something to say.
+//
+// The last part is the one that looks like a defect and is not. A live region
+// has to exist before its content changes or the change is not announced, so
+// this span is the single deliberately-empty element on the page. It is not a
+// property row and its blankness is not the "value the page could not read"
+// that rule is about.
+func TestTaskDetailRailCopyConfirmationIsAPoliteLiveRegion(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "chip-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	row := regionBetween(t, html, `data-krill="task-properties-id"`, "</dd>")
+
+	// The whole span, opening tag included: regionBetween cuts at its start
+	// marker, and the marker here sits inside the tag.
+	status := regexp.MustCompile(`<span[^>]*data-krill="copy-task-id-status"[^>]*>(?s).*?</span>`)
+	span := status.FindString(row)
+	require.NotEmpty(t, span,
+		"the copy chip has no live region to confirm into, so a click would copy silently:\n%s", row)
+
+	assert.Contains(t, span, `role="status"`,
+		"the confirmation needs a live region role or it is announced to nobody")
+	assert.Contains(t, span, `aria-live="polite"`,
+		"polite, not assertive: confirming a copy must not interrupt the operator mid-task")
+	assert.NotContains(t, span, `aria-live="assertive"`,
+		"assertive interrupts whatever the operator was doing")
+	assert.Equal(t, "></span>", span[len(span)-len("></span>"):],
+		"the confirmation is blank on arrival -- a live region has to exist before its content "+
+			"changes, so this one span starts empty by design. span: %s", span)
+
+	// Not focusable, so no reader lands on the confirmation instead of where
+	// they were: a span cannot take focus, and it carries nothing that can.
+	assert.NotContains(t, span, "tabindex")
+	for _, focusable := range []string{"<button", "<a ", "<input"} {
+		assert.NotContains(t, span, focusable,
+			"the confirmation must not be focusable, or the copy steals the operator's place")
+	}
+
+	// Beside the chip, not over it: the id stays on screen while the
+	// confirmation is read, and the confirmation sits in the same row.
+	assert.Contains(t, row, ">"+task.ID.String()+"</button>",
+		"the chip's id must still be there while the confirmation reads")
+	// Only the id row carries the status hook: a confirmation region that
+	// wandered onto another row would announce beside the wrong value.
+	assert.Equal(t, 1, strings.Count(html, `data-krill="copy-task-id-status"`),
+		"the copy confirmation region belongs to the Task id row alone")
 }
 
 // TestTaskDetailRailDependsOnCardRendersOnADepsReadFailure is the degraded
@@ -659,8 +760,8 @@ func TestTaskDetailRailAttemptsCountSurvivesTheLapsedLeaseIsCloser(t *testing.T)
 	sweeper := store.SessionID(uuid.New())
 	f.store.lastClaim = store.Claim{
 		ID: uuid.New(), TaskID: task.ID, SessionID: sweeper,
-		ClaimedAt: time.Now().Add(-3 * time.Hour).UTC(),
-		ReleasedAt: func() *time.Time { t := time.Now().Add(-2 * time.Hour).UTC(); return &t }(),
+		ClaimedAt:     time.Now().Add(-3 * time.Hour).UTC(),
+		ReleasedAt:    func() *time.Time { t := time.Now().Add(-2 * time.Hour).UTC(); return &t }(),
 		ReleaseReason: strPtr("reclaim"),
 	}
 
@@ -881,6 +982,62 @@ var railMarkupRE = regexp.MustCompile(`<[^>]*>`)
 // "Claimed by <span class="font-mono text-xs"></span>" is this shape.
 var railEmptySpanRE = regexp.MustCompile(`<span[^>]*>\s*</span>`)
 
+// railCopyStatusSpanRE is the one element on the card that is empty on
+// purpose: the copy chip's live region. A live region has to be in the
+// document before its content changes or the change is never announced, so
+// it necessarily renders empty and is only filled by the click that copies.
+//
+// It is the exemption, not a weakening: this span carries no value and makes
+// no claim about the task, so railEmptySpanRE's rule -- an empty element
+// where a value belongs reads as a value the page could not read -- has
+// nothing to say about it. The carve-out is anchored on the exact hook
+// rather than on "any empty span with a role", so the chip's own span, or an
+// empty span in any other row, still trips the sweep.
+var railCopyStatusSpanRE = regexp.MustCompile(`<span[^>]*data-krill="copy-task-id-status"[^>]*>\s*</span>`)
+
+// withoutCopyStatusLiveRegion strips that one span so the sweep can run
+// over the card with its teeth intact.
+func withoutCopyStatusLiveRegion(card string) string {
+	return railCopyStatusSpanRE.ReplaceAllString(card, "")
+}
+
+// TestWithoutCopyStatusLiveRegion_StripsOnlyThatOneSpan keeps the exemption
+// narrow. A carve-out phrased as "any empty span" or "any empty element with
+// a role" would quietly disarm the sweep it was added to exempt, and the
+// defect the sweep exists for -- a value-bearing span with nothing in it --
+// would walk straight back in through the new exemption.
+func TestWithoutCopyStatusLiveRegion_StripsOnlyThatOneSpan(t *testing.T) {
+	const liveRegion = `<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>`
+
+	t.Run("strips the empty live region", func(t *testing.T) {
+		assert.Empty(t, withoutCopyStatusLiveRegion(liveRegion),
+			"the one legitimately empty element on the card should be the only thing removed")
+	})
+
+	t.Run("leaves a populated live region alone", func(t *testing.T) {
+		// The carve-out is for the empty state only. A span that has
+		// something to say is content, and the sweep's question does not
+		// apply to it.
+		populated := `<span data-krill="copy-task-id-status" role="status">Copied</span>`
+		assert.Equal(t, populated, withoutCopyStatusLiveRegion(populated))
+	})
+
+	// The defect the sweep exists for, verbatim: an empty span carrying a
+	// row's value. If this survives the carve-out, the exemption has grown
+	// beyond its one live region and the sweep is no longer sweeping.
+	for _, defect := range []string{
+		`Claimed by <span class="font-mono text-xs"></span>`,
+		`<span class="text-base-content/70" role="status"></span>`,
+		`<span data-krill="copy-task-id-status-other"></span>`,
+		`<span><span class="font-mono"></span></span>`,
+	} {
+		t.Run("still catches "+defect, func(t *testing.T) {
+			assert.Regexp(t, railEmptySpanRE, withoutCopyStatusLiveRegion(defect),
+				"the carve-out must not exempt an empty span that carries a value")
+		})
+	}
+}
+
 // railValueTexts is every properties-card row's visible text, keyed by hook.
 //
 // Stripping the markup is what makes this useful: a row whose value element
@@ -1015,8 +1172,13 @@ func TestTaskDetailRailNoRowRendersAnEmptyValue(t *testing.T) {
 			// And no empty span anywhere in the card, whatever row it sits in.
 			// The regex is anchored on the card rather than the page because
 			// the page's chrome legitimately renders empty spacer elements.
-			assert.NotRegexp(t, railEmptySpanRE, propertiesOf(t, html),
-				"the properties card rendered an element with no content in it:\n%s", propertiesOf(t, html))
+			// The copy chip's live region is the single carve-out, stripped by
+			// its exact hook: it is empty by design, carries no value, and says
+			// nothing about the task. The carve-out is that one span, not empty
+			// spans generally, so every other row still runs under the sweep.
+			card := withoutCopyStatusLiveRegion(propertiesOf(t, html))
+			assert.NotRegexp(t, railEmptySpanRE, card,
+				"the properties card rendered an element with no content in it:\n%s", card)
 		})
 	}
 }

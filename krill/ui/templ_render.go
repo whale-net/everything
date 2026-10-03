@@ -50,7 +50,8 @@ document.documentElement.setAttribute('data-theme',t);})();
 <style>%s</style>
 <style>%s</style>
 <script>%s</script>
-<script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS, relativeAgeScript, leaseCountdownScript)
+<script>%s</script>
+<script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS, relativeAgeScript, leaseCountdownScript, copyTaskIdScript)
 }
 
 // leaseCountdownScript rewrites every board card's lease <time> into the
@@ -164,6 +165,103 @@ for(var i=0;i<nodes.length;i++){
 var t=Date.parse(nodes[i].getAttribute('data-krill-updated-at'));
 if(!isNaN(t)){nodes[i].textContent='Updated '+ago(t)+' ago';}
 }
+}
+document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
+document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
+})();`
+
+// copyTaskIdScript gives the task detail rail's Task id chip its behaviour:
+// click copies the id to the clipboard and confirms in place. It is the one
+// control on the page that cannot be server-rendered, for the reason
+// NFR 7b497d92 names -- the rail is a fragment the Refresh button and every
+// tab swap re-request, so state held only inside it would die with the swap.
+// Deriving it in the head, outside every fragment, is also what lets it
+// survive a tab swap without the server re-binding it.
+//
+// The page is read-only: this writes to the operator's own clipboard and
+// POSTs nothing to krill, so there is no form, no hx-post and no operator
+// route anywhere in the path.
+//
+// Degradation is deliberate on both axes. The chip renders disabled with the
+// reason in its title, and this script is what enables it -- a control that
+// is guaranteed to fail must not look live (design-htmx-ui, Page anatomy),
+// because an operator who clicks a button that does nothing has been told
+// the id is gone when it is not. And navigator.clipboard is absent on an
+// insecure origin and refused under a denied clipboard permission; either
+// way the failure selects the id instead, so the operator's next Ctrl+C
+// works. Silence is the one outcome that is not acceptable here.
+//
+// Both listeners hang off `document`, never `document.body`, for the same
+// reason as leaseCountdownScript: this is emitted from CustomHead, so a
+// classic inline script here runs while the parser is still inside <head>
+// and document.body is still null. htmx events bubble, so document sees
+// every swap regardless.
+const copyTaskIdScript = `
+(function(){
+var RESET_MS=2500;
+var TONE={copied:'text-success',failed:'text-error'};
+var BASE='ml-2 text-xs ';
+function statusOf(btn){
+var cell=btn.closest('dd');
+return cell?cell.querySelector('[data-krill="copy-task-id-status"]'):null;
+}
+function announce(btn,state,msg){
+var s=statusOf(btn);if(!s){return;}
+if(btn._copyTimer){clearTimeout(btn._copyTimer);}
+s.className=BASE+TONE[state];
+s.textContent=msg;
+btn.setAttribute('data-copy-state',state);
+btn._copyTimer=setTimeout(function(){
+if(!btn.isConnected){return;}
+s.textContent='';btn.removeAttribute('data-copy-state');
+},RESET_MS);
+}
+// Selecting the chip's own text is the failure path's real fallback: the id
+// is readable either way, so selecting it makes the operator's next Ctrl+C
+// succeed without the clipboard API. Best effort -- a browser that refuses
+// the Range too still gets the message naming the manual step.
+function selectId(btn){
+try{
+var sel=window.getSelection();if(!sel){return;}
+var r=document.createRange();r.selectNodeContents(btn);
+sel.removeAllRanges();sel.addRange(r);
+}catch(e){}
+}
+function writeId(btn){
+var id=btn.getAttribute('data-task-id')||(btn.textContent||'').trim();
+var clip=(typeof navigator!=='undefined')?navigator.clipboard:null;
+if(!clip||typeof clip.writeText!=='function'){return null;}
+try{return clip.writeText(id);}catch(e){return null;}
+}
+function bind(btn){
+// Bind once. The upgrade runs after every swap, and a chip two nested
+// swapped fragments both contain would otherwise collect a second listener
+// and announce twice per click.
+if(btn.getAttribute('data-krill-bound')==='1'){return;}
+btn.setAttribute('data-krill-bound','1');
+// The upgrade the disabled chip was waiting for: it works now, and its
+// title says so instead of still blaming missing JavaScript.
+btn.removeAttribute('disabled');
+btn.setAttribute('title','Copy the task id to your clipboard');
+btn.addEventListener('click',function(ev){
+ev.preventDefault();
+var p=writeId(btn);
+if(!p||typeof p.then!=='function'){
+selectId(btn);
+announce(btn,'failed','Could not copy. The id is selected - press Ctrl+C.');
+return;
+}
+p.then(function(){
+announce(btn,'copied','Copied');
+},function(){
+selectId(btn);
+announce(btn,'failed','Could not copy. The id is selected - press Ctrl+C.');
+});
+});
+}
+function upgrade(root){
+var nodes=(root||document).querySelectorAll('[data-krill="copy-task-id"]');
+for(var i=0;i<nodes.length;i++){bind(nodes[i]);}
 }
 document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
 document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
