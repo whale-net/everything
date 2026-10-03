@@ -209,7 +209,19 @@ templ taskPropertiesCard(page TaskDetailPage) {
 					<dt class="text-base-content/70">Claim</dt>
 					<dd data-krill="task-properties-claim">
 						if page.ClaimID != "" {
-							Claimed by <span class="font-mono text-xs">{ page.ClaimHolder }</span>
+							// The task row says a claim is held and the read
+							// that names its holder failed, so the row has a
+							// claim it cannot attribute. It says so, rather
+							// than printing "Claimed by" over an empty span --
+							// which would read as claimed-by-nobody, a value
+							// the page never learned. The same rule the
+							// Escalated row's unreadable-instant branch
+							// follows, and for the same reason.
+							if page.ClaimHolder != "" {
+								Claimed by <span class="font-mono text-xs">{ page.ClaimHolder }</span>
+							} else {
+								<span class="text-base-content/70">Claimed by a session whose id could not be read.</span>
+							}
 							if page.ClaimExpired {
 								<span class="text-base-content/70"> (lease expired, not live)</span>
 							}

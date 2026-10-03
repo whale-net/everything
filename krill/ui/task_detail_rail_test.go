@@ -11,6 +11,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -23,8 +24,16 @@ import (
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
-// errClaimRead is the last-claim read failing, which the rail must survive.
+// errClaimRead is a claim read failing, which the rail must survive; it
+// stands for both GetClaimByID and LatestClaimForTask, whose failures cost
+// the row one clause each and never the page.
 var errClaimRead = errors.New("claim-read-boom")
+
+// errDepsRead is the dependencies read failing, which is the one read whose
+// failure changes the rail's SHAPE rather than one row's content: the
+// Depends-on card has to render, because it cannot otherwise distinguish
+// "no dependencies" from "could not tell".
+var errDepsRead = errors.New("deps-read-boom")
 
 // propertiesOf is the properties card's own markup, so an assertion about
 // one row is about that row and not about whatever else on the page
@@ -392,4 +401,460 @@ func TestTaskDetailRailMilepebbleRowIsCarriedOnlyForAMilepebble(t *testing.T) {
 		time.Now())
 	assert.Empty(t, plain.MilepebbleName)
 	assert.Empty(t, plain.MilepebblePath)
+}
+
+// TestTaskDetailRailClaimHolderReadFailureNamesNobody is the degraded half
+// of the live-claim shape, and the one the Implementation pass did not cover:
+// GetClaimByID is a read like any other, and when it fails the task still
+// holds a claim -- the task row says so, and so does the region's
+// data-krill-claim-id, which is what a later claim-guarded write is checked
+// against.
+//
+// What the rail must not do is print "Claimed by" followed by an empty span.
+// That reads as "claimed by nobody", which is a different and untrue claim
+// from "we could not read who holds it", and it is the exact hole the
+// Escalated row's unreadable-instant branch exists to avoid.
+func TestTaskDetailRailClaimHolderReadFailureNamesNobody(t *testing.T) {
+	f := newDetailFixture(t)
+	claim := uuid.New()
+	lease := time.Now().Add(20 * time.Minute).UTC().Truncate(time.Second)
+	task := f.add(store.Task{
+		Title: "unreadable-holder", CurrentLane: store.LaneTesting,
+		CurrentClaimID: &claim, LeaseExpiresAt: &lease,
+	})
+	f.store.claimErr = errClaimRead
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	claimRow := regionBetween(t, html, `data-krill="task-properties-claim"`, "</dd>")
+	assert.NotContains(t, claimRow, "claim-read-boom",
+		"the store's error is not the operator's to read")
+	// The claim is still the task's -- the region attribute is the
+	// claim-guarded write's input and must not be blanked by this read.
+	assert.Contains(t, html, `data-krill-claim-id="`+claim.String()+`"`,
+		"a claim read that failed does not unclaim the task")
+	// And whatever the row says, it must not name an empty holder. The
+	// subject is the third argument and the message the fourth: read the
+	// other way round, the regex is matched against the message and the
+	// assertion passes on a row that does exactly this.
+	assert.NotRegexp(t, `<span class="font-mono text-xs"></span>`, claimRow,
+		"an empty holder span renders a value the page could not read as though it were one:\n%s", claimRow)
+	assert.NotRegexp(t, `Claimed by\s*</span>`, claimRow,
+		"'Claimed by' with nothing after it reads as claimed-by-nobody:\n%s", claimRow)
+}
+
+// TestTaskDetailRailEscalatedTimeIsUpgradedNotJustCarried is the JS-on half
+// of FR 82add903's "relative time, exact on hover".
+//
+// The element carrying the instant is only half the clause: the head's
+// relativeAgeScript keys on the [data-krill-updated-at] selector, and a
+// markup assertion that only checked the attribute would pass against an
+// element the script's selector no longer matches -- which renders the
+// absolute instant forever, looking correct and never going relative. The
+// selector is therefore read off the script itself rather than restated here,
+// so a change to one is a change to both.
+func TestTaskDetailRailEscalatedTimeIsUpgradedNotJustCarried(t *testing.T) {
+	f := newDetailFixture(t)
+	esc := uuid.New()
+	escalatedAt := time.Date(2026, 9, 30, 13, 50, 0, 0, time.UTC)
+	f.store.escalation = store.EscalationEvent{ID: esc, CreatedAt: escalatedAt}
+	task := f.add(store.Task{
+		Title: "aged-task", CurrentLane: store.LaneTesting, CurrentEscalationID: &esc,
+	})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	// The script the page serves is the one that does the upgrade, so the
+	// selector is whatever the shipped script selects on.
+	assert.Contains(t, relativeAgeScript, "[data-krill-updated-at]",
+		"the head script's selector changed; this test's selector must change with it")
+	row := regionBetween(t, html, `data-krill="task-properties-escalated"`, "</dd>")
+	assert.Contains(t, row, "data-krill-updated-at",
+		"the escalated row's instant is invisible to relativeAgeScript without this attribute")
+
+	// The exact-on-hover half: the absolute instant is on the title, so an
+	// operator who wants the precise time gets it whether or not the upgrade
+	// ran.
+	assert.Contains(t, row, `title="`+escalatedAt.Format(time.RFC3339)+`"`)
+	// And with scripting off the element's own text is still the instant, not
+	// an empty node the reader has nothing for.
+	assert.Contains(t, row, ">"+escalatedAt.Format(time.RFC3339)+"</time>")
+}
+
+// TestTaskDetailRailCopyChipIsAnAccessibleControlWithNoBehaviourYet pins
+// the copy chip as an accessible control carrying the id, and -- the half a
+// reviewer will pull on -- as markup only.
+//
+// The clipboard behaviour belongs to a later task. Asserting its absence
+// here is what makes that later task's lane honest: if the behaviour had
+// landed early, or a stray onclick had crept in, the chip would be claiming
+// an affordance the page does not honour, which is worse than rendering no
+// affordance at all.
+func TestTaskDetailRailCopyChipIsAnAccessibleControlWithNoBehaviourYet(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "chip-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	// The row rather than the hook: the hook sits INSIDE the opening tag, so
+	// a region cut at it would not contain the tag and every assertion about
+	// the element's own attributes would be about markup outside the slice.
+	row := regionBetween(t, html, `data-krill="task-properties-id"`, "</dd>")
+	// A real control: a button, explicitly type=button so it can never
+	// submit an enclosing form, with an accessible name and the id in both
+	// the attribute the behaviour will read and the text the operator reads.
+	assert.Contains(t, row, "<button type=\"button\"")
+	assert.Contains(t, row, `aria-label="Copy task id"`)
+	assert.Contains(t, row, `data-krill="copy-task-id"`)
+	assert.Contains(t, row, `data-task-id="`+task.ID.String()+`"`)
+	assert.Contains(t, row, ">"+task.ID.String()+"</button>",
+		"the chip's own text is the id, so the control reads as what it copies")
+
+	// And no behaviour. A button that does nothing must not look like one
+	// that does: no inline handler, no htmx verb, and no script anywhere on
+	// the page that binds the chip.
+	assert.NotContains(t, row, "onclick", "an inline handler is the behaviour a later task owns")
+	for _, verb := range []string{"hx-post", "hx-put", "hx-delete", "hx-trigger", "hx-get"} {
+		assert.NotContains(t, row, verb,
+			"the chip carries no htmx behaviour yet; a %s here is that task's work", verb)
+	}
+	assert.NotContains(t, html, "navigator.clipboard",
+		"the clipboard write is a later task's; nothing on this page may perform one")
+	// And the rail ships no script of its own, so the behaviour that will
+	// bind this chip has to arrive in the head rather than inline here.
+	rail := regionBetween(t, html, `data-krill="task-properties-rail"`, "</aside>")
+	assert.NotContains(t, rail, "<script",
+		"a script inside the rail would be dropped by every htmx swap that re-renders it")
+}
+
+// TestTaskDetailRailDependsOnCardRendersOnADepsReadFailure is the degraded
+// half of the Depends-on card, and the reason the card's absence is
+// conditional on the READ rather than on the RESULT.
+//
+// "No dependencies" and "could not read the dependencies" are different
+// answers to the same question, and the difference is the operator's whole
+// reason for looking: a task with no dependencies is claimable now, and a
+// task whose dependencies could not be read may be blocked by something this
+// page is not showing. So the failure renders the card, with the alert
+// inside it, in place of the list -- never an empty card, which would read
+// as the first answer.
+func TestTaskDetailRailDependsOnCardRendersOnADepsReadFailure(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "unreadable-deps", CurrentLane: store.LaneTesting})
+	f.store.depsErr = errDepsRead
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	card := regionBetween(t, html, `data-krill="task-depends-on"`, "</aside>")
+	assert.Contains(t, card, "The dependencies could not be read")
+	assert.NotContains(t, card, `data-krill="task-depends-on-item"`,
+		"a failed read lists nothing; an empty list would read as 'no dependencies'")
+	assert.NotContains(t, html, "deps-read-boom", "the store's error is not the operator's to read")
+	// The rest of the rail is unaffected: one failed read is one clause of
+	// one card.
+	props := propertiesOf(t, html)
+	assert.Contains(t, props, `data-krill="task-properties-lane"`)
+	assert.Contains(t, props, `data-krill="task-properties-attempts"`)
+}
+
+// TestTaskDetailRailDependsOnCardIsAbsentWhenThereAreNone is the other side
+// of the same condition, stated as a test of its own because it is the case
+// the operator sees most: a task nobody declared a dependency on.
+//
+// The card is omitted entirely. An empty box beside the content says
+// something is missing, where the answer is "nothing" -- and the region the
+// FR names the card by is simply not on the page.
+func TestTaskDetailRailDependsOnCardIsAbsentWhenThereAreNone(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "unblocked-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	assert.NotContains(t, html, `data-krill="task-depends-on"`,
+		"no dependencies renders no card, not an empty one")
+	assert.NotContains(t, html, ">Depends on</h2>")
+	// The properties card beside where it would have been still renders, so
+	// this is the card's absence and not the rail's.
+	assert.Contains(t, html, `data-krill="task-properties"`)
+}
+
+// TestTaskDetailRailAttemptsLabelCountsLapsedAndAbandonedAttempts is FR
+// 82add903's "n of cap, noting lapsed leases count".
+//
+// The number itself is the store's -- attempt_count, which ReclaimExpired,
+// AbandonClaim and ReleaseLease each increment, so a task that claimed and
+// abandoned comes back with a higher count and not a lower one. The rail's
+// half is to render that count against the cap and to SAY that a lapse or an
+// abandon counts, because an operator watching a task's count climb with no
+// worker on it would otherwise read the climb as a bug.
+//
+// Both halves are pinned: the label is the store's own count against the
+// store's own cap, and the note is on the page.
+func TestTaskDetailRailAttemptsLabelCountsLapsedAndAbandonedAttempts(t *testing.T) {
+	f := newDetailFixture(t)
+	// A task that was claimed, abandoned, and claimed again: three lapsed
+	// or abandoned attempts, none of which left a live claim behind.
+	task := f.add(store.Task{
+		Title: "thrashy-task", CurrentLane: store.LaneTesting, AttemptCount: 3,
+	})
+	abandoned := time.Now().Add(-2 * time.Hour).UTC()
+	abandoner := store.SessionID(uuid.New())
+	f.store.lastClaim = store.Claim{
+		ID: uuid.New(), TaskID: task.ID, SessionID: abandoner,
+		ClaimedAt: abandoned, ReleasedAt: &abandoned, ReleaseReason: strPtr("abandon"),
+	}
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	row := regionBetween(t, html, `data-krill="task-properties-attempts"`, "</dd>")
+	assert.Contains(t, row, taskAttemptsLabel(task.AttemptCount),
+		"the label is the store's count against the store's cap")
+	assert.Contains(t, row, fmt.Sprintf("%d of %d", task.AttemptCount, store.DefaultAttemptCap),
+		"and it names the cap explicitly, so '3 of 3' reads as capped rather than as a bare 3")
+	assert.Contains(t, row, "lease-lapse and abandon attempts count toward the cap",
+		"without this note, a count climbing while no worker holds the task reads as a bug")
+
+	// And the same page names who last held it, so "3 of 3" and "None. Last
+	// held by X" are visible together -- the two facts an operator is
+	// reconciling when they ask why a task is capped and idle.
+	assert.Contains(t, html, "None. Last held by")
+	assert.Contains(t, html, abandoner.String())
+}
+
+// TestTaskDetailRailAttemptsCountSurvivesTheLapsedLeaseIsCloser is the
+// FR's "n of cap, NOTING lapsed leases count" as the case the counting
+// note is actually about.
+//
+// The case above pins the label and the note together, but its fixture
+// still carries a last claim, so it cannot tell a count that came from
+// task.attempt_count off one the page derived from the claim rows it can
+// see. This one cannot: after a lease lapses and ReclaimExpired sweeps
+// it, the task holds no claim and no lease, and the only thing on the
+// page that remembers the burn is the task row's own counter.
+//
+// A rail that recomputed attempts from visible claims -- the shape a
+// "count the claims for this task" implementation would take -- would
+// render "0 of 3" here and read as a task nobody has ever touched.
+func TestTaskDetailRailAttemptsCountSurvivesTheLapsedLeaseIsCloser(t *testing.T) {
+	f := newDetailFixture(t)
+	// Swept: no current_claim_id, no lease_expires_at, and one attempt
+	// burned by the lapse. The store's ReclaimExpired clears both claim
+	// fields and increments attempt_count in the same statement.
+	task := f.add(store.Task{
+		Title: "swept-task", CurrentLane: store.LaneTesting, AttemptCount: 1,
+	})
+	sweeper := store.SessionID(uuid.New())
+	f.store.lastClaim = store.Claim{
+		ID: uuid.New(), TaskID: task.ID, SessionID: sweeper,
+		ClaimedAt: time.Now().Add(-3 * time.Hour).UTC(),
+		ReleasedAt: func() *time.Time { t := time.Now().Add(-2 * time.Hour).UTC(); return &t }(),
+		ReleaseReason: strPtr("reclaim"),
+	}
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	row := regionBetween(t, html, `data-krill="task-properties-attempts"`, "</dd>")
+	assert.Contains(t, row, taskAttemptsLabel(1),
+		"a lapsed lease burned an attempt, and the sweep cleared every claim field the page can see")
+	assert.NotContains(t, row, taskAttemptsLabel(0),
+		"an attempts count derived from the visible claims would render 0 of 3 for a task that has been worked on")
+
+	// The lease itself is genuinely gone, so the row must not render one --
+	// the count surviving the sweep must not carry a lease back with it.
+	assert.NotContains(t, html, `data-krill="task-lease"`,
+		"the sweep cleared lease_expires_at; rendering a lease here would be inventing one")
+	assert.Contains(t, html, "None. Last held by",
+		"and the sweep still leaves the session that held it last nameable")
+}
+
+// TestTaskDetailRailMilepebbleRowLinksToThatMilepebblesTasks is FR
+// 82add903's "Milepebble (link to its tasks)" as its own case, because the
+// href is the clause: a row naming the milepebble without linking it, or
+// linking somewhere other than its task list, is a dead end in the one place
+// on the page that offers a way back to the queue.
+//
+// It also pins that the link is the milepebble's OWN list and not the
+// milestone's, which a href built from the parent would get subtly wrong --
+// the operator lands on a list that does not contain their task.
+func TestTaskDetailRailMilepebbleRowLinksToThatMilepebblesTasks(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.addOnMilepebble(store.Task{Title: "pebbled-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	row := regionBetween(t, html, `data-krill="task-properties-milepebble"`, "</dd>")
+	want := htmlEscapedURL(productTaskContainerHref(f.pid, tasksSuffix,
+		taskContainer{ID: f.mp, Kind: string(store.MilestoneKindMilepebble)}))
+	assert.Contains(t, row, `href="`+want+`"`, "the row links at its own milepebble's task list")
+	assert.Contains(t, row, ">Cut milepebble</a>")
+	// Scoped to the milepebble, not the milestone it was cut from: the
+	// list the operator lands on must be the one that holds this task.
+	assert.Contains(t, row, "scope=milepebble")
+	assert.NotContains(t, row, f.mid.String(),
+		"the parent milestone's id has no business in a link to the milepebble's tasks")
+}
+
+// TestTaskDetailRailRendersOnBothDetailRoutes pins the rail to the route the
+// FR names. The rail is composed in the one serveTaskDetail both routes
+// reach, so a rail wired from the request context alone -- from the
+// pre-redesign route's path, say -- would render on one URL and not the
+// other, and only the URL the FR specifies would be covered by any other
+// test here.
+func TestTaskDetailRailRendersOnBothDetailRoutes(t *testing.T) {
+	f := newDetailFixture(t)
+	esc := uuid.New()
+	escalatedAt := time.Date(2026, 9, 30, 13, 50, 0, 0, time.UTC)
+	f.store.escalation = store.EscalationEvent{ID: esc, CreatedAt: escalatedAt}
+	task := f.addOnMilepebble(store.Task{
+		Title: "both-ways", CurrentLane: store.LaneTesting,
+		AttemptCount: 1, CurrentEscalationID: &esc,
+	})
+
+	for name, get := range map[string]func(string, bool) (int, string){
+		"product-scoped": func(tid string, hx bool) (int, string) { return f.getProductScoped(tid, hx) },
+		// The pre-redesign URL names the container, so it has to name the
+		// milepebble this task actually sits on -- the fixture's other
+		// container would refuse it as a task belonging to another one.
+		"pre-redesign": func(tid string, hx bool) (int, string) {
+			return f.getAt(taskDetailPath(f.pid, f.mp, uuid.MustParse(tid)), hx)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			code, html := get(task.ID.String(), true)
+			require.Equal(t, 200, code, "body: %s", html)
+
+			props := propertiesOf(t, html)
+			for _, want := range []string{
+				`data-krill="task-properties"`,
+				`data-krill="task-properties-lane"`,
+				`data-krill="task-properties-attempts"`,
+				`data-krill="task-properties-claim"`,
+				`data-krill="task-properties-escalated"`,
+				`data-krill="task-properties-milepebble"`,
+				`data-krill="task-properties-id"`,
+				"1 of 3",
+			} {
+				assert.Contains(t, props, want)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+// TestTaskDetailRailDoesNotNameTheEscalationId is a judgement the rail made
+// and a reviewer will pull on, stated as a test so it cannot drift back.
+//
+// The task row's escalation is a UUID. A rail row reading "Escalation:
+// escalation 3f9c-..." states an identifier the operator cannot act on and
+// does not need -- what they need is WHEN, and the row already says that,
+// exactly, on hover. The id stays on the view model as page.Escalation for
+// the Overview callout to present; it is simply not printed here.
+func TestTaskDetailRailDoesNotNameTheEscalationId(t *testing.T) {
+	f := newDetailFixture(t)
+	esc := uuid.New()
+	escalatedAt := time.Date(2026, 9, 30, 13, 50, 0, 0, time.UTC)
+	f.store.escalation = store.EscalationEvent{ID: esc, Reason: store.EscalationReasonThrashCap, CreatedAt: escalatedAt}
+	task := f.add(store.Task{
+		Title: "escalated-task", CurrentLane: store.LaneTesting, CurrentEscalationID: &esc,
+	})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	row := regionBetween(t, html, `data-krill="task-properties-escalated"`, "</dd>")
+	// The FR's clause -- relative time, exact on hover, only when escalated
+	// -- is satisfied by the element alone.
+	assert.Contains(t, row, `data-krill-updated-at="`+escalatedAt.Format(time.RFC3339)+`"`,
+		"the row's instant must be one relativeAgeScript can upgrade")
+	assert.Contains(t, row, `title="`+escalatedAt.Format(time.RFC3339)+`"`,
+		"and the exact instant must be on hover")
+	// And the id is not in it.
+	assert.NotContains(t, row, esc.String(),
+		"a bare UUID in a rail row is an identifier, not an answer; the row states WHEN")
+	assert.NotContains(t, html, "escalation "+esc.String(),
+		"the raw 'escalation <uuid>' string is not the operator's to read")
+
+	// The id is still on the view model for the Overview callout, which
+	// explains the escalation. Dropping it from the markup is not dropping it
+	// from the page's data.
+	page := detailPageOfFixture(t, taskDetailInputs{
+		Task:       task,
+		Escalation: &store.EscalationEvent{Reason: store.EscalationReasonThrashCap, CreatedAt: escalatedAt},
+	})
+	assert.Equal(t, "escalation "+esc.String(), page.Escalation)
+	assert.Equal(t, "thrash-cap", page.EscalationReason)
+	assert.Equal(t, escalatedAt.Format(time.RFC3339), page.EscalatedAt)
+}
+
+// TestTaskDetailPageStillCarriesWhatTheOverviewPanelReads is the safety
+// check on moving Lane/Attempts/Claim/Escalated out of the content column:
+// the Overview tab panel (a sibling task) is specified to show the
+// explanation callout, the description and the latest notes, and to explain
+// an escalation from the event's reason and counter.
+//
+// Every one of those inputs is a view-model field or a content-column
+// region, so the move is safe only while they survive it. This asserts they
+// do, at the level the Overview panel will read them -- which is the only
+// place a dedup can quietly cost a sibling task its input.
+func TestTaskDetailPageStillCarriesWhatTheOverviewPanelReads(t *testing.T) {
+	f := newDetailFixture(t)
+	esc, claim := uuid.New(), uuid.New()
+	escalatedAt := time.Date(2026, 9, 30, 13, 50, 0, 0, time.UTC)
+	lease := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	body := "the description"
+	task := f.addOnMilepebble(store.Task{
+		Title: "overview-inputs", CurrentLane: store.LaneTesting, Body: &body,
+		AttemptCount:   store.DefaultAttemptCap,
+		CurrentClaimID: &claim, LeaseExpiresAt: &lease, CurrentEscalationID: &esc,
+	})
+	cap := store.DefaultAttemptCap
+	f.store.escalation = store.EscalationEvent{
+		ID: esc, Reason: store.EscalationReasonThrashCap, CreatedAt: escalatedAt,
+		CounterValue: &cap, CapValue: &cap,
+	}
+	f.store.claim = store.Claim{ID: claim, TaskID: task.ID, SessionID: store.SessionID(uuid.New())}
+	f.store.notes = []store.Note{
+		{ID: uuid.New(), Kind: store.NoteKindScopeNote, Body: "newest", CurrentStatus: "noted"},
+		{ID: uuid.New(), Kind: store.NoteKindComment, Body: "older", CurrentStatus: "carried-over"},
+	}
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	// The Overview panel's three subjects are still rendered in the content
+	// column it will slot into.
+	main := regionBetween(t, html, `data-krill="task-detail-main"`, "</section>")
+	assert.Contains(t, main, `data-krill="task-body"`, "the description card's input")
+	assert.Contains(t, main, `data-krill="task-notes"`, "the latest-notes card's input")
+
+	// And the callout's facts are on the view model, which is what the
+	// callout will be built from -- reason, counter and cap, all of which
+	// the rail's Escalated row does not print.
+	page := detailPageOfFixture(t, taskDetailInputs{
+		Task:       task,
+		Claim:      &store.Claim{SessionID: store.SessionID(uuid.New())},
+		Escalation: &f.store.escalation,
+		Notes:      f.store.notes,
+	})
+	assert.Equal(t, "thrash-cap", page.EscalationReason)
+	assert.Equal(t, escalatedAt.Format(time.RFC3339), page.EscalatedAt)
+	assert.Equal(t, body, page.Body)
+	assert.Len(t, page.Notes, 2, "the notes are still on the view model in the store's order")
+
+	// The three state badges the callout keys off come off the task row and
+	// are untouched by the move.
+	header := regionBetween(t, html, `data-krill="task-detail-header"`, `data-krill="loaded-at"`)
+	for _, key := range []string{"claimed", "capped", "escalated"} {
+		assert.Contains(t, header, `data-krill="task-badge-`+key+`"`,
+			"the Overview callout keys off this badge, which the dedup must not have moved")
+	}
 }

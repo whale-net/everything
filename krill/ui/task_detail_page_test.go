@@ -31,6 +31,7 @@ type fakeDetailStore struct {
 	notes         []store.Note
 	notesErr      error
 	claim         store.Claim
+	claimErr      error
 	lastClaim     store.Claim
 	lastClaimErr  error
 	escalation    store.EscalationEvent
@@ -83,7 +84,7 @@ func (f *fakeDetailStore) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID
 }
 
 func (f *fakeDetailStore) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
-	return f.claim, nil
+	return f.claim, f.claimErr
 }
 
 // LatestClaimForTask is the rail's read behind "None. Last held by X": it

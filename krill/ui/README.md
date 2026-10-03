@@ -968,6 +968,14 @@ conditions are:
   `LatestClaimForTask`, read **only when the task holds no claim**. The two
   fields are mutually exclusive by construction, so the row cannot say
   "claimed by X" and "last held by X" at once.
+
+  When that `GetClaimByID` read *fails*, the row has a claim it cannot
+  attribute, and it says so — "Claimed by a session whose id could not be
+  read." Printing "Claimed by" over an empty holder span reads as
+  claimed-by-**nobody**, which is a value the page never learned. The lease
+  and `data-krill-claim-id` still render: both come off the task row, which
+  was read successfully, and the claim is genuinely the task's. This is the
+  same rule as the Escalated row's unreadable-instant branch.
 - **Escalated** appears only when `task.CurrentEscalation_id` is set, and its
   instant comes off the `EscalationEvent` above. When that read failed the
   row stays and says the instant could not be read — the Escalated badge
@@ -1017,7 +1025,8 @@ milestone is not under the URL's product, is an in-shell 404. Dependencies
 and notes each render an inline alert on a read failure; a failed
 escalation read costs the page the instant and nothing else, and a failed
 last-claim read costs it only the "last held by" clause — both are logged at
-`WARN` because the page still renders. The region carries
+`WARN` because the page still renders. A failed `GetClaimByID` costs the row
+the holder name and nothing else, and is also logged at `WARN`. The region carries
 `data-krill-claim-id` / `data-krill-lease-expires-at` for later
 claim-guarded writes; it has no form or `hx-post`.
 <!-- END task-detail section -->
