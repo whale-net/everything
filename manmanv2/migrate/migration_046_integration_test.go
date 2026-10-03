@@ -170,14 +170,6 @@ func TestMigration046_DropsRiverTablesWhenPresent(t *testing.T) {
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
-	latest, err := runner.LatestVersion()
-	if err != nil {
-		t.Fatalf("LatestVersion: %v", err)
-	}
-	if latest != 47 {
-		t.Fatalf("expected the latest migration source version to be 47, got %d -- update this test if a newer migration has since landed", latest)
-	}
-
 	if err := runner.Migrate(45); err != nil {
 		t.Fatalf("Migrate(45) (applying every migration up to but excluding 046): %v", err)
 	}
@@ -216,6 +208,16 @@ func TestMigration046_NoopOnDatabaseThatNeverRanRiver(t *testing.T) {
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
+	// Up must land at whatever head the embedded migrations dir defines, so
+	// a later migration needs no edit here.
+	latest, err := runner.LatestVersion()
+	if err != nil {
+		t.Fatalf("LatestVersion: %v", err)
+	}
+	if latest == 0 {
+		t.Fatal("expected at least one embedded migration")
+	}
+
 	if err := runner.Up(); err != nil {
 		t.Fatalf("Up (full history, no River schema ever present): %v", err)
 	}
@@ -227,8 +229,8 @@ func TestMigration046_NoopOnDatabaseThatNeverRanRiver(t *testing.T) {
 	if dirty {
 		t.Fatalf("expected clean state after Up, got dirty")
 	}
-	if version != 47 {
-		t.Fatalf("expected version 47 after Up, got %d", version)
+	if version != latest {
+		t.Fatalf("expected version %d after Up, got %d", latest, version)
 	}
 
 	assertRiverObjectsAbsent046(ctx, t, db)

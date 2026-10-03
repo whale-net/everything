@@ -142,6 +142,21 @@ Splitting follows a fixed set of rules, several referenced by number elsewhere i
 
 For file-type-specific guidance (planning docs, heavily cross-referenced reference docs, code modules, persona docs) and worked examples, see the `doc-splitting` skill.
 
+## Migration Tests
+
+Migration tests must not depend on a migration's absolute version number
+unless the version *is* the subject:
+
+- Never assert the head as a literal (`if version != uint(47)`). Derive it —
+  `latest, err := runner.LatestVersion()`, then `assert.Equal(t, latest, version)`.
+- Prefer absolute `runner.Migrate(N)` over relative `runner.Steps(n)`; `Steps`
+  is relative to wherever the DB is, so its meaning drifts as migrations land.
+  `Migrate(N)` followed by `Steps(±1)` is fine — the hop is anchored.
+
+A test that pins either way breaks the `Test Database Integration` CI job the
+next time anyone adds a migration, for no real signal. See
+`libs/go/migrate/README.md` "Writing migration tests" for worked examples.
+
 ## SCD2 (Slowly Changing Dimensions Type 2)
 
 **Column convention — always use `valid_from` / `valid_to`:**
