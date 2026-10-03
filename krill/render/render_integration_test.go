@@ -342,6 +342,6 @@ func TestRender_StoredCurrentState_VerbatimAndPlaceholderFallback(t *testing.T) 
 
 	files, err = render.Render(ctx, render.NewStoreSource(entities), scopeID, product.ID)
 	require.NoError(t, err)
-	assert.True(t, strings.HasSuffix(files.CurrentStateMD, "\n# Current state\n\n"+survey))
+	assert.True(t, strings.HasSuffix(files.CurrentStateMD, "\n# Current state\n\nPart of the [Widgets product brief](../PRODUCT.md).\n\n"+survey))
 	assert.NotContains(t, files.CurrentStateMD, "This section is intentionally not rendered.")
 }

@@ -273,6 +273,11 @@ func firstSentence(s string) string {
 	return s
 }
 
+// backlink is the one-line pointer every split file opens with.
+func backlink(name string) string {
+	return fmt.Sprintf("Part of the [%s product brief](../PRODUCT.md).\n\n", name)
+}
+
 func renderProductMD(name, revision string, doc slice.Document, personas []store.Persona, nonGoals []store.NonGoal, notes []store.Note, detail bool) string {
 	var b strings.Builder
 
@@ -281,10 +286,10 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 	b.WriteString(name)
 	b.WriteString(" — Product brief\n\n")
 	b.WriteString("This file is the index. Vision, Personas, Load-bearing decisions, Non-goals, and Notes are inline; the three sections with no natural ceiling are split out:\n\n")
-	b.WriteString("| Section | File |\n|---|---|\n")
-	b.WriteString("| Current state | [`product/01-current-state.md`](product/01-current-state.md) |\n")
-	b.WriteString("| Capability map | [`product/02-capability-map.md`](product/02-capability-map.md) |\n")
-	b.WriteString("| Roadmap | [`product/03-roadmap.md`](product/03-roadmap.md) |\n\n")
+	b.WriteString("| Section | File | Read it when |\n|---|---|---|\n")
+	b.WriteString("| Current state | [`product/01-current-state.md`](product/01-current-state.md) | Checking what already exists, what is in the way, and what is missing before scoping a milestone |\n")
+	b.WriteString("| Capability map | [`product/02-capability-map.md`](product/02-capability-map.md) | Citing a `Cn` from a requirement, or deciding whether a request is a new capability |\n")
+	b.WriteString("| Roadmap | [`product/03-roadmap.md`](product/03-roadmap.md) | Designing a milestone: its outcome, deliveries, and deferrals are the scope contract |\n\n")
 
 	if !detail {
 		b.WriteString("_Product notes are headlines only here. Read them from krill (`list_entity_notes`), or re-render with detail._\n\n")
@@ -312,7 +317,7 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		title := cleanDecisionTitle(d.Name)
 		b.WriteString(fmt.Sprintf("### LB%d — %s\n\n", d.DisplayNumber, title))
 		if d.Body != nil && strings.TrimSpace(*d.Body) != "" {
-			b.WriteString(strings.TrimSpace(*d.Body))
+			b.WriteString(preserveLineBreaks(*d.Body))
 			b.WriteString("\n\n")
 		}
 	}
@@ -404,6 +409,44 @@ func demoteHeadings(body string) string {
 			lvl := min(len(m[1])+3, 6)
 			lines[i] = strings.Repeat("#", lvl) + l[len(m[1]):]
 		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// preserveLineBreaks keeps a multi-line body's line structure in markdown:
+// the common indent of continuation lines is trimmed (the first line is
+// already unindented) and soft-wrapped lines get a hard break. Fenced code
+// and table rows are left alone.
+func preserveLineBreaks(body string) string {
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+	minIndent := -1
+	for _, l := range lines[1:] {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		n := len(l) - len(strings.TrimLeft(l, " \t"))
+		if minIndent < 0 || n < minIndent {
+			minIndent = n
+		}
+	}
+	for i := range lines {
+		l := strings.TrimRight(lines[i], " \t\r")
+		if i > 0 && minIndent > 0 && len(l) >= minIndent {
+			l = l[minIndent:]
+		}
+		lines[i] = l
+	}
+	inFence := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || i == len(lines)-1 || strings.TrimSpace(l) == "" || strings.TrimSpace(lines[i+1]) == "" ||
+			strings.HasPrefix(strings.TrimSpace(l), "|") || strings.HasPrefix(strings.TrimSpace(lines[i+1]), "```") {
+			continue
+		}
+		lines[i] = l + "  "
 	}
 	return strings.Join(lines, "\n")
 }
@@ -502,6 +545,7 @@ func renderCurrentStateMD(name, revision string, stored *string) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Current state\n\n")
+	b.WriteString(backlink(name))
 	if stored != nil {
 		b.WriteString(stripSurveyPreamble(*stored))
 		return b.String()
@@ -558,6 +602,8 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document, detail boo
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Capability map\n\n")
+	b.WriteString(backlink(name))
+	b.WriteString("Milestones that deliver these capabilities are in [`03-roadmap.md`](03-roadmap.md).\n\n")
 
 	// Group Features by their parent FeatureSet, in the order FeatureSets
 	// and Features are both already returned (feature_set.position/name,
@@ -602,7 +648,7 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document, detail boo
 						nFR++
 					}
 				}
-				b.WriteString(fmt.Sprintf("- **C%d** — %s (%d FR, %d NFR)\n", f.DisplayNumber, cleanFeatureTitle(f.Name), nFR, nNFR))
+				b.WriteString(fmt.Sprintf("- **C%d** — %s%s\n", f.DisplayNumber, cleanFeatureTitle(f.Name), requirementCounts(nFR, nNFR)))
 				writeCheapExpensive(&b, cheapExpensive[f.ID])
 				continue
 			}
@@ -625,6 +671,22 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document, detail boo
 	}
 
 	return b.String()
+}
+
+// requirementCounts renders " (n FR, m NFR)", omitting zero kinds and
+// everything when the Feature has no Requirements.
+func requirementCounts(nFR, nNFR int) string {
+	var parts []string
+	if nFR > 0 {
+		parts = append(parts, fmt.Sprintf("%d FR", nFR))
+	}
+	if nNFR > 0 {
+		parts = append(parts, fmt.Sprintf("%d NFR", nNFR))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 // writeCheapExpensive emits a Feature's recorded 'Stays cheap/expensive
@@ -808,6 +870,8 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry, later [
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Roadmap\n\n")
+	b.WriteString(backlink(name))
+	b.WriteString("Each `Cn` below is defined in [`02-capability-map.md`](02-capability-map.md).\n\n")
 	b.WriteString("_`Status` is each milestone's **current** delivery status, derived from krill's append-only `milestone_status_event` history (`store.MilestoneStatusEventStore.CurrentStatuses`). A milestone with no recorded transition is `not started` — that is krill's own derivation from the absence of history, not a rendered default._\n\n")
 
 	abandoned := 0
@@ -843,11 +907,7 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry, later [
 		if len(m.Deferrals) > 0 {
 			items := make([]string, len(m.Deferrals))
 			for i, d := range m.Deferrals {
-				body := d.Body
-				if d.CapabilityDisplayNumber != nil {
-					body = fmt.Sprintf("%s [C%d]", body, *d.CapabilityDisplayNumber)
-				}
-				items[i] = fmt.Sprintf("%s (→ %s)", body, d.Destination)
+				items[i] = formatDeferral(d)
 			}
 			b.WriteString("- Deliberately deferred: ")
 			b.WriteString(strings.Join(items, "; "))
@@ -877,6 +937,43 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry, later [
 
 	renderLaterCoverageMD(&b, later)
 	return b.String()
+}
+
+// formatDeferral renders one deferral, appending the capability ref and
+// destination only when the body does not already say them.
+func formatDeferral(d store.MilestoneDeferral) string {
+	out := d.Body
+	if d.CapabilityDisplayNumber != nil {
+		ref := fmt.Sprintf("C%d", *d.CapabilityDisplayNumber)
+		if !regexp.MustCompile(`\b` + ref + `\b`).MatchString(out) {
+			out += " [" + ref + "]"
+		}
+	}
+	if dest := strings.TrimSpace(d.Destination); dest != "" && !bodyStatesDestination(d.Body, dest) {
+		out += " (→ " + dest + ")"
+	}
+	return out
+}
+
+// bodyStatesDestination reports whether body already contains "-> <dest>"
+// (or the unicode arrow), comparing on the destination's leading clause.
+func bodyStatesDestination(body, dest string) bool {
+	norm := func(s string) string {
+		return strings.ToLower(strings.ReplaceAll(s, "->", "→"))
+	}
+	head := dest
+	if i := strings.IndexAny(head, ",(;"); i >= 0 {
+		head = head[:i]
+	}
+	head = strings.TrimSpace(norm(head))
+	if head == "" {
+		return false
+	}
+	if strings.Contains(head, "→") {
+		return strings.Contains(norm(body), head)
+	}
+	re := regexp.MustCompile(`→\s*` + regexp.QuoteMeta(head) + `\b`)
+	return re.MatchString(norm(body))
 }
 
 func derefString(p *string) string {

@@ -922,3 +922,64 @@ func TestRender_NoteBodyHeadingsAreDemoted(t *testing.T) {
 	assert.Contains(t, files.ProductMD, "\n# not a heading\n", "fenced content is untouched")
 	assert.NotContains(t, files.ProductMD, "\n# Top\n")
 }
+
+func TestRender_DeferralsDoNotDuplicateBodyRefs(t *testing.T) {
+	ms := uuid.New()
+	cn10, cn17 := 10, 17
+	src := &fakeSource{
+		Doc:           slice.Document{SchemaVersion: slice.SchemaVersion, Product: &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"}},
+		MilestoneRefs: []store.MilestoneRef{{ID: ms, Name: "M1", Kind: store.MilestoneKindMilestone}},
+		Deferrals: map[uuid.UUID][]store.MilestoneDeferral{ms: {
+			{Body: "headless callers (C10 -> M2; shape fixed)", Destination: "M2", CapabilityDisplayNumber: &cn10},
+			{Body: "live follow", Destination: "M2", CapabilityDisplayNumber: &cn17},
+			{Body: "cut: C3 → M3 first, then C4 → Later", Destination: "C3 → M3 first, then C4 → Later (conditional)"},
+		}},
+	}
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+	assert.Contains(t, files.RoadmapMD, "- Deliberately deferred: headless callers (C10 -> M2; shape fixed); live follow [C17] (→ M2); cut: C3 → M3 first, then C4 → Later\n")
+}
+
+func TestRender_CapabilityCountsOmittedWhenNoRequirements(t *testing.T) {
+	fs := slice.FeatureSetEntity{EntityRef: newRef(), Name: "Now"}
+	f1, f2 := newFeature("A", 1), newFeature("B", 2)
+	f1.FeatureSetID, f2.FeatureSetID = fs.ID, fs.ID
+	f2.FeatureSetID = fs.ID
+	src := &fakeSource{Doc: slice.Document{
+		SchemaVersion: slice.SchemaVersion,
+		Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+		FeatureSets:   []slice.FeatureSetEntity{fs},
+		Features:      []slice.FeatureEntity{f1, f2},
+		Requirements:  []slice.RequirementEntity{{EntityRef: newRef(), FeatureID: f2.ID, Kind: "FR", Name: "r"}},
+	}}
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+	assert.Contains(t, files.CapabilityMapMD, "- **C1** — A\n")
+	assert.Contains(t, files.CapabilityMapMD, "- **C2** — B (1 FR)\n")
+	assert.NotContains(t, files.CapabilityMapMD, "0 FR")
+	assert.NotContains(t, files.CapabilityMapMD, "0 NFR")
+}
+
+func TestRender_DecisionBodyKeepsLineBreaksAndDedents(t *testing.T) {
+	src := &fakeSource{Doc: slice.Document{
+		SchemaVersion: slice.SchemaVersion,
+		Product:       &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"},
+		Decisions: []slice.DecisionEntity{{EntityRef: newRef(), Name: "LB1 — X", DisplayNumber: 1,
+			Body: strPtr("At risk: C1.\n  Decide now: a\n    b.\n  Stays cheap: x.\n")}},
+	}}
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+	assert.Contains(t, files.ProductMD, "At risk: C1.  \nDecide now: a  \n  b.  \nStays cheap: x.\n")
+}
+
+func TestRender_PointersBacklinksCrossLinksAndSectionGuidance(t *testing.T) {
+	src := &fakeSource{Doc: slice.Document{SchemaVersion: slice.SchemaVersion, Product: &slice.ProductEntity{EntityRef: newRef(), Name: "Widgets", Vision: "v"}}}
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID)
+	require.NoError(t, err)
+	assert.Contains(t, files.ProductMD, "| Section | File | Read it when |")
+	for _, md := range []string{files.CurrentStateMD, files.CapabilityMapMD, files.RoadmapMD} {
+		assert.Contains(t, md, "Part of the [Widgets product brief](../PRODUCT.md).")
+	}
+	assert.Contains(t, files.CapabilityMapMD, "(03-roadmap.md)")
+	assert.Contains(t, files.RoadmapMD, "(02-capability-map.md)")
+}
