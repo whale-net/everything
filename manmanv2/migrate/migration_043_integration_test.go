@@ -149,14 +149,6 @@ func migrateTo42_043(ctx context.Context, t *testing.T, db *dbtest.Postgres, sql
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
-	latest, err := runner.LatestVersion()
-	if err != nil {
-		t.Fatalf("LatestVersion: %v", err)
-	}
-	if latest != 47 {
-		t.Fatalf("expected the latest migration source version to be 47, got %d -- update this test if a newer migration has since landed", latest)
-	}
-
 	if err := runner.Migrate(42); err != nil {
 		t.Fatalf("Migrate(42) (everything migration 043 needs, minus 043 itself): %v", err)
 	}
@@ -184,7 +176,7 @@ func TestMigration043_AppliesOnTopOfFullHistoryAndDropsTable(t *testing.T) {
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	// Target version 43 explicitly rather than Up() (which now also
-	// applies 044) -- this test is about migration 043 specifically, not
+	// applies every later migration) -- this test is about migration 043 specifically, not
 	// "whatever the latest migration happens to be".
 	if err := runner.Migrate(43); err != nil {
 		t.Fatalf("Migrate(43) (applying every migration through 043): %v", err)
@@ -323,7 +315,7 @@ func TestMigration043_DownRecreatesEmptyTable(t *testing.T) {
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	// Target version 43 explicitly rather than Up() (which now also
-	// applies 044) -- same rationale as the other migration integration
+	// applies every later migration) -- same rationale as the other migration integration
 	// tests' use of Migrate(N) over a relative Up()/Steps() call.
 	if err := runner.Migrate(43); err != nil {
 		t.Fatalf("Migrate(43): %v", err)

@@ -107,6 +107,64 @@ depends on the table (or that the drop was a mistake) and roll back to the
 soft-drop's `.down.sql` while the data still exists, before it's actually
 discarded.
 
+## Writing migration tests
+
+Two rules keep a migration test from breaking every time a new migration
+lands. Both exist because the opposite has been paid for repeatedly — the
+head assertion in this repo has been bumped by hand at least three times
+("bump hardcoded latest-migration-version assertions past 039", "bump
+prior migration tests' hardcoded latest-version to 42", and again for
+048_mcp_oauth).
+
+### Never name the head as a literal
+
+A test that calls `Up()` should not assert `version == uint(47)`. The
+newest migration changes constantly; the literal does not. Derive it from
+the same embedded dir the runner migrates, so landing a migration needs
+no edit:
+
+```go
+latest, err := runner.LatestVersion()
+require.NoError(t, err)
+require.NotZero(t, latest, "expected at least one embedded migration")
+
+require.NoError(t, runner.Up())
+
+version, dirty, err := runner.Version()
+require.NoError(t, err)
+assert.False(t, dirty)
+assert.Equal(t, latest, version, "Up() must land clean at the head migration")
+```
+
+`krill/migrate/schema/schema_integration_test.go` is the reference copy
+of this shape.
+
+### Anchor with `Migrate(N)`, not relative `Steps(n)`
+
+`Steps(n)` is relative to wherever the database happens to be, so its
+meaning drifts as migrations are added — `Steps(7)` after a fresh `Up()`
+covered 001–007 at the time it was written and covers something else the
+next time. Use the absolute form:
+
+```go
+require.NoError(t, runner.Migrate(6))  // land right before the migration under test
+// ... insert pre-existing state ...
+require.NoError(t, runner.Migrate(9))  // apply the migration under test and the rest
+
+version, dirty, err := runner.Version()
+require.NoError(t, err)
+assert.False(t, dirty)
+assert.Equal(t, uint(9), version)
+```
+
+A `Migrate(N)` in the same test function makes a following `Steps(1)` /
+`Steps(-1)` fine — the relative hop is anchored to an explicit target, so
+it keeps its meaning. It's `Up()` + bare `Steps(n)` with no anchor that
+silently changes scope.
+
+`Down()` and `Up()` are fine as-is: they mean "all of it" and "from zero"
+regardless of how many migrations that is.
+
 ## See also
 
 - [`MIGRATION_HISTORY.md`](MIGRATION_HISTORY.md) — history-tracking design and recovery scenarios in depth

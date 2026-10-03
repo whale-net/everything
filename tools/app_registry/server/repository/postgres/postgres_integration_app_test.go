@@ -1061,7 +1061,7 @@ func TestMigration008BackfillsSnapshotsFromExistingRows(t *testing.T) {
 	defer sqlDB.Close()
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	if err := runner.Steps(7); err != nil {
+	if err := runner.Migrate(7); err != nil {
 		t.Fatalf("apply migrations 001-007: %v", err)
 	}
 
@@ -1098,7 +1098,7 @@ func TestMigration008BackfillsSnapshotsFromExistingRows(t *testing.T) {
 	// schema shape it was written against. Migration 010's own backfill (a
 	// different, later transformation of these same tables) has its own
 	// test below.
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(8); err != nil {
 		t.Fatalf("apply migration 008: %v", err)
 	}
 
@@ -1180,7 +1180,7 @@ func TestMigration010BackfillsHistoryFromExistingRows(t *testing.T) {
 	defer sqlDB.Close()
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	if err := runner.Steps(9); err != nil {
+	if err := runner.Migrate(9); err != nil {
 		t.Fatalf("apply migrations 001-009: %v", err)
 	}
 
@@ -1230,7 +1230,7 @@ func TestMigration010BackfillsHistoryFromExistingRows(t *testing.T) {
 		t.Fatalf("seed artifact pointing at B's old snapshot: %v", err)
 	}
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(10); err != nil {
 		t.Fatalf("apply migration 010: %v", err)
 	}
 
@@ -1334,7 +1334,7 @@ func TestMigration010DownRestoresPreMigrationShape(t *testing.T) {
 	defer sqlDB.Close()
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	if err := runner.Steps(10); err != nil {
+	if err := runner.Migrate(10); err != nil {
 		t.Fatalf("apply migrations 001-010: %v", err)
 	}
 
@@ -1351,7 +1351,7 @@ func TestMigration010DownRestoresPreMigrationShape(t *testing.T) {
 		t.Fatalf("seed via real ReconcileApps: %v", err)
 	}
 
-	if err := runner.Steps(-1); err != nil {
+	if err := runner.Migrate(9); err != nil {
 		t.Fatalf("roll back migration 010: %v", err)
 	}
 
