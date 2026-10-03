@@ -65,17 +65,33 @@ type TaskDetailPage struct {
 	// spell the same sequence out as prose: one rendering, not two.
 	Steps           []TaskLaneStep
 	Attempts        string // e.g. "2 of 3"
-	ClaimID        string
-	LeaseExpiresAt string // RFC3339, empty when unclaimed
-	LoadedAt       string // RFC3339
-	Badges         []TaskBadge
-	Deps           []TaskDepLink
-	DepsError      string
-	Notes          []TaskNoteRow
-	NotesError     string
-	SliceJSON      string
-	SliceError     string
-	ClaimSummary   string // e.g. "session ..., claimed at ..."; empty when unclaimed
+	ClaimID         string
+	LeaseExpiresAt  string // RFC3339, empty when unclaimed
+	LoadedAt        string // RFC3339
+	Badges          []TaskBadge
+	Deps            []TaskDepLink
+	DepsError       string
+	Notes           []TaskNoteRow
+	NotesError      string
+	SliceJSON       string
+	SliceError      string
+
+	// The rail's Claim row, split rather than pre-joined into one string:
+	// the live claimant, whether that claim's lease has lapsed, and -- for
+	// a task nobody holds -- the session that held it last. Exactly one of
+	// ClaimHolder and LastClaimHolder is ever set, which is what makes
+	// "None. Last held by X" and "claimed by X" mutually exclusive rather
+	// than two facts about one task that could both be rendered.
+	ClaimHolder     string
+	ClaimExpired    bool
+	LastClaimHolder string
+
+	// MilepebbleName/Path are the task's own container, carried only when
+	// that container IS a milepebble. A task on an uncut milestone has no
+	// milepebble, and a row naming its milestone again would say what the
+	// breadcrumb already says.
+	MilepebbleName string
+	MilepebblePath string
 
 	// Escalation names the task's current escalation event, and
 	// EscalatedAt says when. EscalationReason is the store's own reason
@@ -125,57 +141,10 @@ templ TaskDetail(page TaskDetailPage) {
 		<div class="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="task-detail-frame">
 			<section class="min-w-0 space-y-4" data-krill="task-detail-main">
 				@taskLaneSteps(page.Steps)
-				<dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
-					<dt class="font-semibold">Current lane</dt>
-					<dd>
-						@TaskLaneBadge(page.Lane)
-					</dd>
-					<dt class="font-semibold">Attempts</dt>
-					<dd data-krill="task-attempts">{ page.Attempts } (lease-lapse and abandon attempts count toward the cap)</dd>
-					if page.Escalation != "" {
-						<dt class="font-semibold">Escalation</dt>
-						<dd data-krill="task-escalation">
-							{ page.Escalation }
-							if page.EscalatedAt != "" {
-								<time data-krill="task-escalated-at" datetime={ page.EscalatedAt } title={ page.EscalatedAt }>{ page.EscalatedAt }</time>
-							}
-						</dd>
-					}
-					<dt class="font-semibold">Claim</dt>
-					<dd data-krill="task-claim">
-						if page.ClaimID == "" {
-							Not claimed
-						} else {
-							{ page.ClaimSummary }
-							if page.LeaseExpiresAt != "" {
-								<span data-krill="task-lease">lease until <time data-krill="task-lease" datetime={ page.LeaseExpiresAt } title={ page.LeaseExpiresAt }>{ page.LeaseExpiresAt }</time></span>
-							}
-						}
-					</dd>
-				</dl>
 				if page.Body != "" {
 					<h2 class="text-lg font-semibold">Description</h2>
 					<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ page.Body }</pre>
 				}
-				<h2 class="text-lg font-semibold">Dependencies</h2>
-				<div data-krill="task-deps">
-					if page.DepsError != "" {
-						@htmxui.Alert(htmxui.AlertError, page.DepsError, nil)
-					} else if len(page.Deps) == 0 {
-						<p class="text-sm text-base-content/70">No dependencies</p>
-					} else {
-						<ul class="list-disc pl-5 text-sm">
-							for _, d := range page.Deps {
-								<li data-krill="task-dep">
-									<a href={ templ.URL(d.DetailPath) } class="link link-primary">{ d.Title }</a>
-									if d.Lane != "" {
-										<span class="ml-2 text-base-content/70">{ d.Lane }</span>
-									}
-								</li>
-							}
-						</ul>
-					}
-				</div>
 				<h2 class="text-lg font-semibold">Notes</h2>
 				<div data-krill="task-notes">
 					if page.NotesError != "" {
@@ -203,9 +172,154 @@ templ TaskDetail(page TaskDetailPage) {
 					}
 				</div>
 			</section>
-			<aside data-krill="task-properties-rail"></aside>
+			<aside data-krill="task-properties-rail">
+				@taskPropertiesCard(page)
+				@taskDependsOnCard(page)
+			</aside>
 		</div>
 	</section>
+}
+
+// taskPropertiesCard is the rail's properties card: one label/value row per
+// property the task actually has.
+//
+// A row with nothing behind it is omitted rather than rendered empty. A
+// blank "Escalated" or "Milepebble" row would read as a value the page
+// could not read, which is a different and untrue claim from "this task has
+// neither".
+templ taskPropertiesCard(page TaskDetailPage) {
+	<div class="card bg-base-100 border border-base-300" data-krill="task-properties">
+		<div class="card-body gap-3 p-4 text-sm">
+			<h2 class="card-title text-sm font-semibold">Properties</h2>
+			<dl class="space-y-2">
+				<div>
+					<dt class="text-base-content/70">Lane</dt>
+					<dd data-krill="task-properties-lane">
+						@TaskLaneBadge(page.Lane)
+					</dd>
+				</div>
+				<div>
+					<dt class="text-base-content/70">Attempts</dt>
+					<dd data-krill="task-properties-attempts">
+						{ page.Attempts }
+						<span class="text-base-content/70">(lease-lapse and abandon attempts count toward the cap)</span>
+					</dd>
+				</div>
+				<div>
+					<dt class="text-base-content/70">Claim</dt>
+					<dd data-krill="task-properties-claim">
+						if page.ClaimID != "" {
+							// The task row says a claim is held and the read
+							// that names its holder failed, so the row has a
+							// claim it cannot attribute. It says so, rather
+							// than printing "Claimed by" over an empty span --
+							// which would read as claimed-by-nobody, a value
+							// the page never learned. The same rule the
+							// Escalated row's unreadable-instant branch
+							// follows, and for the same reason.
+							if page.ClaimHolder != "" {
+								Claimed by <span class="font-mono text-xs">{ page.ClaimHolder }</span>
+							} else {
+								<span class="text-base-content/70">Claimed by a session whose id could not be read.</span>
+							}
+							if page.ClaimExpired {
+								<span class="text-base-content/70"> (lease expired, not live)</span>
+							}
+							if page.LeaseExpiresAt != "" {
+								<span class="block text-base-content/70">
+									Lease until <time data-krill="task-lease" datetime={ page.LeaseExpiresAt } title={ page.LeaseExpiresAt }>{ page.LeaseExpiresAt }</time>
+								</span>
+							}
+						} else if page.LastClaimHolder != "" {
+							None. Last held by <span class="font-mono text-xs">{ page.LastClaimHolder }</span>
+						} else {
+							None. This task has never been claimed.
+						}
+					</dd>
+				</div>
+				if page.Escalation != "" {
+					<div>
+						<dt class="text-base-content/70">Escalated</dt>
+						<dd data-krill="task-properties-escalated">
+							if page.EscalatedAt != "" {
+								// The visible text is relative, derived by the
+								// head's relativeAgeScript from the absolute
+								// instant in the attribute -- a fragment that
+								// carried its own relative string would be as
+								// old as the response, and nothing inside the
+								// swap could age it.
+								<time data-krill="task-escalated-at" data-krill-updated-at={ page.EscalatedAt }
+									datetime={ page.EscalatedAt } title={ page.EscalatedAt }>{ page.EscalatedAt }</time>
+							} else {
+								// The task row says it is escalated but the
+								// event behind it could not be read, so there
+								// is no instant to state. The row stays: the
+								// Escalated badge beside the title comes from
+								// the task row and is still true.
+								<span class="text-base-content/70">When it was escalated could not be read.</span>
+							}
+						</dd>
+					</div>
+				}
+				if page.MilepebbleName != "" {
+					<div>
+						<dt class="text-base-content/70">Milepebble</dt>
+						<dd data-krill="task-properties-milepebble">
+							<a href={ templ.URL(page.MilepebblePath) } class="link link-primary">{ page.MilepebbleName }</a>
+						</dd>
+					</div>
+				}
+				<div>
+					<dt class="text-base-content/70">Task id</dt>
+					<dd data-krill="task-properties-id">
+						// Markup only: the clipboard behaviour is a later
+						// task's, so this is an accessible control carrying
+						// the id and not yet a button that does anything.
+						<button type="button" class="badge badge-ghost font-mono"
+							aria-label="Copy task id" data-krill="copy-task-id" data-task-id={ page.ID }>
+							{ page.ID }
+						</button>
+					</dd>
+				</div>
+			</dl>
+		</div>
+	</div>
+}
+
+// taskDependsOnCard is the rail's dependency card: each task this one
+// waits on as a link to its own detail, with its lane as a badge.
+//
+// Declaration order is the store's: ListDependencies already returns the
+// rows in the order they were declared, and that order is the one an
+// operator debugging a blocked task needs to read.
+//
+// A task that waits on nothing renders no card at all rather than an empty
+// one -- an empty box beside the content says something is missing where
+// the answer is "nothing". A read failure does render the card, because
+// there the difference between "no dependencies" and "could not tell" is
+// exactly what the operator is being asked to act on.
+templ taskDependsOnCard(page TaskDetailPage) {
+	if len(page.Deps) > 0 || page.DepsError != "" {
+		<div class="card bg-base-100 border border-base-300" data-krill="task-depends-on">
+			<div class="card-body gap-2 p-4 text-sm">
+				<h2 class="card-title text-sm font-semibold">Depends on</h2>
+				if page.DepsError != "" {
+					@htmxui.Alert(htmxui.AlertError, page.DepsError, nil)
+				} else {
+					<ul class="space-y-2">
+						for _, d := range page.Deps {
+							<li class="flex flex-wrap items-center gap-2" data-krill="task-depends-on-item">
+								<a href={ templ.URL(d.DetailPath) } class="link link-primary">{ d.Title }</a>
+								if d.Lane != "" {
+									@TaskLaneBadge(d.Lane)
+								}
+							</li>
+						}
+					</ul>
+				}
+			</div>
+		</div>
+	}
 }
 
 // taskDetailCrumbs is the path from the product down to this task:

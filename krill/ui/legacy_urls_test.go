@@ -135,6 +135,14 @@ func (legacyTasks) GetEscalationEventByID(context.Context, uuid.UUID) (store.Esc
 	return store.EscalationEvent{}, store.ErrNotFound
 }
 
+// LatestClaimForTask is the task detail rail's read behind "None. Last held
+// by X". This fixture's task holds no claim and has never held one, so the
+// read answers found=false; it is declared because the embedded nil
+// interface would panic rather than refuse.
+func (legacyTasks) LatestClaimForTask(context.Context, uuid.UUID, uuid.UUID) (store.Claim, bool, error) {
+	return store.Claim{}, false, nil
+}
+
 var _ store.TaskStore = legacyTasks{}
 
 // legacyFixture is the world a legacy-URL test walks: one product holding

@@ -32,12 +32,12 @@ import (
 // than as two badges that happen to share a label.
 var badgeSpanRE = regexp.MustCompile(`<span class="(badge[^"]*)" data-krill="([^"]+)">([^<]*)</span>`)
 
-// The detail's lane <dd>, and the header container the state badges now
-// live in beside the h1 rather than in a properties <dd>. Both used to
-// hold bare text, which is why they are the places a bare-text regression
-// would show up.
+// The detail's lane <dd> -- in the properties rail, where the row moved --
+// and the header container the state badges live in beside the h1. Both
+// used to hold bare text, which is why they are the places a bare-text
+// regression would show up.
 var (
-	detailLaneDD  = regexp.MustCompile(`(?s)Current lane</dt>\s*<dd[^>]*>(.*?)</dd>`)
+	detailLaneDD  = regexp.MustCompile(`(?s)data-krill="task-properties-lane">\s*(.*?)</dd>`)
 	detailStateDD = regexp.MustCompile(`(?s)<div[^>]*data-krill="task-state"[^>]*>(.*?)</div>`)
 )
 
@@ -145,6 +145,14 @@ func (f *parityStore) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([
 
 func (f *parityStore) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
 	return f.claim, nil
+}
+
+// LatestClaimForTask is the rail's read behind "None. Last held by X". The
+// task this parity fixture seeds carries a claim, so the read is not made;
+// it is declared because the embedded nil interface would panic rather
+// than refuse if a fixture ever seeded an unclaimed task.
+func (f *parityStore) LatestClaimForTask(context.Context, uuid.UUID, uuid.UUID) (store.Claim, bool, error) {
+	return f.claim, true, nil
 }
 
 // GetEscalationEventByID is the detail's read behind current_escalation_id,
