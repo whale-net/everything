@@ -114,7 +114,7 @@ check:
    PRODUCT.md always carries full persona, decision, and non-goal bodies, and
    the capability map shows each Feature's `cheap-expensive-later` note where
    recorded. The capability map is headlines only by default (a `Cn` line with its
-   FR/NFR counts); read Requirement bodies via krill's `get_feature_slice`
+   FR/NFR counts, omitted when it has no Requirements); read Requirement bodies via krill's `get_feature_slice`
    MCP tool, or pass `--detail` to render them in full.
 4. Diff `<dir>` against the committed files before deciding whether to
    commit the refresh — a re-render is not guaranteed content-equivalent to
@@ -246,7 +246,9 @@ Each of these is real content present in the committed files with **no
 entity in krill to hold it**. None has been rounded up to "acceptable".
 Closing them means new schema, which is a milestone — see the follow-up.
 
-1. **`PRODUCT.md` — the jump table's "When to read it" column.** All three
+1. **`PRODUCT.md` — the jump table's per-brief "When to read it" wording.**
+   The renderer now emits a generic "Read it when" column (fixed text per
+   file); the brief-specific cells below are still not stored. All three
    cells ("Before specifying any milestone: what exists, what is dead or
    half-built…", "To find the `Cn` a requirement traces to…", "Before
    designing a milestone: its outcome sentence, `Delivers`…"). Guidance
@@ -351,3 +353,12 @@ identical data.
 - **Overwrite guard:** a normal render is refused if any committed file's
   source stamp is newer than the live data being rendered (e.g. rendering
   from an older database); pass `--force` to override.
+
+## Cross-links and formatting
+
+Every split file opens with `Part of the [<name> product brief](../PRODUCT.md).`;
+the capability map and roadmap link to each other. A `ARCHITECTURE.md` link is
+not rendered: the renderer is given a Product, not its domain directory.
+Load-bearing decision bodies keep their line breaks (continuation indent
+trimmed, hard breaks). A deferral prints its `[Cn]` / `(→ destination)` only
+when the deferral text does not already state it.

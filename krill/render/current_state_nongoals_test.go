@@ -50,8 +50,8 @@ func TestRender_CurrentState_StoredBodyOwnTitleAndPartOfLineStripped(t *testing.
 	md := renderWith(t, &body, nil).CurrentStateMD
 
 	assert.Equal(t, 1, countH1(md), "exactly one H1")
-	assert.NotContains(t, md, "Part of the")
-	assert.True(t, strings.HasSuffix(md, "\n# Current state\n\nSurveyed 2026-09-23 from the code.\n\nSecond paragraph.\n"), md)
+	assert.Equal(t, 1, strings.Count(md, "Part of the"), "only the renderer's own backlink")
+	assert.True(t, strings.HasSuffix(md, "\n# Current state\n\nPart of the [Widgets product brief](../PRODUCT.md).\n\nSurveyed 2026-09-23 from the code.\n\nSecond paragraph.\n"), md)
 }
 
 func TestRender_CurrentState_PartOfOnItsOwnLineStripped(t *testing.T) {
@@ -59,7 +59,7 @@ func TestRender_CurrentState_PartOfOnItsOwnLineStripped(t *testing.T) {
 	md := renderWith(t, &body, nil).CurrentStateMD
 
 	assert.Equal(t, 1, countH1(md))
-	assert.True(t, strings.HasSuffix(md, "\n# Current state\n\nBody.\n"), md)
+	assert.True(t, strings.HasSuffix(md, "\n# Current state\n\nPart of the [Widgets product brief](../PRODUCT.md).\n\nBody.\n"), md)
 }
 
 func TestRender_CurrentState_BodyWithoutPreambleIsVerbatim(t *testing.T) {
@@ -67,7 +67,7 @@ func TestRender_CurrentState_BodyWithoutPreambleIsVerbatim(t *testing.T) {
 	md := renderWith(t, &body, nil).CurrentStateMD
 
 	assert.Equal(t, 1, countH1(md))
-	assert.True(t, strings.HasSuffix(md, "\n# Current state\n\n"+body), md)
+	assert.True(t, strings.HasSuffix(md, "\n# Current state\n\nPart of the [Widgets product brief](../PRODUCT.md).\n\n"+body), md)
 }
 
 func TestRender_NonGoals_NoDeferredEntriesOmitsHeading(t *testing.T) {
