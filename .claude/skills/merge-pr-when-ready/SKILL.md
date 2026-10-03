@@ -77,11 +77,8 @@ Options:
 Run the monitoring script from the skill directory:
 
 ```bash
-# Path to the monitoring script (part of this skill)
-SCRIPT_PATH="/home/alex/whale_net/everything/.claude/skills/merge-pr-when-ready/monitor-pr.sh"
-
-# Execute the script with PR number
-"${SCRIPT_PATH}" 326
+# monitor-pr.sh sits next to this SKILL.md; run it from this skill's directory
+./monitor-pr.sh 326
 ```
 
 The script (`monitor-pr.sh`) handles:
@@ -92,7 +89,7 @@ The script (`monitor-pr.sh`) handles:
 - Deleting source branch
 - Progress reporting
 
-**IMPORTANT**:
+Notes:
 - The script is version-controlled in the skill directory
 - Run directly (not in background) for real-time updates
 - Uses `gh` CLI for reliability (GitHub MCP may not have merge permissions)
