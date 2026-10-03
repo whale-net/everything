@@ -461,3 +461,18 @@ bazel test //libs/go/auth:auth_integration_test --test_output=all
 ## License
 
 Part of the Everything monorepo.
+
+## Upstream-delegating authorization server (`UpstreamProvider`)
+
+For an MCP whose callers hold identities in Keycloak and whose backend needs
+the Keycloak JWT itself (audience, roles) — `NewUpstreamProviderFromEnv`
+(`MCP_OAUTH_CLIENT_ID` / `_CLIENT_SECRET` / `_STATE_KEY`) serves `/register`,
+`/authorize`, `/oauth/callback`, `/token` and RFC 8414 metadata. MCP clients
+register here (so the IdP's anonymous-DCR policy never applies); sign-in is
+delegated to the IdP with one confidential server-side client, and the IdP's
+access/refresh tokens are relayed to the client (refresh is proxied).
+Everything in flight (client registrations, pending sign-ins, auth codes) is
+sealed (`Sealer`, AES-GCM) rather than stored, so it is replica-safe with no
+migration. Trade-off: auth codes are time-limited (60s) and PKCE-bound but not
+single-use. Mount with `up.Mount(mux)` and set protected-resource metadata's
+`AuthorizationServer` to the MCP's own URL.
