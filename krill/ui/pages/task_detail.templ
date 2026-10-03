@@ -6,6 +6,7 @@ package pages
 import (
 	"strconv"
 
+	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
@@ -96,10 +97,57 @@ type TaskDepLink struct {
 }
 
 // TaskNoteRow is one note on the task.
+//
+// Rows arrive in the store's own order (ListNotesForTask's ascending
+// created_at, id) and are rendered in it: a note list an operator reads as
+// a log is only a log if the page does not reshuffle it, and the store's
+// order is the one the MCP read and every other view agree on.
 type TaskNoteRow struct {
 	Kind   string
 	Status string
 	Body   string
+}
+
+// TaskNoteBadges renders one note's two badges -- what it IS (kind) and
+// where it sits in its lifecycle (status).
+//
+// It is the ONE rendering of a note's badges on this page, shared by the
+// Notes panel and the Overview panel's latest notes, so the two facets
+// cannot disagree about what a note is. The colours come from
+// components.NoteKindStyle and components.NoteLifecycleStyle, which is
+// where the vocabulary's presentation belongs.
+templ TaskNoteBadges(kind, status string) {
+	{{ k := components.NoteKindStyle(kind) }}
+	@htmxui.Badge(kind, k.Variant, k.Size, k.Soft, templ.Attributes{"data-krill": "note-kind"})
+	{{ s := components.NoteLifecycleStyle(status) }}
+	@htmxui.Badge(status, s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "note-status"})
+}
+
+// taskDepList is the ONE rendering of a task's dependencies: each as a
+// link to its own product-scoped detail plus its lane as a badge, in the
+// order the read returned them.
+//
+// Both callers -- the rail's Depends-on card and the Dependencies tab --
+// render through it, because the card is a shortcut to the same list and
+// two spellings of it are two lists that can drift. Each item's address
+// is the product-scoped /products/{pid}/tasks/{tid}, so a dependency on
+// another milestone needs no container in the link.
+templ taskDepList(deps []TaskDepLink) {
+	<ul class="space-y-2" data-krill="task-dep-list">
+		for _, d := range deps {
+			<li class="flex flex-wrap items-center gap-2" data-krill="task-dep">
+				<a href={ templ.URL(d.DetailPath) } class="link link-primary" data-krill="task-dep-link">{ d.Title }</a>
+				// The lane is a badge rather than a word, through the shared
+				// TaskLaneBadge, so a dependency reads the same as a row in
+				// the Tasks table and a card on the Board. A dependency
+				// whose own task could not be read carries no lane, and an
+				// empty badge would claim a lane the page never learned.
+				if d.Lane != "" {
+					@TaskLaneBadge(d.Lane)
+				}
+			</li>
+		}
+	</ul>
 }
 
 // TaskDetailPage is the task detail view model. ClaimID and
@@ -352,12 +400,9 @@ templ taskPropertiesCard(page TaskDetailPage) {
 	</div>
 }
 
-// taskDependsOnCard is the rail's dependency card: each task this one
-// waits on as a link to its own detail, with its lane as a badge.
-//
-// Declaration order is the store's: ListDependencies already returns the
-// rows in the order they were declared, and that order is the one an
-// operator debugging a blocked task needs to read.
+// taskDependsOnCard is the rail's dependency card: a shortcut to the same
+// list the Dependencies tab renders, through taskDepList, so the two
+// cannot drift.
 //
 // A task that waits on nothing renders no card at all rather than an empty
 // one -- an empty box beside the content says something is missing where
@@ -372,16 +417,7 @@ templ taskDependsOnCard(page TaskDetailPage) {
 				if page.DepsError != "" {
 					@htmxui.Alert(htmxui.AlertError, page.DepsError, nil)
 				} else {
-					<ul class="space-y-2">
-						for _, d := range page.Deps {
-							<li class="flex flex-wrap items-center gap-2" data-krill="task-depends-on-item">
-								<a href={ templ.URL(d.DetailPath) } class="link link-primary">{ d.Title }</a>
-								if d.Lane != "" {
-									@TaskLaneBadge(d.Lane)
-								}
-							</li>
-						}
-					</ul>
+					@taskDepList(page.Deps)
 				}
 			</div>
 		</div>
@@ -589,25 +625,34 @@ templ taskOverviewPanel(page TaskDetailPage) {
 	</div>
 }
 
-// taskNotesPanel is the Notes host (task 27947a7e owns its contents). A
-// failed notes read alerts INSIDE this panel only: the header, the lane
+// taskNotesPanel lists EVERY note on the task, each with its kind badge
+// and its lifecycle-status badge through the shared TaskNoteBadges, in the
+// store's own order (see TaskNoteRow).
+//
+// A failed notes read alerts INSIDE this panel only: the header, the lane
 // steps and the properties rail are outside the swap region, and the
 // other panels are not rendered while this one is. An unreadable list
-// never renders as an empty one -- NotesError is what this panel reads.
+// never renders as an empty one -- NotesError is what this panel reads,
+// and the empty state is what a READ THAT SUCCEEDED with nothing says.
 templ taskNotesPanel(page TaskDetailPage) {
 	<div data-krill="task-panel-notes" data-krill-panel-host="notes">
 		<h2 class="text-lg font-semibold">Notes</h2>
 		if page.NotesError != "" {
 			@htmxui.Alert(htmxui.AlertError, page.NotesError, nil)
 		} else if len(page.Notes) == 0 {
-			<p class="text-sm text-base-content/70">No notes</p>
+			@htmxui.EmptyState(
+				"No notes",
+				"Nothing has been recorded against this task yet.",
+				"", "", templ.Attributes{"data-krill": "task-notes-empty"},
+			)
 		} else {
-			<ul class="space-y-2 text-sm">
+			<ul class="space-y-3 text-sm" data-krill="task-note-list">
 				for _, n := range page.Notes {
 					<li data-krill="task-note">
-						@htmxui.Badge(n.Kind, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-kind"})
-						@htmxui.Badge(n.Status, htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-status"})
-						<pre class="whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
+						<div class="flex flex-wrap items-center gap-2">
+							@TaskNoteBadges(n.Kind, n.Status)
+						</div>
+						<pre class="mt-1 whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
 					</li>
 				}
 			</ul>
@@ -615,27 +660,25 @@ templ taskNotesPanel(page TaskDetailPage) {
 	</div>
 }
 
-// taskDependenciesPanel is the Dependencies host (task 27947a7e owns its
-// contents). DepsError is read here and nowhere else: a failed
-// dependencies read must cost this panel alone.
+// taskDependenciesPanel lists EVERY dependency through the same
+// taskDepList the rail's Depends-on card renders, so the two facets are
+// one list rather than two that can drift.
+//
+// DepsError is read here and nowhere else: a failed dependencies read
+// must cost this panel alone.
 templ taskDependenciesPanel(page TaskDetailPage) {
 	<div data-krill="task-panel-dependencies" data-krill-panel-host="dependencies">
 		<h2 class="text-lg font-semibold">Dependencies</h2>
 		if page.DepsError != "" {
 			@htmxui.Alert(htmxui.AlertError, page.DepsError, nil)
 		} else if len(page.Deps) == 0 {
-			<p class="text-sm text-base-content/70">No dependencies</p>
+			@htmxui.EmptyState(
+				"No dependencies",
+				"Nothing has to finish before this task can be claimed.",
+				"", "", templ.Attributes{"data-krill": "task-deps-empty"},
+			)
 		} else {
-			<ul class="list-disc pl-5 text-sm">
-				for _, d := range page.Deps {
-					<li data-krill="task-dep">
-						<a href={ templ.URL(d.DetailPath) } class="link link-primary">{ d.Title }</a>
-						if d.Lane != "" {
-							<span class="ml-2 text-base-content/70">{ d.Lane }</span>
-						}
-					</li>
-				}
-			</ul>
+			@taskDepList(page.Deps)
 		}
 	</div>
 }

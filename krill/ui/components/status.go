@@ -113,6 +113,54 @@ func TaskStateStyle(state string) StatusStyle {
 	}
 }
 
+// NoteKindStyle maps a note's kind -- what a note IS (store.NoteKind,
+// spelled out as strings so this package keeps no //krill/store
+// dependency) -- onto a daisyUI badge.
+//
+// A kind is a category rather than a state, so these colours separate the
+// three categories and carry no severity: a scope note is a discovery
+// someone surfaced, a comment is the general-purpose case, and a
+// cheap/expensive-later note is a statement about a capability. The
+// unknown-kind fallback is neutral, the same as everywhere else here.
+func NoteKindStyle(kind string) StatusStyle {
+	switch kind {
+	case "scope-note":
+		return StatusStyle{htmxui.BadgeInfo, htmxui.BadgeSizeSM, false}
+	case "comment":
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	case "cheap-expensive-later":
+		return StatusStyle{htmxui.BadgeSecondary, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
+
+// NoteLifecycleStyle maps a note's lifecycle status -- where it sits in
+// the noted -> carried-over / deferred / closed progression (store's
+// NoteLifecycleStatus) -- onto a daisyUI badge.
+//
+// This vocabulary does carry severity, unlike the kind's: "noted" is a
+// note still waiting on a decision, which is the state an operator scans
+// for, so it is warning; "carried-over" moved to another unit of work and
+// is live somewhere else, which is info; "deferred" was deliberately put
+// aside, which is ghost; and "closed" is finished, so success. As with
+// the other mappers, the default arm keeps a fifth status from rendering
+// as a blank badge.
+func NoteLifecycleStyle(status string) StatusStyle {
+	switch status {
+	case "noted":
+		return StatusStyle{htmxui.BadgeWarning, htmxui.BadgeSizeSM, false}
+	case "carried-over":
+		return StatusStyle{htmxui.BadgeInfo, htmxui.BadgeSizeSM, false}
+	case "deferred":
+		return StatusStyle{htmxui.BadgeGhost, htmxui.BadgeSizeSM, false}
+	case "closed":
+		return StatusStyle{htmxui.BadgeSuccess, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
+
 // EscalationReasonLabel is the human wording for one escalation reason.
 // The store's values are hyphenated wire strings; a badge an operator
 // reads is not one, so the two live apart here rather than being spelled

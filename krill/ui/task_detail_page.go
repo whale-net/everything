@@ -232,13 +232,17 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 		page.DepsError = "The dependencies could not be read. See the logs."
 	}
 	for _, d := range in.Deps {
-		link := pages.TaskDepLink{Title: d.DependsOnTaskID.String()}
+		// The product-scoped detail is the only address a dependency needs:
+		// a dependency may sit on any container under the product, so the
+		// retired per-container form would name the wrong one and cost a
+		// redirect to reach the same page.
+		link := pages.TaskDepLink{
+			Title:      d.DependsOnTaskID.String(),
+			DetailPath: productTaskDetailPath(pid, d.DependsOnTaskID),
+		}
 		if dt, ok := in.DepTasks[d.DependsOnTaskID]; ok {
 			link.Title = dt.Title
 			link.Lane = string(dt.CurrentLane)
-			link.DetailPath = taskDetailPath(pid, dt.MilestoneID, dt.ID)
-		} else {
-			link.DetailPath = taskDetailPath(pid, c.ID, d.DependsOnTaskID)
 		}
 		page.Deps = append(page.Deps, link)
 	}
