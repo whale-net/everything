@@ -140,10 +140,6 @@ type authServerMetadata struct {
 // be advertised or accepted), TokenEndpointAuthMethodsSupported: ["none"]
 // (public PKCE clients; this package issues no client secret).
 func (p *Provider) authServerMetadataDoc() authServerMetadata {
-	grants := p.cfg.GrantTypesSupported
-	if len(grants) == 0 {
-		grants = []string{"authorization_code"}
-	}
 	return authServerMetadata{
 		Issuer:                            p.cfg.Issuer,
 		AuthorizationEndpoint:             p.cfg.Issuer + authorizePath,
@@ -151,7 +147,7 @@ func (p *Provider) authServerMetadataDoc() authServerMetadata {
 		RegistrationEndpoint:              p.cfg.Issuer + registerPath,
 		ScopesSupported:                   p.cfg.ScopesSupported,
 		ResponseTypesSupported:            []string{"code"},
-		GrantTypesSupported:               grants,
+		GrantTypesSupported:               []string{"authorization_code"},
 		TokenEndpointAuthMethodsSupported: []string{"none"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 	}
