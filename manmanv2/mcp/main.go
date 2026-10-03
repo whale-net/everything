@@ -44,6 +44,12 @@ func run(logger *slog.Logger) error {
 	if issuer == "" || clientID == "" {
 		return errors.New("OIDC_ISSUER and OIDC_CLIENT_ID are required: the MCP server has no unauthenticated mode")
 	}
+	_, grantSet := grantflow.ConfigFromEnv(os.Getenv, issuer)
+	whagentEnv, err := server.WhagentEnvFromEnv(os.Getenv, grantSet)
+	if err != nil {
+		return err
+	}
+	_ = whagentEnv // wired into the handler in Implementation
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
