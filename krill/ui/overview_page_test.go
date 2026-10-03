@@ -122,6 +122,38 @@ func (*overviewCounter) CountProductTasks(context.Context, store.ListProductTask
 	return 0, nil
 }
 
+// The task-detail reads, which shellPagePaths' walk reaches through the
+// per-container detail URL: that URL now 302s into the product-scoped
+// detail (FR 0c03eac1), and the product-scoped handler reads the task
+// before it checks the container, so a fixture with no GetTaskByID
+// nil-panics on a page the walk has always visited. The task answers under
+// a milestone the shared listing carries, so the detail renders rather than
+// answering its in-shell 404 -- the walk measures chrome, not data.
+func (*overviewCounter) GetTaskByID(_ context.Context, id uuid.UUID) (store.Task, error) {
+	return store.Task{
+		ID:          id,
+		Title:       "Overview walk task",
+		MilestoneID: uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001"),
+		CurrentLane: store.LaneImplementation,
+	}, nil
+}
+
+func (*overviewCounter) ListDependencies(context.Context, uuid.UUID, uuid.UUID) ([]store.TaskDependency, error) {
+	return nil, nil
+}
+
+func (*overviewCounter) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([]store.Note, error) {
+	return nil, nil
+}
+
+func (*overviewCounter) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
+	return store.Claim{}, store.ErrNotFound
+}
+
+func (*overviewCounter) GetEscalationEventByID(context.Context, uuid.UUID) (store.EscalationEvent, error) {
+	return store.EscalationEvent{}, store.ErrNotFound
+}
+
 // overviewMux mounts the shell's own routes against an app whose two
 // Overview reads are fixtures: the escalated counter and the delivery
 // listing. Mounting the real registrations (rather than just the Overview

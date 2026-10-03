@@ -321,22 +321,21 @@ func navGroupTable(t navTargets) []navGroup {
 	// fall back from.
 	//
 	// Each still OWNS the pre-redesign per-milestone subtree (its
-	// AltPath), because that URL is a task view however it is reached: an
-	// operator who followed a bookmarked /milestones/{mid}/tasks link is
-	// on a Tasks page and must see the sidebar say so. The wildcard is
-	// what lets one item own a subtree rooted at an id the chrome does
-	// not hold.
+	// AltPath). It was load-bearing while those URLs served their own
+	// pages: an operator who followed a bookmarked /milestones/{mid}/tasks
+	// link was on a Tasks page and had to see the sidebar say so. The
+	// wildcard is what lets one item own a subtree rooted at an id the
+	// chrome does not hold.
 	//
 	// The href does not follow: it is the product-wide page either way.
-	// Under FR f41a352d's legacy rule the list and board URLs become 302s
-	// into these very product-wide pages, so for those two the AltPath
-	// stops mattering -- the operator arrives by the redirect on a path
-	// Path already owns, and the sidebar marks Tasks from Path. The
-	// per-container task DETAIL is the exception and the reason this
-	// AltPath outlives the cutover: it keeps serving at the legacy URL,
-	// because redirecting a detail would trade a page that answers for
-	// one whose replacement has not shipped. An operator reading one of
-	// those must still see the sidebar say Tasks, and Path cannot do it.
+	// Every per-milestone URL is now a 302 -- the list and the board into
+	// these very product-wide pages (FR f41a352d), the detail into the
+	// product-scoped detail (FR 0c03eac1) -- so an operator who followed a
+	// bookmark arrives by the redirect on a path Path already owns, and the
+	// sidebar marks Tasks from Path. The AltPath is kept as the belt to
+	// that pair of braces rather than removed with them: a render whose URL
+	// still carries a pre-redesign path is then marked correctly too, and
+	// the wildcard costs nothing when nothing does.
 	tasks := productHref(t.Product, tasksSuffix)
 	board := productHref(t.Product, boardSuffix)
 

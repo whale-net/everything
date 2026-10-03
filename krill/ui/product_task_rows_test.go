@@ -608,47 +608,55 @@ func TestProductScopedTaskDetailRefusesATaskOutsideTheProduct(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "A task on another product's milestone")
 }
 
-// TestPerContainerTaskDetailStillServes pins the other half of the route
-// split: sharing serveTaskDetail between the two URLs did not cost the
-// per-container one its page.
+// TestPerContainerTaskDetailRedirectsToTheProductScopedDetail pins the
+// other half of the route split: the per-container URL is retired (FR
+// 0c03eac1) into the product-scoped detail the rows themselves link to.
 //
 // This is driven through mountShellRoutes rather than a hand-built mux so
 // the assertion covers the real registration as well as the handler -- a
-// route that served correctly but was no longer mounted would pass a
-// handler-level test. The URL is spelled by taskDetailPath, the same
+// URL that redirected correctly but was no longer mounted would pass a
+// handler-level test. The old URL is spelled by taskDetailPath, the same
 // helper the row link test says a row must NOT use, so the two URLs stay
 // distinguishable by construction rather than by a literal typed here.
-func TestPerContainerTaskDetailStillServes(t *testing.T) {
+//
+// And the redirect preserves what the operator came for: the container
+// named is the MILEPEBBLE the task belongs to, and the target carries only
+// the tid, so it lands on the task's own page.
+func TestPerContainerTaskDetailRedirectsToTheProductScopedDetail(t *testing.T) {
 	mux := productTaskDetailMux(t)
 
-	// The container named is the MILEPEBBLE the task belongs to: a task is
-	// scoped to one container, and that container is what the URL has to
-	// name for this route to serve it.
-	rec := fetch(t, mux, taskDetailPath(productTaskProduct, productTaskMilepebble, productTaskRowOnMilep))
+	legacy := taskDetailPath(productTaskProduct, productTaskMilepebble, productTaskRowOnMilep)
+	rec := fetch(t, mux, legacy)
 
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Contains(t, rec.Body.String(), "A task on a milepebble of the cut milestone")
+	require.Equal(t, http.StatusFound, rec.Code, "body: %s", rec.Body.String())
+	want := "/products/" + productTaskProduct.String() + "/tasks/" + productTaskRowOnMilep.String()
+	assert.Equal(t, want, rec.Header().Get("Location"))
+
+	followed := fetch(t, mux, rec.Header().Get("Location"))
+	require.Equal(t, http.StatusOK, followed.Code, "body: %s", followed.Body.String())
+	assert.Contains(t, followed.Body.String(), "A task on a milepebble of the cut milestone",
+		"the redirect must land on the task, not merely on a page that answers")
 }
 
-// TestPerContainerTaskDetailStillRefusesATaskInAnotherContainer is the
-// per-container route's own membership rule after the split: a task that
-// exists and reads fine, but belongs to a container the URL did not name,
-// is not this page's answer.
+// TestPerContainerTaskDetailRedirectStillRefusesATaskOutsideTheProduct is
+// the membership rule the redirect has to carry with it: retiring the
+// per-container URL must not retire the check that keeps another product's
+// task out of this product's chrome.
 //
-// The product-scoped URL has no container to compare against, so the two
-// routes' refusals are decided by different code -- this is the half that
-// only the per-container route can get wrong.
-func TestPerContainerTaskDetailStillRefusesATaskInAnotherContainer(t *testing.T) {
+// The product-scoped URL names no container, so its only membership check
+// is the listing lookup, and the redirect is safe only because that check
+// travels with it. Driving it through the legacy URL rather than straight
+// at the target is what makes this a test of the retirement.
+func TestPerContainerTaskDetailRedirectStillRefusesATaskOutsideTheProduct(t *testing.T) {
 	mux := productTaskDetailMux(t)
 
-	// The other task belongs to productTaskOtherMilestone, which this
-	// product's listing does not carry. The URL names a real container of
-	// THIS product, so only the container comparison can refuse it -- the
-	// listing check the product-scoped route relies on would pass here.
-	rec := fetch(t, mux, taskDetailPath(productTaskProduct, productTaskMilepebble, productTaskOtherMilestone))
+	legacy := taskDetailPath(productTaskProduct, productTaskMilepebble, productTaskOtherMilestone)
+	rec := fetch(t, mux, legacy)
+	require.Equal(t, http.StatusFound, rec.Code)
 
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-	assert.NotContains(t, rec.Body.String(), "A task on another product's milestone")
+	followed := fetch(t, mux, rec.Header().Get("Location"))
+	assert.Equal(t, http.StatusNotFound, followed.Code)
+	assert.NotContains(t, followed.Body.String(), "A task on another product's milestone")
 }
 
 // TestTasksRegionRefreshReReadsTheCurrentScope pins the Refresh control's

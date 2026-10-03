@@ -400,32 +400,305 @@ func TestLegacyMilepebbleURLDoesNot404(t *testing.T) {
 	}
 }
 
-// TestLegacyTaskDetailURLStillServes is the other half of FR f41a352d's
-// rule, and the half a redirect-everything change gets wrong: the
-// per-container task DETAIL keeps serving its own page rather than
-// redirecting.
+// TestLegacyTaskDetailRedirectsToTheProductScopedDetail is FR 0c03eac1's
+// legacy-URL clause: a pre-redesign milestone task detail URL redirects to
+// the redesigned detail.
 //
-// The detail is the one URL of the three where redirecting would lose the
-// operator something. A list and a board both exist in the product-wide
-// view, so sending the old URL there changes which page answers. A task
-// detail does not: its replacement has not shipped, so a redirect would
-// trade a page that answers for one that does not.
-func TestLegacyTaskDetailURLStillServes(t *testing.T) {
+// It retires into the DETAIL and not into a list the way the per-container
+// list and board do, because the operator following a bookmarked task link
+// came to read that task. That is also why the target carries the tid alone
+// rather than a container scope: the product-scoped detail resolves the
+// task's own milestone from the task, so a redirect that pinned the old
+// URL's {mid} would send a task that had since moved between containers to
+// a page that cannot find it.
+//
+// Both halves are driven because either alone is satisfiable by a wrong
+// redirect: the Location pins the target's shape, and the walk proves the
+// target actually serves the task rather than a well-chromed 404.
+func TestLegacyTaskDetailRedirectsToTheProductScopedDetail(t *testing.T) {
 	f := newLegacyFixture(t)
 	detail := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String() +
 		"/tasks/" + f.tid.String()
 
 	rec := fetch(t, f.mux, detail)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET %s = %d, want 200: the task detail still serves its own page", detail, rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("GET %s = %d, want 302: the redesigned detail replaces this page", detail, rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "" {
-		t.Errorf("GET %s answered a redirect to %q: the detail keeps serving until its successor ships", detail, loc)
+	want := productTaskDetailPath(f.pid, f.tid)
+	if got := rec.Header().Get("Location"); got != want {
+		t.Fatalf("GET %s redirected to %q, want the product-scoped detail %q", detail, got, want)
 	}
-	// And it is the task's own page rather than an in-shell status page:
-	// the fixture's one task's title is what the region carries.
-	if body := rec.Body.String(); !strings.Contains(body, "Test task") {
-		t.Errorf("GET %s did not render the task itself", detail)
+
+	code, final := followRedirect(t, f, detail)
+	if code != http.StatusOK {
+		t.Fatalf("GET %s resolved to %d at %s, want 200: an old task link must still read the task",
+			detail, code, final)
+	}
+	if final != want {
+		t.Errorf("GET %s landed on %s, want %s", detail, final, want)
+	}
+	if body := fetch(t, f.mux, final).Body.String(); !strings.Contains(body, "Test task") {
+		t.Errorf("GET %s landed on %s rendering no task: the redirect preserved the URL but not the task", detail, final)
+	}
+}
+
+// TestLegacyTaskDetailRedirectIsNotContainerScoped pins the {mid} half of
+// the redirect rule: the old URL's container does not travel.
+//
+// A target that carried the container -- a scope query, or the per-
+// container URL itself -- would be a redirect that resolves and still
+// strands the operator whenever the task's own milestone is not the one the
+// old URL named. This drives that case end to end rather than reading the
+// query: the milepebble URL for the milestone's own task is the exact
+// mismatch, and the product-scoped detail serves it because it resolves the
+// task's container itself.
+func TestLegacyTaskDetailRedirectIsNotContainerScoped(t *testing.T) {
+	f := newLegacyFixture(t)
+	// The URL names the milepebble; the fixture's task belongs to the
+	// milestone. The per-container URL would have refused this outright.
+	detail := "/spec/products/" + f.pid.String() + "/milestones/" + f.mpid.String() +
+		"/tasks/" + f.tid.String()
+
+	rec := fetch(t, f.mux, detail)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("GET %s = %d, want 302", detail, rec.Code)
+	}
+	want := productTaskDetailPath(f.pid, f.tid)
+	if got := rec.Header().Get("Location"); got != want {
+		t.Errorf("GET %s redirected to %q, want %q: the redirect carries the tid, not the old URL's container",
+			detail, got, want)
+	}
+
+	body := fetch(t, f.mux, want).Body.String()
+	if !strings.Contains(body, "Test task") {
+		t.Errorf("GET %s reached %s but rendered no task", detail, want)
+	}
+}
+
+// TestLegacyTaskDetailUnresolvableURLStaysInShell is the one case this
+// redirect cannot make: a URL whose ids do not parse has no product-scoped
+// detail to name. It answers in the shell rather than redirecting nowhere,
+// the same rule every other successor obeys.
+func TestLegacyTaskDetailUnresolvableURLStaysInShell(t *testing.T) {
+	f := newLegacyFixture(t)
+	p := "/spec/products/" + f.pid.String() + "/milestones/"
+
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{name: "unparseable task id", url: p + f.mid.String() + "/tasks/not-a-uuid"},
+		{name: "unparseable container id", url: p + "not-a-uuid/tasks/" + f.tid.String()},
+		// The product id is the third wildcard this URL declares, and the
+		// one legacyTaskDetailSuccessor parses before the others. A
+		// successor that built the target from a pid it had not checked
+		// would answer /products/ 404 for a URL whose tid was perfectly
+		// good -- so the unparseable pid is its own case, not a repeat.
+		{name: "unparseable product id", url: "/spec/products/not-a-uuid/milestones/" + f.mid.String() + "/tasks/" + f.tid.String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := fetch(t, f.mux, tc.url)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d, want 200: an unresolvable legacy URL must still land in the shell",
+					tc.url, rec.Code)
+			}
+			if loc := rec.Header().Get("Location"); loc != "" {
+				t.Errorf("GET %s redirected to %q, which has nowhere to go", tc.url, loc)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, `data-krill="no-products"`) {
+				t.Errorf("GET %s did not render the product index:\n%s", tc.url, body)
+			}
+		})
+	}
+}
+
+// TestLegacyTaskDetailRedirectAnswersEveryMethodWithFound pins the half of
+// the redirect a status code alone does not: which methods answer it, and
+// with which code.
+//
+// The legacy pattern carries no method prefix, so the redirect is
+// mounted for every method rather than for GET alone, and 302 is the code
+// that makes that safe here. The target is registered GET-only (a task
+// detail is a read), and 302 is the status a client may re-issue as a GET,
+// so a non-GET that follows the redirect lands on the page. A 307 or 308
+// would preserve the method instead and land on a 405; a 301 would let a
+// browser cache the mapping past the product-membership check the target
+// applies, which is the whole reason this URL is a redirect and not a
+// copy. So this asserts 302 for every method, and asserts the two codes
+// that would each be a defect in their own right.
+//
+// The 405 the target answers a preserved method with is read from the real
+// registration rather than asserted as a constant, so the reason 302 is
+// the right code here is checked against the route that has to accept the
+// redirected request.
+func TestLegacyTaskDetailRedirectAnswersEveryMethodWithFound(t *testing.T) {
+	f := newLegacyFixture(t)
+	detail := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String() +
+		"/tasks/" + f.tid.String()
+	want := productTaskDetailPath(f.pid, f.tid)
+
+	// Read the target's own method set off the live registration: the
+	// 302's method contract is only correct relative to what the target
+	// accepts, so a target that later grows a POST would make a
+	// hard-coded "405" here a lie.
+	target := httptest.NewRecorder()
+	f.mux.ServeHTTP(target, httptest.NewRequest(http.MethodPost, want, nil))
+	if target.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST %s = %d, want 405: the redirect's method contract is asserted against a target that answers it, "+
+			"and this one does not refuse POST", want, target.Code)
+	}
+	if allow := target.Header().Get("Allow"); !strings.Contains(allow, http.MethodGet) {
+		t.Fatalf("POST %s answers Allow %q, which does not include GET: a 302's method downgrade has nothing to land on", want, allow)
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			f.mux.ServeHTTP(rec, httptest.NewRequest(method, detail, nil))
+
+			if rec.Code != http.StatusFound {
+				t.Errorf("%s %s = %d, want 302", method, detail, rec.Code)
+			}
+			// Named rather than folded into the 302 check above, because
+			// each of these is a redirect that is wrong in its own way and
+			// an operator would feel all three: 301 and 308 are cacheable
+			// and outlive the page they name, 307 preserves a method the
+			// target refuses.
+			for _, wrong := range []int{http.StatusMovedPermanently, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+				if rec.Code == wrong {
+					t.Errorf("%s %s answers %d, which must not replace 302: a cacheable or method-preserving redirect "+
+						"either pins the old URL past the product-membership check or lands a non-GET on a 405", method, detail, wrong)
+				}
+			}
+			if got := rec.Header().Get("Location"); got != want {
+				t.Errorf("%s %s redirected to %q, want %q", method, detail, got, want)
+			}
+		})
+	}
+}
+
+// TestLegacyTaskDetailRedirectLocationIsCanonical pins that every spelling
+// of the same task id redirects to the same Location.
+//
+// A successor that interpolated the path segment would hand back whatever
+// spelling arrived, and the target would then be a URL no link in the UI
+// spells and no cache keys the same way twice. Each case below is the same
+// task as the canonical one, so a Location built from the parsed UUID is
+// the same string for all of them; each is driven through a full follow so
+// a canonicalized Location is also shown to be a Location that resolves.
+//
+// The upper-case spelling is the one that discriminates today: the mux
+// hands a wildcard's segment to the handler already unescaped, so the
+// percent-encoded case reaches uuid.Parse identically either way and pins
+// the weaker half -- that the Location never carries an escape of its own.
+func TestLegacyTaskDetailRedirectLocationIsCanonical(t *testing.T) {
+	f := newLegacyFixture(t)
+	p := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String() + "/tasks"
+	want := productTaskDetailPath(f.pid, f.tid)
+
+	for _, tc := range []struct {
+		name string
+		tid  string
+	}{
+		// %2D is a "-". The mux unescapes a wildcard's segment before the
+		// handler reads it, so the successor sees the same task -- which
+		// is why this case pins that the Location it builds carries no
+		// escape, rather than that the two spellings differ at all.
+		{name: "percent-encoded", tid: strings.Replace(f.tid.String(), "-", "%2D", 1)},
+		{name: "upper case", tid: strings.ToUpper(f.tid.String())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := fetch(t, f.mux, p+"/"+tc.tid)
+			if rec.Code != http.StatusFound {
+				t.Fatalf("GET %s/%s = %d, want 302", p, tc.tid, rec.Code)
+			}
+			if got := rec.Header().Get("Location"); got != want {
+				t.Errorf("GET %s/%s redirected to %q, want the canonical %q: the Location must come from the "+
+					"parsed id, not from the request path's own spelling", p, tc.tid, got, want)
+			}
+			if code, final := followRedirect(t, f, p+"/"+tc.tid); code != http.StatusOK || final != want {
+				t.Errorf("GET %s/%s resolved to %d at %s, want 200 at %s", p, tc.tid, code, final, want)
+			}
+		})
+	}
+}
+
+// TestNoPerContainerTaskURLRendersTheDetail is the retirement's negative
+// half: no URL under the pre-redesign per-container task subtree serves the
+// task detail any more, and the one canonical form that does resolve is the
+// redirect.
+//
+// The table already pins that the pattern redirects, and re-adding a Serve
+// beside the Successor is caught by the one-destination check. What neither
+// catches is a second registration somewhere that happens to cover a
+// neighbouring spelling of the same URL -- a subtree pattern, a trailing
+// slash, a sub-page hung under the detail -- which would leave the old page
+// serving through a door the table does not name. So this walks the
+// near-miss forms rather than the one registered pattern: a route that
+// still dispatched handleTaskDetail anywhere in that subtree would render
+// the page's own markers at one of them.
+//
+// The forms that answer 404 did so before the retirement too -- the pattern
+// was never a subtree -- so this is not a new dark URL claim. What is
+// asserted is only what the retirement owns: none of them renders the
+// detail, and the canonical form's redirect target is the page that does.
+//
+// It also carries the redirect's loop-freedom, which no other check states
+// directly: the Location answers 200 with no Location of its own, so a
+// successor pointed at another successor's target could not chain.
+func TestNoPerContainerTaskURLRendersTheDetail(t *testing.T) {
+	f := newLegacyFixture(t)
+	p := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String() + "/tasks"
+	sp := "/spec/products/" + f.pid.String()
+	want := productTaskDetailPath(f.pid, f.tid)
+
+	// The markers are the detail page's own, not a status: a 200 that
+	// rendered them would mean the old page still answers, and a 404 or a
+	// 302 that somehow carried them would mean the check cannot tell the
+	// three apart.
+	const rail = `data-krill="task-properties-rail"`
+	detailPage := func(body string) bool {
+		return strings.Contains(body, rail) || strings.Contains(body, "Test task")
+	}
+
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{name: "canonical legacy URL", url: p + "/" + f.tid.String()},
+		{name: "trailing slash", url: p + "/" + f.tid.String() + "/"},
+		{name: "sub-page under the detail", url: p + "/" + f.tid.String() + "/notes"},
+		{name: "query string under the detail", url: p + "/" + f.tid.String() + "/?tab=overview"},
+		{name: "query string on the list", url: p + "?task=" + f.tid.String()},
+		{name: "repeated tasks segment", url: p + "/tasks/" + f.tid.String()},
+		{name: "container after the id", url: p + "/" + f.tid.String() + "/milestones/" + f.mid.String()},
+		{name: "product-scoped without the container", url: sp + "/tasks/" + f.tid.String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := fetch(t, f.mux, tc.url)
+			if body := rec.Body.String(); detailPage(body) {
+				t.Errorf("GET %s = %d and rendered the task detail:\n%s\n"+
+					"a per-container task URL is still serving: the pre-redesign detail was not fully retired",
+					tc.url, rec.Code, body)
+			}
+		})
+	}
+
+	// The canonical form is the one that resolves, and it resolves by
+	// redirecting to a page that does not redirect again.
+	rec := fetch(t, f.mux, p+"/"+f.tid.String())
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+		t.Fatalf("GET %s = %d at %q, want 302 at %s", p+"/"+f.tid.String(), rec.Code, rec.Header().Get("Location"), want)
+	}
+	landed := fetch(t, f.mux, want)
+	if landed.Code != http.StatusOK {
+		t.Errorf("GET %s = %d, want 200: the redirect must not chain", want, landed.Code)
+	}
+	if loc := landed.Header().Get("Location"); loc != "" {
+		t.Errorf("GET %s redirected again to %q: the retirement chains", want, loc)
+	}
+	if !detailPage(landed.Body.String()) {
+		t.Errorf("GET %s did not render the task detail:\n%s", want, landed.Body.String())
 	}
 }
 
@@ -574,7 +847,10 @@ func TestPreRedesignURLsRenderNoReadFailure_HasTeeth(t *testing.T) {
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
 
-	body := fetch(t, mux, milestoneTasksPath(pid, mid)+"/"+tid.String()).Body.String()
+	// The product-scoped detail, not the pre-redesign URL: that one is a
+	// 302 now, so fetching it here would assert on a redirect body rather
+	// than on the page a failing slice read actually degrades.
+	body := fetch(t, mux, productTaskDetailPath(pid, tid)).Body.String()
 	if !strings.Contains(body, `alert-error`) {
 		t.Fatalf("a task detail page whose slice read failed rendered no error alert: " +
 			"the honesty check has nothing to catch and is vacuous")

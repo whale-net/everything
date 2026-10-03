@@ -244,7 +244,14 @@ func (app *App) taskDetailProductHeader(ctx context.Context, r *http.Request, pi
 	return productHeaderOf(p)
 }
 
-// handleTaskDetail renders one task's detail.
+// handleTaskDetail renders one task's detail at the pre-redesign
+// per-container URL, resolving the container from the path.
+//
+// No route mounts it: legacyURLs retires that URL into the product-scoped
+// detail (FR 0c03eac1). It stays because it is the one caller that resolves
+// the container by hand rather than from the task, so it is where the
+// per-container membership rule — a task belonging to another container
+// under the same product is not this page's answer — is exercised.
 func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	pid, c, ok := app.resolveTaskRoute(w, r)
 	if !ok {
