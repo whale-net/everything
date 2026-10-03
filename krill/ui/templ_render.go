@@ -74,6 +74,10 @@ document.documentElement.setAttribute('data-theme',t);})();
 // renders this from CustomHead, so a classic inline script here runs while
 // the parser is still inside <head> and document.body is still null. htmx
 // events bubble, so document sees every swap regardless.
+//
+// The swap listener is named `htmx:after:swap` -- the event htmx 4.0.0
+// actually dispatches. htmx 4 renamed its lifecycle events to the colon
+// form, so the 1.x camelCase name binds a listener that never fires.
 const leaseCountdownScript = `
 (function(){
 function span(ms){
@@ -93,7 +97,7 @@ nodes[i].textContent=left>=0?('Lease in '+span(left)):('Lease expired '+span(-le
 }
 }
 document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
-document.addEventListener('htmx:afterSwap',function(e){upgrade(e.target);});
+document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
 })();`
 
 // markdownCSS gives goldmark-rendered markdown (pages/markdown.go's
@@ -138,9 +142,13 @@ const markdownCSS = `
 // Both listeners are on document, never on document.body: this script is
 // emitted into the head, where <body> does not exist yet, so a
 // document.body guard would evaluate false and bind nothing -- the
-// afterSwap upgrade would then never fire, and every in-place swap on the
+// swap upgrade would then never fire, and every in-place swap on the
 // Tasks region (a filter change, a Refresh) would leave the element
 // showing the absolute instant the server rendered.
+//
+// The swap listener is named `htmx:after:swap`, the event htmx 4.0.0
+// dispatches; the 1.x camelCase name is never dispatched and would bind a
+// listener that never fires.
 const relativeAgeScript = `
 (function(){
 function ago(then){
@@ -158,7 +166,7 @@ if(!isNaN(t)){nodes[i].textContent='Updated '+ago(t)+' ago';}
 }
 }
 document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
-document.addEventListener('htmx:afterSwap',function(e){upgrade(e.target);});
+document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
 })();`
 
 // renderShell writes one signed-in page: the workspace chrome plus body,

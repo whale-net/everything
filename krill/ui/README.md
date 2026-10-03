@@ -771,7 +771,7 @@ the read did not report cannot be judged live or lapsed, so calling it
 **Freshness is an instant, not a sentence.** The region renders
 `data-krill-updated-at` with the read's absolute RFC3339 value and nothing
 derived from it; `relativeAgeScript` (templ_render.go, in the document
-head) turns it into "Updated N ago" and re-runs on `htmx:afterSwap`. A
+head) turns it into "Updated N ago" and re-runs on `htmx:after:swap`. A
 server-rendered relative string would be as old as the response and nothing
 inside the region would reveal it. Without JavaScript the operator sees the
 instant, which is why that is the element's server-side content.

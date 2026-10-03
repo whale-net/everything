@@ -104,7 +104,7 @@ func TestBoardPageShipsTheLeaseCountdownScriptInTheHead(t *testing.T) {
 	assert.Contains(t, head, "Lease in ")
 	assert.Contains(t, head, "Lease expired ")
 	assert.Contains(t, head, " ago")
-	assert.Contains(t, head, "htmx:afterSwap")
+	assert.Contains(t, head, "htmx:after:swap")
 
 	// And it is head-only: a fragment swapped into the page must not carry
 	// a second copy of it, or every Refresh would stack another listener.

@@ -312,7 +312,7 @@ func TestBoardCardCarriesNoRelativeLeaseWording(t *testing.T) {
 	head := buildHead()
 	assert.Contains(t, head, `time[data-krill="task-lease"][datetime]`)
 	assert.Contains(t, head, "Lease in ")
-	assert.Contains(t, head, "htmx:afterSwap")
+	assert.Contains(t, head, "htmx:after:swap")
 }
 
 // TestBoardFragmentDiffersOnlyByItsFreshnessInstant is the same rule from
