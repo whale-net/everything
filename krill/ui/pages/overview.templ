@@ -255,29 +255,6 @@ type OverviewEscalation struct {
 	EscalatedAtExact string
 }
 
-// NeedsAttentionMax is how many escalated tasks the panel lists. The FR's
-// "at most the 5 most recently escalated" bounds what an operator skims
-// before following See all, so the read asks the store for exactly this
-// many rather than fetching a default page and truncating it.
-const NeedsAttentionMax = 5
-
-// OverviewEscalation is one escalated task in the Needs-attention panel:
-// why it escalated, what it is, and when. EscalatedAtExact carries the
-// same instant as the relative EscalatedAt so hovering can surface the
-// precise time, which the relative figure alone cannot answer.
-type OverviewEscalation struct {
-	TaskID string
-	Title  string
-	Href   string
-
-	// Reason is the store's wire value; the badge renders its human
-	// wording through components.EscalationReasonLabel.
-	Reason string
-
-	EscalatedAt      string
-	EscalatedAtExact string
-}
-
 // inFlightBadges renders one badge per in-flight container, through the
 // same statusBadge the delivery page uses so the colours match every
 // other status badge in the shell.
@@ -394,7 +371,6 @@ templ Overview(page OverviewPage) {
 			@overviewStatTiles(page.StatTiles)
 		}
 		<div class="grid gap-6 lg:grid-cols-2">
-			@NeedsAttentionPanel(page)
 			<div class="card bg-base-100 border border-base-300" data-krill="overview-in-flight-panel">
 				<div class="card-body">
 					<h2 class="card-title">Milestones in flight</h2>
