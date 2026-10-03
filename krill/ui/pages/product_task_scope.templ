@@ -48,6 +48,19 @@ const (
 	productTaskScopeMilepebbleMode = "milepebble"
 )
 
+// ProductTaskLaneOption is one lane the Tasks view's lane select offers.
+type ProductTaskLaneOption struct {
+	// Value is the lane's wire value -- the same string the store's own
+	// filter set is keyed by, so a lane this page offers is a lane the
+	// read accepts.
+	Value string
+	// Label is what the operator reads, e.g. "Testing". Equal to Value:
+	// the lane vocabulary has no display variant of its own.
+	Label string
+	// Selected marks the lane this request resolved to.
+	Selected bool
+}
+
 // ProductTaskScopeControl is the scope control's view model.
 type ProductTaskScopeControl struct {
 	// Path is the view's own URL -- the form's GET action and its hx-get,
@@ -81,8 +94,20 @@ type ProductTaskScopeControl struct {
 	Milestones  []ProductTaskContainerOption
 	Milepebbles []ProductTaskContainerOption
 
-	// Lane and OnlyStuck are the sibling filters this URL carries. They
-	// are re-submitted as hidden fields so changing the scope keeps them
+	// ShowFilters reveals the lane select and the only-stuck checkbox --
+	// the Tasks view's own filters (FR 61d7fb7b). Off on the Board, which
+	// reuses the same parsed scope but carries these two as the hidden
+	// fields below instead: they are what a scope change must not drop,
+	// not controls the Board offers.
+	ShowFilters bool
+
+	// Lanes are the lane select's options, "Any lane" first, marking the
+	// one this request resolved to. Empty when ShowFilters is off.
+	Lanes []ProductTaskLaneOption
+
+	// Lane and OnlyStuck are the sibling filters this URL carries. With
+	// ShowFilters on they drive the select and the checkbox; with it off
+	// they are re-submitted as hidden fields, so a scope change keeps them
 	// rather than silently dropping a filter the operator set.
 	Lane      string
 	OnlyStuck bool
@@ -138,16 +163,52 @@ templ ProductTaskScopeForm(c ProductTaskScopeControl) {
 				</select>
 			</label>
 		}
-		if c.Lane != "" {
+		if c.ShowFilters {
+			@ProductTaskFilterControls(c)
+		}
+		if !c.ShowFilters && c.Lane != "" {
 			<input type="hidden" name={ ProductTaskLaneQueryParam } value={ c.Lane } data-krill="scope-carried-lane" />
 		}
-		if c.OnlyStuck {
+		if !c.ShowFilters && c.OnlyStuck {
 			<input type="hidden" name={ ProductTaskOnlyStuckQueryParam } value="true" data-krill="scope-carried-only-stuck" />
 		}
 		<button type="submit" class="btn btn-primary btn-sm" data-krill="scope-apply">
-			Apply scope
+			Apply
 		</button>
 	</form>
+}
+
+// ProductTaskFilterControls is the Tasks view's own two filters: a lane
+// select and an "Only stuck" checkbox (FR 61d7fb7b).
+//
+// They live INSIDE the scope form rather than beside it, which is what
+// makes every filter and the scope one GET with one Apply: changing the
+// lane keeps the scope, and changing the scope keeps the lane, because
+// there is only one form to submit and it carries all of them. Two forms
+// would mean each had to re-submit the other's state as hidden fields --
+// the drift that a shared link would then reproduce.
+//
+// The checkbox submits only when checked, and an unchecked box submits
+// nothing at all: only_stuck absent IS false, which is why there is no
+// companion hidden field here the way the Board carries one.
+templ ProductTaskFilterControls(c ProductTaskScopeControl) {
+	<label class="fieldset">
+		<span class="fieldset-legend">Lane</span>
+		<select name={ ProductTaskLaneQueryParam } class="select select-sm" data-krill="lane-filter-select">
+			for _, o := range c.Lanes {
+				<option value={ o.Value } selected?={ o.Selected } data-krill-lane={ o.Value }>
+					{ o.Label }
+				</option>
+			}
+		</select>
+	</label>
+	<label class="label cursor-pointer justify-start gap-2 p-0">
+		<input type="checkbox" name={ ProductTaskOnlyStuckQueryParam } value="true" class="checkbox checkbox-sm"
+			checked?={ c.OnlyStuck }
+			data-krill="only-stuck-filter"
+			title="Expired lease, at the attempt cap, escalated, or cancelled." />
+		<span class="label-text">Only stuck</span>
+	</label>
 }
 
 // scopeModeHint is the one sentence that says what each mode means, on
