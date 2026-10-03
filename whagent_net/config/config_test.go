@@ -283,3 +283,28 @@ func TestValidate_ToolLoadingMode_RejectsUnknownValue_NamesAgentAndValue(t *test
 		assert.Contains(t, err.Error(), mode)
 	}
 }
+
+// TestRealAgentsYAML_ManmanV2Ops pins the manmanv2-ops agent's tool
+// allowlist and required realm role.
+func TestRealAgentsYAML_ManmanV2Ops(t *testing.T) {
+	_, agents, err := Load()
+	require.NoError(t, err)
+
+	var got *AgentDefinitionConfig
+	for i := range agents {
+		if agents[i].AgentID == "manmanv2-ops" {
+			got = &agents[i]
+		}
+	}
+	require.NotNil(t, got)
+	require.NotNil(t, got.Scope)
+	assert.Equal(t, "manmanv2", *got.Scope)
+	require.Len(t, got.ToolSet, 1)
+	assert.Equal(t, []string{
+		"whoami", "list_servers", "get_server", "list_deployments", "get_deployment",
+		"get_connect_address", "list_pending_restarts", "get_session_actions",
+		"list_action_definitions", "get_action_definition", "start_deployment",
+		"stop_deployment", "restart_deployment", "execute_action",
+	}, got.ToolSet[0].AllowedTools)
+	assert.Contains(t, RequiredRoles(agents), "whagent-manmanv2-ops")
+}
