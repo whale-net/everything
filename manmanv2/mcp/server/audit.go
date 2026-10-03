@@ -23,6 +23,10 @@ type AuditRecord struct {
 	Reason string
 	// Snapshot is the pre-call state captured by Tool.Snapshot, if any.
 	Snapshot any
+	// Agent is the whagent-net actor behind the call; nil for direct callers.
+	Agent *Agent
+	// SubjectIssuer is the on-behalf-of user's issuer, set on whagent calls whose user could not be resolved.
+	SubjectIssuer string
 }
 
 // Auditor receives one record per tool call, allowed or refused.
@@ -41,6 +45,12 @@ func (a LogAuditor) Record(ctx context.Context, r AuditRecord) {
 		"tool", r.Tool,
 		"target_id", r.TargetID,
 		"outcome", r.Outcome,
+	}
+	if r.Agent != nil {
+		attrs = append(attrs, "agent_subject", r.Agent.Subject, "agent_id", r.Agent.AgentID, "whagent_session_id", r.Agent.SessionID)
+	}
+	if r.SubjectIssuer != "" {
+		attrs = append(attrs, "sub_iss", r.SubjectIssuer)
 	}
 	if r.Reason != "" {
 		attrs = append(attrs, "reason", r.Reason)

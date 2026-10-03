@@ -74,7 +74,7 @@ func handleCall(ctx context.Context, reg *Registry, audit Auditor, caller *Calle
 		audit.Record(ctx, rec)
 		return nil, ErrUnauthenticated
 	}
-	rec.Subject, rec.Persona = caller.Subject, caller.Persona
+	rec.Subject, rec.Persona, rec.Agent = caller.Subject, caller.Persona, caller.Agent
 
 	if err := reg.Authorize(caller.Persona, name); err != nil {
 		rec.Outcome, rec.Reason = OutcomeRefused, err.Error()
