@@ -116,8 +116,11 @@ type MilestonesPage struct {
 	Rows []MilestoneRow
 
 	// Empty is set when the filter matched no milestone, so the region
-	// says so rather than reading as a table that failed.
-	Empty bool
+	// says so rather than reading as a table that failed. EmptyDetail
+	// names the active filter, so "no milestones here" is distinguishable
+	// from a product that has no milestones at all.
+	Empty       bool
+	EmptyDetail string
 
 	// ProgressError is set when the progress read failed. The table still
 	// renders: a failed figure must not cost the operator the names,
@@ -253,7 +256,7 @@ templ Milestones(page MilestonesPage) {
 			<div data-krill="milestones-empty">
 				@htmxui.EmptyState(
 					"No milestones here",
-					"This product has no milestone in the selected status.",
+					page.EmptyDetail,
 					"", "", templ.Attributes{},
 				)
 			</div>

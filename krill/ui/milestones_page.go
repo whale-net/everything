@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -127,25 +128,39 @@ func (app *App) buildMilestonesPage(r *http.Request, product store.Product, list
 		Statuses: milestoneStatusOptions(status),
 	}
 
+	// A failed progress read costs the Progress column, not the table: the
+	// rows are still built from the listing alone, so the operator keeps
+	// the names, statuses, budgets and outcomes and each Progress cell
+	// says what could not be read. A table that vanished entirely would
+	// leave them with neither the roadmap nor the reason it is missing.
 	progress, err := app.milestoneProgressByID(r.Context(), product.ID)
-	switch {
-	case err != nil:
+	if err != nil {
 		logger.Error("milestones progress read failed", "product", product.ID.String(), "error", err)
 		page.ProgressError = milestonesProgressError
-	default:
-		page.Rows = milestoneRowsOf(product.ID, listing, progress)
-		page.Empty = len(page.Rows) == 0
-		return page
+		page.Rows = milestoneRowsWithoutProgress(product.ID, listing, status)
+	} else {
+		page.Rows = milestoneRowsOf(product.ID, listing, progress, status)
 	}
-
-	// With no figures to show, the rows are still built -- from the
-	// listing alone -- so the table keeps its names, statuses, budgets and
-	// outcomes and each Progress cell says what could not be read. A table
-	// that vanished entirely would leave the operator with neither the
-	// roadmap nor the reason it is missing.
-	page.Rows = milestoneRowsWithoutProgress(product.ID, listing)
 	page.Empty = len(page.Rows) == 0
+	page.EmptyDetail = milestonesEmptyDetail(status)
 	return page
+}
+
+// milestonesEmptyDetail is the empty state's second sentence, naming the
+// filter that produced it.
+//
+// The two cases are genuinely different and must not read alike: a product
+// with no milestone in the chosen status has plenty of milestones under
+// "All statuses", while a product with no milestones at all is a
+// different page. Without the filter named, both render as "no
+// milestones", and an operator filtering to "shipped" concludes their
+// product was never built.
+func milestonesEmptyDetail(status store.MilestoneStatus) string {
+	if status == "" {
+		return "This product has no milestones yet."
+	}
+	return "This product has no milestone in status “" + string(status) +
+		"”. Choose “All statuses” to see every milestone."
 }
 
 // milestonesProgressError is the sentence the Progress column shows when
@@ -193,24 +208,48 @@ func (app *App) milestoneProgressByID(ctx context.Context, productID uuid.UUID) 
 }
 
 // milestoneRowsOf builds one row per milestone, with its figures from the
-// progress read.
+// progress read, in the FR's order: highest roadmap position first, then
+// id.
 //
-// The order is the FR's: highest roadmap position first, then id. The
-// delivery listing arrives ordered by NAME (store.Milestones.
-// ListRefsByProduct), which is not this table's order, so the rows are
-// sorted here -- the position is not carried on the listing entry, and
-// inventing one by reading the names would be a guess.
+// The sort is here rather than inherited because the listing arrives
+// position ASC -- ascending is the renderer's creation order, and this
+// table reads newest-first. Position is carried on the listing entry for
+// exactly this: reversing a sorted slice would also reverse the id
+// tiebreak within one position, which is not the same order.
 //
-// The listing is the row set: it is the read that filters (its statuses
-// parameter is what the select submits), so a milestone the filter
-// excludes is absent from it and absent from the table. A milestone with
-// no progress row -- which the all-containers scope should not produce,
-// since its LEFT JOIN keeps zero-task containers -- falls back to a row
-// with no figures rather than being dropped, so a progress read that came
-// back short never costs the operator a milestone.
-func milestoneRowsOf(productID uuid.UUID, listing slice.DeliveryListing, progress map[uuid.UUID]store.ContainerTaskProgress) []pages.MilestoneRow {
-	rows := make([]pages.MilestoneRow, 0, len(listing.Milestones))
+// The rows are the listing's milestones, re-filtered on each milestone's
+// OWN status. The delivery read's filter deliberately keeps a milestone
+// whose milepebble matched even when the milestone itself did not (see
+// //krill/slice's ListProductDelivery), which is right for a wire shape
+// that nests milepebbles under their parent and wrong for this table: a
+// row badged "in progress" under a "shipped" filter would be the one
+// obvious way for the select to lie. So the read narrows the work and
+// this filter decides the rows -- and it is the milestone's own status
+// either way, never a milepebble's.
+func milestoneRowsOf(productID uuid.UUID, listing slice.DeliveryListing, progress map[uuid.UUID]store.ContainerTaskProgress, status store.MilestoneStatus) []pages.MilestoneRow {
+	// The listing's own slice is not sorted: a caller may still be
+	// holding it, and sorting it in place would reorder the delivery
+	// page's rows under this one.
+	entries := make([]slice.MilestoneListingEntry, 0, len(listing.Milestones))
 	for _, m := range listing.Milestones {
+		if status == "" || m.Status == status {
+			entries = append(entries, m)
+		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].Position != entries[j].Position {
+			return entries[i].Position > entries[j].Position
+		}
+		// The FR's tiebreak, and the same pair the product task read
+		// sorts its own rows by (task_product_list.go's ORDER BY
+		// m.position DESC, m.id ASC), so a milestone and its tasks appear
+		// in one consistent order. The uuid's own bytes compare the way
+		// Postgres compares the id column.
+		return entries[i].ID.String() < entries[j].ID.String()
+	})
+
+	rows := make([]pages.MilestoneRow, 0, len(entries))
+	for _, m := range entries {
 		rows = append(rows, milestoneRow(productID, m, progress[m.ID]))
 	}
 	return rows
@@ -218,8 +257,8 @@ func milestoneRowsOf(productID uuid.UUID, listing slice.DeliveryListing, progres
 
 // milestoneRowsWithoutProgress is milestoneRowsOf with the figures the
 // failed read could not supply, for the case where it failed at all.
-func milestoneRowsWithoutProgress(productID uuid.UUID, listing slice.DeliveryListing) []pages.MilestoneRow {
-	return milestoneRowsOf(productID, listing, nil)
+func milestoneRowsWithoutProgress(productID uuid.UUID, listing slice.DeliveryListing, status store.MilestoneStatus) []pages.MilestoneRow {
+	return milestoneRowsOf(productID, listing, nil, status)
 }
 
 // milestoneRow is one milestone's row: the listing entry's own fields, and

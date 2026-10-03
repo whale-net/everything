@@ -57,14 +57,22 @@ type MilepebbleListingEntry struct {
 // the caller's status filter, so long as at least one milepebble did; see
 // ListProductDelivery's own doc comment for that rule.
 type MilestoneListingEntry struct {
-	ID               uuid.UUID                 `json:"id"`
-	Name             string                    `json:"name"`
-	Outcome          *string                   `json:"outcome"`
-	FRBudget         *int                      `json:"fr_budget"`
-	Status           store.MilestoneStatus     `json:"status"`
-	Delivers         Document                  `json:"delivers"`
-	MustNotForeclose Document                  `json:"must_not_foreclose"`
-	Deferrals        []DeferralDTO             `json:"deferrals"`
+	ID      uuid.UUID             `json:"id"`
+	Name    string                `json:"name"`
+	Outcome *string               `json:"outcome"`
+	FRBudget *int                 `json:"fr_budget"`
+	Status   store.MilestoneStatus `json:"status"`
+	Delivers Document              `json:"delivers"`
+
+	// Position is the milestone's own ordering among its siblings (issue
+	// #2682's creation order). The slice above is already SORTED by it
+	// ascending, so a consumer that reorders (the Milestones table lists
+	// highest position first) needs the value itself -- the slice's order
+	// alone cannot be reversed without losing the tiebreak.
+	Position int `json:"position"`
+
+	MustNotForeclose Document      `json:"must_not_foreclose"`
+	Deferrals        []DeferralDTO `json:"deferrals"`
 
 	// ShippedCount/UnshippedCount are populated only when Status is
 	// store.MilestoneStatusPartiallyComplete -- issue #2686's per-item
@@ -256,6 +264,7 @@ func (q *Querier) buildMilestoneListingEntry(ctx context.Context, m store.Milest
 		Outcome:          m.Outcome,
 		FRBudget:         m.FRBudget,
 		Status:           status,
+		Position:         m.Position,
 		Delivers:         delivers,
 		MustNotForeclose: mustNotForeclose,
 		Deferrals:        NewDeferralDTOs(deferrals),
