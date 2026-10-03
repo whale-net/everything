@@ -9,7 +9,7 @@ import (
 
 func TestNewHandlerServesUnauthenticatedMetadataAndChallenge(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	ts := httptest.NewServer(NewHandler(next, fakeVerifier{}, "https://kc/realms/r", "https://mcp.example/", ""))
+	ts := httptest.NewServer(NewHandler(next, OIDCCallerVerifier(fakeVerifier{}), "https://kc/realms/r", "https://mcp.example/", ""))
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/.well-known/oauth-protected-resource")
@@ -47,7 +47,7 @@ func TestNewHandlerServesUnauthenticatedMetadataAndChallenge(t *testing.T) {
 
 func TestNewHandlerWithoutPublicURLOmitsMetadata(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {})
-	ts := httptest.NewServer(NewHandler(next, fakeVerifier{}, "https://kc/realms/r", "", ""))
+	ts := httptest.NewServer(NewHandler(next, OIDCCallerVerifier(fakeVerifier{}), "https://kc/realms/r", "", ""))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/.well-known/oauth-protected-resource")
 	if err != nil {
