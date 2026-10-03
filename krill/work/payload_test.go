@@ -62,6 +62,10 @@ func (f *fakeTaskStore) GetClaimByID(ctx context.Context, id uuid.UUID) (store.C
 	panic("not used by this test -- both branches under test return before Assemble ever calls this")
 }
 
+func (f *fakeTaskStore) LatestClaimForTask(ctx context.Context, scopeID, taskID uuid.UUID) (store.Claim, bool, error) {
+	panic("not used by this test")
+}
+
 func (f *fakeTaskStore) Heartbeat(ctx context.Context, params store.HeartbeatParams) (store.LeaseState, error) {
 	panic("not used by this test")
 }
