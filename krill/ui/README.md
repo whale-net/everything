@@ -885,13 +885,45 @@ Tasks.
 <!-- BEGIN task-detail section (task 9599fc1f) -->
 ### Task detail
 
-`/spec/products/{id}/milestones/{mid}/tasks/{tid}` (task_detail_page.go,
-`pages/task_detail.templ`) is the read-only task detail. It composes
-`GetTaskByID`, `ListDependencies`, `ListNotesForTask`, the current claim
-row and the task's spec slice (`MilestoneDeliversSlice`, the same document
-`get_task` embeds); no history query is added. A task id unknown, or whose
-milestone is not `{mid}`, is an in-shell 404. Dependencies and notes each
-render an inline alert on a read failure. The region carries
+`/products/{pid}/tasks/{tid}`, and the pre-redesign
+`/spec/products/{id}/milestones/{mid}/tasks/{tid}` that shares it
+(task_detail_page.go, `pages/task_detail.templ`), are the read-only task
+detail. `serveTaskDetail` is the one read-and-render both URLs reach; only
+the container check differs.
+
+**The frame is built before its contents.** Top to bottom: a breadcrumb
+(product → milestone → milepebble when the task sits on one → the task's
+own title, the only crumb with no href), the title as the page's one `h1`
+with the task's state badges beside it, then
+`grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]` — a main column and
+`<aside data-krill="task-properties-rail">`. The rail and the tab strip are
+the later tasks that fill those two regions; the region's shape is fixed
+first so they have a frame to slot into.
+
+Two values on this page must not be re-derived:
+
+- **The lane step strip reads `task.lane_sequence`,** never
+  `store.CanonicalLaneOrder` (store/task.go NFR5): a task created as
+  Scaffold → Validation → Done has said which lanes it is on, and a strip
+  built from the canonical order would show it passing through an
+  Implementation lane it never had. Earlier lanes are `step-primary`
+  (passed); the current one is `task-step-current` + `aria-current="step"`.
+- **The breadcrumb's milepebble level** comes from `taskContainer.ParentID`
+  / `ParentName`, which `resolveTaskContainer` sets. A task under a cut
+  milestone always sits on one of its milepebbles, so "the container is a
+  milepebble" and "the task sits on a cut milepebble" are one condition,
+  decided from the container's own `Kind` rather than a second lookup.
+
+It composes `GetTaskByID`, `ListDependencies`, `ListNotesForTask`, the
+current claim row, the escalation event behind `task.CurrentEscalationID`
+(`GetEscalationEventByID`, read **once** so the properties rail and the
+Overview callout cannot disagree about why a task was escalated) and the
+task's spec slice (`MilestoneDeliversSlice`, the same document `get_task`
+embeds); no history query is added. A task id unknown, or one whose
+milestone is not under the URL's product, is an in-shell 404. Dependencies
+and notes each render an inline alert on a read failure; a failed
+escalation read costs the page the reason and nothing else, since the
+Escalated badge comes from the task row. The region carries
 `data-krill-claim-id` / `data-krill-lease-expires-at` for later
 claim-guarded writes; it has no form or `hx-post`.
 <!-- END task-detail section -->

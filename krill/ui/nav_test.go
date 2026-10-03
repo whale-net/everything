@@ -372,6 +372,14 @@ func (*navTasks) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
 	return store.Claim{}, store.ErrNotFound
 }
 
+// GetEscalationEventByID is the read behind a task's own
+// current_escalation_id. The task this walk answers with is never
+// escalated, so the read is never made; it is declared rather than left to
+// the embedded nil interface, which panics rather than refusing.
+func (*navTasks) GetEscalationEventByID(context.Context, uuid.UUID) (store.EscalationEvent, error) {
+	return store.EscalationEvent{}, store.ErrNotFound
+}
+
 // navStubDesignSessions and navStubRevisionEvents are the minimum the
 // design-session list page reads. The session list belongs to
 // design_page_test.go's own target, so these two are declared here rather

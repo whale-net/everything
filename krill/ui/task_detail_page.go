@@ -55,11 +55,22 @@ type taskDetailInputs struct {
 	NotesErr error
 	Slice    slice.Document
 	SliceErr error
+
+	// Escalation is the event behind Task.CurrentEscalationID, read once
+	// so the properties rail and the Overview callout can both show why a
+	// task was escalated without either re-reading it (and without one of
+	// them rendering a reason the other contradicts).
+	Escalation *store.EscalationEvent
 }
 
 // taskDetailPageOf assembles the detail view model. now is injected so a
 // lease's expiry is judged against the read time.
-func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now time.Time) pages.TaskDetailPage {
+//
+// product is the breadcrumb's product crumb. It is a header rather than an
+// id because the same banner every product-scoped page carries is already
+// this value; a second spelling of "the product this task belongs to"
+// would be one more thing to keep in step.
+func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContainer, in taskDetailInputs, now time.Time) pages.TaskDetailPage {
 	t := in.Task
 	summary := store.TaskSummary{
 		ID: t.ID, Title: t.Title, CurrentLane: t.CurrentLane, AttemptCount: t.AttemptCount,
@@ -70,6 +81,8 @@ func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now t
 		Path:     taskDetailPath(pid, c.ID, t.ID),
 		ID:       t.ID.String(),
 		Title:    t.Title,
+		Crumbs:   taskDetailCrumbsOf(product, pid, c, t.Title),
+		Steps:    taskLaneSteps(t.LaneSequence, t.CurrentLane),
 		Lane:     string(t.CurrentLane),
 		Attempts: taskAttemptsLabel(t.AttemptCount),
 		LoadedAt: now.UTC().Format(time.RFC3339),
@@ -87,9 +100,10 @@ func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now t
 	}
 	if t.CurrentEscalationID != nil {
 		page.Escalation = "escalation " + t.CurrentEscalationID.String()
-	}
-	for _, l := range t.LaneSequence {
-		page.LaneSequence = append(page.LaneSequence, string(l))
+		if in.Escalation != nil {
+			page.EscalationReason = string(in.Escalation.Reason)
+			page.EscalatedAt = in.Escalation.CreatedAt.UTC().Format(time.RFC3339)
+		}
 	}
 	if t.AttemptCount > 0 {
 		page.Attempts += fmt.Sprintf(" (current attempt: %d)", t.AttemptCount)
@@ -135,6 +149,99 @@ func taskDetailPageOf(pid uuid.UUID, c taskContainer, in taskDetailInputs, now t
 		page.SliceJSON = string(b)
 	}
 	return page
+}
+
+// taskDetailCrumbsOf is the breadcrumb from the product down to this
+// task: product -> milestone -> milepebble -> the task's own title.
+//
+// The milepebble crumb appears only when the task sits on a cut
+// milepebble. A task on an uncut milestone has no such level, and a
+// crumb naming one would offer a link into a container that does not
+// exist -- while a task's container is always a milepebble once its
+// milestone is cut, so "when the container is a milepebble" and "when
+// the task sits on one" are the same condition, decided by the
+// container's own Kind rather than by a second lookup.
+//
+// Each ancestor links to the page that names it: the milestone to its own
+// detail, the milepebble to its own task list. The task's title is the
+// page the operator is already on, so it is the one crumb with no href.
+func taskDetailCrumbsOf(product pages.ProductHeader, pid uuid.UUID, c taskContainer, title string) []pages.TaskCrumb {
+	crumbs := make([]pages.TaskCrumb, 0, 4)
+	if product.Name != "" {
+		crumbs = append(crumbs, pages.TaskCrumb{Label: product.Name, Href: product.Href})
+	}
+	if c.Kind == string(store.MilestoneKindMilepebble) {
+		// The parent is carried on the container rather than re-read: the
+		// delivery listing that named the milepebble also named its
+		// parent, and that listing is the check that decided this task
+		// belongs to this product at all.
+		if c.ParentName != "" {
+			crumbs = append(crumbs, pages.TaskCrumb{
+				Label: c.ParentName,
+				Href:  milestoneDetailHref(pid, c.ParentID),
+			})
+		}
+		crumbs = append(crumbs, pages.TaskCrumb{
+			Label: c.Name,
+			Href:  productTaskContainerHref(pid, tasksSuffix, c),
+		})
+	} else {
+		crumbs = append(crumbs, pages.TaskCrumb{
+			Label: c.Name,
+			Href:  milestoneDetailHref(pid, c.ID),
+		})
+	}
+	return append(crumbs, pages.TaskCrumb{Label: title})
+}
+
+// taskLaneSteps is the detail's step strip: the task's OWN lane_sequence,
+// with every lane before the one it is in marked passed and that lane
+// marked current.
+//
+// The sequence is the task's rather than the store's canonical lane
+// order (store/task.go NFR5): a task created as Scaffold -> Validation ->
+// Done has said which lanes it is on, and a strip built from the
+// canonical order would show it passing through an Implementation lane it
+// never had. The current lane is looked up in the sequence rather than
+// compared against a position, so a task whose lane is somehow absent
+// marks no step current instead of marking one that is not.
+func taskLaneSteps(sequence []store.Lane, current store.Lane) []pages.TaskLaneStep {
+	currentAt := -1
+	for i, lane := range sequence {
+		if lane == current {
+			currentAt = i
+			break
+		}
+	}
+	steps := make([]pages.TaskLaneStep, 0, len(sequence))
+	for i, lane := range sequence {
+		steps = append(steps, pages.TaskLaneStep{
+			Label:   string(lane),
+			Passed:  currentAt >= 0 && i < currentAt,
+			Current: i == currentAt,
+		})
+	}
+	return steps
+}
+
+// taskDetailProductHeader is the breadcrumb's product crumb.
+//
+// The product-scoped route has already resolved the product and put it on
+// the request, so it is read from there. The pre-redesign per-container URL
+// resolves its own; a read that fails costs the page its first crumb and
+// nothing else, because the task itself was read separately and the page
+// is still answerable without it -- the same rule product_scope.go's
+// rememberUnprefixedProduct follows, for the same reason.
+func (app *App) taskDetailProductHeader(ctx context.Context, r *http.Request, pid uuid.UUID) pages.ProductHeader {
+	if p, ok := currentProduct(r.Context()); ok && p.ID == pid {
+		return productHeaderOf(p)
+	}
+	p, err := app.spec.Product(ctx, pid)
+	if err != nil {
+		logger.Warn("task detail: product read failed for the breadcrumb", "product", pid.String(), "error", err)
+		return pages.ProductHeader{Href: productPath(pid)}
+	}
+	return productHeaderOf(p)
 }
 
 // handleTaskDetail renders one task's detail.
@@ -235,6 +342,22 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 			in.Claim = &cl
 		}
 	}
+	if task.CurrentEscalationID != nil {
+		// The escalation event is read once and carried, so the rail and
+		// the Overview callout cannot disagree about why this task was
+		// escalated. A task whose escalation was resolved between the two
+		// reads is not an error the operator can act on -- the task row no
+		// longer claims one, and the next render says so.
+		ev, err := app.tasks.GetEscalationEventByID(ctx, *task.CurrentEscalationID)
+		switch {
+		case err == nil:
+			in.Escalation = &ev
+		case errors.Is(err, store.ErrNotFound):
+			logger.Warn("task escalation event read found nothing", "task", tid.String(), "escalation", task.CurrentEscalationID.String())
+		default:
+			logger.Error("task escalation event read failed", "task", tid.String(), "escalation", task.CurrentEscalationID.String(), "error", err)
+		}
+	}
 	if sr, ok := app.spec.(taskSliceReader); ok {
 		in.Slice, in.SliceErr = sr.MilestoneDeliversSlice(ctx, task.MilestoneID)
 	} else {
@@ -244,7 +367,7 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 		logger.Error("task slice read failed", "task", tid.String(), "error", in.SliceErr)
 	}
 
-	page := taskDetailPageOf(pid, c, in, time.Now())
+	page := taskDetailPageOf(pid, app.taskDetailProductHeader(ctx, r, pid), c, in, time.Now())
 	// Refresh re-requests whatever URL served this page, not the
 	// per-container detail: both routes reach here, and only the request
 	// knows which one the operator is on.

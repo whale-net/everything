@@ -9,6 +9,25 @@ import "github.com/whale-net/everything/libs/go/htmxui"
 // Refresh button's hx-target and the served fragment's root id.
 const TaskDetailAnchor = "krill-task-detail"
 
+// TaskCrumb is one breadcrumb entry: where the operator has been on the
+// way to this task. Href is empty for the task's own title, which is the
+// page they are already on and so is the one crumb that is not a link.
+type TaskCrumb struct {
+	Label string
+	Href  string
+}
+
+// TaskLaneStep is one lane of the step strip, over the task's OWN
+// lane_sequence (store/task.go NFR5: a task may skip or reorder lanes, so
+// the sequence it was created with is the only authority on what comes
+// next). Current marks the lane the task is in; Passed marks every lane
+// before it, which is what "already through this" looks like.
+type TaskLaneStep struct {
+	Label   string
+	Passed  bool
+	Current bool
+}
+
 // TaskDepLink is one dependency, linked to its own detail page.
 type TaskDepLink struct {
 	Title      string
@@ -25,15 +44,27 @@ type TaskNoteRow struct {
 
 // TaskDetailPage is the task detail view model. ClaimID and
 // LeaseExpiresAt are the observed claim identity, kept so a later write
-// can be claim-guarded. DepsError/NotesError are per-section read failures.
+// can be claim-guarded. DepsError/NotesError are per-section read
+// failures.
 type TaskDetailPage struct {
-	Path           string
-	ID             string
-	Title          string
-	Body           string
-	Lane           string
-	LaneSequence   []string
-	Attempts       string // e.g. "2 of 3"
+	Path  string
+	ID    string
+	Title string
+	Body  string
+	Lane  string
+
+	// Crumbs is product -> milestone -> milepebble -> this task's title.
+	// The milepebble crumb is present only for a task that sits on a cut
+	// milepebble; a task on an uncut milestone has no such level, and
+	// inventing one would put a crumb in the path that cannot be walked
+	// back down.
+	Crumbs []TaskCrumb
+
+	// Steps is the lane step strip, one entry per lane of the task's own
+	// lane_sequence. It replaces the "Lane sequence" row this page used to
+	// spell the same sequence out as prose: one rendering, not two.
+	Steps           []TaskLaneStep
+	Attempts        string // e.g. "2 of 3"
 	ClaimID        string
 	LeaseExpiresAt string // RFC3339, empty when unclaimed
 	LoadedAt       string // RFC3339
@@ -45,113 +76,214 @@ type TaskDetailPage struct {
 	SliceJSON      string
 	SliceError     string
 	ClaimSummary   string // e.g. "session ..., claimed at ..."; empty when unclaimed
-	Escalation     string
-	TasksPath      string
-	BoardPath      string
-	ContainerName  string
+
+	// Escalation names the task's current escalation event, and
+	// EscalatedAt says when. EscalationReason is the store's own reason
+	// vocabulary ("thrash-cap", "attempt-cap", "manual"), carried for the
+	// properties rail and the Overview callout to present -- and
+	// deliberately not rendered as a bare word here, because every enum an
+	// operator reads is a badge through a variant mapper, and the reason's
+	// presentation belongs with the panel that explains it.
+	//
+	// All three are empty when the task carries no escalation: a task that
+	// was never escalated has no reason to show, and a blank row would read
+	// as one whose reason could not be read.
+	Escalation        string
+	EscalationReason  string
+	EscalatedAt       string // RFC3339
+	TasksPath         string
+	BoardPath         string
+	ContainerName     string
 }
 
-// TaskDetail renders the task detail region.
+// TaskDetail renders the task detail region: the breadcrumb, the title
+// with the task's state badges, and the two-column frame the properties
+// rail and the tab panels slot into.
 templ TaskDetail(page TaskDetailPage) {
 	<section id={ TaskDetailAnchor } data-krill="task-detail" data-krill-task-id={ page.ID } data-krill-claim-id={ page.ClaimID } data-krill-lease-expires-at={ page.LeaseExpiresAt }>
-		<h2 class="text-xl font-semibold" data-krill="page-title">{ page.Title }</h2>
+		@taskDetailCrumbs(page.Crumbs)
+		<div class="flex flex-wrap items-center gap-3" data-krill="task-detail-header">
+			<h1 class="text-2xl font-semibold" data-krill="page-title">{ page.Title }</h1>
+			<div class="flex flex-wrap items-center gap-2" data-krill="task-state">
+				@TaskBadges(page.Badges)
+			</div>
+			<div class="flex-1"></div>
+			<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
+				hx-get={ templ.URL(page.Path) }
+				hx-target={ "#" + TaskDetailAnchor }
+				hx-swap="outerHTML">
+				Refresh
+			</button>
+		</div>
 		<p class="mt-1 text-sm text-base-content/70">
 			Loaded at <span data-krill="loaded-at">{ page.LoadedAt }</span>
 		</p>
-		<button type="button" class="btn btn-ghost btn-sm" data-krill="refresh"
-			hx-get={ templ.URL(page.Path) }
-			hx-target={ "#" + TaskDetailAnchor }
-			hx-swap="outerHTML">
-			Refresh
-		</button>
 		<p class="mt-2 text-sm">
 			<a href={ templ.URL(page.TasksPath) } class="link link-primary" data-krill="tasks-link">Back to { page.ContainerName } tasks</a>
 			<a href={ templ.URL(page.BoardPath) } class="link link-primary ml-2" data-krill="board-link">Board</a>
 		</p>
-		<dl class="mt-4 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
-			<dt class="font-semibold">Current lane</dt>
-			<dd>
-				@TaskLaneBadge(page.Lane)
-			</dd>
-			<dt class="font-semibold">Lane sequence</dt>
-			<dd data-krill="task-lane-sequence">
-				for i, l := range page.LaneSequence {
-					if i > 0 {
-						<span class="mx-1">&rarr;</span>
-					}
-					<span>{ l }</span>
-				}
-			</dd>
-			<dt class="font-semibold">Attempts</dt>
-			<dd data-krill="task-attempts">{ page.Attempts } (lease-lapse and abandon attempts count toward the cap)</dd>
-			<dt class="font-semibold">State</dt>
-			<dd data-krill="task-state">
-				@TaskBadges(page.Badges)
-			</dd>
-			if page.Escalation != "" {
-				<dt class="font-semibold">Escalation</dt>
-				<dd data-krill="task-escalation">{ page.Escalation }</dd>
-			}
-			<dt class="font-semibold">Claim</dt>
-			<dd data-krill="task-claim">
-				if page.ClaimID == "" {
-					Not claimed
-				} else {
-					{ page.ClaimSummary }
-					if page.LeaseExpiresAt != "" {
-						<span data-krill="task-lease">lease until <time data-krill="task-lease" datetime={ page.LeaseExpiresAt } title={ page.LeaseExpiresAt }>{ page.LeaseExpiresAt }</time></span>
-					}
-				}
-			</dd>
-		</dl>
-		if page.Body != "" {
-			<h3 class="mt-4 font-semibold">Description</h3>
-			<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ page.Body }</pre>
-		}
-		<h3 class="mt-4 font-semibold">Dependencies</h3>
-		<div data-krill="task-deps">
-			if page.DepsError != "" {
-				@htmxui.Alert(htmxui.AlertError, page.DepsError, nil)
-			} else if len(page.Deps) == 0 {
-				<p class="text-sm text-base-content/70">No dependencies</p>
-			} else {
-				<ul class="list-disc pl-5 text-sm">
-					for _, d := range page.Deps {
-						<li data-krill="task-dep">
-							<a href={ templ.URL(d.DetailPath) } class="link link-primary">{ d.Title }</a>
-							if d.Lane != "" {
-								<span class="ml-2 text-base-content/70">{ d.Lane }</span>
+		<div class="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="task-detail-frame">
+			<section class="min-w-0 space-y-4" data-krill="task-detail-main">
+				@taskLaneSteps(page.Steps)
+				<dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+					<dt class="font-semibold">Current lane</dt>
+					<dd>
+						@TaskLaneBadge(page.Lane)
+					</dd>
+					<dt class="font-semibold">Attempts</dt>
+					<dd data-krill="task-attempts">{ page.Attempts } (lease-lapse and abandon attempts count toward the cap)</dd>
+					if page.Escalation != "" {
+						<dt class="font-semibold">Escalation</dt>
+						<dd data-krill="task-escalation">
+							{ page.Escalation }
+							if page.EscalatedAt != "" {
+								<time data-krill="task-escalated-at" datetime={ page.EscalatedAt } title={ page.EscalatedAt }>{ page.EscalatedAt }</time>
 							}
-						</li>
+						</dd>
 					}
-				</ul>
-			}
-		</div>
-		<h3 class="mt-4 font-semibold">Notes</h3>
-		<div data-krill="task-notes">
-			if page.NotesError != "" {
-				@htmxui.Alert(htmxui.AlertError, page.NotesError, nil)
-			} else if len(page.Notes) == 0 {
-				<p class="text-sm text-base-content/70">No notes</p>
-			} else {
-				<ul class="space-y-2 text-sm">
-					for _, n := range page.Notes {
-						<li data-krill="task-note">
-							@htmxui.Badge(n.Kind, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-kind"})
-							@htmxui.Badge(n.Status, htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-status"})
-							<pre class="whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
-						</li>
+					<dt class="font-semibold">Claim</dt>
+					<dd data-krill="task-claim">
+						if page.ClaimID == "" {
+							Not claimed
+						} else {
+							{ page.ClaimSummary }
+							if page.LeaseExpiresAt != "" {
+								<span data-krill="task-lease">lease until <time data-krill="task-lease" datetime={ page.LeaseExpiresAt } title={ page.LeaseExpiresAt }>{ page.LeaseExpiresAt }</time></span>
+							}
+						}
+					</dd>
+				</dl>
+				if page.Body != "" {
+					<h2 class="text-lg font-semibold">Description</h2>
+					<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ page.Body }</pre>
+				}
+				<h2 class="text-lg font-semibold">Dependencies</h2>
+				<div data-krill="task-deps">
+					if page.DepsError != "" {
+						@htmxui.Alert(htmxui.AlertError, page.DepsError, nil)
+					} else if len(page.Deps) == 0 {
+						<p class="text-sm text-base-content/70">No dependencies</p>
+					} else {
+						<ul class="list-disc pl-5 text-sm">
+							for _, d := range page.Deps {
+								<li data-krill="task-dep">
+									<a href={ templ.URL(d.DetailPath) } class="link link-primary">{ d.Title }</a>
+									if d.Lane != "" {
+										<span class="ml-2 text-base-content/70">{ d.Lane }</span>
+									}
+								</li>
+							}
+						</ul>
 					}
-				</ul>
-			}
-		</div>
-		<h3 class="mt-4 font-semibold">Spec slice</h3>
-		<div data-krill="task-slice">
-			if page.SliceError != "" {
-				@htmxui.Alert(htmxui.AlertError, page.SliceError, nil)
-			} else {
-				<pre class="overflow-x-auto text-xs">{ page.SliceJSON }</pre>
-			}
+				</div>
+				<h2 class="text-lg font-semibold">Notes</h2>
+				<div data-krill="task-notes">
+					if page.NotesError != "" {
+						@htmxui.Alert(htmxui.AlertError, page.NotesError, nil)
+					} else if len(page.Notes) == 0 {
+						<p class="text-sm text-base-content/70">No notes</p>
+					} else {
+						<ul class="space-y-2 text-sm">
+							for _, n := range page.Notes {
+								<li data-krill="task-note">
+									@htmxui.Badge(n.Kind, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-kind"})
+									@htmxui.Badge(n.Status, htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "note-status"})
+									<pre class="whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
+								</li>
+							}
+						</ul>
+					}
+				</div>
+				<h2 class="text-lg font-semibold">Spec slice</h2>
+				<div data-krill="task-slice">
+					if page.SliceError != "" {
+						@htmxui.Alert(htmxui.AlertError, page.SliceError, nil)
+					} else {
+						<pre class="overflow-x-auto text-xs">{ page.SliceJSON }</pre>
+					}
+				</div>
+			</section>
+			<aside data-krill="task-properties-rail"></aside>
 		</div>
 	</section>
+}
+
+// taskDetailCrumbs is the path from the product down to this task:
+// product -> milestone -> milepebble (only when the task sits on one) ->
+// the task's own title, which is the page they are already on and so is
+// plain text rather than a link.
+//
+// The product leads even though the milestone is the nearer ancestor: it
+// is the context the whole product area hangs off, and an operator
+// reaching a task through a copied link needs the first crumb to be the
+// one that says whose work this is.
+//
+// It renders inside the region rather than in the shell's top bar because
+// the region is what a Refresh swaps: the breadcrumb names this task's own
+// container, so it has to travel with the content it describes.
+templ taskDetailCrumbs(crumbs []TaskCrumb) {
+	if len(crumbs) > 0 {
+		<nav class="breadcrumbs text-sm" aria-label="Breadcrumb" data-krill="task-breadcrumb">
+			<ul>
+				for _, c := range crumbs {
+					<li data-krill="breadcrumb-crumb">
+						if c.Href == "" {
+							<span>{ c.Label }</span>
+						} else {
+							<a href={ templ.URL(c.Href) }>{ c.Label }</a>
+						}
+					</li>
+				}
+			</ul>
+		</nav>
+	}
+}
+
+// taskLaneSteps is the lane step strip: the task's own sequence, with
+// every lane before the current one marked as passed and the current one
+// marked as current.
+//
+// The strip reads over LaneSequence rather than over the store's
+// canonical lane order, because a task's lane_sequence is what it was
+// created with and is the authority on its own path (store/task.go
+// NFR5). A task created as Scaffold -> Validation -> Done shows those
+// three, and a strip that invented Implementation between them would be
+// describing a workflow this task is not on.
+templ taskLaneSteps(steps []TaskLaneStep) {
+	if len(steps) > 0 {
+		<ul class="steps w-full" data-krill="task-lane-steps">
+			for _, s := range steps {
+				<li class={ taskLaneStepClasses(s) } data-krill={ taskLaneStepHook(s) }
+					if s.Current {
+						aria-current="step"
+					}>
+					{ s.Label }
+				</li>
+			}
+		</ul>
+	}
+}
+
+// taskLaneStepClasses is one step's daisyUI class. Both a passed and the
+// current step are step-primary -- daisyUI's own vocabulary for a step
+// the task has reached -- and they are told apart by the hook and by
+// aria-current rather than by colour alone.
+func taskLaneStepClasses(s TaskLaneStep) string {
+	if s.Passed || s.Current {
+		return "step step-primary"
+	}
+	return "step"
+}
+
+// taskLaneStepHook is the step's data-krill hook: which of the three
+// states it is in, so a test can say which lanes are marked passed and
+// which is current rather than inferring it from a colour.
+func taskLaneStepHook(s TaskLaneStep) string {
+	switch {
+	case s.Current:
+		return "task-step-current"
+	case s.Passed:
+		return "task-step-passed"
+	}
+	return "task-step-upcoming"
 }

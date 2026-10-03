@@ -19,17 +19,25 @@ import (
 
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 type fakeDetailStore struct {
 	store.TaskStore
-	tasks    map[uuid.UUID]store.Task
-	getErr   error
-	deps     []store.TaskDependency
-	depsErr  error
-	notes    []store.Note
-	notesErr error
-	claim    store.Claim
+	tasks         map[uuid.UUID]store.Task
+	getErr        error
+	deps          []store.TaskDependency
+	depsErr       error
+	notes         []store.Note
+	notesErr      error
+	claim         store.Claim
+	escalation    store.EscalationEvent
+	escalationErr error
+
+	// asked records every escalation id the page resolved, so a test can
+	// assert the read was made for the task's OWN escalation rather than
+	// only that the resulting page looks right.
+	asked []uuid.UUID
 }
 
 // CountEscalatedTasks is the chrome's Needs-attention badge read, which
@@ -76,6 +84,17 @@ func (f *fakeDetailStore) GetClaimByID(context.Context, uuid.UUID) (store.Claim,
 	return f.claim, nil
 }
 
+// GetEscalationEventByID is the detail's read behind a task's own
+// current_escalation_id: the one read behind why the task is escalated,
+// which the rail and the Overview callout both render.
+func (f *fakeDetailStore) GetEscalationEventByID(_ context.Context, id uuid.UUID) (store.EscalationEvent, error) {
+	f.asked = append(f.asked, id)
+	if f.escalationErr != nil {
+		return store.EscalationEvent{}, f.escalationErr
+	}
+	return f.escalation, nil
+}
+
 type fakeSliceSpec struct {
 	*fakeSpecReader
 	doc slice.Document
@@ -87,24 +106,47 @@ func (f *fakeSliceSpec) MilestoneDeliversSlice(context.Context, uuid.UUID) (slic
 }
 
 type detailFixture struct {
-	pid, mid uuid.UUID
-	store    *fakeDetailStore
-	spec     *fakeSliceSpec
-	mux      *http.ServeMux
+	pid, mid, mp uuid.UUID
+	store        *fakeDetailStore
+	spec         *fakeSliceSpec
+	mux          *http.ServeMux
 }
 
+// newDetailFixture is one product holding two containers: an uncut
+// milestone, and a cut milestone whose own task lives on its milepebble --
+// which is what a task under a cut milestone always is, since the store
+// refuses to create one against the milestone itself. Both containers are
+// here because the breadcrumb reads differently over them, and a fixture
+// with only one of them could not tell the two apart.
+//
+// The product row is on the fake as well as in the listing, because the
+// two routes that reach this page find the product differently: the
+// product-scoped one has it resolved onto the request, and the
+// pre-redesign one has to read it.
 func newDetailFixture(t *testing.T) *detailFixture {
 	t.Helper()
-	f := &detailFixture{pid: uuid.New(), mid: uuid.New()}
+	f := &detailFixture{pid: uuid.New(), mid: uuid.New(), mp: uuid.New()}
 	f.store = &fakeDetailStore{tasks: map[uuid.UUID]store.Task{}}
-	f.spec = &fakeSliceSpec{fakeSpecReader: &fakeSpecReader{listing: slice.DeliveryListing{
-		Milestones: []slice.MilestoneListingEntry{{ID: f.mid, Name: "Plain"}},
-	}}}
+	f.spec = &fakeSliceSpec{fakeSpecReader: &fakeSpecReader{
+		products: []store.Product{{ID: f.pid, Name: "Detail product"}},
+		product:  store.Product{ID: f.pid, Name: "Detail product"},
+		listing: slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{
+			{ID: f.mid, Name: "Plain"},
+			{
+				ID:   uuid.New(),
+				Name: "Cut milestone",
+				Milepebbles: []slice.MilepebbleListingEntry{
+					{ID: f.mp, Name: "Cut milepebble"},
+				},
+			},
+		}},
+	}}
 	// scopes is what the chrome reads for its Needs-attention badge on
 	// every page it renders.
 	app := &App{spec: f.spec, tasks: f.store, scopes: chromeScopes{}}
 	f.mux = http.NewServeMux()
 	f.mux.HandleFunc("GET /spec/products/{id}/milestones/{mid}/tasks/{tid}", app.handleTaskDetail)
+	f.mux.HandleFunc("GET /products/{pid}/tasks/{tid}", app.handleProductTaskDetail)
 	return f
 }
 
@@ -119,6 +161,13 @@ func (f *detailFixture) add(t store.Task) store.Task {
 	return t
 }
 
+// addOnMilepebble installs a task on the fixture's cut milepebble, which
+// is the container a task under a cut milestone belongs to.
+func (f *detailFixture) addOnMilepebble(t store.Task) store.Task {
+	t.MilestoneID = f.mp
+	return f.add(t)
+}
+
 // htmlEscapedURL is an href as it reads in the rendered markup: templ
 // escapes it on the way out, so a query's "&" is "&amp;" in the page. An
 // assertion that compares against the raw URL would fail against a link
@@ -128,13 +177,352 @@ func htmlEscapedURL(raw string) string {
 }
 
 func (f *detailFixture) get(tid string, hx bool) (int, string) {
-	req := httptest.NewRequest(http.MethodGet, "/spec/products/"+f.pid.String()+"/milestones/"+f.mid.String()+"/tasks/"+tid, nil)
+	return f.getAt("/spec/products/"+f.pid.String()+"/milestones/"+f.mid.String()+"/tasks/"+tid, hx)
+}
+
+// getProductScoped drives the FR's own URL, /products/{pid}/tasks/{tid},
+// where the product is the path's and the task's container is not.
+func (f *detailFixture) getProductScoped(tid string, hx bool) (int, string) {
+	return f.getAt("/products/"+f.pid.String()+"/tasks/"+tid, hx)
+}
+
+func (f *detailFixture) getAt(path string, hx bool) (int, string) {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	if hx {
 		req.Header.Set("HX-Request", "true")
 	}
 	rec := httptest.NewRecorder()
 	f.mux.ServeHTTP(rec, req)
 	return rec.Code, rec.Body.String()
+}
+
+// regionBetween is the markup from the first marker to the next one, so an
+// assertion about one region is about that region and not about whatever
+// else on the page happens to carry the same words.
+func regionBetween(t *testing.T, html, start, end string) string {
+	t.Helper()
+	from := strings.Index(html, start)
+	require.GreaterOrEqual(t, from, 0, "the page rendered no %s region:\n%s", start, html)
+	rest := html[from:]
+	to := strings.Index(rest, end)
+	require.GreaterOrEqual(t, to, 0, "the %s region is never closed:\n%s", start, html)
+	return rest[:to]
+}
+
+// breadcrumbOf is the breadcrumb's own markup.
+func breadcrumbOf(t *testing.T, html string) string {
+	t.Helper()
+	return regionBetween(t, html, `data-krill="task-breadcrumb"`, "</nav>")
+}
+
+// laneStepsOf is the lane step strip's own markup.
+func laneStepsOf(t *testing.T, html string) string {
+	t.Helper()
+	return regionBetween(t, html, `data-krill="task-lane-steps"`, "</ul>")
+}
+
+// TestTaskDetailBreadcrumbWalksProductMilestoneMilepebble is FR 0c03eac1's
+// breadcrumb on the shape it actually has to describe: a task whose
+// milestone is cut, which means the task sits on a milepebble and the path
+// has three ancestors before the title.
+//
+// Each ancestor is named and linked, and the title is the one crumb with
+// no href -- it is the page the operator is already on.
+func TestTaskDetailBreadcrumbWalksProductMilestoneMilepebble(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.addOnMilepebble(store.Task{Title: "breadcrumb-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	crumbs := breadcrumbOf(t, html)
+	for _, want := range []string{
+		// The product names itself and links at its own page.
+		">Detail product</a>",
+		`href="` + htmlEscapedURL(productHeaderOf(store.Product{ID: f.pid}).Href) + `"`,
+		// The milestone the milepebble was cut from -- which is not the
+		// task's own container and so has to come from the parent the
+		// container carries.
+		">Cut milestone</a>",
+		`href="` + htmlEscapedURL(milestoneDetailHref(f.pid, cutMilestoneIDOf(f.spec))) + `"`,
+		// The milepebble the task itself sits on, linking at its own list.
+		">Cut milepebble</a>",
+		`href="` + htmlEscapedURL(productTaskContainerHref(f.pid, tasksSuffix,
+			taskContainer{ID: f.mp, Kind: string(store.MilestoneKindMilepebble)})) + `"`,
+	} {
+		assert.Contains(t, crumbs, want)
+	}
+	// The title is the current page, so it is text and not a link.
+	assert.Contains(t, crumbs, ">breadcrumb-task<")
+	assert.NotContains(t, regionBetween(t, html, `data-krill="task-breadcrumb"`, `data-krill="task-detail-header"`),
+		`href="`+htmlEscapedURL(productTaskDetailPath(f.pid, task.ID))+`"`,
+		"the crumb for the page already open must not link to itself")
+}
+
+// cutMilestoneIDOf is the id of the fixture's cut milestone, read off the
+// listing rather than stored beside it -- so a fixture that renames the
+// milestone does not leave this asserting about an id nothing carries.
+func cutMilestoneIDOf(spec *fakeSliceSpec) uuid.UUID {
+	for _, m := range spec.listing.Milestones {
+		if len(m.Milepebbles) > 0 {
+			return m.ID
+		}
+	}
+	return uuid.Nil
+}
+
+// TestTaskDetailBreadcrumbOnAnUncutMilestone has no milepebble level,
+// because there is none: a task on a milestone that was never cut has no
+// milepebble ancestor, and a crumb naming one would link into a container
+// that does not exist.
+func TestTaskDetailBreadcrumbOnAnUncutMilestone(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "uncut-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	crumbs := breadcrumbOf(t, html)
+	assert.Contains(t, crumbs, ">Detail product</a>")
+	assert.Contains(t, crumbs, ">Plain</a>")
+	assert.Contains(t, crumbs, ">uncut-task<")
+	assert.NotContains(t, crumbs, "Cut milepebble")
+	assert.Equal(t, 3, strings.Count(crumbs, "<li"), "product, milestone, task -- and nothing between")
+}
+
+// TestTaskDetailHeaderTitleAndBadges is the h1 half of FR 0c03eac1: the
+// task's title as the page's one h1, with the state badges beside it and
+// rendered through the same component the Tasks table and the Board use --
+// so the three views cannot drift on either the label or the colour.
+func TestTaskDetailHeaderTitleAndBadges(t *testing.T) {
+	f := newDetailFixture(t)
+	claim, esc := uuid.New(), uuid.New()
+	lease := time.Now().Add(time.Hour).UTC()
+	task := f.add(store.Task{
+		Title: "header-task", CurrentLane: store.LaneTesting,
+		AttemptCount:   store.DefaultAttemptCap,
+		CurrentClaimID: &claim, LeaseExpiresAt: &lease, CurrentEscalationID: &esc,
+	})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	header := regionBetween(t, html, `data-krill="task-detail-header"`, `data-krill="loaded-at"`)
+	assert.Contains(t, header, `<h1 class="text-2xl font-semibold" data-krill="page-title">header-task</h1>`,
+		"the task title is the page's one h1")
+	assert.Equal(t, 1, strings.Count(html, "<h1"), "a page with two h1s has no title")
+	for _, key := range []string{"claimed", "capped", "escalated"} {
+		assert.Contains(t, header, `data-krill="task-badge-`+key+`"`)
+	}
+	// And through the shared component, not a copy of its markup.
+	assert.Contains(t, header, `class="badge badge-info badge-sm" data-krill="task-badge-claimed"`)
+}
+
+// TestTaskDetailLaneStepsMarkCurrentAndPassed is the step strip's whole
+// contract: the task's own lanes, in order, with everything before the
+// current lane passed and the current lane itself marked.
+func TestTaskDetailLaneStepsMarkCurrentAndPassed(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{
+		Title: "stepped-task", CurrentLane: store.LaneTesting,
+		LaneSequence: []store.Lane{store.LaneScaffold, store.LaneImplementation, store.LaneTesting, store.LaneDone},
+	})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	steps := laneStepsOf(t, html)
+	assert.Equal(t, []string{
+		`data-krill="task-step-passed"`, `data-krill="task-step-passed"`,
+		`data-krill="task-step-current"`, `data-krill="task-step-upcoming"`,
+	}, hooksInOrder(steps, `data-krill="task-step-`),
+		"the two lanes before the current one are passed, the current one is marked, the one after is not")
+	assert.Contains(t, steps, ">Scaffold</li>")
+	assert.Contains(t, steps, ">Testing</li>")
+	assert.Contains(t, steps, ">Done</li>")
+	assert.Contains(t, steps, `aria-current="step"`, "the current lane is marked for assistive technology too")
+	assert.Equal(t, 3, strings.Count(steps, "step step-primary"),
+		"both passed lanes and the current one are steps the task has reached")
+}
+
+// TestTaskDetailLaneStepsFollowTheTasksOwnSequence is store/task.go NFR5
+// made visible: the strip reads the task's own lane_sequence, so a task
+// created as Scaffold -> Validation -> Done shows exactly those three. A
+// strip built from the store's canonical lane order would put an
+// Implementation lane in the middle that this task was never on.
+func TestTaskDetailLaneStepsFollowTheTasksOwnSequence(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{
+		Title: "skipping-task", CurrentLane: store.LaneValidation,
+		LaneSequence: []store.Lane{store.LaneScaffold, store.LaneValidation, store.LaneDone},
+	})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	steps := laneStepsOf(t, html)
+	assert.NotContains(t, steps, "Implementation")
+	assert.Equal(t, []string{
+		`data-krill="task-step-passed"`, `data-krill="task-step-current"`, `data-krill="task-step-upcoming"`,
+	}, hooksInOrder(steps, `data-krill="task-step-`))
+}
+
+// hooksInOrder is every attribute value in html that opens with prefix, in
+// the order they appear and including the opening quote, so a list of hooks
+// compares exactly rather than by a substring match that would also accept
+// a partially-named hook.
+func hooksInOrder(html, prefix string) []string {
+	var out []string
+	for rest := html; ; {
+		i := strings.Index(rest, prefix)
+		if i < 0 {
+			return out
+		}
+		rest = rest[i+len(prefix):]
+		end := strings.Index(rest, `"`)
+		if end < 0 {
+			return out
+		}
+		out = append(out, prefix+rest[:end+1])
+		rest = rest[end+1:]
+	}
+}
+
+// TestTaskDetailFrameHasAnEmptyPropertiesRail pins the frame the rail and
+// the tab panels slot into: a main column beside a rail region that is
+// there and empty, rather than a page with no rail for the next task to
+// find and no assertion that says it went missing.
+func TestTaskDetailFrameHasAnEmptyPropertiesRail(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "framed-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	assert.Contains(t, html, `data-krill="task-detail-frame"`)
+	assert.Contains(t, html, "lg:grid-cols-[minmax(0,1fr)_18rem]")
+	assert.Contains(t, html, `<aside data-krill="task-properties-rail"></aside>`,
+		"the rail region lands empty, and empty is what the rail task fills")
+	assert.Contains(t, html, `data-krill="task-detail-main"`)
+}
+
+// TestTaskDetailReadsTheEscalationEvent is the read behind the reason: the
+// page resolves task.CurrentEscalationID once, so the rail and the
+// Overview callout cannot each answer with a different "why".
+//
+// The reason is asserted on the view model rather than on the markup,
+// because this page does not spell the store's reason vocabulary out as
+// bare words -- the panel that explains it presents it as a badge. What the
+// markup owes the operator here is that the escalation exists and when.
+func TestTaskDetailReadsTheEscalationEvent(t *testing.T) {
+	f := newDetailFixture(t)
+	esc := uuid.New()
+	created := time.Date(2026, 9, 30, 13, 50, 0, 0, time.UTC)
+	f.store.escalation = store.EscalationEvent{
+		ID: esc, Reason: store.EscalationReasonThrashCap, CreatedAt: created,
+	}
+	task := f.add(store.Task{Title: "escalated-task", CurrentLane: store.LaneTesting, CurrentEscalationID: &esc})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	assert.Equal(t, []uuid.UUID{esc}, f.store.asked,
+		"the page resolves the task's own escalation id, once")
+	assert.Contains(t, html, `data-krill="task-escalated-at" datetime="`+created.Format(time.RFC3339)+`"`)
+	assert.NotContains(t, html, "thrash-cap",
+		"the reason is the callout's to badge, not this row's to spell out")
+
+	page := detailPageOfFixture(t, taskDetailInputs{
+		Task:       task,
+		Escalation: &store.EscalationEvent{Reason: store.EscalationReasonThrashCap, CreatedAt: created},
+	})
+	assert.Equal(t, "thrash-cap", page.EscalationReason,
+		"the reason travels on the view model for the rail and the callout")
+	assert.Equal(t, created.Format(time.RFC3339), page.EscalatedAt)
+}
+
+// TestTaskDetailEscalationReadFailsWithoutTakingThePageDown is the
+// degraded half: the reason is one read among several, so a failure on it
+// costs the reason and keeps the page -- including the Escalated badge,
+// which comes from the task row and is still true.
+func TestTaskDetailEscalationReadFailsWithoutTakingThePageDown(t *testing.T) {
+	f := newDetailFixture(t)
+	esc := uuid.New()
+	f.store.escalationErr = errors.New("escalation-boom")
+	task := f.add(store.Task{Title: "half-readable", CurrentLane: store.LaneTesting, CurrentEscalationID: &esc})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	assert.Contains(t, html, `data-krill="task-badge-escalated"`, "the state comes from the task row, not from this read")
+	assert.Contains(t, html, `data-krill="task-escalation"`)
+	assert.NotContains(t, html, "escalation-boom")
+
+	page := detailPageOfFixture(t, taskDetailInputs{Task: task})
+	assert.Equal(t, "escalation "+esc.String(), page.Escalation,
+		"the task row still names the escalation it holds")
+	assert.Empty(t, page.EscalationReason, "a reason that could not be read is not invented")
+	assert.Empty(t, page.EscalatedAt)
+}
+
+// TestTaskDetailOfAnUnescalatedTaskCarriesNoEscalation: the three fields
+// are empty together, because a reason with no event behind it is a value
+// this page would have invented.
+func TestTaskDetailOfAnUnescalatedTaskCarriesNoEscalation(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "quiet-task", CurrentLane: store.LaneTesting})
+
+	page := detailPageOfFixture(t, taskDetailInputs{Task: task})
+
+	assert.Empty(t, page.Escalation)
+	assert.Empty(t, page.EscalationReason)
+	assert.Empty(t, page.EscalatedAt)
+}
+
+// detailPageOfFixture builds the detail view model from the builder alone,
+// for the values the markup deliberately does not render. It reaches for
+// the builder rather than parsing HTML because what it checks is a value
+// travelling, not a value on the page.
+func detailPageOfFixture(t *testing.T, in taskDetailInputs) pages.TaskDetailPage {
+	t.Helper()
+	return taskDetailPageOf(uuid.New(), pages.ProductHeader{Name: "Detail product"},
+		taskContainer{ID: uuid.New(), Name: "Plain", Kind: string(store.MilestoneKindMilestone)},
+		in, time.Now())
+}
+
+// TestProductScopedTaskDetailRefusesATaskFromAnotherProduct drives FR
+// 0c03eac1's second clause through the product-scoped route: the task
+// exists and reads fine by id, and only the product's own listing can
+// refuse it -- which is what keeps another product's task out of this
+// product's breadcrumb and chrome.
+func TestProductScopedTaskDetailRefusesATaskFromAnotherProduct(t *testing.T) {
+	f := newDetailFixture(t)
+	elsewhere := f.add(store.Task{
+		Title: "another-products-task", MilestoneID: uuid.New(), CurrentLane: store.LaneTesting,
+	})
+
+	code, html := f.getProductScoped(elsewhere.ID.String(), false)
+
+	assert.Equal(t, http.StatusNotFound, code)
+	assert.Contains(t, html, "<html", "the refusal renders inside the shell, not as a bare error")
+	assert.NotContains(t, html, "another-products-task")
+}
+
+// TestTaskDetailBreadcrumbOnThePreRedesignURL is the same breadcrumb over
+// the per-container URL, which finds the product by reading it rather than
+// off the request. Both routes share serveTaskDetail, so this is the case
+// that would catch a header wired from the request context alone.
+func TestTaskDetailBreadcrumbOnThePreRedesignURL(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.addOnMilepebble(store.Task{Title: "legacy-url-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getAt(taskDetailPath(f.pid, f.mp, task.ID), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	crumbs := breadcrumbOf(t, html)
+	assert.Contains(t, crumbs, ">Detail product</a>")
+	assert.Contains(t, crumbs, ">Cut milestone</a>")
+	assert.Contains(t, crumbs, ">Cut milepebble</a>")
 }
 
 func TestTaskDetailFieldsReachPage(t *testing.T) {
@@ -261,7 +649,15 @@ func TestTaskDetailFragmentShapeAndReadOnly(t *testing.T) {
 	assert.Contains(t, full, "<html")
 	assert.Contains(t, frag, `data-krill="refresh"`)
 	assert.Contains(t, frag, `hx-get="`+taskDetailPath(f.pid, f.mid, task.ID)+`"`)
-	for _, body := range []string{frag, full} {
+
+	// The read-only assertions are about THIS page's surface, which is the
+	// whole fragment for an htmx request and the detail region inside
+	// <main> for a page. The chrome around it is not the page's: the
+	// sidebar's Product switcher is a form of its own, and asserting
+	// against the whole document would make this page's read-only contract
+	// depend on whether the switcher happens to have anything to pick.
+	region := regionBetween(t, full, `data-krill="task-detail"`, "</main>")
+	for _, body := range []string{frag, region} {
 		assert.NotContains(t, body, "<form")
 		assert.NotContains(t, body, "hx-post")
 		assert.NotContains(t, body, "hx-put")

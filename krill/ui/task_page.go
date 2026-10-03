@@ -59,6 +59,15 @@ type taskContainer struct {
 	Status store.MilestoneStatus
 
 	Milepebbles []taskContainerChild // non-empty only for a cut milestone
+
+	// ParentID and ParentName are the milestone a milepebble container was
+	// cut from; both are uuid.Nil / "" for a milestone container. A
+	// milepebble is its own `milestone_ref` row, so nothing else on this
+	// struct names what it was cut from -- but the task detail's
+	// breadcrumb walks product -> milestone -> milepebble, and it is read
+	// here, where the listing that carried the parent is in hand.
+	ParentID   uuid.UUID
+	ParentName string
 }
 
 type taskContainerChild struct {
@@ -84,7 +93,10 @@ func resolveTaskContainer(listing slice.DeliveryListing, mid uuid.UUID) (taskCon
 		}
 		for _, mp := range m.Milepebbles {
 			if mp.ID == mid {
-				return taskContainer{ID: mp.ID, Name: mp.Name, Kind: string(store.MilestoneKindMilepebble), Status: mp.Status}, true
+				return taskContainer{
+					ID: mp.ID, Name: mp.Name, Kind: string(store.MilestoneKindMilepebble),
+					Status: mp.Status, ParentID: m.ID, ParentName: m.Name,
+				}, true
 			}
 		}
 	}
