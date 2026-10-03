@@ -400,32 +400,109 @@ func TestLegacyMilepebbleURLDoesNot404(t *testing.T) {
 	}
 }
 
-// TestLegacyTaskDetailURLStillServes is the other half of FR f41a352d's
-// rule, and the half a redirect-everything change gets wrong: the
-// per-container task DETAIL keeps serving its own page rather than
-// redirecting.
+// TestLegacyTaskDetailRedirectsToTheProductScopedDetail is FR 0c03eac1's
+// legacy-URL clause: a pre-redesign milestone task detail URL redirects to
+// the redesigned detail.
 //
-// The detail is the one URL of the three where redirecting would lose the
-// operator something. A list and a board both exist in the product-wide
-// view, so sending the old URL there changes which page answers. A task
-// detail does not: its replacement has not shipped, so a redirect would
-// trade a page that answers for one that does not.
-func TestLegacyTaskDetailURLStillServes(t *testing.T) {
+// It retires into the DETAIL and not into a list the way the per-container
+// list and board do, because the operator following a bookmarked task link
+// came to read that task. That is also why the target carries the tid alone
+// rather than a container scope: the product-scoped detail resolves the
+// task's own milestone from the task, so a redirect that pinned the old
+// URL's {mid} would send a task that had since moved between containers to
+// a page that cannot find it.
+//
+// Both halves are driven because either alone is satisfiable by a wrong
+// redirect: the Location pins the target's shape, and the walk proves the
+// target actually serves the task rather than a well-chromed 404.
+func TestLegacyTaskDetailRedirectsToTheProductScopedDetail(t *testing.T) {
 	f := newLegacyFixture(t)
 	detail := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String() +
 		"/tasks/" + f.tid.String()
 
 	rec := fetch(t, f.mux, detail)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET %s = %d, want 200: the task detail still serves its own page", detail, rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("GET %s = %d, want 302: the redesigned detail replaces this page", detail, rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "" {
-		t.Errorf("GET %s answered a redirect to %q: the detail keeps serving until its successor ships", detail, loc)
+	want := productTaskDetailPath(f.pid, f.tid)
+	if got := rec.Header().Get("Location"); got != want {
+		t.Fatalf("GET %s redirected to %q, want the product-scoped detail %q", detail, got, want)
 	}
-	// And it is the task's own page rather than an in-shell status page:
-	// the fixture's one task's title is what the region carries.
-	if body := rec.Body.String(); !strings.Contains(body, "Test task") {
-		t.Errorf("GET %s did not render the task itself", detail)
+
+	code, final := followRedirect(t, f, detail)
+	if code != http.StatusOK {
+		t.Fatalf("GET %s resolved to %d at %s, want 200: an old task link must still read the task",
+			detail, code, final)
+	}
+	if final != want {
+		t.Errorf("GET %s landed on %s, want %s", detail, final, want)
+	}
+	if body := fetch(t, f.mux, final).Body.String(); !strings.Contains(body, "Test task") {
+		t.Errorf("GET %s landed on %s rendering no task: the redirect preserved the URL but not the task", detail, final)
+	}
+}
+
+// TestLegacyTaskDetailRedirectIsNotContainerScoped pins the {mid} half of
+// the redirect rule: the old URL's container does not travel.
+//
+// A target that carried the container -- a scope query, or the per-
+// container URL itself -- would be a redirect that resolves and still
+// strands the operator whenever the task's own milestone is not the one the
+// old URL named. This drives that case end to end rather than reading the
+// query: the milepebble URL for the milestone's own task is the exact
+// mismatch, and the product-scoped detail serves it because it resolves the
+// task's container itself.
+func TestLegacyTaskDetailRedirectIsNotContainerScoped(t *testing.T) {
+	f := newLegacyFixture(t)
+	// The URL names the milepebble; the fixture's task belongs to the
+	// milestone. The per-container URL would have refused this outright.
+	detail := "/spec/products/" + f.pid.String() + "/milestones/" + f.mpid.String() +
+		"/tasks/" + f.tid.String()
+
+	rec := fetch(t, f.mux, detail)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("GET %s = %d, want 302", detail, rec.Code)
+	}
+	want := productTaskDetailPath(f.pid, f.tid)
+	if got := rec.Header().Get("Location"); got != want {
+		t.Errorf("GET %s redirected to %q, want %q: the redirect carries the tid, not the old URL's container",
+			detail, got, want)
+	}
+
+	body := fetch(t, f.mux, want).Body.String()
+	if !strings.Contains(body, "Test task") {
+		t.Errorf("GET %s reached %s but rendered no task", detail, want)
+	}
+}
+
+// TestLegacyTaskDetailUnresolvableURLStaysInShell is the one case this
+// redirect cannot make: a URL whose ids do not parse has no product-scoped
+// detail to name. It answers in the shell rather than redirecting nowhere,
+// the same rule every other successor obeys.
+func TestLegacyTaskDetailUnresolvableURLStaysInShell(t *testing.T) {
+	f := newLegacyFixture(t)
+	p := "/spec/products/" + f.pid.String() + "/milestones/"
+
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{name: "unparseable task id", url: p + f.mid.String() + "/tasks/not-a-uuid"},
+		{name: "unparseable container id", url: p + "not-a-uuid/tasks/" + f.tid.String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := fetch(t, f.mux, tc.url)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d, want 200: an unresolvable legacy URL must still land in the shell",
+					tc.url, rec.Code)
+			}
+			if loc := rec.Header().Get("Location"); loc != "" {
+				t.Errorf("GET %s redirected to %q, which has nowhere to go", tc.url, loc)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, `data-krill="no-products"`) {
+				t.Errorf("GET %s did not render the product index:\n%s", tc.url, body)
+			}
+		})
 	}
 }
 
@@ -574,7 +651,10 @@ func TestPreRedesignURLsRenderNoReadFailure_HasTeeth(t *testing.T) {
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
 
-	body := fetch(t, mux, milestoneTasksPath(pid, mid)+"/"+tid.String()).Body.String()
+	// The product-scoped detail, not the pre-redesign URL: that one is a
+	// 302 now, so fetching it here would assert on a redirect body rather
+	// than on the page a failing slice read actually degrades.
+	body := fetch(t, mux, productTaskDetailPath(pid, tid)).Body.String()
 	if !strings.Contains(body, `alert-error`) {
 		t.Fatalf("a task detail page whose slice read failed rendered no error alert: " +
 			"the honesty check has nothing to catch and is vacuous")

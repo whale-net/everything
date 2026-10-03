@@ -190,8 +190,9 @@ Every URL the operator UI facelift replaces is registered from one table,
 names exactly one destination:
 
 - **`Serve`** — the URL's existing page, rendered inside the shell at 200.
-  Every entry is in this state today.
 - **`Successor`** — where the URL goes once its redesigned page ships.
+  Retired so far: the per-milestone **task list** and **board** (FR
+  f41a352d) and the per-milestone **task detail** (FR 0c03eac1).
 
 So the phase that replaces a page moves its URL from `Serve` to
 `Successor` and changes nothing else. That is the point: a replaced page's
@@ -200,12 +201,20 @@ table rather than being a route registration someone has to remember to
 redirect.
 
 A `Successor` is a `func(*App, *http.Request) (target string, ok bool)`.
-`ok` is false only when no product could be resolved to build the target —
-an un-prefixed URL must always land somewhere, so that case renders the
-product index rather than redirecting to nowhere. Redirects are **302**,
-not 301: a pre-redesign URL stays a live link an operator may keep
+`ok` is false only when the ids in the old URL cannot be resolved to build
+the target — an un-prefixed URL must always land somewhere, so that case
+renders the product index rather than redirecting to nowhere. Redirects are
+**302**, not 301: a pre-redesign URL stays a live link an operator may keep
 following, and 301 lets a browser pin the old URL in its cache past the
 page it now names.
+
+**A successor decides whether it carries the old URL's scope.** The list
+and board carry `{mid}` into a `scope=` / `container_id=` query, so a
+bookmarked milestone URL still opens *that* milestone's work rather than
+the whole product's. The detail does not: it carries the `tid` alone,
+because the page it retires into resolves the task's own container from the
+task. Reusing `legacyTaskSuccessor(suffix)` for the detail would land the
+operator on a list, which is the wrong page for a link that named a task.
 
 Do **not** redirect a URL to a page that has not shipped. Those render a
 placeholder, so an operator following a working "what is escalated?" link
@@ -780,7 +789,8 @@ instant, which is why that is the element's server-side content.
 not the per-container form. This table is not scoped to a container, so the
 per-container link would name the wrong milestone for every row but one.
 That route resolves the task's own container and checks it against the
-product's listing; the per-container detail URL keeps serving alongside it.
+product's listing, and it is the only detail URL that serves: the
+pre-redesign per-container one now 302s into it (see Task detail below).
 
 The **Board** view (`product_board_page.go`, `pages/board.templ`) renders
 one swimlane per milestone that has tasks (FR cf000440): five counted
@@ -870,35 +880,52 @@ the product alone, so a request cannot produce a sidebar whose links
 disagree with the page it is on.
 
 Each item still **owns** the pre-redesign `/milestones/{mid}/tasks` subtree
-as its `AltPath`: that URL is a task view however it is reached, and an
-operator who followed a bookmarked one is on a Tasks page and must see the
-sidebar say so. The href moved to the product-wide page; the active marking
-did not. Under FR f41a352d's legacy rule the per-milestone **list and
-board** URLs become 302s into these very product-wide pages, so for those
-two the `AltPath` stops mattering — the operator arrives on a path `Path`
-already owns. The per-container task **detail** is the exception, and the
-reason the `AltPath` outlives the cutover: it keeps serving at the legacy
-URL, and an operator reading one of those still needs the sidebar to say
-Tasks.
+as its `AltPath`. It was load-bearing while those URLs served their own
+pages: that URL is a task view however it is reached, and an operator who
+followed a bookmarked one was on a Tasks page and had to see the sidebar say
+so. The href moved to the product-wide page; the active marking did not.
+Every per-milestone URL is now a 302 — the **list and board** into these
+very product-wide pages (FR f41a352d), the **detail** into the product-scoped
+detail (FR 0c03eac1) — so an operator who followed a bookmark arrives on a
+path `Path` already owns, and the sidebar marks Tasks from `Path`. The
+`AltPath` is kept as the belt to that pair of braces rather than removed
+with them: a render whose URL still carries a pre-redesign path is then
+marked correctly too, and the wildcard costs nothing when nothing does.
 <!-- END product-task-scope section -->
 
 <!-- BEGIN task-detail section (task 9599fc1f) -->
 ### Task detail
 
-`/products/{pid}/tasks/{tid}`, and the pre-redesign
-`/spec/products/{id}/milestones/{mid}/tasks/{tid}` that shares it
-(task_detail_page.go, `pages/task_detail.templ`), are the read-only task
-detail. `serveTaskDetail` is the one read-and-render both URLs reach; only
-the container check differs.
+`/products/{pid}/tasks/{tid}` (task_detail_page.go, `pages/task_detail.templ`)
+is the task detail, and the only URL that serves it. `serveTaskDetail` is
+the one read-and-render both detail routes reach; only the container check
+differs, and only the product-scoped one is mounted.
+
+**The pre-redesign per-container detail is retired.** Its
+`legacyURLs` entry names `legacyTaskDetailSuccessor` rather than serving
+(FR 0c03eac1), so a bookmarked
+`/spec/products/{id}/milestones/{mid}/tasks/{tid}` 302s into
+`productTaskDetailPath(pid, tid)` — the **tid alone, no container**. Unlike
+the per-container list and the board, which retire into a view *scoped* to
+the `{mid}` they named, the detail retires into the detail: the operator
+following a bookmark came to read that task, and the product-scoped handler
+resolves the task's own milestone from the task, so a redirect that pinned
+the old URL's `{mid}` would strand any task that had since moved between
+containers. A `{pid}`, `{mid}` or `{tid}` that does not parse has no such
+target, and `serveLegacy` renders the product index rather than redirecting
+nowhere.
 
 **The frame is built before its contents.** Top to bottom: a breadcrumb
 (product → milestone → milepebble when the task sits on one → the task's
 own title, the only crumb with no href), the title as the page's one `h1`
 with the task's state badges beside it, then
 `grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]` — a main column and
-`<aside data-krill="task-properties-rail">`. The rail and the tab strip are
-the later tasks that fill those two regions; the region's shape is fixed
-first so they have a frame to slot into.
+`<aside data-krill="task-properties-rail">`. The rail and the tab strip
+(Overview / Notes / Dependencies / Spec slice) are the later tasks that fill
+those two regions; the region's shape is fixed first so they have a frame to
+slot into. `page.Path` is set from `r.URL.Path` after the render, not from
+`taskDetailPath`, so Refresh re-requests whichever URL actually served the
+page.
 
 Two values on this page must not be re-derived:
 

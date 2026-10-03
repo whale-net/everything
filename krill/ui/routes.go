@@ -151,7 +151,11 @@ func legacyURLs() []legacyURL {
 		// new view carrying that container, so a bookmarked milestone URL
 		// still opens that milestone's work.
 		{Pattern: specProductPath + "/milestones/{mid}/tasks", Successor: legacyTaskSuccessor(tasksSuffix)},
-		{Pattern: specProductPath + "/milestones/{mid}/tasks/{tid}", Serve: (*App).handleTaskDetail},
+		// The per-container task DETAIL retires too (FR 0c03eac1), but
+		// into the product-scoped detail rather than a list: the successor
+		// carries the tid alone, because that URL resolves the task's own
+		// container from the task rather than from the path.
+		{Pattern: specProductPath + "/milestones/{mid}/tasks/{tid}", Successor: legacyTaskDetailSuccessor},
 		{Pattern: specProductPath + "/milestones/{mid}/board", Successor: legacyTaskSuccessor(boardSuffix)},
 
 		// The design-session browser.
@@ -230,10 +234,8 @@ func (app *App) serveLegacy(l legacyURL) http.HandlerFunc {
 //
 // So a bookmarked milestone URL keeps opening that milestone's work rather
 // than the whole product's -- the redirect carries the scope, it does not
-// merely change the page. The per-container task DETAIL URL is deliberately
-// not one of these: it still serves its own page (its successor stays nil
-// until the redesigned detail ships), so an operator following an old task
-// link reads the task rather than landing on a list.
+// merely change the page. A per-container task DETAIL is not one of these
+// (see legacyTaskDetailSuccessor): it retires into the detail, not a list.
 func legacyTaskSuccessor(suffix string) func(*App, *http.Request) (string, bool) {
 	return func(app *App, r *http.Request) (string, bool) {
 		// specProductPath's own wildcard is {id}, and the container is
@@ -279,6 +281,34 @@ func legacyTaskContainer(app *App, r *http.Request, pid uuid.UUID) (taskContaine
 		return asMilestone, true
 	}
 	return container, true
+}
+
+// legacyTaskDetailSuccessor is the successor for the pre-redesign
+// per-container task detail: the product-scoped detail, carrying the tid
+// alone (FR 0c03eac1).
+//
+// Unlike the list and the board, this is not scoped to the {mid} the old
+// URL named. The product-scoped detail resolves the task's own container
+// from the task itself, so the target needs no container and a task that
+// moved between the old URL's milestone and another still lands on it --
+// which is the point: an operator following an old link reads the task.
+//
+// The {mid} is still parsed, because an unparseable one is not a URL this
+// table kept alive, and serveLegacy renders the product index rather than
+// a redirect nowhere.
+func legacyTaskDetailSuccessor(app *App, r *http.Request) (string, bool) {
+	pid, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		return "", false
+	}
+	tid, err := uuid.Parse(r.PathValue("tid"))
+	if err != nil {
+		return "", false
+	}
+	if _, err := uuid.Parse(r.PathValue("mid")); err != nil {
+		return "", false
+	}
+	return productTaskDetailPath(pid, tid), true
 }
 
 // The area handlers below own the shell's per-area roots. Each renders the
