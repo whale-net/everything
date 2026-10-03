@@ -1,6 +1,7 @@
 package main
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -296,5 +297,339 @@ func TestCopyTaskIdScript_BindsEachChipOnce(t *testing.T) {
 	if !strings.Contains(copyTaskIdScript, "setAttribute('data-krill-bound','1')") {
 		t.Errorf("the copy script tests its bind-once marker but never sets it, so the guard can "+
 			"never be true and every chip rebinds on every swap. script: %s", copyTaskIdScript)
+	}
+}
+
+// copyScriptIndex returns the offset of needle in the copy script, failing
+// the test when it is absent. Every structural assertion below is about
+// ORDER or SHAPE rather than mere presence, and an order assertion needs a
+// definite offset on both sides: an absent needle makes the comparison
+// vacuous, which is how "the guard runs before the bind" passes against a
+// script that has no guard at all.
+func copyScriptIndex(t *testing.T, needle string) int {
+	t.Helper()
+	i := strings.Index(copyTaskIdScript, needle)
+	if i < 0 {
+		t.Fatalf("the copy script no longer contains %q, so this test's ordering assertion has "+
+			"nothing to compare and would pass vacuously. script: %s", needle, copyTaskIdScript)
+	}
+	return i
+}
+
+// TestCopyTaskIdScript_GuardsBeforeItBinds is the bind-once rule as an
+// ORDER rather than a presence. The presence test above proves the guard
+// exists and that the marker is written; neither says the guard runs FIRST.
+//
+// The order is the whole mechanism. Checked after the listener is attached,
+// a chip reachable from two nested swapped fragments would still collect two
+// listeners on the first pass -- the guard would only bite on the second --
+// and both would announce, which reads to the operator as a copy that half
+// worked.
+func TestCopyTaskIdScript_GuardsBeforeItBinds(t *testing.T) {
+	guard := copyScriptIndex(t, "getAttribute('data-krill-bound')==='1'")
+	mark := copyScriptIndex(t, "setAttribute('data-krill-bound','1')")
+	listen := copyScriptIndex(t, "addEventListener('click'")
+
+	if guard > mark {
+		t.Errorf("the bind-once guard (offset %d) runs AFTER the marker is written (offset %d), so "+
+			"the check can never be true and every chip rebinds on every swap. script: %s",
+			guard, mark, copyTaskIdScript)
+	}
+	if mark > listen {
+		t.Errorf("the bind-once marker (offset %d) is written AFTER the click listener is attached "+
+			"(offset %d), so a chip reachable from two nested swapped fragments collects two "+
+			"listeners and announces twice per click. script: %s",
+			mark, listen, copyTaskIdScript)
+	}
+	// The guard has to be an early return, not a condition that merely skips
+	// the marker: a chip that tested the attribute and then fell through would
+	// re-attach its listener on every swap while still looking guarded.
+	if !strings.Contains(copyTaskIdScript, "==='1'){return;}") {
+		t.Errorf("the bind-once guard is not an early return, so a chip that already tested bound "+
+			"still falls through and attaches a second listener. script: %s", copyTaskIdScript)
+	}
+}
+
+// TestCopyTaskIdScript_MarksTheChipBoundBeforeAnythingElse pins the other
+// half of the swap story: the chip arrives from every swap as FRESH markup --
+// server-rendered, disabled, unbound -- and only the after:swap upgrade can
+// revive it. If the upgrade ran but never removed `disabled`, the chip would
+// sit there looking correct in the DOM and refusing every click, with nothing
+// on the page to say why.
+func TestCopyTaskIdScript_EnablesTheChipInsideTheBindItGuards(t *testing.T) {
+	guard := copyScriptIndex(t, "getAttribute('data-krill-bound')==='1'")
+	enable := copyScriptIndex(t, "btn.removeAttribute('disabled')")
+	listen := copyScriptIndex(t, "addEventListener('click'")
+
+	// After the guard: a chip already bound must not be re-enabled either --
+	// that is harmless, but it means the enable sits inside the guarded
+	// region rather than outside it.
+	if enable < guard {
+		t.Errorf("the chip is enabled (offset %d) BEFORE the bind-once guard (offset %d), so the "+
+			"enable is outside the guarded region. script: %s", enable, guard, copyTaskIdScript)
+	}
+	// And before the listener: enabling after attaching would leave a window
+	// in which a click on a still-disabled button does nothing.
+	if enable > listen {
+		t.Errorf("the chip is enabled (offset %d) only AFTER its click listener is attached (offset "+
+			"%d). script: %s", enable, listen, copyTaskIdScript)
+	}
+	// The title is swapped too, and on the same pass: a chip whose title still
+	// says "needs JavaScript" while it works is telling the operator the
+	// opposite of the truth.
+	if strings.Contains(copyTaskIdScript, "needs JavaScript") {
+		t.Errorf("the copy script still carries the disabled chip's \"needs JavaScript\" title text; "+
+			"the script must replace it, not ship it. script: %s", copyTaskIdScript)
+	}
+	if !strings.Contains(copyTaskIdScript, "btn.setAttribute('title','Copy the task id to your clipboard')") {
+		t.Errorf("the script enables the chip but never retitles it, so it keeps promising it needs "+
+			"JavaScript while working. script: %s", copyTaskIdScript)
+	}
+}
+
+// TestCopyTaskIdScript_ResetsOnlyWhileTheChipIsStillOnThePage is the
+// detached-node case, as an ORDER. The reset writes into the status element
+// and removes the chip's state attribute; both are writes to nodes that a
+// swap may have taken away.
+//
+// The guard is present (asserted elsewhere), but a guard that runs AFTER the
+// first write has already written into a detached node -- the exception is
+// swallowed and, worse, a browser that keeps the detached subtree alive lets
+// the stale text sit in a node an operator may still be reading through a
+// cached back-navigation.
+func TestCopyTaskIdScript_ResetsOnlyWhileTheChipIsStillOnThePage(t *testing.T) {
+	timer := copyScriptIndex(t, "setTimeout(function()")
+	guard := copyScriptIndex(t, "btn.isConnected")
+	write := copyScriptIndex(t, "s.textContent=''")
+
+	if guard < timer {
+		t.Errorf("the isConnected guard (offset %d) runs BEFORE the timer (offset %d), so it checks "+
+			"the node once at schedule time and a swap after that is unguarded. script: %s",
+			guard, timer, copyTaskIdScript)
+	}
+	if guard > write {
+		t.Errorf("the reset writes into the status element (offset %d) BEFORE checking the chip is "+
+			"still connected (offset %d), so a swap mid-flight takes the write. script: %s",
+			write, guard, copyTaskIdScript)
+	}
+	// And a second click must not leave the first timer running to clear the
+	// second confirmation early: the operator clicks twice and the "Copied"
+	// vanishes while they are still looking at it.
+	clear := strings.Index(copyTaskIdScript, "clearTimeout")
+	set := strings.Index(copyTaskIdScript, "setTimeout(")
+	if clear < 0 {
+		t.Errorf("a second click leaves the first reset timer armed, so it clears the second "+
+			"confirmation early. script: %s", copyTaskIdScript)
+	} else if set < 0 || clear > set {
+		t.Errorf("the pending reset (offset %d) is not cleared before the next one is armed "+
+			"(offset %d), so a second click's confirmation is cleared by the first click's timer. "+
+			"script: %s", clear, set, copyTaskIdScript)
+	}
+}
+
+// TestCopyTaskIdScript_ConfirmsBothOutcomesInWords guards the "not by colour
+// alone" clause for BOTH states rather than the success half only. The
+// existing presence test proves the word "Copied" exists somewhere; this
+// proves each tone is paired with a message, so removing the failure message
+// leaves the failure announced by text-error and nothing else -- invisible to
+// a monochrome display and silent to a reader who never sees the colour.
+func TestCopyTaskIdScript_ConfirmsBothOutcomesInWords(t *testing.T) {
+	// Every tone key must reach a message, and every message must reach a
+	// textContent write. Pairing them by offset is what makes this an
+	// assertion about the pairing rather than two independent presences.
+	for state, msg := range map[string]string{
+		"copied": "announce(btn,'copied','Copied')",
+		"failed": "announce(btn,'failed','Could not copy. The id is selected - press Ctrl+C.')",
+	} {
+		call := strings.Index(copyTaskIdScript, msg)
+		if call < 0 {
+			t.Errorf("the %s state has no message: %q. Without one the outcome is conveyed by the "+
+				"%s colour alone. script: %s", state, msg, state, copyTaskIdScript)
+			continue
+		}
+		// The announce helper is what puts text in the live region; a state
+		// whose announce call sits outside the helper cannot be read out.
+		if helper := strings.Index(copyTaskIdScript, "function announce("); helper < 0 || helper > call {
+			t.Errorf("the %s message is announced from outside announce(): %s", state, copyTaskIdScript)
+		}
+	}
+	// And the tone map must key both states, or TONE[state] is undefined and
+	// the className write lands as the string "undefined".
+	for _, state := range []string{"copied", "failed"} {
+		key := state + ":'"
+		if !strings.Contains(copyTaskIdScript, key) {
+			t.Errorf("the tone map has no %q entry, so announcing the %s state writes the literal "+
+				"string 'undefined' into the confirmation's class. script: %s",
+				state, state, copyTaskIdScript)
+		}
+	}
+}
+
+// TestCopyTaskIdScript_PrefersTheIdAttributeOverTheButtonText is the id
+// source. The attribute is what the script reads because the button's own
+// text is the id the operator sees -- but the button's text also carries
+// whatever the status write or a daisyUI badge put there, so a chip that read
+// its text would copy a string that is not an id.
+//
+// The order is the claim: the attribute first, the text only as the fallback
+// for a chip that somehow lost it, and the fallback trimmed (the template
+// renders the id on its own line, so the raw text carries whitespace).
+func TestCopyTaskIdScript_PrefersTheIdAttributeOverTheButtonText(t *testing.T) {
+	read := copyScriptIndex(t, "var id=btn.getAttribute('data-task-id')||(btn.textContent||'').trim();")
+	write := copyScriptIndex(t, "var p=writeId(btn);")
+	clip := copyScriptIndex(t, "clip.writeText(id)")
+
+	// Inside writeId the id is read before it is written: a helper that
+	// passed something else to writeText would resolve and announce "Copied"
+	// having copied nothing.
+	if read > clip {
+		t.Errorf("the chip's id is read (offset %d) only after writeText (offset %d) is handed "+
+			"something, so what lands on the clipboard is not the id. script: %s",
+			read, clip, copyTaskIdScript)
+	}
+	// And the handler reads it through that helper rather than reaching for
+	// the clipboard itself, so the "which id" rule lives in one place.
+	if read > write {
+		t.Errorf("the chip's id is read (offset %d) only after the click handler (offset %d) has "+
+			"already used it. script: %s", read, write, copyTaskIdScript)
+	}
+	// The fallback is trimmed. Untrimmed, the operator pastes a value with a
+	// newline and a leading tab into whatever they were about to use it in.
+	if !strings.Contains(copyTaskIdScript, ".trim()") {
+		t.Errorf("the id fallback is not trimmed, so a chip whose attribute is missing copies the "+
+			"template's surrounding whitespace with the id. script: %s", copyTaskIdScript)
+	}
+}
+
+// TestCopyTaskIdScript_FindsTheLiveRegionThroughTheChipOwnRow keeps the
+// script's lookup and the markup's shape in step.
+//
+// The script walks up to the chip's <dd> and then finds the status span
+// inside it. That is the right scope -- a single confirmation on the page,
+// beside its own chip -- but it is a coupling to the markup's structure, and
+// a rail that moved the span out of the <dd> would leave the script writing
+// into null and the click confirming nothing at all, with the copy having
+// actually worked. So the <dd> is asserted to be what the chip and its
+// status share.
+func TestCopyTaskIdScript_FindsTheLiveRegionThroughTheChipOwnRow(t *testing.T) {
+	closest := copyScriptIndex(t, "btn.closest('dd')")
+	hook := copyScriptIndex(t, `cell.querySelector('[data-krill="copy-task-id-status"]')`)
+
+	if closest > hook {
+		t.Errorf("the status lookup (offset %d) precedes the <dd> walk (offset %d) it is scoped by. "+
+			"script: %s", hook, closest, copyTaskIdScript)
+	}
+	// A bare document-wide querySelector would announce beside whatever row
+	// happened to be first -- beside the wrong value, on a page with two.
+	if strings.Contains(copyTaskIdScript, "document.querySelector('[data-krill=\"copy-task-id-status\"]')") {
+		t.Errorf("the copy script looks the live region up document-wide; a second chip's "+
+			"confirmation would land in the first one's row. script: %s", copyTaskIdScript)
+	}
+	// And a null status must be a no-op rather than a throw: the copy has
+	// already happened by then, and an exception in the announce would leave
+	// the operator with a clipboard that filled and a page that said nothing.
+	if !strings.Contains(copyTaskIdScript, "var s=statusOf(btn);if(!s){return;}") {
+		t.Errorf("the announce helper does not bail on a missing status element, so a chip whose "+
+			"row lost the live region throws after the copy succeeded. script: %s", copyTaskIdScript)
+	}
+}
+
+// TestCopyTaskIdScript_LeavesNoOtherValueInTheMarkup is the leakage check.
+//
+// The chip carries one value -- the task id -- because that is the whole
+// point. But the same head script runs on EVERY krill page, and the hook it
+// keys on is a generic one: a chip marked data-krill="copy-task-id" anywhere
+// on any page gets bound, and whatever its data-task-id says is written to
+// that operator's clipboard and read into a live region. So the script must
+// put nothing else anywhere: no other attribute write, no other value
+// surfaced, nothing echoed into the DOM that the operator did not type.
+//
+// The claim id, the lease instant and the session id all sit in data
+// attributes on the detail section. None of them may appear in the script.
+func TestCopyTaskIdScript_LeavesNoOtherValueInTheMarkup(t *testing.T) {
+	// Every attribute the script writes must be one of the three it owns.
+	// A fourth write is a new value leaving the page.
+	writes := regexp.MustCompile(`\.setAttribute\('([^']+)'`)
+	allowed := map[string]bool{
+		"data-krill-bound": true, // the bind-once marker
+		"title":            true, // the retitle
+		"data-copy-state":  true, // the outcome, for styling and for tests
+	}
+	for _, m := range writes.FindAllStringSubmatch(copyTaskIdScript, -1) {
+		if !allowed[m[1]] {
+			t.Errorf("the copy script writes the %q attribute, which is a value leaving the page "+
+				"that this task never asked for. script: %s", m[1], copyTaskIdScript)
+		}
+	}
+	// The live region only ever carries a fixed phrase. Anything built by
+	// concatenation -- the id, a claim id, an error string -- would put a
+	// value into an announced element, which is read aloud.
+	for _, built := range []string{"s.textContent=id", "s.textContent=sess", "s.textContent=claim"} {
+		if strings.Contains(copyTaskIdScript, built) {
+			t.Errorf("the live region is filled with a derived value (%q); it must carry only the "+
+				"fixed phrases, since a live region is announced aloud. script: %s",
+				built, copyTaskIdScript)
+		}
+	}
+	// And nothing from the surrounding page is read into the copy. The only
+	// read off the chip is its own id.
+	if strings.Contains(copyTaskIdScript, "data-krill-claim-id") ||
+		strings.Contains(copyTaskIdScript, "data-krill-lease-expires-at") {
+		t.Errorf("the copy script reads the region's claim or lease attributes, which would put a "+
+			"credential-adjacent value in the operator's clipboard. script: %s", copyTaskIdScript)
+	}
+}
+
+// TestCopyTaskIdScript_AnnouncesTheFailureOnEveryPathThatCanFail walks the
+// click handler's own branches rather than checking that a failure message
+// exists somewhere in the script.
+//
+// There are three ways the copy can fail -- the API is absent, writeText
+// throws synchronously, writeText rejects -- and each has to reach the same
+// outcome. writeId collapses the first two into one null return, so the
+// handler has exactly two failure exits, and BOTH must select the id and say
+// so. A failure exit that only announced, without selecting, leaves the
+// operator told to press Ctrl+C over a selection that was never made.
+//
+// The counting is what makes it bite: one announce-and-select pair means a
+// path fails silently.
+func TestCopyTaskIdScript_AnnouncesTheFailureOnEveryPathThatCanFail(t *testing.T) {
+	const failMsg = "announce(btn,'failed',"
+	if n := strings.Count(copyTaskIdScript, failMsg); n != 2 {
+		t.Errorf("the click handler has %d failure announcements; it needs one for the "+
+			"missing/throwing-clipboard exit and one for the rejected-promise exit, or one of "+
+			"them copies with nothing said and nothing selected. script: %s", n, copyTaskIdScript)
+	}
+	// Both exits must select, and both must announce -- in that order, so the
+	// selection exists by the time the operator is told to use it.
+	if n := strings.Count(copyTaskIdScript, "selectId(btn);\n"); n < 2 {
+		t.Errorf("selectId(btn) appears %d times; both failure exits must select the id before "+
+			"announcing, or the message tells the operator to press Ctrl+C over nothing selected. "+
+			"script: %s", n, copyTaskIdScript)
+	}
+	// The click's own default must be cancelled: the chip is a <button>, and
+	// a submit-capable default inside a form would make the copy a write.
+	if !strings.Contains(copyTaskIdScript, "ev.preventDefault();") {
+		t.Errorf("the click handler does not preventDefault, so the chip's button default runs. "+
+			"script: %s", copyTaskIdScript)
+	}
+	// The selection is over the chip's CONTENTS, not the whole document and
+	// not the status span beside it: selecting the status span would put the
+	// message on the clipboard instead of the id.
+	if !strings.Contains(copyTaskIdScript, "r.selectNodeContents(btn);") {
+		t.Errorf("the failure path does not select the chip's own contents, so the operator's next "+
+			"Ctrl+C would copy the wrong text. script: %s", copyTaskIdScript)
+	}
+	// The selection replaces whatever was selected rather than adding to it.
+	if !strings.Contains(copyTaskIdScript, "sel.removeAllRanges();sel.addRange(r);") {
+		t.Errorf("the failure path does not clear the existing selection before adding the id's, "+
+			"so Ctrl+C copies a range spanning both. script: %s", copyTaskIdScript)
+	}
+	// And the whole thing is best-effort: a browser that refuses the Range
+	// still gets the message naming the manual step, so the selection cannot
+	// be the thing that throws the failure away.
+	if !strings.Contains(copyTaskIdScript, "catch(e){}") {
+		t.Errorf("the selection is unguarded, so a browser that refuses the Range throws instead "+
+			"of telling the operator to select the id by hand. script: %s", copyTaskIdScript)
 	}
 }

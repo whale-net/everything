@@ -542,8 +542,67 @@ func TestTaskDetailRailCopyChipIsAnAccessibleControlBoundFromTheHead(t *testing.
 	// satisfied by a page that simply has a dead chip. buildHead is the
 	// seam the shipped shell renders, and the fragment served above has no
 	// head of its own to check.
-	assert.Contains(t, buildHead(), "navigator.clipboard",
-		"the head must carry copyTaskIdScript, or this chip never copies anything")
+	//
+	// The whole script, not a word from it: "navigator.clipboard" alone is
+	// satisfied by any head carrying ANY clipboard call, so a build that
+	// dropped copyTaskIdScript and grew an unrelated one would pass. The
+	// negative half above is only defensible because this half is exact.
+	head := buildHead()
+	assert.Contains(t, head, copyTaskIdScript,
+		"the head must carry copyTaskIdScript itself, or this chip never copies anything")
+}
+
+// TestTaskDetailRailCopyChipIsLiveOnlyBecauseTheHeadSaysSo is the audit of
+// the sweep's narrowing, stated as its own test rather than left to be
+// inferred from two neighbours.
+//
+// The rail sweep used to assert the whole rail contains no
+// "navigator.clipboard". That was correct while the chip had no behaviour,
+// and it became wrong the moment the head script arrived: the page has to
+// contain a clipboard call somewhere, and narrowing the sweep to "no inline
+// clipboard" is only honest if something else makes a DEAD chip fail. This
+// is that something else, and it is two claims joined:
+//
+//  1. the head carries the script, whole; and
+//  2. the script is what removes the chip's disabled.
+//
+// Together they mean the chip cannot be both disabled on arrival and without
+// an enabler: the state is changed by one specific, asserted piece of code.
+// Neither half alone is enough -- a head carrying the script while the chip
+// ships enabled-but-unwired is a live-looking dead control, and a chip whose
+// disabled is removed by markup with no script behind it is dead with the
+// disabled attribute gone.
+func TestTaskDetailRailCopyChipIsLiveOnlyBecauseTheHeadSaysSo(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "chip-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	// 1. the enabler is in the head, whole.
+	head := buildHead()
+	require.Contains(t, head, copyTaskIdScript,
+		"without the head's copy script the chip below can never be enabled")
+
+	// 2. the enabler is what flips it, and the flip is inside the bind that
+	// every fresh chip from a swap goes through.
+	require.Contains(t, copyTaskIdScript, "btn.removeAttribute('disabled')",
+		"the script has to be what removes disabled; nothing else does")
+
+	// And the chip really is disabled on arrival -- otherwise the pair above
+	// describes a control that is live regardless, and the whole
+	// enable-the-chip contract is decorative.
+	row := regionBetween(t, html, `data-krill="task-properties-id"`, "</dd>")
+	require.Contains(t, row, `" disabled title="`,
+		"the chip must ship disabled for the head's enable to mean anything")
+
+	// The swap path, joined up: a chip swapped in after page load arrives in
+	// exactly the server-rendered state asserted above, so the after:swap
+	// listener is the only thing that revives it, and it has to reach the
+	// swapped subtree rather than only the initial document.
+	assert.Contains(t, copyTaskIdScript, "document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});",
+		"a swapped-in chip arrives disabled and unbound; only an after:swap upgrade over the "+
+			"swapped subtree can revive it")
 }
 
 // TestTaskDetailRailCopyChipIsDisabledUntilTheHeadEnablesIt is the
@@ -1302,4 +1361,396 @@ func TestTaskDetailRailClaimRowRendersFourDistinctShapes(t *testing.T) {
 				"the claim row rendered an element with no content in it:\n%s", row)
 		})
 	}
+}
+
+// sweepTrips runs the sweep's OWN predicate -- the exact expression
+// TestTaskDetailRailNoRowRendersAnEmptyValue asserts with -- over a card, so
+// this file's carve-out cases are testing the shipped sweep rather than a
+// restatement of it.
+//
+// That distinction is the point. The carve-out is a change to the sweep's
+// INPUT, so testing it against a hand-written copy of the rule proves only
+// that the copy agrees with itself. Driving it through the real card, with
+// the real regex, is what makes "the carve-out does not disarm the sweep" a
+// statement about the page rather than about this file.
+func sweepTrips(card string) bool {
+	return railEmptySpanRE.MatchString(withoutCopyStatusLiveRegion(card))
+}
+
+// TestTheCopyChipCarveOutStillCatchesTheEmptyValueDefect is the audit of the
+// empty-element sweep's carve-out, run against the real card.
+//
+// The rail failed validation once for exactly this class of bug: a row
+// rendering an empty value that read as a real one. The sweep was written to
+// make that impossible, and this task then carved one element out of it --
+// the copy chip's live region, which is empty on arrival by design, because
+// a live region must exist before its content changes to be announced.
+//
+// A carve-out is only safe if it is narrow enough that the class of bug it
+// was protecting against still cannot walk in through it. Each case below is
+// that class, injected into the REAL rendered card: the sweep must still
+// trip on it. The live region itself is in that card throughout, so every
+// case also proves the carve-out is not simply eating the whole card.
+//
+// This is deliberately not "the regex still matches a string I typed". It is
+// "the shipped page, plus this defect, still fails the shipped sweep".
+func TestTheCopyChipCarveOutStillCatchesTheEmptyValueDefect(t *testing.T) {
+	// The claim row's holder is the value the original defect emptied, so
+	// the carrier here is the real markup rather than a hand-written span.
+	f := newDetailFixture(t)
+	held := time.Now().Add(-time.Hour).UTC()
+	lastSession := store.SessionID(uuid.New())
+	task := f.add(store.Task{Title: "carve-out-task", CurrentLane: store.LaneTesting})
+	f.store.lastClaim = store.Claim{
+		ID: uuid.New(), TaskID: task.ID, SessionID: lastSession,
+		ClaimedAt: held, ReleasedAt: &held, ReleaseReason: strPtr("complete"),
+	}
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	card := propertiesOf(t, html)
+	// The live region really is on the card -- otherwise every case below
+	// passes for the wrong reason, with no carve-out in play at all.
+	require.NotEmpty(t, railCopyStatusSpanRE.FindString(card),
+		"the card under audit has no live region to carve out:\n%s", card)
+	// And the carve-out is what clears it, so the baseline is clean.
+	require.False(t, sweepTrips(card),
+		"the real card trips the sweep even after the carve-out, so this audit has no clean "+
+			"baseline to inject into:\n%s", card)
+
+	// Each case replaces the claim row's value with a shape the sweep must
+	// reject. The claim row's real content is what gets replaced, so nothing
+	// here is a shape the template could not produce.
+	replacements := map[string]struct{ from, to string }{
+		// The original defect, verbatim: an empty span styled as the row's
+		// value. "Claimed by <span class="font-mono text-xs"></span>" reads
+		// as claimed-by-nobody.
+		"the original defect: an empty holder span": {
+			from: `<span class="font-mono text-xs">` + lastSession.String() + `</span>`,
+			to:   `<span class="font-mono text-xs"></span>`,
+		},
+		// The same defect wearing the live region's role: an exemption keyed
+		// on "empty span with a role" instead of on the exact hook would let
+		// this through.
+		"an empty value span that also has role=status": {
+			from: `<span class="font-mono text-xs">` + lastSession.String() + `</span>`,
+			to:   `<span class="font-mono text-xs" role="status" aria-live="polite"></span>`,
+		},
+		// The near-miss hook: one character away from the exempt one. An
+		// exemption keyed on a prefix rather than on the exact attribute
+		// value would swallow it.
+		"a near-miss hook": {
+			from: `<span class="font-mono text-xs">` + lastSession.String() + `</span>`,
+			to:   `<span class="font-mono text-xs" data-krill="copy-task-id-status-2"></span>`,
+		},
+		// Nested: an empty span inside another span. The outer has content
+		// (an element), so a sweep that only checked the outermost tag's text
+		// would read it as populated.
+		"a nested empty span": {
+			from: `<span class="font-mono text-xs">` + lastSession.String() + `</span>`,
+			to:   `<span class="font-mono text-xs"><span class="font-mono"></span></span>`,
+		},
+		// Whitespace-only: an element whose content is a newline and a tab,
+		// which is what a template's own indentation produces.
+		"a whitespace-only span": {
+			from: `<span class="font-mono text-xs">` + lastSession.String() + `</span>`,
+			to:   "<span class=\"font-mono text-xs\">\n\t\t\t</span>",
+		},
+	}
+
+	for name, r := range replacements {
+		t.Run(name, func(t *testing.T) {
+			require.Contains(t, card, r.from,
+				"the card no longer has the carrier this defect replaces:\n%s", card)
+			defective := strings.Replace(card, r.from, r.to, 1)
+
+			// The defect is really in, and the live region is still there --
+			// so the sweep is failing because of the defect, not because the
+			// carve-out ate the card.
+			require.NotEqual(t, card, defective, "the injection did not change the card")
+			require.NotEmpty(t, railCopyStatusSpanRE.FindString(defective),
+				"the live region vanished from the card under test, so this case is not testing "+
+					"the carve-out:\n%s", defective)
+
+			assert.True(t, sweepTrips(defective),
+				"the carve-out swallowed a value-bearing empty span; this is the defect class the "+
+					"sweep exists for and it must still fail:\n%s", defective)
+		})
+	}
+}
+
+// TestTheCopyChipCarveOutIsOneElementNotAPattern is the carve-out's other
+// half: it must remove exactly the one span, and leave the rest of the card
+// byte-for-byte alone.
+//
+// The cases above ask whether the sweep still BITES. This asks whether the
+// carve-out still removes only what it is supposed to -- because an
+// over-broad replacement that quietly deleted real content would make the
+// sweep pass by hiding markup rather than by the markup being correct, and
+// that failure is invisible from the sweep's side.
+func TestTheCopyChipCarveOutIsOneElementNotAPattern(t *testing.T) {
+	f := newDetailFixture(t)
+	esc := uuid.New()
+	escalatedAt := time.Now().Add(-90 * time.Minute).UTC().Truncate(time.Second)
+	claim := uuid.New()
+	lease := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	task := f.add(store.Task{
+		Title: "carve-out-scope", CurrentLane: store.LaneTesting, AttemptCount: 1,
+		CurrentClaimID: &claim, LeaseExpiresAt: &lease, CurrentEscalationID: &esc,
+	})
+	f.store.escalation = store.EscalationEvent{ID: esc, CreatedAt: escalatedAt}
+	f.store.claim = store.Claim{ID: claim, TaskID: task.ID, SessionID: store.SessionID(uuid.New())}
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	card := propertiesOf(t, html)
+	carved := withoutCopyStatusLiveRegion(card)
+
+	// Exactly one element went. The card is six rows; a carve-out that ate
+	// more than one would show up as a row that has vanished.
+	assert.Equal(t, 1, strings.Count(card, railCopyStatusSpanRE.FindString(card)),
+		"the carve-out matched %d spans, but the chip's live region is one",
+		strings.Count(card, railCopyStatusSpanRE.FindString(card)))
+
+	// Every row is still there, with its value.
+	for hook, want := range map[string]string{
+		"task-properties-lane":      "Testing",
+		"task-properties-attempts":  "1 of 3",
+		"task-properties-claim":     "Claimed by",
+		"task-properties-escalated": escalatedAt.Format(time.RFC3339),
+		"task-properties-id":        task.ID.String(),
+	} {
+		row := regionBetween(t, carved, `data-krill="`+hook+`"`, "</dd>")
+		assert.Contains(t, row, want,
+			"the carve-out removed content from the %s row; it must strip one span, not a pattern", hook)
+	}
+
+	// And the whole removal is accounted for by that one span's own text --
+	// nothing else changed.
+	span := railCopyStatusSpanRE.FindString(card)
+	require.NotEmpty(t, span)
+	assert.Equal(t, strings.Replace(card, span, "", 1), carved,
+		"the carve-out changed more than the live region's own markup")
+}
+
+// TestTheCopyChipCarveOutWouldBeUnnecessaryIfTheSweepRanOnTheRow is the
+// structural reason the carve-out has to exist at all, and the reason it can
+// stay this narrow.
+//
+// The sweep's regex matches an empty span ANYWHERE in the card. The live
+// region is an empty span in the card. So the carve-out is not optional
+// politeness -- without it the sweep would fail on every correct page, and
+// the tempting fix for that failure is to weaken the regex, which would
+// weaken the sweep for every row. This pins that the exemption is a
+// pre-filter on one element rather than a loosening of the rule.
+func TestTheCopyChipCarveOutWouldBeUnnecessaryIfTheSweepRanOnTheRow(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "baseline-task", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	card := propertiesOf(t, html)
+
+	// The live region IS an empty span, matched by the sweep's own regex --
+	// so the carve-out is load-bearing, not decorative.
+	assert.Regexp(t, railEmptySpanRE, card,
+		"the sweep's regex does not match the live region, so the carve-out is dead code and the "+
+			"rule it protects may have been loosened instead:\n%s", card)
+
+	// But it is the ONLY match: a card where the sweep finds two empty spans
+	// has a second defect the carve-out is not covering, and the sweep would
+	// be relying on the exemption for more than the one live region.
+	assert.Equal(t, 1, len(railEmptySpanRE.FindAllString(card, -1)),
+		"the card holds more than the one exempt empty span, so the carve-out is hiding a real "+
+			"defect rather than only the live region:\n%s", card)
+
+	// The exemption is scoped to the hook, and the hook appears once. A
+	// second chip's live region would be a second exemption.
+	assert.Equal(t, 1, strings.Count(html, `data-krill="copy-task-id-status"`),
+		"one chip, one live region: a second exempt element would mean the carve-out covers more "+
+			"than it was written for")
+}
+
+// TestTheCopyChipCarveOutIsAnAttributeMatchNotAPositionMatch states the
+// carve-out's residual reach, exactly, rather than leaving it for the next
+// reader to discover.
+//
+// railCopyStatusSpanRE matches on the hook ATTRIBUTE wherever it appears in
+// the card. It is not scoped to the Task id row. So an empty span that
+// happens to carry data-krill="copy-task-id-status" in some OTHER row would
+// be exempted too, and the sweep would not see it.
+//
+// That is a real hole, and this test is written to make it visible rather
+// than to argue it away. It does NOT defend the hole -- it pins what the
+// hole costs and what keeps it bounded:
+//
+//   - The sweep does not trip on such a span. Asserted, so nobody later
+//     "fixes" a red test by loosening the sweep further.
+//   - The hole is bounded by the hook being unique. Asserted, and the count
+//     is one on the shipped page, so a second element reusing the hook is a
+//     change the page-level count test in
+//     TestTaskDetailRailCopyConfirmationIsAPoliteLiveRegion already fails on.
+//
+// The honest summary for the Validation lane: the carve-out is one attribute
+// wide, not one row wide. Today that is exactly one element on one page. If a
+// second empty element ever carries the hook, the fix is to anchor the regex
+// on the Task id row, NOT to widen the exemption.
+func TestTheCopyChipCarveOutIsAnAttributeMatchNotAPositionMatch(t *testing.T) {
+	f := newDetailFixture(t)
+	held := time.Now().Add(-time.Hour).UTC()
+	lastSession := store.SessionID(uuid.New())
+	task := f.add(store.Task{Title: "carve-out-reach", CurrentLane: store.LaneTesting})
+	f.store.lastClaim = store.Claim{
+		ID: uuid.New(), TaskID: task.ID, SessionID: lastSession,
+		ClaimedAt: held, ReleasedAt: &held, ReleaseReason: strPtr("complete"),
+	}
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	card := propertiesOf(t, html)
+	carrier := `<span class="font-mono text-xs">` + lastSession.String() + `</span>`
+	require.Contains(t, card, carrier, "the claim row's holder span moved:\n%s", card)
+
+	// The stated limit: an empty span carrying the hook, in a row that has
+	// nothing to do with the copy chip, is exempted along with the live
+	// region. Stated as a fact about the shipped regex, not as a wish.
+	reused := strings.Replace(card, carrier, `<span data-krill="copy-task-id-status"></span>`, 1)
+	require.NotEqual(t, card, reused)
+	assert.False(t, sweepTrips(reused),
+		"the carve-out's exemption is one ATTRIBUTE wide, not one ROW wide: an empty span "+
+			"carrying the live region's hook is exempted wherever it sits. If this has become true, "+
+			"the exemption was widened; if it should stop being true, anchor railCopyStatusSpanRE "+
+			"on the Task id row rather than loosening the sweep:\n%s", reused)
+
+	// What bounds it: the hook is unique to the one live region, and the
+	// count is asserted at page level. This is the assertion that would fail
+	// first if a second element ever reused the hook.
+	assert.Equal(t, 1, strings.Count(html, `data-krill="copy-task-id-status"`),
+		"the carve-out's exemption is as wide as the number of elements carrying the hook; "+
+			"that number is one, and this is what keeps the limit above harmless")
+}
+
+// TestTaskDetailRailCopyChipLivesOutsideEverySwapTarget is the swap half of
+// the placement claim, stated as a property of the markup rather than of the
+// script.
+//
+// The task body requires the behaviour to survive every tab swap without
+// being re-bound, and the head placement is what delivers that. But the chip
+// itself is in the rail, and the rail is inside the region the Refresh button
+// replaces -- so "outside every swap target" is not literally true and must
+// not be asserted as if it were. What IS true, and what makes the head
+// placement load-bearing, is:
+//
+//	the chip's BEHAVIOUR is never inside a swapped region, so it is never
+//	re-requested and never re-parsed; and the script re-binds on every swap
+//	anyway, so a chip that IS re-requested comes back working.
+//
+// This pins the first half from the markup side: the chip's row is inside
+// the Refresh target (which is why the rebind path matters), and no script
+// rides along with it (which is why the behaviour cannot die with the swap).
+func TestTaskDetailRailCopyChipLivesOutsideEverySwapTarget(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "swap-survival", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	// The Refresh button replaces the whole detail section by outerHTML --
+	// the section the rail is in. So a Refresh DOES re-request the chip, as
+	// fresh disabled markup, and the after:swap rebind is the only thing that
+	// revives it. This is the load the head placement is carrying.
+	refresh := regionBetween(t, html, `data-krill="refresh"`, "</button>")
+	require.Contains(t, refresh, `hx-target="#`+pages.TaskDetailAnchor+`"`)
+	require.Contains(t, refresh, `hx-swap="outerHTML"`)
+
+	// The chip is inside that replaced region. The HX fragment served IS the
+	// one element the Refresh replaces, so the chip being in the fragment is
+	// the claim. Read with the sound top-level parser rather than a naive
+	// `</section>` cut, which would close on the content column's inner
+	// section before the rail is ever reached.
+	require.Len(t, fragmentTopLevelElements(html), 1,
+		"the HX fragment must be exactly the one element the Refresh replaces:\n%s", html)
+	assert.Contains(t, html, `data-krill="copy-task-id"`,
+		"the chip must be inside the swapped region; if it ever moves out, this test's premise "+
+			"changes and the rebind path would need re-justifying")
+
+	// And the behaviour does NOT ride along with it. A chip re-requested by
+	// every Refresh would come back with whatever inline handler it shipped
+	// with; the head's is unaffected by the swap.
+	assert.NotContains(t, html, "<script",
+		"no script may live inside the swapped detail region, or it dies with every Refresh")
+
+	// Both halves of the head's answer, asserted together: it survives the
+	// swap (it is in the head) and it revives a swapped-in chip (it rebinds).
+	head := buildHead()
+	assert.Contains(t, head, copyTaskIdScript, "the behaviour lives in the head, outside every swap")
+	assert.Contains(t, copyTaskIdScript,
+		"document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});",
+		"a Refresh re-requests the chip disabled; only an after:swap upgrade over the swapped "+
+			"subtree revives it")
+}
+
+// TestTaskDetailRailCopyChipAccessibilityContract is the confirmation's
+// accessibility contract read off the MARKUP and the SCRIPT together, as
+// distinct claims.
+//
+// The script-level test already asserts the script never calls .focus() and
+// never uses alert/confirm. What it cannot see is the rendered page: whether
+// the chip itself is reachable by keyboard, whether the live region is
+// actually a live region, and whether the outcome is carried by a word a
+// screen reader reads out rather than by a colour class.
+//
+// The keyboard clause is the one worth stating: a copy chip that cannot be
+// reached by Tab is not an accessible control at all, however well its
+// live region is written, and the script's removeAttribute('disabled') is
+// exactly what makes it reachable again after the head runs.
+func TestTaskDetailRailCopyChipAccessibilityContract(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "a11y-chip", CurrentLane: store.LaneTesting})
+
+	code, html := f.getProductScoped(task.ID.String(), true)
+	require.Equal(t, 200, code, "body: %s", html)
+
+	row := regionBetween(t, html, `data-krill="task-properties-id"`, "</dd>")
+
+	// Reachable by keyboard once the head has run. It is NOT reachable on
+	// arrival -- that is the deliberate disabled state -- and the script's
+	// removal of disabled is what makes it reachable, so both halves are
+	// asserted rather than the convenient one.
+	assert.Contains(t, row, `" disabled`, "the chip ships disabled, before the head runs")
+	assert.NotContains(t, row, "tabindex",
+		"a tabindex on the chip would either remove it from the tab order or reorder it, and "+
+			"neither is wanted: the script's removeAttribute('disabled') is what restores it")
+
+	// The live region is a live region, is polite rather than assertive, and
+	// is announced without moving focus: no tabindex, no autofocus, and
+	// nothing focusable inside it.
+	status := regexp.MustCompile(`<span[^>]*data-krill="copy-task-id-status"[^>]*>(?s).*?</span>`)
+	span := status.FindString(row)
+	require.NotEmpty(t, span, "no live region beside the chip:\n%s", row)
+	assert.Contains(t, span, `role="status"`)
+	assert.Contains(t, span, `aria-live="polite"`)
+	for _, forbidden := range []string{"tabindex", "autofocus", "<button", "<a ", "<input"} {
+		assert.NotContains(t, strings.ToLower(span), forbidden,
+			"the confirmation must not be focusable; %q in it would move the operator's place", forbidden)
+	}
+
+	// And the outcome is a word in both states. The success word is asserted
+	// on the script (it only exists there); the failure message too. Neither
+	// may be conveyed by text-success / text-error alone, which a monochrome
+	// display and a screen reader both render as nothing.
+	assert.Contains(t, copyTaskIdScript, "'Copied'",
+		"the success confirmation must be a word, not the success colour")
+	assert.Contains(t, copyTaskIdScript, "Could not copy. The id is selected - press Ctrl+C.",
+		"the failure confirmation must name what happened and what to do, not only turn red")
+	assert.NotContains(t, copyTaskIdScript, ".focus(",
+		"the copy must not move focus; the operator is mid-task")
+	assert.NotContains(t, copyTaskIdScript, "alert(",
+		"an alert() blocks the operator and is announced by every screen reader at once")
+	assert.NotContains(t, copyTaskIdScript, "confirm(",
+		"a confirm() dialog for a copy is a modal interruption, not an in-place confirmation")
 }
