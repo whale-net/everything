@@ -116,11 +116,17 @@ type TaskNoteRow struct {
 // cannot disagree about what a note is. The colours come from
 // components.NoteKindStyle and components.NoteLifecycleStyle, which is
 // where the vocabulary's presentation belongs.
-templ TaskNoteBadges(kind, status string) {
-	{{ k := components.NoteKindStyle(kind) }}
-	@htmxui.Badge(kind, k.Variant, k.Size, k.Soft, templ.Attributes{"data-krill": "note-kind"})
-	{{ s := components.NoteLifecycleStyle(status) }}
-	@htmxui.Badge(status, s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "note-status"})
+//
+// It takes the row rather than the two strings so the Overview panel, whose
+// rows it also renders, calls the same component with the same argument
+// shape the Notes panel does.
+templ TaskNoteBadges(n TaskNoteRow) {
+	<div class="flex flex-wrap items-center gap-2" data-krill="note-badges">
+		{{ k := components.NoteKindStyle(n.Kind) }}
+		@htmxui.Badge(n.Kind, k.Variant, k.Size, k.Soft, templ.Attributes{"data-krill": "note-kind"})
+		{{ s := components.NoteLifecycleStyle(n.Status) }}
+		@htmxui.Badge(n.Status, s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "note-status"})
+	</div>
 }
 
 // taskDepList is the ONE rendering of a task's dependencies: each as a
@@ -649,9 +655,7 @@ templ taskNotesPanel(page TaskDetailPage) {
 			<ul class="space-y-3 text-sm" data-krill="task-note-list">
 				for _, n := range page.Notes {
 					<li data-krill="task-note">
-						<div class="flex flex-wrap items-center gap-2">
-							@TaskNoteBadges(n.Kind, n.Status)
-						</div>
+						@TaskNoteBadges(n)
 						<pre class="mt-1 whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
 					</li>
 				}
