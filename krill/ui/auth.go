@@ -59,33 +59,12 @@ func (m mcpResolver) ResolveCallerPersona(r *http.Request) (string, bool) {
 // defaults -- `/authorize`, `/token`, and `/register` can land on
 // different `ui` replicas.
 func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolver) (*auth.Provider, auth.CredentialStore, error) {
-	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool, PersonaColumn: "persona"})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	clients, err := auth.NewPostgresClientRegistry(ctx, auth.ClientRegistryConfig{Pool: pool})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	authCodes, err := auth.NewPostgresAuthCodeStore(ctx, auth.AuthCodeStoreConfig{Pool: pool, PersonaColumn: "persona"})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	provider, err := auth.NewProvider(auth.ProviderConfig{
+	return auth.NewPostgresProvider(ctx, auth.PostgresProviderConfig{
+		Pool:         pool,
 		Issuer:       cfg.UIPublicURL,
 		Resource:     cfg.MCPPublicURL,
 		ResourceName: "krill MCP",
 		Resolver:     resolver,
-		Credentials:  credentials,
-		Clients:      clients,
-		AuthCodes:    authCodes,
-		SignInURL:    "/login",
+		Credentials:  auth.StoreConfig{PersonaColumn: "persona"},
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return provider, credentials, nil
 }

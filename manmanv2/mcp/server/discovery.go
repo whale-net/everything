@@ -5,23 +5,23 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/auth"
-	"github.com/whale-net/everything/libs/go/grpcauth"
 )
 
-// NewHandler serves mcpHandler behind HTTPAuth, with /healthz and RFC 9728
-// protected-resource metadata outside it so MCP clients can discover the
-// authorization server. publicURL is the externally reachable MCP URL;
-// metadataURLOverride, if set, replaces the derived metadata URL in 401
-// challenges.
-func NewHandler(mcpHandler http.Handler, v grpcauth.TokenVerifier, issuer, publicURL, metadataURLOverride string) http.Handler {
+// NewHandler serves mcpHandler behind HTTPAuthWith, with /healthz and RFC
+// 9728 protected-resource metadata outside it so MCP clients can discover
+// the authorization server (authorizationServer: the UI hosting
+// /authorize, /token and /register, or the OIDC issuer in direct-Keycloak
+// mode). publicURL is the externally reachable MCP URL; metadataURLOverride,
+// if set, replaces the derived metadata URL in 401 challenges.
+func NewHandler(mcpHandler http.Handler, verify CallerVerifier, authorizationServer, publicURL, metadataURLOverride string) http.Handler {
 	meta := auth.ProtectedResourceMetadataConfig{
 		Resource:            strings.TrimRight(publicURL, "/"),
-		AuthorizationServer: issuer,
+		AuthorizationServer: authorizationServer,
 		ResourceName:        "manmanv2 MCP",
 	}
 	metadataURL := auth.ResourceServerBearerOptions(meta).ResourceMetadataURL
 	if metadataURLOverride != "" {
 		metadataURL = metadataURLOverride
 	}
-	return auth.NewResourceServerMux(meta, map[string]http.Handler{"/": HTTPAuth(v, metadataURL)(mcpHandler)})
+	return auth.NewResourceServerMux(meta, map[string]http.Handler{"/": HTTPAuthWith(verify, metadataURL)(mcpHandler)})
 }

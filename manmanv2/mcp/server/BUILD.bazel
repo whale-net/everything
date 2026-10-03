@@ -27,6 +27,7 @@ go_library(
     deps = [
         "//libs/go/auth",
         "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantflow",
         "//manmanv2/connectaddr",
         "//manmanv2/protos:manmanpb",
         "@com_github_modelcontextprotocol_go_sdk//auth",
@@ -43,6 +44,7 @@ go_test(
     embed = [":server"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantflow",
         "//manmanv2/protos:manmanpb",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@org_golang_google_grpc//:grpc",

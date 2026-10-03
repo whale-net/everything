@@ -354,41 +354,20 @@ func run() error {
 	// Postgres-backed implementations, not auth's in-memory defaults:
 	// /authorize, /token, and /register can each land on a different `web`
 	// replica.
-	mcpClients, err := mcpauth.NewPostgresClientRegistry(ctx, mcpauth.ClientRegistryConfig{Pool: pool})
-	if err != nil {
-		return fmt.Errorf("mcpauth client registry: apply migration 007_mcpauth_oauth before starting web: %w", err)
-	}
-	mcpAuthCodes, err := mcpauth.NewPostgresAuthCodeStore(ctx, mcpauth.AuthCodeStoreConfig{Pool: pool})
-	if err != nil {
-		return fmt.Errorf("mcpauth auth code store: apply migration 007_mcpauth_oauth before starting web: %w", err)
-	}
-	// Same table/column configuration mcp/main.go uses for its own
-	// mcpauth.NewCredentialStore -- one shared mcp_credential table
-	// (migration 006), keyed on the Person UUID.
-	mcpCredentials, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
-		Pool:           pool,
-		TableName:      "mcp_credential",
-		IdentityColumn: "person_id",
-		IdentityCast:   "uuid",
-	})
-	if err != nil {
-		return fmt.Errorf("mcpauth credential store: apply migration 006_mcpauth_credential before starting web: %w", err)
-	}
 	if cfg.MCPPublicURL == "" {
 		return fmt.Errorf("ASS_MCP_PUBLIC_URL is required")
 	}
-	mcpProvider, err := mcpauth.NewProvider(mcpauth.ProviderConfig{
+	// One shared mcp_credential table (migration 006), keyed on the Person UUID.
+	mcpProvider, _, err := mcpauth.NewPostgresProvider(ctx, mcpauth.PostgresProviderConfig{
+		Pool:         pool,
 		Issuer:       cfg.OAuthRedirectBase,
 		Resource:     cfg.MCPPublicURL,
 		ResourceName: "Audience Score System MCP",
 		Resolver:     authenticator.MCPCallerResolver(),
-		Credentials:  mcpCredentials,
-		Clients:      mcpClients,
-		AuthCodes:    mcpAuthCodes,
-		SignInURL:    "/login",
+		Credentials:  mcpauth.StoreConfig{TableName: "mcp_credential", IdentityColumn: "person_id", IdentityCast: "uuid"},
 	})
 	if err != nil {
-		return fmt.Errorf("construct mcpauth provider: %w", err)
+		return fmt.Errorf("construct mcpauth provider (apply migrations 006/007 before starting web): %w", err)
 	}
 
 	application := &app{store: st, auth: authenticator, invite: inviteHandlers, link: linkHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, matches: matchesHandlers, outcomes: outcomesHandlers, videos: videosHandlers, mcpProvider: mcpProvider}

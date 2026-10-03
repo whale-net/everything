@@ -461,3 +461,13 @@ bazel test //libs/go/auth:auth_integration_test --test_output=all
 ## License
 
 Part of the Everything monorepo.
+
+## Setting up an app: `NewPostgresProvider`
+
+Every MCP app builds its authorization server the same way: the hosting UI
+calls `NewPostgresProvider(ctx, PostgresProviderConfig{...})` with a
+`CallerResolver` over its own sign-in session, mounts the returned Provider,
+and the MCP verifies bearer tokens with the returned `CredentialStore`
+(`RequireBearerToken`). Do not hand-wire the stores. An MCP that must act as
+the user against a backend adds `libs/go/grpcauth/grantflow` (consent gate on
+`/authorize` + per-request token exchange); see `manmanv2/ui/mcp_auth.go`.

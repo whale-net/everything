@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 
 	"github.com/whale-net/everything/libs/go/db"
@@ -44,6 +45,11 @@ type Config struct {
 
 	// Session
 	SessionSecret string
+
+	// MCP OAuth authorization server (optional): the UI's public URL and the
+	// MCP's, so /register, /authorize and /token are served here.
+	UIPublicURL  string
+	MCPPublicURL string
 
 	// Control API (gRPC)
 	ControlAPIURL string
@@ -85,6 +91,8 @@ func LoadConfig() *Config {
 		OIDCClientSecret: getEnv("OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URI", "http://localhost:8000/auth/callback"),
 		SessionSecret:    getEnv("SECRET_KEY", "dev-secret-key-change-in-production"),
+		UIPublicURL:      getEnv("UI_PUBLIC_URL", ""),
+		MCPPublicURL:     getEnv("MCP_PUBLIC_URL", ""),
 		ControlAPIURL:    getEnv("CONTROL_API_URL", "control-api-dev-service:50051"),
 		LogProcessorURL:  getEnv("LOG_PROCESSOR_URL", "log-processor:50053"),
 		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
@@ -140,6 +148,7 @@ func getEnvInt(key string, defaultValue int) int {
 type App struct {
 	config       *Config
 	auth         *htmxauth.Authenticator
+	pool         *pgxpool.Pool // nil without PG_DATABASE_URL
 	grpc         *ControlClient
 	logProcessor manmanpb.LogProcessorClient
 	userAuthOpt  grpc.DialOption
@@ -186,9 +195,11 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	}
 
 	var auth *htmxauth.Authenticator
+	var pool *pgxpool.Pool
 	if config.DatabaseURL != "" {
 		log.Println("Using DB-backed sessions (token refresh enabled)")
-		pool, err := db.NewPool(ctx, config.DatabaseURL)
+		var err error
+		pool, err = db.NewPool(ctx, config.DatabaseURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to session DB: %w", err)
 		}
@@ -230,6 +241,7 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	return &App{
 		config:       config,
 		auth:         auth,
+		pool:         pool,
 		grpc:         grpcClient,
 		logProcessor: logProcessorClient,
 		userAuthOpt:  userAuthOpt,
@@ -328,12 +340,16 @@ func main() {
 	// Setup HTTP server
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
+	root, err := app.mountMCPAuth(ctx, mux)
+	if err != nil {
+		log.Fatalf("Failed to set up MCP authorization server: %v", err)
+	}
 
 	// Create server — wrap mux with otelhttp so every HTTP request gets a span.
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      otelhttp.NewHandler(mux, "manmanv2-ui"),
+		Handler:      otelhttp.NewHandler(root, "manmanv2-ui"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
