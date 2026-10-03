@@ -15,7 +15,9 @@ import (
 
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/krill/ui/pages"
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
 // taskSliceReader is the optional spec read that returns a task's embedded
@@ -206,8 +208,19 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 		if in.Escalation != nil {
 			page.EscalationReason = string(in.Escalation.Reason)
 			page.EscalatedAt = in.Escalation.CreatedAt.UTC().Format(time.RFC3339)
+			// The two automatic reasons carry the counter that tripped
+			// them and the cap it tripped against; manual carries
+			// neither. The store's CHECK refuses a mismatched pair, so
+			// one flag covers both-or-neither.
+			if in.Escalation.CounterValue != nil && in.Escalation.CapValue != nil {
+				page.EscalationCounter = *in.Escalation.CounterValue
+				page.EscalationCap = *in.Escalation.CapValue
+				page.HasEscalationCounter = true
+			}
 		}
 	}
+	page.AttemptCount = t.AttemptCount
+	page.AttemptCap = store.DefaultAttemptCap
 	if t.AttemptCount > 0 {
 		page.Attempts += fmt.Sprintf(" (current attempt: %d)", t.AttemptCount)
 	}
@@ -248,6 +261,18 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 	for _, n := range in.Notes {
 		page.Notes = append(page.Notes, pages.TaskNoteRow{Kind: string(n.Kind), Status: string(n.CurrentStatus), Body: n.Body})
 	}
+	// The Overview shows the TAIL of that list -- ListNotesForTask already
+	// returned them oldest-first, so the most recent are at the end. The
+	// full list stays on page.Notes for the Notes tab; the two are the
+	// same notes, and the Overview names how many it kept so a truncated
+	// list is never read as the whole one.
+	page.NotesTotal = len(page.Notes)
+	if len(page.Notes) > pages.LatestNotesLimit {
+		page.LatestNotes = page.Notes[len(page.Notes)-pages.LatestNotesLimit:]
+	} else {
+		page.LatestNotes = page.Notes
+	}
+	page.Callouts = taskDetailCallouts(t, page, now)
 	if in.SliceErr != nil {
 		page.SliceError = "The spec slice could not be read. See the logs."
 	} else if b, err := json.MarshalIndent(in.Slice, "", "  "); err != nil {
@@ -256,6 +281,126 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 		page.SliceJSON = string(b)
 	}
 	return page
+}
+
+// taskDetailCallouts composes the Overview panel's explanation banners for
+// the three states that mean a task is not simply in flight: escalated, at
+// the attempt cap, and holding a lapsed lease.
+//
+// It returns EMPTY for a healthy task, and that is the important case. A
+// banner that appeared for every task would teach an operator to read past
+// it, and the escalation that genuinely needs them would be the third
+// thing on the page they had already learned to skip. There is no neutral
+// "nothing is wrong" state here -- the absence of a banner IS that state.
+//
+// The three are independent and can co-occur: a task can be escalated AND
+// at the cap AND hold an expired lease. Each is named on its own line
+// rather than merged, because each carries a different counter and a
+// different fix, and a merged sentence would pick one of the three to be
+// the headline.
+//
+// Severity follows components.TaskStateStyle's mapping, so a banner and the
+// task's own state badge are the same colour: escalated is the state that
+// needs a human and is an error, while being capped or holding a lapsed
+// lease is the system catching up on its own bookkeeping and is a warning.
+func taskDetailCallouts(t store.Task, page pages.TaskDetailPage, now time.Time) []pages.TaskCallout {
+	var out []pages.TaskCallout
+	if c, ok := escalationCallout(page); ok {
+		out = append(out, c)
+	}
+	if page.AttemptCap > 0 && page.AttemptCount >= page.AttemptCap {
+		out = append(out, pages.TaskCallout{
+			Key:     pages.TaskCalloutCapped,
+			Variant: htmxui.AlertWarning,
+			Message: fmt.Sprintf(
+				"At the attempt cap (%d of %d). Every claim, reclaim, release and abandon counts against it; a requeue resets the counter.",
+				page.AttemptCount, page.AttemptCap),
+		})
+	}
+	if t.LeaseExpiresAt != nil && !t.LeaseExpiresAt.After(now) {
+		out = append(out, pages.TaskCallout{
+			Key:     pages.TaskCalloutLeaseExpired,
+			Variant: htmxui.AlertWarning,
+			Message: "The lease on this task expired at " +
+				t.LeaseExpiresAt.UTC().Format(time.RFC3339) +
+				". No worker holds it any more; a reclaim sweep closes the claim and counts the lapse as an attempt.",
+		})
+	}
+	return out
+}
+
+// escalationCallout is the banner for an escalated task, worded by the
+// event's own reason.
+//
+// The reason is the whole point of the banner, so it names which of the
+// three fired and -- for the two automatic ones -- the counter that tripped
+// it and the cap it tripped against. A task escalated with no event behind
+// it (the read failed) still gets a banner, because the task row's claim
+// that it is escalated is true even when the reason could not be read; that
+// banner says so rather than inventing a reason.
+func escalationCallout(page pages.TaskDetailPage) (pages.TaskCallout, bool) {
+	if page.Escalation == "" {
+		return pages.TaskCallout{}, false
+	}
+	if page.EscalationReason == "" {
+		return pages.TaskCallout{
+			Key:     pages.TaskCalloutEscalated,
+			Variant: htmxui.AlertError,
+			Message: "This task is escalated. The reason behind it could not be read; see the logs.",
+		}, true
+	}
+	label := components.EscalationReasonLabel(page.EscalationReason)
+	if !page.HasEscalationCounter {
+		// A manual escalation is the one reason with no triggering
+		// counter at all, so there is no number to state -- the reason
+		// is the whole explanation.
+		return pages.TaskCallout{
+			Key:     pages.TaskCalloutEscalated,
+			Variant: htmxui.AlertError,
+			Message: "Escalated (" + label + "), so no worker can claim it. Requeue returns it to the claimable queue.",
+		}, true
+	}
+	// Each reason trips its OWN counter, and they are independent
+	// bookkeeping: naming the counter rather than saying "after n" is what
+	// keeps a thrash-cap banner from reading as though n were attempts.
+	return pages.TaskCallout{
+		Key:     pages.TaskCalloutEscalated,
+		Variant: htmxui.AlertError,
+		Message: fmt.Sprintf("%s Requeue resets the %s and keeps the notes.",
+			escalationHeadline(page), escalationCounterName(page.EscalationReason)),
+	}, true
+}
+
+// escalationHeadline is the automatic-reason banner's first sentence: which
+// reason fired, and the counter and cap it fired against.
+func escalationHeadline(page pages.TaskDetailPage) string {
+	label := components.EscalationReasonLabel(page.EscalationReason)
+	switch page.EscalationReason {
+	case string(store.EscalationReasonThrashCap):
+		return fmt.Sprintf("Escalated after %d %s (%s of %d).",
+			page.EscalationCounter, calloutPluralN(page.EscalationCounter, "failing verdict", "failing verdicts"),
+			label, page.EscalationCap)
+	default:
+		return fmt.Sprintf("Escalated at the %s (%d of %d).", label, page.EscalationCounter, page.EscalationCap)
+	}
+}
+
+// escalationCounterName is the counter a requeue resets for this reason --
+// the same mapping RequeueTask's ResetCounter implements.
+func escalationCounterName(reason string) string {
+	if reason == string(store.EscalationReasonThrashCap) {
+		return "thrash counter"
+	}
+	return "attempt counter"
+}
+
+// calloutPluralN picks the noun form for n, so "1 failing verdict" is not
+// "1 failing verdicts".
+func calloutPluralN(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // taskDetailCrumbsOf is the breadcrumb from the product down to this
