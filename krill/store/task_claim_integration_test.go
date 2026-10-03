@@ -12,7 +12,9 @@
 // attempt_count never incrementing from a claim alone (a fresh claim or a
 // reclaim of a lapsed lease), NFR3's two-subject attribution on both
 // task_claim and task_attempt, and LatestClaimForTask's newest-wins,
-// never-claimed and cross-scope cases. Shares task_integration_test.go's
+// never-claimed, cross-scope, released-still-latest, tied-claimed_at
+// id-tiebreak, both-subject-pairs and read-error-is-not-not-found
+// cases. Shares task_integration_test.go's
 // test-store/test-scope/test-world/subject helpers and
 // task_dependency_integration_test.go's createTestTask/setTaskLane
 // helpers, mirroring milepebble_integration_test.go's own choice to share
@@ -474,4 +476,181 @@ func TestTaskStore_LatestClaimForTask_OtherScope_NotFound(t *testing.T) {
 	_, found, err = s.Tasks().LatestClaimForTask(ctx, scopeID, task.ID)
 	require.NoError(t, err)
 	assert.True(t, found, "the task's own scope still resolves its claim")
+}
+
+// TestTaskStore_LatestClaimForTask_ReleasedIsStillTheLatest is the read's
+// reason for existing: a task whose only claim has ended. AbandonClaim
+// clears task.current_claim_id, so GetClaimByID -- which resolves only
+// that column -- has no row to answer with, and the released claim is
+// the one row that still says who worked on the task.
+func TestTaskStore_LatestClaimForTask_ReleasedIsStillTheLatest(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "released-only", self)
+
+	acting := taskTestSubject("agent-who-held-it")
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, acting),
+		Acting: acting, OnBehalfOf: acting,
+	})
+	require.NoError(t, err)
+
+	_, err = s.Tasks().AbandonClaim(ctx, store.AbandonParams{
+		ScopeID: scopeID, TaskID: task.ID, ClaimID: claim.ID,
+		Acting: acting, OnBehalfOf: acting,
+	})
+	require.NoError(t, err)
+
+	// Prove the task really is unclaimed, so the read below is answering
+	// a question GetClaimByID structurally cannot.
+	var currentClaimID *uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT current_claim_id FROM task WHERE id = $1`, task.ID).Scan(&currentClaimID))
+	require.Nil(t, currentClaimID, "an abandoned task must have no current claim, or this test proves nothing")
+
+	latest, found, err := s.Tasks().LatestClaimForTask(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	require.True(t, found, "a released claim is still a claim the rail can name")
+	assert.Equal(t, claim.ID, latest.ID)
+	assert.Equal(t, acting, latest.CreatedByActing)
+	require.NotNil(t, latest.ReleasedAt, "the release must survive the read -- the rail shows it as no longer held")
+	require.NotNil(t, latest.ReleaseReason)
+	assert.Equal(t, "abandon", *latest.ReleaseReason)
+
+	// GetClaimByID cannot reach this row from the task at all: the
+	// caller would have no claim id to pass.
+	_, err = s.Tasks().GetClaimByID(ctx, uuid.Nil)
+	require.Error(t, err, "sanity: a nil claim id is an error, which is what a caller hits when current_claim_id is NULL")
+}
+
+// TestTaskStore_LatestClaimForTask_TiedClaimedAt_BreaksTieByID pins the
+// `id` tiebreak in ORDER BY claimed_at DESC, id. Two claims minted in
+// the same instant are ordered by id ascending, so the winner is the
+// lower id -- arbitrary, but the same row every call, which is what a
+// view rendering "last held by" needs.
+//
+// The higher-id row is inserted FIRST so a regressed query that dropped
+// `, id` and fell back on heap order would return it and fail, rather
+// than coincidentally agreeing.
+func TestTaskStore_LatestClaimForTask_TiedClaimedAt_BreaksTieByID(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "tied", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+
+	// uuid.New() is v4 (random), so ordering two of them is not
+	// predictable; fix both ends instead.
+	lower := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	higher := uuid.MustParse("ffffffff-ffff-4fff-8fff-ffffffffffff")
+	claimedAt := time.Now().UTC().Truncate(time.Microsecond)
+
+	insertTied := func(id uuid.UUID, sub string) {
+		t.Helper()
+		_, err := db.Pool.Exec(ctx, `
+			INSERT INTO task_claim (
+				id, scope_id, task_id, session_id, claimed_at, initial_lease_expires_at,
+				created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+				created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $7, $8, $9)
+		`, id, scopeID, task.ID, sessionID, claimedAt, claimedAt.Add(store.DefaultLeaseDuration),
+			self.Iss, sub, string(self.Kind))
+		require.NoError(t, err)
+	}
+	insertTied(higher, "agent-higher-id")
+	insertTied(lower, "agent-lower-id")
+	require.Equal(t, 2, countRows(t, ctx, db, "task_claim", task.ID))
+
+	// Read it several times: a tiebreak that is only accidentally stable
+	// shows up as a flip here, and Postgres is free to change plan.
+	var first uuid.UUID
+	for i := 0; i < 5; i++ {
+		latest, found, err := s.Tasks().LatestClaimForTask(ctx, scopeID, task.ID)
+		require.NoError(t, err)
+		require.True(t, found)
+		if i == 0 {
+			first = latest.ID
+			assert.Equal(t, lower, latest.ID, "ties on claimed_at resolve to the lower id, not the last row written")
+			assert.Equal(t, "agent-lower-id", latest.CreatedByActing.Sub)
+			continue
+		}
+		assert.Equal(t, first, latest.ID, "the tied answer must not move between calls")
+	}
+
+	// Both rows really do share the timestamp, so the tie is genuine
+	// rather than the id test quietly exercising a strict ordering.
+	var distinct int
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT count(DISTINCT claimed_at) FROM task_claim WHERE task_id = $1`, task.ID).Scan(&distinct))
+	assert.Equal(t, 1, distinct, "the fixture must give both rows the same claimed_at")
+}
+
+// TestTaskStore_LatestClaimForTask_BothSubjectPairs_Scanned proves the
+// read selects the whole claimColumns set rather than acting-only: the
+// two pairs come back independently, not one standing in for the other.
+// An agent acting on a human's behalf is the case the rail renders.
+func TestTaskStore_LatestClaimForTask_BothSubjectPairs_Scanned(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "attributed", self)
+
+	acting := store.Subject{Iss: "https://acting.example.com", Sub: "agent-worker", Kind: store.SubjectKindAgent}
+	onBehalfOf := store.Subject{Iss: "https://human.example.com", Sub: "human-1", Kind: store.SubjectKindHuman}
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, acting),
+		Acting: acting, OnBehalfOf: onBehalfOf,
+	})
+	require.NoError(t, err)
+
+	latest, found, err := s.Tasks().LatestClaimForTask(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, claim.ID, latest.ID)
+	assert.Equal(t, acting, latest.CreatedByActing)
+	assert.Equal(t, onBehalfOf, latest.CreatedByOnBehalfOf,
+		"the on-behalf-of pair must survive independently of the acting pair")
+	assert.Equal(t, claim.SessionID, latest.SessionID)
+	assert.Equal(t, scopeID, latest.ScopeID)
+	assert.Equal(t, task.ID, latest.TaskID)
+	assert.False(t, latest.InitialLeaseExpiresAt.IsZero(), "the remaining non-subject columns must scan too")
+	assert.False(t, latest.CreatedAt.IsZero())
+}
+
+// TestTaskStore_LatestClaimForTask_ReadError_IsNotNotFound separates the
+// two failure shapes the (Claim, bool, error) return exists to
+// distinguish: a genuine read failure must surface as an error, not be
+// flattened into found=false, which a caller would render as "never
+// claimed". A cancelled context is the one failure available without a
+// second database.
+func TestTaskStore_LatestClaimForTask_ReadError_IsNotNotFound(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "read-error", self)
+	_, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self),
+		Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, found, err := s.Tasks().LatestClaimForTask(cancelled, scopeID, task.ID)
+	require.Error(t, err, "a failed read must be an error, not the found=false not-found signal")
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.False(t, found)
 }

@@ -1313,13 +1313,22 @@ go_test(
 # expired-lease reclaim path, attempt-cap exhaustion, attempt_count
 # incrementing by exactly one per successful claim (including across a
 # reclaim), NFR3's two-subject attribution on both task_claim and
-# task_attempt, and LatestClaimForTask's newest-wins, never-claimed and
-# cross-scope cases. Shares task_integration_test.go's test-store/test-scope/
-# test-world/subject helpers and task_dependency_integration_test.go's
-# createTestTask/setTaskLane helpers rather than duplicating them,
-# mirroring milepebble_integration_test.go's own choice. Deliberately NOT
+# task_attempt, and LatestClaimForTask's seven cases: newest-wins across
+# two claims, never-claimed and unknown-task both reading as the
+# not-found signal, cross-scope reading as not-found, a released claim
+# still answering once current_claim_id is NULL (the case GetClaimByID
+# structurally cannot serve), the `id` tiebreak under two rows sharing
+# one claimed_at, both subject pairs scanning independently rather than
+# one standing in for the other, and a genuine read error surfacing as
+# an error rather than being flattened into the not-found signal. Shares
+# task_integration_test.go's test-store/test-scope/test-world/subject
+# helpers and task_dependency_integration_test.go's createTestTask/
+# setTaskLane helpers rather than duplicating them, mirroring
+# milepebble_integration_test.go's own choice. Deliberately NOT
 # part of `bazel test //...` -- see //libs/go/dbtest's README for the full
-# rationale.
+# rationale. CI's Test Database Integration job discovers and runs this
+# target by dependency query (see .github/workflows/ci.yml), so the
+# LatestClaimForTask coverage above is not local-only.
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //krill/store:task_claim_integration_test --test_output=all
