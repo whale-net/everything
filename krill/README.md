@@ -288,8 +288,9 @@ the `scope` table's design rationale.
 
 ## Importing whagent_net's brief (FR11, issue #2549)
 
-whagent_net's product brief (`whagent_net/PRODUCT.md` + `whagent_net/product/*.md`)
-already follows the layout `krill/importer` parses. An Operator/Admin runs
+whagent_net's original hand-authored product brief (`PRODUCT.md` + `product/*.md`; frozen
+in `krill/conformance/testdata/whagent_net/` since whagent_net's own files are now krill/render
+output) followed the layout `krill/importer` parses. An Operator/Admin runs
 the same `import` CLI described above, pointed at `whagent_net` instead of
 `krill`:
 

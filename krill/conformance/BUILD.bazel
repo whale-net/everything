@@ -1,5 +1,14 @@
 load("@rules_go//go:def.bzl", "go_test")
 
+# Frozen pre-migration whagent_net brief (hand-authored markdown). whagent_net's
+# own PRODUCT.md is now krill/render output, which the markdown importer does
+# not parse, so importer tests read this copy instead.
+filegroup(
+    name = "whagent_net_fixture",
+    srcs = glob(["testdata/whagent_net/**"]),
+    visibility = ["//krill:__subpackages__"],
+)
+
 # krill's self-hosting round-trip proof (issue #2497, FR18/FR19): import
 # krill's own committed brief through //krill/importer, render the imported
 # Product back through //krill/render, and prove every FR16-reported
@@ -22,8 +31,8 @@ load("@rules_go//go:def.bzl", "go_test")
 #
 # whagent_net_import_integration_test.go (issue #2549, FR11) shares this
 # target too: it imports whagent_net's real, committed brief (data deps
-# //whagent_net:docs, //whagent_net/product:docs, located via runfiles the
-# same way krillDocsRoot locates krill's own) -- the first product krill
+# testdata/whagent_net -- the frozen pre-migration hand-authored brief --
+# located via runfiles the same way krillDocsRoot locates krill's own) -- the first product krill
 # holds that krill did not author -- and proves the FR11 entity-id report
 # accounts for every source item, with no content lost across the import.
 # Its own expected counts are derived from whagent_net's real files at
@@ -101,8 +110,6 @@ go_test(
         "//krill/product:docs",
         "//krill/store:work_axis_srcs",
         "//krill/work:work_axis_srcs",
-        "//whagent_net:docs",
-        "//whagent_net/product:docs",
     ] + glob(["testdata/**"]),
     gotags = ["integration"],
     tags = [

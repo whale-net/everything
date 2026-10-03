@@ -103,7 +103,9 @@ on `krill/importer/cmd`) so krill never shells out to git.
 `whagent_net` is the first product krill holds that krill did not
 author (C27's adoption proof) — every other imported doc set to date
 (krill's own self-import, FR18/FR19) is krill's own brief. Its doc set
-(`whagent_net/PRODUCT.md` + `whagent_net/product/*.md`) already matches
+(the pre-migration hand-authored brief, frozen in
+`krill/conformance/testdata/whagent_net/`; whagent_net's live files are now
+krill/render output) matched
 the layout `parse.go` expects; no parser change was needed (confirmed
 against the real files, not assumed — see
 `krill/importer/importer_integration_test.go`'s

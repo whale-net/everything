@@ -79,17 +79,15 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// whagentNetDocsRoot locates whagent_net's own real, committed doc set
-// through Bazel runfiles (data deps //whagent_net:docs and
-// //whagent_net/product:docs on this package's go_test target), mirroring
-// krillDocsRoot's (roundtrip_integration_test.go) use of krill's own
-// brief. whagent_net is parsed and imported here as a read fixture only --
-// nothing in this file ever writes back to whagent_net/*.
+// whagentNetDocsRoot locates the frozen pre-migration whagent_net brief
+// (testdata/whagent_net, data dep //krill/conformance:whagent_net_fixture)
+// through Bazel runfiles. whagent_net's live files are now krill/render
+// output, which the markdown importer does not parse. Read-only fixture.
 func whagentNetDocsRoot(t *testing.T) string {
 	t.Helper()
-	productMD, err := runfiles.Rlocation("_main/whagent_net/PRODUCT.md")
+	productMD, err := runfiles.Rlocation("_main/krill/conformance/testdata/whagent_net/PRODUCT.md")
 	if err != nil {
-		t.Fatalf("runfiles.Rlocation(whagent_net/PRODUCT.md): %v (is //whagent_net:docs still a data dep of this test target?)", err)
+		t.Fatalf("runfiles.Rlocation(whagent_net fixture PRODUCT.md): %v (is //krill/conformance:whagent_net_fixture still a data dep of this test target?)", err)
 	}
 	return filepath.Dir(productMD)
 }

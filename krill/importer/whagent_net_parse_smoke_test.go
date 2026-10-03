@@ -32,9 +32,9 @@ var (
 
 func whagentNetDocsRootForSmoke(t *testing.T) string {
 	t.Helper()
-	productMD, err := runfiles.Rlocation("_main/whagent_net/PRODUCT.md")
+	productMD, err := runfiles.Rlocation("_main/krill/conformance/testdata/whagent_net/PRODUCT.md")
 	if err != nil {
-		t.Fatalf("runfiles.Rlocation(whagent_net/PRODUCT.md): %v (is //whagent_net:docs still a data dep of this test target?)", err)
+		t.Fatalf("runfiles.Rlocation(whagent_net fixture PRODUCT.md): %v (is //krill/conformance:whagent_net_fixture still a data dep of this test target?)", err)
 	}
 	return filepath.Dir(productMD)
 }

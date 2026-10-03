@@ -316,9 +316,9 @@ func TestImport_TwiceSameSession_DoesNotDuplicateMilestoneRef(t *testing.T) {
 // constructs a *store.Store or krill session at all, so there is no write
 // path available to use even by accident.
 func TestParse_WhagentNetFixture_ParsesWithoutImporting(t *testing.T) {
-	productMD, err := runfiles.Rlocation("_main/whagent_net/PRODUCT.md")
+	productMD, err := runfiles.Rlocation("_main/krill/conformance/testdata/whagent_net/PRODUCT.md")
 	if err != nil {
-		t.Fatalf("runfiles.Rlocation(whagent_net/PRODUCT.md): %v (is //whagent_net:docs still a data dep of this test target?)", err)
+		t.Fatalf("runfiles.Rlocation(whagent_net fixture PRODUCT.md): %v (is //krill/conformance:whagent_net_fixture still a data dep of this test target?)", err)
 	}
 	root := filepath.Dir(productMD)
 

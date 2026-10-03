@@ -30,8 +30,8 @@ go_library(
 # Real Postgres integration test for Import (importer.go, write.go, issue
 # #2492's Testing section) against krill's real embedded schema
 # (//krill/migrate/schema), plus Parse alone against whagent_net's real doc
-# set as a read-only parser fixture (data dep on //whagent_net:docs and
-# //whagent_net/product:docs, located at runtime via
+# set as a read-only parser fixture (data dep on the frozen
+# //krill/conformance:whagent_net_fixture, located at runtime via
 # @rules_go//go/runfiles -- whagent_net is never imported, only parsed).
 # Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
 # README for the full rationale behind each tag and how to run tests like
@@ -45,8 +45,7 @@ go_test(
     timeout = "long",
     srcs = ["importer_integration_test.go"],
     data = [
-        "//whagent_net:docs",
-        "//whagent_net/product:docs",
+        "//krill/conformance:whagent_net_fixture",
     ] + glob(["testdata/**"]),
     gotags = ["integration"],
     tags = [
@@ -99,8 +98,8 @@ go_test(
 )
 
 # Non-manual smoke check for the drift class issue #2629 fixed: Parse
-# alone against whagent_net's real doc set (data deps on //whagent_net:docs
-# and //whagent_net/product:docs, located via runfiles the same way
+# alone against whagent_net's frozen pre-migration doc set (data dep on
+# //krill/conformance:whagent_net_fixture, located via runfiles the same way
 # importer_integration_test.go does above), checked against counts
 # re-derived from those same files instead of a hardcoded snapshot. No
 # database needed, so this runs under default `bazel test //...` even
@@ -111,8 +110,7 @@ go_test(
     name = "whagent_net_parse_smoke_test",
     srcs = ["whagent_net_parse_smoke_test.go"],
     data = [
-        "//whagent_net:docs",
-        "//whagent_net/product:docs",
+        "//krill/conformance:whagent_net_fixture",
     ],
     deps = [
         ":importer",
