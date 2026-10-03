@@ -1,16 +1,18 @@
 //go:build integration
 
-// Real-Postgres coverage for TaskStore.ClaimTask/GetClaimByID
-// (task_claim.go, migration 015, issue #2722's Testing section, FR3/FR5):
-// the successful-claim path (a new task_claim row, a claimed task_attempt
-// row, and task.current_claim_id/lease_expires_at updated in place, with
-// attempt_count left untouched), the real-Postgres concurrency race (two
-// goroutines racing the same task's row lock -- exactly one wins), the
-// unsatisfied-dependency rejection naming the blocking task, the
-// expired-lease reclaim path, attempt-cap exhaustion, attempt_count never
-// incrementing from a claim alone (a fresh claim or a reclaim of a lapsed
-// lease), and NFR3's two-subject attribution on both task_claim and
-// task_attempt. Shares task_integration_test.go's
+// Real-Postgres coverage for TaskStore.ClaimTask/GetClaimByID/
+// LatestClaimForTask (task_claim.go, migration 015, issue #2722's Testing
+// section, FR3/FR5; LatestClaimForTask is FR 82add903's "who held this
+// task last" read): the successful-claim path (a new task_claim row, a
+// claimed task_attempt row, and task.current_claim_id/lease_expires_at
+// updated in place, with attempt_count left untouched), the real-Postgres
+// concurrency race (two goroutines racing the same task's row lock --
+// exactly one wins), the unsatisfied-dependency rejection naming the
+// blocking task, the expired-lease reclaim path, attempt-cap exhaustion,
+// attempt_count never incrementing from a claim alone (a fresh claim or a
+// reclaim of a lapsed lease), NFR3's two-subject attribution on both
+// task_claim and task_attempt, and LatestClaimForTask's newest-wins,
+// never-claimed and cross-scope cases. Shares task_integration_test.go's
 // test-store/test-scope/test-world/subject helpers and
 // task_dependency_integration_test.go's createTestTask/setTaskLane
 // helpers, mirroring milepebble_integration_test.go's own choice to share
@@ -367,4 +369,109 @@ func TestTaskStore_ClaimTask_RecordsBothSubjectPairs(t *testing.T) {
 	`, claim.ID).Scan(&attemptActingSub, &attemptOnBehalfOfSub))
 	assert.Equal(t, "agent-1", attemptActingSub)
 	assert.Equal(t, "human-1", attemptOnBehalfOfSub)
+}
+
+// TestTaskStore_LatestClaimForTask_NewestClaimWins is FR 82add903's
+// properties-rail read over a task that has been claimed, released and
+// claimed again: the newest task_claim row is returned, with the
+// created_by_acting pair of the session that took it -- the "Last held
+// by X" the rail names once the claim has been released and
+// task.current_claim_id is NULL.
+func TestTaskStore_LatestClaimForTask_NewestClaimWins(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "reclaimed", self)
+
+	firstActing := taskTestSubject("agent-first")
+	first, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, firstActing),
+		Acting: firstActing, OnBehalfOf: firstActing,
+	})
+	require.NoError(t, err)
+	_, err = s.Tasks().AbandonClaim(ctx, store.AbandonParams{
+		ScopeID: scopeID, TaskID: task.ID, ClaimID: first.ID,
+		Acting: firstActing, OnBehalfOf: firstActing,
+	})
+	require.NoError(t, err)
+
+	secondActing := taskTestSubject("agent-second")
+	second, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, secondActing),
+		Acting: secondActing, OnBehalfOf: secondActing,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, countRows(t, ctx, db, "task_claim", task.ID))
+
+	latest, found, err := s.Tasks().LatestClaimForTask(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	require.True(t, found, "a twice-claimed task must report a latest claim")
+	assert.Equal(t, second.ID, latest.ID)
+	assert.Equal(t, secondActing, latest.CreatedByActing, "the read must name WHO held the claim, not just the session id")
+	assert.Equal(t, second.SessionID, latest.SessionID)
+
+	// The same read over a released task still answers -- this is the
+	// case GetClaimByID cannot serve at all, since current_claim_id is
+	// NULL once the claim ends.
+	released, err := s.Tasks().GetClaimByID(ctx, first.ID)
+	require.NoError(t, err)
+	require.NotNil(t, released.ReleasedAt)
+	latestAfterRelease, found, err := s.Tasks().LatestClaimForTask(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, second.ID, latestAfterRelease.ID, "releasing the newest claim must not change which row is newest")
+}
+
+// TestTaskStore_LatestClaimForTask_NeverClaimed_NotFound is the
+// not-found signal: a task that has never been claimed reads as
+// found=false with no error, so a caller renders "None" rather than
+// treating a missing history as a failure.
+func TestTaskStore_LatestClaimForTask_NeverClaimed_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "unclaimed", self)
+
+	_, found, err := s.Tasks().LatestClaimForTask(ctx, scopeID, task.ID)
+	require.NoError(t, err, "a task with no claims is not an error")
+	assert.False(t, found)
+
+	// A task id that does not exist at all reads the same way: the read
+	// answers about a task's claim history, and an unknown task has none.
+	_, found, err = s.Tasks().LatestClaimForTask(ctx, scopeID, uuid.New())
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
+// TestTaskStore_LatestClaimForTask_OtherScope_NotFound is the
+// scope-qualification check: reading one scope's task under a different
+// scope id must not surface that scope's claim.
+func TestTaskStore_LatestClaimForTask_OtherScope_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	otherScopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "scoped", self)
+	_, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: claimTestSession(t, ctx, db, scopeID, self),
+		Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	_, found, err := s.Tasks().LatestClaimForTask(ctx, otherScopeID, task.ID)
+	require.NoError(t, err)
+	assert.False(t, found, "another scope's task id must not resolve to this scope's claim")
+
+	_, found, err = s.Tasks().LatestClaimForTask(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	assert.True(t, found, "the task's own scope still resolves its claim")
 }

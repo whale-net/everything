@@ -292,3 +292,28 @@ func (s taskStore) GetClaimByID(ctx context.Context, id uuid.UUID) (Claim, error
 	}
 	return claim, nil
 }
+
+// LatestClaimForTask is TaskStore.LatestClaimForTask (task_claim.go, FR
+// 82add903) -- see task.go's interface doc comment for the shape summary.
+// GetClaimByID resolves only task.current_claim_id, so it has nothing to
+// say once a claim is released; this reads task_claim directly, newest
+// first, so a view can render "None. Last held by X" for an unclaimed
+// task. The id tiebreak keeps the answer stable for rows sharing a
+// claimed_at. Not-found (a never-claimed task, or a task id outside the
+// scope) is found=false, not an error.
+func (s taskStore) LatestClaimForTask(ctx context.Context, scopeID, taskID uuid.UUID) (Claim, bool, error) {
+	claim, err := scanClaim(s.pool.QueryRow(ctx, `
+		SELECT `+claimColumns+`
+		FROM task_claim
+		WHERE task_id = $1 AND scope_id = $2
+		ORDER BY claimed_at DESC, id
+		LIMIT 1
+	`, taskID, scopeID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Claim{}, false, nil
+	}
+	if err != nil {
+		return Claim{}, false, fmt.Errorf("get latest task_claim for task: %w", err)
+	}
+	return claim, true, nil
+}

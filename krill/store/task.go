@@ -298,6 +298,17 @@ type TaskStore interface {
 	// current claim/lease state for the by-id payload (FR10).
 	GetClaimByID(ctx context.Context, id uuid.UUID) (Claim, error)
 
+	// LatestClaimForTask returns the most recent `task_claim` row for the
+	// task -- newest by claimed_at, ties broken by id -- or found=false
+	// when the task has never been claimed (task_claim.go, FR 82add903).
+	// GetClaimByID answers only task.current_claim_id, which is NULL once a
+	// claim is released, so it cannot name who held a task last; this read
+	// can, and carries the full created_by_acting pair so a view names the
+	// subject rather than a bare session id. Scope-qualified: a task id
+	// belonging to another scope reads as not found, never as another
+	// scope's claim. Backed by 015's task_claim_task_claimed_idx.
+	LatestClaimForTask(ctx context.Context, scopeID, taskID uuid.UUID) (Claim, bool, error)
+
 	// Heartbeat is FR6's lease extension (task_lease.go, issue #2723): in
 	// one transaction that row-locks the same `task` row ClaimTask does,
 	// verifies params.ClaimID is the task's current, live claim (rejecting

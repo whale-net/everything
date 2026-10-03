@@ -234,6 +234,10 @@ func (f *fakeTaskStore) GetClaimByID(ctx context.Context, id uuid.UUID) (store.C
 	return f.getClaimByIDResult, f.getClaimByIDErr
 }
 
+func (f *fakeTaskStore) LatestClaimForTask(ctx context.Context, scopeID, taskID uuid.UUID) (store.Claim, bool, error) {
+	return store.Claim{}, false, nil
+}
+
 func (f *fakeTaskStore) Heartbeat(ctx context.Context, params store.HeartbeatParams) (store.LeaseState, error) {
 	f.gotHeartbeatParams = params
 	if f.heartbeatErr != nil {
