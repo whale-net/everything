@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	smokeCapabilityLinePattern   = regexp.MustCompile(`(?m)^C\d+ — `)
+	smokeCapabilityLinePattern   = regexp.MustCompile(`(?m)^- \*\*C\d+\*\* — `)
 	smokeMilestoneHeadingPattern = regexp.MustCompile(`(?m)^### M\d+ `)
 )
 

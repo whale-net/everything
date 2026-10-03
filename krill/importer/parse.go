@@ -106,8 +106,8 @@ var (
 	capabilityRe    = regexp.MustCompile(`^-?\s*\*{0,2}C(\d+)\*{0,2}\s*[—–-]\s*(.+)$`)
 	decisionTitleRe = regexp.MustCompile(`^LB(\d+)\s*[—–-]\s*(.+)$`)
 	milestoneHdRe   = regexp.MustCompile(`^#{2,3}\s*M(\d+)\s*[—–-]\s*(.+)$`)
-	deliversRe      = regexp.MustCompile(`^Delivers:\s*(.*)$`)
-	mustNotRe       = regexp.MustCompile(`^Must not foreclose:\s*(.*)$`)
+	deliversRe      = regexp.MustCompile(`^(?:-\s+)?Delivers:\s*(.*)$`)
+	mustNotRe       = regexp.MustCompile(`^(?:-\s+)?Must not foreclose:\s*(.*)$`)
 	bareMilestoneRe = regexp.MustCompile(`\bM(\d+)\b`)
 	capTokenRe      = regexp.MustCompile(`\bC\d+\b`)
 	lbTokenRe       = regexp.MustCompile(`\bLB\d+\b`)
@@ -253,8 +253,12 @@ func parseDecisions(body string) []ParsedDecision {
 		}
 		if hm := headingRe.FindStringSubmatch(trimmed); hm != nil {
 			// A heading (e.g. "### Two intake candidates...") ends the
-			// current entry and is not itself entry content.
+			// current entry and is not itself entry content; a `### LB<n> — ...`
+			// heading (the rendered form) also starts the next entry.
 			flush()
+			if m := decisionTitleRe.FindStringSubmatch(hm[2]); m != nil {
+				current = &ParsedDecision{ID: "LB" + m[1], Name: hm[2]}
+			}
 			continue
 		}
 		if m := decisionTitleRe.FindStringSubmatch(trimmed); m != nil {

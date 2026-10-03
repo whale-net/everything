@@ -181,7 +181,7 @@ func parsedTotalEntries(p *importer.ParsedProduct) int {
 // capability or a milestone) never breaks this test, while a genuine
 // Parse regression (missing a line, double-counting one) still does.
 var (
-	capabilityLinePattern   = regexp.MustCompile(`(?m)^C\d+ — `)
+	capabilityLinePattern   = regexp.MustCompile(`(?m)^- \*\*C\d+\*\* — `)
 	milestoneHeadingPattern = regexp.MustCompile(`(?m)^### M\d+ `)
 )
 
