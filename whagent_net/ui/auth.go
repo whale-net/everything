@@ -81,29 +81,12 @@ func (app *App) mcpCallerResolver() auth.CallerResolverFunc {
 // replicas (libs/go/auth/README.md "OAuth2 client registry" /
 // "authorization-code + PKCE flow").
 func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolverFunc) (*auth.Provider, error) {
-	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
-	if err != nil {
-		return nil, err
-	}
-
-	clients, err := auth.NewPostgresClientRegistry(ctx, auth.ClientRegistryConfig{Pool: pool})
-	if err != nil {
-		return nil, err
-	}
-
-	authCodes, err := auth.NewPostgresAuthCodeStore(ctx, auth.AuthCodeStoreConfig{Pool: pool})
-	if err != nil {
-		return nil, err
-	}
-
-	return auth.NewProvider(auth.ProviderConfig{
+	provider, _, err := auth.NewPostgresProvider(ctx, auth.PostgresProviderConfig{
+		Pool:         pool,
 		Issuer:       cfg.UIPublicURL,
 		Resource:     cfg.MCPPublicURL,
 		ResourceName: "whagent-net MCP",
 		Resolver:     resolver,
-		Credentials:  credentials,
-		Clients:      clients,
-		AuthCodes:    authCodes,
-		SignInURL:    "/login",
 	})
+	return provider, err
 }

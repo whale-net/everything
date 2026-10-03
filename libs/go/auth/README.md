@@ -462,17 +462,12 @@ bazel test //libs/go/auth:auth_integration_test --test_output=all
 
 Part of the Everything monorepo.
 
-## Upstream-delegating authorization server (`UpstreamProvider`)
+## Setting up an app: `NewPostgresProvider`
 
-For an MCP whose callers hold identities in Keycloak and whose backend needs
-the Keycloak JWT itself (audience, roles) — `NewUpstreamProviderFromEnv`
-(`MCP_OAUTH_CLIENT_ID` / `_CLIENT_SECRET` / `_STATE_KEY`) serves `/register`,
-`/authorize`, `/oauth/callback`, `/token` and RFC 8414 metadata. MCP clients
-register here (so the IdP's anonymous-DCR policy never applies); sign-in is
-delegated to the IdP with one confidential server-side client, and the IdP's
-access/refresh tokens are relayed to the client (refresh is proxied).
-Everything in flight (client registrations, pending sign-ins, auth codes) is
-sealed (`Sealer`, AES-GCM) rather than stored, so it is replica-safe with no
-migration. Trade-off: auth codes are time-limited (60s) and PKCE-bound but not
-single-use. Mount with `up.Mount(mux)` and set protected-resource metadata's
-`AuthorizationServer` to the MCP's own URL.
+Every MCP app builds its authorization server the same way: the hosting UI
+calls `NewPostgresProvider(ctx, PostgresProviderConfig{...})` with a
+`CallerResolver` over its own sign-in session, mounts the returned Provider,
+and the MCP verifies bearer tokens with the returned `CredentialStore`
+(`RequireBearerToken`). Do not hand-wire the stores. An MCP that must act as
+the user against a backend adds `libs/go/grpcauth/grantflow` (consent gate on
+`/authorize` + per-request token exchange); see `manmanv2/ui/mcp_auth.go`.

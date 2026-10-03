@@ -8,7 +8,9 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//libs/go/auth",
+        "//libs/go/db",
         "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantflow",
         "//libs/go/grpcclient",
         "//libs/go/logging",
         "//manmanv2/mcp/admin",

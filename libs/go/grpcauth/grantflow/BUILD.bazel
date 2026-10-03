@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "grantflow",
+    srcs = [
+        "consent.go",
+        "env.go",
+        "exchange.go",
+        "grantflow.go",
+    ],
+    importpath = "github.com/whale-net/everything/libs/go/grpcauth/grantflow",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//libs/go/grpcauth/pgstore",
+        "@com_github_gorilla_sessions//:sessions",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+go_test(
+    name = "grantflow_test",
+    srcs = ["grantflow_test.go"],
+    embed = [":grantflow"],
+    deps = [
+        "//libs/go/grpcauth",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)

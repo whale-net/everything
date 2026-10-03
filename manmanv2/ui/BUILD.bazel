@@ -31,6 +31,7 @@ go_library(
         "handlers_workshop_conflicts.go",
         "handlers_workshop_page.go",
         "main.go",
+        "mcp_auth.go",
         "templ_render.go",
     ],
     embedsrcs = [
@@ -39,8 +40,10 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/ui",
     visibility = ["//visibility:private"],
     deps = [
+        "//libs/go/auth",
         "//libs/go/db",
         "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantflow",
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
@@ -49,6 +52,7 @@ go_library(
         "//libs/go/htmxui",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "//manmanv2/events",
         "//manmanv2/models",
         "//manmanv2/protos:manmanpb",

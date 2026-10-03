@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,7 +20,9 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/libs/go/auth"
+	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/grpcauth/grantflow"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/manmanv2/mcp/admin"
@@ -89,16 +92,14 @@ func run(logger *slog.Logger) error {
 	server.AddWorkshopTools(srv, manmanpb.NewWorkshopServiceClient(conn.GetConnection()), &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
-	publicURL := os.Getenv("MCP_PUBLIC_URL")
-	var upstream *auth.UpstreamProvider
-	if publicURL == "" {
-		logger.Warn("MCP_PUBLIC_URL unset: no protected-resource metadata served, clients cannot discover OAuth")
-	} else if upstream, err = auth.NewUpstreamProviderFromEnv(ctx, os.Getenv, issuer, publicURL, "manmanv2 MCP"); err != nil {
-		return fmt.Errorf("oauth authorization server: %w", err)
-	} else if upstream == nil {
-		logger.Warn("MCP_OAUTH_CLIENT_ID unset: advertising the OIDC issuer directly; clients need --client-id")
+	verify, authServer, err := callerVerifier(ctx, logger, dbURL, verifier, issuer)
+	if err != nil {
+		return err
 	}
-	handler := server.NewHandler(mcpHandler, verifier, issuer, publicURL, os.Getenv("MCP_RESOURCE_METADATA_URL"), upstream)
+	handler := server.NewHandler(mcpHandler, verify, authServer, os.Getenv("MCP_PUBLIC_URL"), os.Getenv("MCP_RESOURCE_METADATA_URL"))
+	if os.Getenv("MCP_PUBLIC_URL") == "" {
+		logger.Warn("MCP_PUBLIC_URL unset: no protected-resource metadata served, clients cannot discover OAuth")
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -116,4 +117,35 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// callerVerifier picks how callers authenticate. With the GRANT_* variables
+// set the MCP behaves like krill/ASS/whagent-net: clients hold opaque
+// credentials issued by the UI's authorization server (UI_PUBLIC_URL) and
+// the stored per-user grant yields the Keycloak token forwarded to the
+// control API. Without them it accepts Keycloak tokens directly.
+func callerVerifier(ctx context.Context, logger *slog.Logger, dbURL string, oidc grpcauth.TokenVerifier, issuer string) (server.CallerVerifier, string, error) {
+	grantCfg, ok := grantflow.ConfigFromEnv(os.Getenv, issuer)
+	if !ok {
+		logger.Warn("GRANT_* unset: accepting Keycloak tokens directly; clients need --client-id")
+		return server.OIDCCallerVerifier(oidc), issuer, nil
+	}
+	uiURL := strings.TrimRight(os.Getenv("UI_PUBLIC_URL"), "/")
+	if uiURL == "" {
+		return nil, "", errors.New("UI_PUBLIC_URL is required with GRANT_*: it hosts the OAuth authorization server")
+	}
+	pool, err := db.NewPool(ctx, dbURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("grant database: %w", err)
+	}
+	creds, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
+	if err != nil {
+		return nil, "", fmt.Errorf("mcp credential store: %w", err)
+	}
+	grants, err := grantflow.Build(ctx, grantCfg, pool)
+	if err != nil {
+		return nil, "", err
+	}
+	ex := grantflow.Exchanger{Source: grants.Source, Grant: grantflow.DefaultGrant, Verifier: oidc}
+	return server.CredentialCallerVerifier(creds, ex), uiURL, nil
 }
