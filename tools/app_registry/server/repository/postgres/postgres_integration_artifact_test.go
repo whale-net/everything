@@ -723,7 +723,7 @@ func TestMigration004BackfillsVersionColumns(t *testing.T) {
 	defer sqlDB.Close()
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	if err := runner.Steps(3); err != nil {
+	if err := runner.Migrate(3); err != nil {
 		t.Fatalf("apply migrations 001-003: %v", err)
 	}
 
@@ -1343,7 +1343,7 @@ func TestMigration007FoldsVersionAllocationIntoArtifact(t *testing.T) {
 	defer sqlDB.Close()
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	if err := runner.Steps(6); err != nil {
+	if err := runner.Migrate(6); err != nil {
 		t.Fatalf("apply migrations 001-006: %v", err)
 	}
 
@@ -2503,7 +2503,7 @@ func TestMigration014DownRestoresPromotabilityColumn(t *testing.T) {
 	defer sqlDB.Close()
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	if err := runner.Steps(14); err != nil {
+	if err := runner.Migrate(14); err != nil {
 		t.Fatalf("apply migrations 001-014: %v", err)
 	}
 
@@ -2548,7 +2548,7 @@ func TestMigration014DownRestoresPromotabilityColumn(t *testing.T) {
 		t.Fatalf("expected PROMOTABLE before rollback, got %v", published.Artifact.Promotability)
 	}
 
-	if err := runner.Steps(-1); err != nil {
+	if err := runner.Migrate(13); err != nil {
 		t.Fatalf("roll back migration 014: %v", err)
 	}
 

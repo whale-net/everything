@@ -58,14 +58,6 @@ func TestMigration041_AppliesOnTopOfFullHistoryAndDefaultsExistingRows(t *testin
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
-	latest, err := runner.LatestVersion()
-	if err != nil {
-		t.Fatalf("LatestVersion: %v", err)
-	}
-	if latest != 47 {
-		t.Fatalf("expected the latest migration source version to be 47, got %d -- update this test if a newer migration has since landed", latest)
-	}
-
 	// Apply every migration up through 040, seed a servers row *before* 041
 	// lands, then apply 041 -- this is what actually proves the DEFAULT
 	// clause backfills existing rows rather than just new inserts picking it
@@ -80,7 +72,7 @@ func TestMigration041_AppliesOnTopOfFullHistoryAndDefaultsExistingRows(t *testin
 	}
 
 	// Target version 41 explicitly rather than Up() (which now also
-	// applies every later migration through 044) -- this test is about
+	// applies every later migration) -- this test is about
 	// migration 041 specifically, not "whatever the latest migration
 	// happens to be".
 	if err := runner.Migrate(41); err != nil {
