@@ -90,11 +90,11 @@ func NewDualAuthHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, w
 func newMux(guarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle(auth.ProtectedResourceMetadataPath, auth.NewProtectedResourceMetadataHandler(auth.ProtectedResourceMetadataConfig{
+	auth.MountProtectedResourceMetadata(mux, auth.ProtectedResourceMetadataConfig{
 		Resource:            resourceMeta.Resource,
 		AuthorizationServer: resourceMeta.AuthorizationServer,
 		ResourceName:        resourceMeta.ResourceName,
-	}))
+	})
 	mux.Handle("/", guarded)
 	return mux
 }

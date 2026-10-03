@@ -90,13 +90,11 @@ func NewHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, resourceM
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	if resourceMeta.enabled() {
-		mux.Handle(auth.ProtectedResourceMetadataPath, auth.NewProtectedResourceMetadataHandler(auth.ProtectedResourceMetadataConfig{
-			Resource:            resourceMeta.Resource,
-			AuthorizationServer: resourceMeta.AuthorizationServer,
-			ResourceName:        resourceMeta.ResourceName,
-		}))
-	}
+	auth.MountProtectedResourceMetadata(mux, auth.ProtectedResourceMetadataConfig{
+		Resource:            resourceMeta.Resource,
+		AuthorizationServer: resourceMeta.AuthorizationServer,
+		ResourceName:        resourceMeta.ResourceName,
+	})
 	mux.Handle("/", requireBearer(mcpHandler))
 	return mux
 }

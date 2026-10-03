@@ -174,3 +174,17 @@ func (p *Provider) authServerMetadataHandler() http.Handler {
 		}
 	})
 }
+
+// MountProtectedResourceMetadata registers RFC 9728 protected-resource
+// metadata at ProtectedResourceMetadataPath on mux, which must be the
+// resource server's unauthenticated mux (outside any bearer-token guard).
+// It returns the URL to pass as RequireBearerTokenOptions.ResourceMetadataURL
+// so 401 challenges point at it, or "" (nothing mounted) when cfg.Resource
+// or cfg.AuthorizationServer is empty.
+func MountProtectedResourceMetadata(mux *http.ServeMux, cfg ProtectedResourceMetadataConfig) string {
+	if cfg.Resource == "" || cfg.AuthorizationServer == "" {
+		return ""
+	}
+	mux.Handle(ProtectedResourceMetadataPath, NewProtectedResourceMetadataHandler(cfg))
+	return ProtectedResourceMetadataURL(cfg.Resource)
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -205,4 +206,27 @@ func mustReadAll(t *testing.T, resp *http.Response) string {
 	b, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	return string(b)
+}
+
+func TestMountProtectedResourceMetadata(t *testing.T) {
+	mux := http.NewServeMux()
+	cfg := ProtectedResourceMetadataConfig{Resource: "https://mcp.example", AuthorizationServer: "https://as.example"}
+	if got, want := MountProtectedResourceMetadata(mux, cfg), "https://mcp.example"+ProtectedResourceMetadataPath; got != want {
+		t.Fatalf("url = %q, want %q", got, want)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, ProtectedResourceMetadataPath, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	empty := http.NewServeMux()
+	if got := MountProtectedResourceMetadata(empty, ProtectedResourceMetadataConfig{Resource: "https://mcp.example"}); got != "" {
+		t.Fatalf("url = %q, want empty when AuthorizationServer unset", got)
+	}
+	rec = httptest.NewRecorder()
+	empty.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, ProtectedResourceMetadataPath, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 when nothing mounted", rec.Code)
+	}
 }
