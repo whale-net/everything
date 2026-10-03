@@ -131,3 +131,20 @@ func TestRender_LaterCoverage_Rationale(t *testing.T) {
 	assert.Contains(t, files.RoadmapMD, "- C2 — Multi: LB1 (r1), LB3 (r3)\n")
 	assert.Contains(t, files.RoadmapMD, "- C3 — Plain: LB1\n", "no rationale renders byte-identical to before")
 }
+
+func TestRender_RoadmapSortsDecimalMilestonesBetweenTheirNeighbours(t *testing.T) {
+	src := manyMilestonesSource(3)
+	for _, name := range []string{"M4.1", "M2.1", "M4.2"} {
+		src.MilestoneRefs = append(src.MilestoneRefs, store.MilestoneRef{ID: uuid.New(), Name: name, Kind: store.MilestoneKindMilestone})
+	}
+	files, err := render.Render(context.Background(), src, uuid.New(), src.Doc.Product.ID, render.WithDetail())
+	require.NoError(t, err)
+
+	var got []string
+	for _, l := range strings.Split(files.RoadmapMD, "\n") {
+		if strings.HasPrefix(l, "### M") {
+			got = append(got, strings.Fields(l)[1])
+		}
+	}
+	assert.Equal(t, []string{"M1", "M2", "M2.1", "M3", "M4.1", "M4.2"}, got)
+}
