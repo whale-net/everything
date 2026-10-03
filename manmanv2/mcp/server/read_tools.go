@@ -255,4 +255,3 @@ func (n *nameCache) resolve(ctx context.Context, configID int64) (*manmanpb.Game
 	}
 	return gc, g
 }
-

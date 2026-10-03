@@ -1,10 +1,8 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 
-	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/libs/go/auth"
@@ -107,10 +105,8 @@ func mcpHandlerFor(srv *mcp.Server) http.Handler {
 // (mirrors audience_score_system/mcp/server/transport.go's own
 // NewHTTPHandler/NewDualAuthHTTPHandler split).
 func NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials auth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
-	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
-	if resourceMeta.Enabled() {
-		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
-	}
+	opts := auth.ResourceServerBearerOptions(resourceMeta)
+	opts.AllowMissingExpiration = true
 	guard := func(srv *mcp.Server) http.Handler {
 		return credentialGuarded(mcpHandlerFor(srv), credentials, opts)
 	}
@@ -127,10 +123,8 @@ func NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials
 // existing front doors ... apply to the new mount ... unchanged", carried
 // forward to opsMountPath and workMountPath by later tasks).
 func NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials auth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
-	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
-	if resourceMeta.Enabled() {
-		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
-	}
+	opts := auth.ResourceServerBearerOptions(resourceMeta)
+	opts.AllowMissingExpiration = true
 
 	specGuarded := DualAuthHTTPHandler(mcpHandlerFor(specSrv), credentials, whagentCfg, opts)
 	designGuarded := DualAuthHTTPHandler(mcpHandlerFor(designSrv), credentials, whagentCfg, opts)
@@ -148,22 +142,10 @@ func NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, cre
 // NewDualAuthHTTPHandler so the two caller-auth entry points can never
 // drift on the non-auth parts of the mux, or on which mounts exist at all.
 func newMux(specGuarded, designGuarded, workGuarded, opsGuarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
-	auth.MountProtectedResourceMetadata(mux, auth.ProtectedResourceMetadataConfig{
-		Resource:            resourceMeta.Resource,
-		AuthorizationServer: resourceMeta.AuthorizationServer,
-		ResourceName:        resourceMeta.ResourceName,
+	return auth.NewResourceServerMux(resourceMeta, map[string]http.Handler{
+		specMountPath:   specGuarded,
+		designMountPath: designGuarded,
+		workMountPath:   workGuarded,
+		opsMountPath:    opsGuarded,
 	})
-	mux.Handle(specMountPath, specGuarded)
-	mux.Handle(designMountPath, designGuarded)
-	mux.Handle(workMountPath, workGuarded)
-	mux.Handle(opsMountPath, opsGuarded)
-	return mux
-}
-
-func handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

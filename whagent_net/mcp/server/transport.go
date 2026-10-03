@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -49,27 +48,9 @@ func NewHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, resourceM
 		return srv
 	}, nil)
 
-	opts := &sdkauth.RequireBearerTokenOptions{
-		AllowMissingExpiration: true,
-	}
-	if resourceMeta.Enabled() {
-		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
-	}
+	opts := auth.ResourceServerBearerOptions(resourceMeta)
+	opts.AllowMissingExpiration = true
 	requireBearer := sdkauth.RequireBearerToken(NewVerifier(credentials), opts)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
-	auth.MountProtectedResourceMetadata(mux, auth.ProtectedResourceMetadataConfig{
-		Resource:            resourceMeta.Resource,
-		AuthorizationServer: resourceMeta.AuthorizationServer,
-		ResourceName:        resourceMeta.ResourceName,
-	})
-	mux.Handle("/", requireBearer(mcpHandler))
-	return mux
-}
-
-func handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	return auth.NewResourceServerMux(resourceMeta, map[string]http.Handler{"/": requireBearer(mcpHandler)})
 }

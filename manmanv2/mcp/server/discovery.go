@@ -14,16 +14,14 @@ import (
 // metadataURLOverride, if set, replaces the derived metadata URL in 401
 // challenges.
 func NewHandler(mcpHandler http.Handler, v grpcauth.TokenVerifier, issuer, publicURL, metadataURLOverride string) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	metadataURL := auth.MountProtectedResourceMetadata(mux, auth.ProtectedResourceMetadataConfig{
+	meta := auth.ProtectedResourceMetadataConfig{
 		Resource:            strings.TrimRight(publicURL, "/"),
 		AuthorizationServer: issuer,
 		ResourceName:        "manmanv2 MCP",
-	})
+	}
+	metadataURL := auth.ResourceServerBearerOptions(meta).ResourceMetadataURL
 	if metadataURLOverride != "" {
 		metadataURL = metadataURLOverride
 	}
-	mux.Handle("/", HTTPAuth(v, metadataURL)(mcpHandler))
-	return mux
+	return auth.NewResourceServerMux(meta, map[string]http.Handler{"/": HTTPAuth(v, metadataURL)(mcpHandler)})
 }

@@ -230,3 +230,27 @@ func TestMountProtectedResourceMetadata(t *testing.T) {
 		t.Fatalf("status = %d, want 404 when nothing mounted", rec.Code)
 	}
 }
+
+func TestNewResourceServerMux(t *testing.T) {
+	meta := ProtectedResourceMetadataConfig{Resource: "https://mcp.example", AuthorizationServer: "https://as.example"}
+	guarded := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	mux := NewResourceServerMux(meta, map[string]http.Handler{"/": guarded})
+
+	for path, want := range map[string]int{
+		"/healthz":                    http.StatusOK,
+		ProtectedResourceMetadataPath: http.StatusOK,
+		"/anything":                   http.StatusTeapot,
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+	if got := ResourceServerBearerOptions(meta).ResourceMetadataURL; got != "https://mcp.example"+ProtectedResourceMetadataPath {
+		t.Errorf("ResourceMetadataURL = %q", got)
+	}
+	if got := ResourceServerBearerOptions(ProtectedResourceMetadataConfig{}).ResourceMetadataURL; got != "" {
+		t.Errorf("disabled ResourceMetadataURL = %q, want empty", got)
+	}
+}

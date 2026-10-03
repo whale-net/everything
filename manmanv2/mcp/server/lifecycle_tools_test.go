@@ -11,9 +11,9 @@ import (
 )
 
 type fakeLifecycleAPI struct {
-	live                      *manmanpb.Session
-	starts, stops, restarts   int
-	pending                   []*manmanpb.PendingRestartState
+	live                    *manmanpb.Session
+	starts, stops, restarts int
+	pending                 []*manmanpb.PendingRestartState
 }
 
 func (f *fakeLifecycleAPI) ListSessions(context.Context, *manmanpb.ListSessionsRequest, ...grpc.CallOption) (*manmanpb.ListSessionsResponse, error) {

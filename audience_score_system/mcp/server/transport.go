@@ -1,10 +1,8 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 
-	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/libs/go/auth"
@@ -37,9 +35,7 @@ func NewHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, resourceM
 		return srv
 	}, nil)
 
-	requireBearer := auth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: auth.ProtectedResourceMetadataURL(resourceMeta.Resource),
-	})
+	requireBearer := auth.RequireBearerToken(credentials, auth.ResourceServerBearerOptions(resourceMeta))
 
 	return newMux(requireBearer(mcpHandler), resourceMeta)
 }
@@ -58,9 +54,7 @@ func NewDualAuthHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, w
 		return srv
 	}, nil)
 
-	guarded := DualAuthHTTPHandler(mcpHandler, credentials, whagentCfg, &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: auth.ProtectedResourceMetadataURL(resourceMeta.Resource),
-	})
+	guarded := DualAuthHTTPHandler(mcpHandler, credentials, whagentCfg, auth.ResourceServerBearerOptions(resourceMeta))
 
 	return newMux(guarded, resourceMeta)
 }
@@ -71,19 +65,5 @@ func NewDualAuthHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, w
 // two caller-auth entry points can never drift on the non-auth parts of
 // the mux.
 func newMux(guarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
-	auth.MountProtectedResourceMetadata(mux, auth.ProtectedResourceMetadataConfig{
-		Resource:            resourceMeta.Resource,
-		AuthorizationServer: resourceMeta.AuthorizationServer,
-		ResourceName:        resourceMeta.ResourceName,
-	})
-	mux.Handle("/", guarded)
-	return mux
-}
-
-func handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	return auth.NewResourceServerMux(resourceMeta, map[string]http.Handler{"/": guarded})
 }
