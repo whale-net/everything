@@ -1,10 +1,8 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 
-	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/libs/go/auth"
@@ -80,29 +78,9 @@ const workMountPath = "/mcp/work"
 // is the one place the Swarm Operator restriction lives.
 const opsMountPath = "/mcp/ops"
 
-// ResourceMetadataConfig configures NewHTTPHandler's RFC 9728
-// protected-resource discovery surface: `mcp` is the OAuth2 protected
-// resource, mirroring audience_score_system/mcp/server/transport.go's own
-// ResourceMetadataConfig exactly in shape.
-type ResourceMetadataConfig struct {
-	// Resource is this `mcp` instance's own externally reachable URL --
-	// must equal the OAuth2 authorization server's own configured
-	// resource value exactly, or MCP client discovery breaks (RFC 9728).
-	Resource string
-
-	// AuthorizationServer is the issuer identifier of the OAuth2
-	// authorization server protecting Resource.
-	AuthorizationServer string
-
-	// ResourceName is the metadata's human-readable `resource_name`.
-	ResourceName string
-}
-
-// enabled reports whether cfg carries enough to serve RFC 9728
-// protected-resource metadata at all.
-func (cfg ResourceMetadataConfig) enabled() bool {
-	return cfg.Resource != "" && cfg.AuthorizationServer != ""
-}
+// ResourceMetadataConfig configures the RFC 9728 protected-resource
+// metadata this `mcp` serves; see auth.ProtectedResourceMetadataConfig.
+type ResourceMetadataConfig = auth.ProtectedResourceMetadataConfig
 
 // mcpHandlerFor adapts srv to a streamable-HTTP handler that always serves
 // that one *mcp.Server -- the per-mount unit both NewHTTPHandler and
@@ -127,10 +105,8 @@ func mcpHandlerFor(srv *mcp.Server) http.Handler {
 // (mirrors audience_score_system/mcp/server/transport.go's own
 // NewHTTPHandler/NewDualAuthHTTPHandler split).
 func NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials auth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
-	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
-	if resourceMeta.enabled() {
-		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
-	}
+	opts := auth.ResourceServerBearerOptions(resourceMeta)
+	opts.AllowMissingExpiration = true
 	guard := func(srv *mcp.Server) http.Handler {
 		return credentialGuarded(mcpHandlerFor(srv), credentials, opts)
 	}
@@ -147,10 +123,8 @@ func NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials
 // existing front doors ... apply to the new mount ... unchanged", carried
 // forward to opsMountPath and workMountPath by later tasks).
 func NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, credentials auth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
-	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
-	if resourceMeta.enabled() {
-		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
-	}
+	opts := auth.ResourceServerBearerOptions(resourceMeta)
+	opts.AllowMissingExpiration = true
 
 	specGuarded := DualAuthHTTPHandler(mcpHandlerFor(specSrv), credentials, whagentCfg, opts)
 	designGuarded := DualAuthHTTPHandler(mcpHandlerFor(designSrv), credentials, whagentCfg, opts)
@@ -168,24 +142,10 @@ func NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv *mcp.Server, cre
 // NewDualAuthHTTPHandler so the two caller-auth entry points can never
 // drift on the non-auth parts of the mux, or on which mounts exist at all.
 func newMux(specGuarded, designGuarded, workGuarded, opsGuarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
-	if resourceMeta.enabled() {
-		mux.Handle(auth.ProtectedResourceMetadataPath, auth.NewProtectedResourceMetadataHandler(auth.ProtectedResourceMetadataConfig{
-			Resource:            resourceMeta.Resource,
-			AuthorizationServer: resourceMeta.AuthorizationServer,
-			ResourceName:        resourceMeta.ResourceName,
-		}))
-	}
-	mux.Handle(specMountPath, specGuarded)
-	mux.Handle(designMountPath, designGuarded)
-	mux.Handle(workMountPath, workGuarded)
-	mux.Handle(opsMountPath, opsGuarded)
-	return mux
-}
-
-func handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	return auth.NewResourceServerMux(resourceMeta, map[string]http.Handler{
+		specMountPath:   specGuarded,
+		designMountPath: designGuarded,
+		workMountPath:   workGuarded,
+		opsMountPath:    opsGuarded,
+	})
 }

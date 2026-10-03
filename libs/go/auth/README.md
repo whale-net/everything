@@ -318,16 +318,24 @@ session to resolve a caller from).
 Use these instead, on the resource server's own mux:
 
 ```go
-mux.Handle(auth.ProtectedResourceMetadataPath, auth.NewProtectedResourceMetadataHandler(auth.ProtectedResourceMetadataConfig{
-    Resource:            "https://mcp.example.com",      // this resource server's own URL
-    AuthorizationServer: "https://auth.example.com",     // the OTHER process's Provider.Issuer
+meta := auth.ProtectedResourceMetadataConfig{
+    Resource:            "https://mcp.example.com",  // this resource server's own URL
+    AuthorizationServer: "https://auth.example.com", // the OTHER process's Provider.Issuer
     ResourceName:        "Example MCP",
-}))
+}
+opts := auth.ResourceServerBearerOptions(meta) // 401s carry resource_metadata
+guarded := auth.RequireBearerToken(credentials, opts)(mcpHandler)
 
-requireBearer := auth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
-    ResourceMetadataURL: auth.ProtectedResourceMetadataURL("https://mcp.example.com"),
-})
+// /healthz + /.well-known/oauth-protected-resource outside the guard.
+mux := auth.NewResourceServerMux(meta, map[string]http.Handler{"/": guarded})
 ```
+
+Every MCP server in this repo (krill, audience_score_system, whagent_net,
+manmanv2) must build its mux this way: a resource server that skips the
+metadata route makes MCP clients fall back to asking for a manual bearer
+token. A resource server that verifies tokens against an external IdP
+(manmanv2 → Keycloak) uses the same helpers with that IdP as
+`AuthorizationServer`.
 
 `credentials` is the same `CredentialStore` (backed by the same
 `mcp_credential` table) the authorization-server process's `Provider`

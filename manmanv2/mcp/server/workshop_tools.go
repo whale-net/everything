@@ -36,15 +36,15 @@ type WorkshopAPI interface {
 }
 
 type addonOut struct {
-	ID             int64   `json:"id"`
-	GameID         int64   `json:"game_id"`
-	WorkshopID     string  `json:"workshop_id"`
-	Name           string  `json:"name"`
-	Platform       string  `json:"platform"`
-	IsCollection   bool    `json:"is_collection"`
-	IsDeprecated   bool    `json:"is_deprecated"`
-	FileSizeBytes  int64   `json:"file_size_bytes"`
-	InstallPath    string  `json:"installation_path,omitempty"`
+	ID            int64  `json:"id"`
+	GameID        int64  `json:"game_id"`
+	WorkshopID    string `json:"workshop_id"`
+	Name          string `json:"name"`
+	Platform      string `json:"platform"`
+	IsCollection  bool   `json:"is_collection"`
+	IsDeprecated  bool   `json:"is_deprecated"`
+	FileSizeBytes int64  `json:"file_size_bytes"`
+	InstallPath   string `json:"installation_path,omitempty"`
 }
 
 type libraryOut struct {

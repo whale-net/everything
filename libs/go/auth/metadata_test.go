@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -205,4 +206,51 @@ func mustReadAll(t *testing.T, resp *http.Response) string {
 	b, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	return string(b)
+}
+
+func TestMountProtectedResourceMetadata(t *testing.T) {
+	mux := http.NewServeMux()
+	cfg := ProtectedResourceMetadataConfig{Resource: "https://mcp.example", AuthorizationServer: "https://as.example"}
+	if got, want := MountProtectedResourceMetadata(mux, cfg), "https://mcp.example"+ProtectedResourceMetadataPath; got != want {
+		t.Fatalf("url = %q, want %q", got, want)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, ProtectedResourceMetadataPath, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	empty := http.NewServeMux()
+	if got := MountProtectedResourceMetadata(empty, ProtectedResourceMetadataConfig{Resource: "https://mcp.example"}); got != "" {
+		t.Fatalf("url = %q, want empty when AuthorizationServer unset", got)
+	}
+	rec = httptest.NewRecorder()
+	empty.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, ProtectedResourceMetadataPath, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 when nothing mounted", rec.Code)
+	}
+}
+
+func TestNewResourceServerMux(t *testing.T) {
+	meta := ProtectedResourceMetadataConfig{Resource: "https://mcp.example", AuthorizationServer: "https://as.example"}
+	guarded := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	mux := NewResourceServerMux(meta, map[string]http.Handler{"/": guarded})
+
+	for path, want := range map[string]int{
+		"/healthz":                    http.StatusOK,
+		ProtectedResourceMetadataPath: http.StatusOK,
+		"/anything":                   http.StatusTeapot,
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+	if got := ResourceServerBearerOptions(meta).ResourceMetadataURL; got != "https://mcp.example"+ProtectedResourceMetadataPath {
+		t.Errorf("ResourceMetadataURL = %q", got)
+	}
+	if got := ResourceServerBearerOptions(ProtectedResourceMetadataConfig{}).ResourceMetadataURL; got != "" {
+		t.Errorf("disabled ResourceMetadataURL = %q, want empty", got)
+	}
 }

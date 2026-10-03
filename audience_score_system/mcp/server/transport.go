@@ -1,35 +1,16 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 
-	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/libs/go/auth"
 )
 
-// ResourceMetadataConfig configures NewHTTPHandler's protected-resource
-// discovery surface (issue #1646, NFR4): `mcp` is the OAuth2 protected
-// resource in ASS's two-binary split (`web` is the authorization server --
-// see ../../ARCHITECTURE.md "MCP server: caller authentication"), so it
-// serves only RFC 9728 discovery, never /authorize or /token.
-type ResourceMetadataConfig struct {
-	// Resource is this `mcp` instance's own externally reachable URL
-	// (ASS_MCP_PUBLIC_URL) -- must equal `web`'s
-	// auth.ProviderConfig.Resource exactly, or MCP client discovery
-	// breaks (RFC 9728).
-	Resource string
-
-	// AuthorizationServer is the issuer identifier of the OAuth2
-	// authorization server protecting Resource -- `web`'s own
-	// auth.ProviderConfig.Issuer (ASS_OAUTH_REDIRECT_BASE_URL).
-	AuthorizationServer string
-
-	// ResourceName is the metadata's human-readable `resource_name`.
-	ResourceName string
-}
+// ResourceMetadataConfig configures the RFC 9728 protected-resource
+// metadata this `mcp` serves; see auth.ProtectedResourceMetadataConfig.
+type ResourceMetadataConfig = auth.ProtectedResourceMetadataConfig
 
 // NewHTTPHandler builds the mux `mcp`'s main.go binds to ASS_MCP_ADDR: an
 // unauthenticated GET /healthz (for k8s liveness/readiness), RFC 9728
@@ -54,9 +35,7 @@ func NewHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, resourceM
 		return srv
 	}, nil)
 
-	requireBearer := auth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: auth.ProtectedResourceMetadataURL(resourceMeta.Resource),
-	})
+	requireBearer := auth.RequireBearerToken(credentials, auth.ResourceServerBearerOptions(resourceMeta))
 
 	return newMux(requireBearer(mcpHandler), resourceMeta)
 }
@@ -75,9 +54,7 @@ func NewDualAuthHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, w
 		return srv
 	}, nil)
 
-	guarded := DualAuthHTTPHandler(mcpHandler, credentials, whagentCfg, &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: auth.ProtectedResourceMetadataURL(resourceMeta.Resource),
-	})
+	guarded := DualAuthHTTPHandler(mcpHandler, credentials, whagentCfg, auth.ResourceServerBearerOptions(resourceMeta))
 
 	return newMux(guarded, resourceMeta)
 }
@@ -88,19 +65,5 @@ func NewDualAuthHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, w
 // two caller-auth entry points can never drift on the non-auth parts of
 // the mux.
 func newMux(guarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle(auth.ProtectedResourceMetadataPath, auth.NewProtectedResourceMetadataHandler(auth.ProtectedResourceMetadataConfig{
-		Resource:            resourceMeta.Resource,
-		AuthorizationServer: resourceMeta.AuthorizationServer,
-		ResourceName:        resourceMeta.ResourceName,
-	}))
-	mux.Handle("/", guarded)
-	return mux
-}
-
-func handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	return auth.NewResourceServerMux(resourceMeta, map[string]http.Handler{"/": guarded})
 }
