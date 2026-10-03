@@ -150,6 +150,13 @@ func (*overviewCounter) GetClaimByID(context.Context, uuid.UUID) (store.Claim, e
 	return store.Claim{}, store.ErrNotFound
 }
 
+// LatestClaimForTask is the rail's "None. Last held by <session>" read. The
+// walk's fixture task holds no claim, so the not-found signal is the answer
+// and the walk measures chrome, not data.
+func (*overviewCounter) LatestClaimForTask(context.Context, uuid.UUID, uuid.UUID) (store.Claim, bool, error) {
+	return store.Claim{}, false, nil
+}
+
 func (*overviewCounter) GetEscalationEventByID(context.Context, uuid.UUID) (store.EscalationEvent, error) {
 	return store.EscalationEvent{}, store.ErrNotFound
 }

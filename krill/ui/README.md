@@ -998,7 +998,6 @@ titles and lanes already composed into `DepTasks` rather than re-querying. A
 task with no dependencies renders **no card at all** rather than an empty one;
 a read failure does render it, because "no dependencies" and "could not
 tell" is exactly the difference the operator is being asked to act on.
->>>>>>> 3fe81c1f (feat: task detail properties rail and Depends-on card (FR 82add903))
 
 Two values on this page must not be re-derived:
 
