@@ -652,14 +652,17 @@ func TestTaskDetailStripOrderIsTheFacetOrder(t *testing.T) {
 // cannot see fail. A read this file has stopped watching is a read that
 // can break silently.
 //
-// So the legacy detail URL is walked here at every tab, with the same
+// So the detail URL is walked here at every tab, with the same
 // markers, against the same fixture. It is here rather than in
 // legacy_urls_test.go because the walk's own table is the pre-redesign
 // URL set and this is a facet of one of them.
+//
+// The product-scoped address, not the pre-redesign one: that one is a 302
+// now and fetch() here does not follow redirects, so walking it would
+// assert on a redirect body carrying neither a strip nor a panel.
 func TestTaskDetailLegacyWalkReachesTheSlicePanel(t *testing.T) {
 	f := newLegacyFixture(t)
-	detail := "/spec/products/" + f.pid.String() + "/milestones/" + f.mid.String() +
-		"/tasks/" + f.tid.String()
+	detail := productTaskDetailPath(f.pid, f.tid)
 
 	for _, query := range []string{"", "?tab=notes", "?tab=dependencies", "?tab=slice"} {
 		t.Run("detail"+query, func(t *testing.T) {

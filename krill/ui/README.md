@@ -952,6 +952,15 @@ Board's task cards (`product_board_page.go`) and the detail page's own
 "Depends on" links. Both resolve — that is what the redirect is for — so
 repointing them is a separate change, not part of the retirement.
 
+**The detail redirect carries a recognised `?tab=`.** The tab is the detail's
+own URL state (FR 7e463e31), so a shared `.../tasks/{tid}?tab=slice` names a
+facet; a successor built from the parsed UUIDs alone would drop it and land
+the operator on Overview behind an address bar that no longer says which
+facet they asked for. The tab is **resolved** through `taskDetailTabOf` and
+only a key the page knows is written, so a hand-edited `?tab=` cannot reach
+the successor's address — the same resolve-before-you-write rule the detail
+page's own tab handling enforces. `RawQuery` is never forwarded wholesale.
+
 **The frame is built before its contents.** Top to bottom: a breadcrumb
 (product → milestone → milepebble when the task sits on one → the task's
 own title, the only crumb with no href), the title as the page's one `h1`
