@@ -938,12 +938,59 @@ repointing them is a separate change, not part of the retirement.
 own title, the only crumb with no href), the title as the page's one `h1`
 with the task's state badges beside it, then
 `grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]` — a main column and
-`<aside data-krill="task-properties-rail">`. The rail and the tab strip
-(Overview / Notes / Dependencies / Spec slice) are the later tasks that fill
-those two regions; the region's shape is fixed first so they have a frame to
-slot into. `page.Path` is set from `r.URL.Path` after the render, not from
-`taskDetailPath`, so Refresh re-requests whichever URL actually served the
-page.
+`<aside data-krill="task-properties-rail">`. The tab strip (Overview /
+Notes / Dependencies / Spec slice) is the later task that fills the main
+column; the rail is filled (see below). `page.Path` is set from `r.URL.Path`
+after the render, not from `taskDetailPath`, so Refresh re-requests whichever
+URL actually served the page.
+
+**The rail owns each property exactly once.** It is two cards: a
+`Properties` card and a `Depends on` card. The properties card is a `<dl>`
+whose rows are Lane (`TaskLaneBadge`, the shared component, not a copy of
+its markup), Attempts (`taskAttemptsLabel`, with the note that lease-lapse
+and abandon attempts count toward the cap), Claim, Escalated, Milepebble and
+Task id. These rows are the page's *only* rendering of those values — the
+content column carries the description, notes and spec slice, and the step
+strip is the one rendering of the lane sequence. Two renderings of one value
+are two things that can drift.
+
+A row with nothing behind it is omitted rather than rendered empty: a blank
+"Escalated" row would read as an escalation whose instant could not be read,
+which is a different and untrue claim from "this task has none". So the
+conditions are:
+
+- **Claim** is the one row with three shapes. A live claim names the
+  session holding it and the lease expiry as a `<time>`; a lapsed lease adds
+  "(lease expired, not live)"; no claim reads "None. Last held by <session>",
+  or "None. This task has never been claimed." `GetClaimByID` cannot answer
+  that last pair — it resolves `task.current_claim_id` alone, which is NULL
+  once a claim is released — so the "last held by" case is
+  `LatestClaimForTask`, read **only when the task holds no claim**. The two
+  fields are mutually exclusive by construction, so the row cannot say
+  "claimed by X" and "last held by X" at once.
+- **Escalated** appears only when `task.CurrentEscalation_id` is set, and its
+  instant comes off the `EscalationEvent` above. When that read failed the
+  row stays and says the instant could not be read — the Escalated badge
+  comes from the task row and is still true.
+- **Milepebble** is omitted on an uncut milestone: it would name the task's
+  own container again, in the one place on the page where that is not also a
+  link the breadcrumb already offers.
+- **Task id** is a copy chip — a `button` with `aria-label="Copy task id"`
+  carrying the id. Markup only; the clipboard behaviour is a later task's.
+
+Timestamps follow NFR 7b497d92: the lease is a
+`<time data-krill="task-lease" datetime title>` and the escalation instant
+additionally carries `data-krill-updated-at`, so the head's
+`relativeAgeScript` derives the relative text. The server never emits a
+now-derived relative string inside a fragment htmx may re-swap.
+
+The `Depends on` card lists each dependency as a link plus its lane badge, in
+the order `ListDependencies` returned (declaration order). It reads the
+titles and lanes already composed into `DepTasks` rather than re-querying. A
+task with no dependencies renders **no card at all** rather than an empty one;
+a read failure does render it, because "no dependencies" and "could not
+tell" is exactly the difference the operator is being asked to act on.
+>>>>>>> 3fe81c1f (feat: task detail properties rail and Depends-on card (FR 82add903))
 
 Two values on this page must not be re-derived:
 
@@ -960,15 +1007,17 @@ Two values on this page must not be re-derived:
   decided from the container's own `Kind` rather than a second lookup.
 
 It composes `GetTaskByID`, `ListDependencies`, `ListNotesForTask`, the
-current claim row, the escalation event behind `task.CurrentEscalationID`
+current claim row, the task's most recent claim row when it holds none, the
+escalation event behind `task.CurrentEscalationID`
 (`GetEscalationEventByID`, read **once** so the properties rail and the
 Overview callout cannot disagree about why a task was escalated) and the
 task's spec slice (`MilestoneDeliversSlice`, the same document `get_task`
 embeds); no history query is added. A task id unknown, or one whose
 milestone is not under the URL's product, is an in-shell 404. Dependencies
 and notes each render an inline alert on a read failure; a failed
-escalation read costs the page the reason and nothing else, since the
-Escalated badge comes from the task row. The region carries
+escalation read costs the page the instant and nothing else, and a failed
+last-claim read costs it only the "last held by" clause — both are logged at
+`WARN` because the page still renders. The region carries
 `data-krill-claim-id` / `data-krill-lease-expires-at` for later
 claim-guarded writes; it has no form or `hx-post`.
 <!-- END task-detail section -->

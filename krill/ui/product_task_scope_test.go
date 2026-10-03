@@ -131,6 +131,14 @@ func (s *recordingProductTasks) GetClaimByID(context.Context, uuid.UUID) (store.
 	return store.Claim{}, store.ErrNotFound
 }
 
+// LatestClaimForTask is the task detail rail's read behind "None. Last held
+// by X". None of this fixture's tasks holds a claim or ever held one, so the
+// read answers found=false; it is declared because the embedded nil
+// interface would panic rather than refuse.
+func (s *recordingProductTasks) LatestClaimForTask(context.Context, uuid.UUID, uuid.UUID) (store.Claim, bool, error) {
+	return store.Claim{}, false, nil
+}
+
 // GetEscalationEventByID is the detail's read behind a task's own
 // current_escalation_id. None of this fixture's tasks is escalated, so the
 // read is never made; it is declared rather than left to the embedded nil

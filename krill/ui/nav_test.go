@@ -372,6 +372,14 @@ func (*navTasks) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
 	return store.Claim{}, store.ErrNotFound
 }
 
+// LatestClaimForTask is the rail's read behind "None. Last held by X". The
+// task this walk answers with holds no claim and has never held one, so
+// the read answers found=false -- which is what leaves the rail's Claim
+// row saying the task has never been claimed.
+func (*navTasks) LatestClaimForTask(context.Context, uuid.UUID, uuid.UUID) (store.Claim, bool, error) {
+	return store.Claim{}, false, nil
+}
+
 // GetEscalationEventByID is the read behind a task's own
 // current_escalation_id. The task this walk answers with is never
 // escalated, so the read is never made; it is declared rather than left to

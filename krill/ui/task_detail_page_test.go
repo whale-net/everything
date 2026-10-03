@@ -31,6 +31,8 @@ type fakeDetailStore struct {
 	notes         []store.Note
 	notesErr      error
 	claim         store.Claim
+	lastClaim     store.Claim
+	lastClaimErr  error
 	escalation    store.EscalationEvent
 	escalationErr error
 
@@ -82,6 +84,19 @@ func (f *fakeDetailStore) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID
 
 func (f *fakeDetailStore) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
 	return f.claim, nil
+}
+
+// LatestClaimForTask is the rail's read behind "None. Last held by X": it
+// names the session that held the task last, which GetClaimByID cannot
+// once the claim is released and current_claim_id goes NULL.
+func (f *fakeDetailStore) LatestClaimForTask(_ context.Context, _, taskID uuid.UUID) (store.Claim, bool, error) {
+	if f.lastClaimErr != nil {
+		return store.Claim{}, false, f.lastClaimErr
+	}
+	if f.lastClaim.ID == uuid.Nil || f.lastClaim.TaskID != taskID {
+		return store.Claim{}, false, nil
+	}
+	return f.lastClaim, true, nil
 }
 
 // GetEscalationEventByID is the detail's read behind a task's own
@@ -420,11 +435,10 @@ func hooksInOrder(html, prefix string) []string {
 	}
 }
 
-// TestTaskDetailFrameHasAnEmptyPropertiesRail pins the frame the rail and
-// the tab panels slot into: a main column beside a rail region that is
-// there and empty, rather than a page with no rail for the next task to
-// find and no assertion that says it went missing.
-func TestTaskDetailFrameHasAnEmptyPropertiesRail(t *testing.T) {
+// TestTaskDetailFrameHasAPropertiesRail pins the frame the rail and the
+// tab panels slot into: a main column beside a rail region, side by side at
+// lg and stacked below it otherwise.
+func TestTaskDetailFrameHasAPropertiesRail(t *testing.T) {
 	f := newDetailFixture(t)
 	task := f.add(store.Task{Title: "framed-task", CurrentLane: store.LaneTesting})
 
@@ -433,8 +447,7 @@ func TestTaskDetailFrameHasAnEmptyPropertiesRail(t *testing.T) {
 
 	assert.Contains(t, html, `data-krill="task-detail-frame"`)
 	assert.Contains(t, html, "lg:grid-cols-[minmax(0,1fr)_18rem]")
-	assert.Contains(t, html, `<aside data-krill="task-properties-rail"></aside>`,
-		"the rail region lands empty, and empty is what the rail task fills")
+	assert.Contains(t, html, `data-krill="task-properties-rail"`)
 	assert.Contains(t, html, `data-krill="task-detail-main"`)
 }
 
@@ -460,7 +473,8 @@ func TestTaskDetailReadsTheEscalationEvent(t *testing.T) {
 
 	assert.Equal(t, []uuid.UUID{esc}, f.store.asked,
 		"the page resolves the task's own escalation id, once")
-	assert.Contains(t, html, `data-krill="task-escalated-at" datetime="`+created.Format(time.RFC3339)+`"`)
+	assert.Contains(t, html, `data-krill="task-escalated-at" data-krill-updated-at="`+created.Format(time.RFC3339)+`"`)
+	assert.Contains(t, html, `datetime="`+created.Format(time.RFC3339)+`"`)
 	assert.NotContains(t, html, "thrash-cap",
 		"the reason is the callout's to badge, not this row's to spell out")
 
@@ -487,7 +501,7 @@ func TestTaskDetailEscalationReadFailsWithoutTakingThePageDown(t *testing.T) {
 	require.Equal(t, 200, code, "body: %s", html)
 
 	assert.Contains(t, html, `data-krill="task-badge-escalated"`, "the state comes from the task row, not from this read")
-	assert.Contains(t, html, `data-krill="task-escalation"`)
+	assert.Contains(t, html, `data-krill="task-properties-escalated"`)
 	assert.NotContains(t, html, "escalation-boom")
 
 	page := detailPageOfFixture(t, taskDetailInputs{Task: task})
@@ -514,7 +528,7 @@ func TestTaskDetailEscalationReadFindingNothingKeepsThePage(t *testing.T) {
 
 	assert.Equal(t, []uuid.UUID{esc}, f.store.asked, "the read was still made, once")
 	assert.Contains(t, html, `data-krill="task-badge-escalated"`)
-	assert.Contains(t, html, `data-krill="task-escalation"`,
+	assert.Contains(t, html, `data-krill="task-properties-escalated"`,
 		"the task row names the escalation, so the row is still there")
 	assert.NotContains(t, html, `data-krill="task-escalated-at"`,
 		"there is no event, so there is no time to show beside it")
@@ -826,16 +840,19 @@ func TestTaskDetailPartialReadFailuresAlert(t *testing.T) {
 	assert.Contains(t, html, "The dependencies could not be read")
 	assert.Contains(t, html, "The notes could not be read")
 	assert.Contains(t, html, "The spec slice could not be read")
-	assert.NotContains(t, html, "No dependencies")
 	assert.NotContains(t, html, "No notes")
 	assert.NotContains(t, html, "boom")
 }
 
+// TestTaskDetailEmptySections: a task with no dependencies renders no
+// Depends-on card at all. The rail says what the task has, so a card
+// holding nothing beside the content would read as something missing where
+// the answer is "nothing depends on this".
 func TestTaskDetailEmptySections(t *testing.T) {
 	f := newDetailFixture(t)
 	task := f.add(store.Task{Title: "t"})
 	_, html := f.get(task.ID.String(), true)
-	assert.Contains(t, html, "No dependencies")
+	assert.NotContains(t, html, `data-krill="task-depends-on"`)
 	assert.Contains(t, html, "No notes")
 	assert.NotContains(t, html, "could not be read")
 }

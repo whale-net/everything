@@ -61,6 +61,13 @@ type taskDetailInputs struct {
 	// task was escalated without either re-reading it (and without one of
 	// them rendering a reason the other contradicts).
 	Escalation *store.EscalationEvent
+
+	// LastClaim is the task's most recent claim row, read only when the
+	// task holds none. GetClaimByID resolves task.current_claim_id alone,
+	// which is NULL once the claim is released, so this is the only read
+	// that can answer "None. Last held by X" -- the question the rail asks
+	// of every task nobody is working on.
+	LastClaim *store.Claim
 }
 
 // taskDetailPageOf assembles the detail view model. now is injected so a
@@ -95,6 +102,14 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 		BoardPath:     productTaskContainerHref(pid, boardSuffix, c),
 		ContainerName: c.Name,
 	}
+	// The rail's Milepebble row exists only for a task that sits on one.
+	// An uncut milestone's task would otherwise name its own container
+	// again, in the one place on the page where a second naming of it is
+	// not also a link the breadcrumb already offers.
+	if c.Kind == string(store.MilestoneKindMilepebble) {
+		page.MilepebbleName = c.Name
+		page.MilepebblePath = page.TasksPath
+	}
 	if t.Body != nil {
 		page.Body = *t.Body
 	}
@@ -110,13 +125,17 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 	}
 	if t.CurrentClaimID != nil {
 		page.ClaimID = t.CurrentClaimID.String()
-		page.ClaimSummary = "claim " + page.ClaimID
 		if in.Claim != nil {
-			page.ClaimSummary += fmt.Sprintf(", session %s, claimed at %s", in.Claim.SessionID, in.Claim.ClaimedAt.UTC().Format(time.RFC3339))
+			page.ClaimHolder = in.Claim.SessionID.String()
 		}
 		if t.LeaseExpiresAt != nil && !t.LeaseExpiresAt.After(now) {
-			page.ClaimSummary += " (lease expired, not live)"
+			page.ClaimExpired = true
 		}
+	} else if in.LastClaim != nil {
+		// Unclaimed, but not untouched: the session that held the task
+		// last is the whole answer to "why is nobody on this?", and
+		// GetClaimByID cannot supply it because the claim is released.
+		page.LastClaimHolder = in.LastClaim.SessionID.String()
 	}
 	if t.LeaseExpiresAt != nil {
 		page.LeaseExpiresAt = t.LeaseExpiresAt.UTC().Format(time.RFC3339)
@@ -348,6 +367,13 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 		if cl, err := app.tasks.GetClaimByID(ctx, *task.CurrentClaimID); err == nil {
 			in.Claim = &cl
 		}
+	} else if cl, ok, err := app.tasks.LatestClaimForTask(ctx, task.ScopeID, tid); err != nil {
+		// The rail still renders its Claim row -- it just cannot say who
+		// held the task last. A read failure on a convenience clause must
+		// not cost the operator the page.
+		logger.Warn("task last-claim read failed", "task", tid.String(), "error", err)
+	} else if ok {
+		in.LastClaim = &cl
 	}
 	if task.CurrentEscalationID != nil {
 		// The escalation event is read once and carried, so the rail and
