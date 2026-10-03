@@ -1,7 +1,7 @@
 # ManManV2 gRPC API Testing
 
 Quick reference for testing the manmanv2 control plane API using grpcurl.
-See `/grpcurl` for generic grpcurl documentation.
+See `.claude/skills/grpcurl.md` for generic grpcurl documentation.
 
 ## Setup
 

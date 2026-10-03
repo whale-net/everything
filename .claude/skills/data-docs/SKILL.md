@@ -33,7 +33,7 @@ For the target domain, find:
    `<domain>/src/migrations/*.sql`, files named `NNN_description.up.sql` /
    `NNN_description.down.sql`, applied in numeric order. Known locations:
    - `leaflab/migrate/schema/migrations/`
-   - `manmanv2/migrate/migrations/`
+   - `manmanv2/migrate/schema/migrations/`
    - `manman/src/migrations/`
    - `friendly_computing_machine/src/migrations/`
    - `tools/app_registry/migrate/schema/migrations/`

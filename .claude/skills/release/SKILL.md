@@ -37,7 +37,7 @@ gh workflow run release.yml --ref "main" \
   -f include_demo=false
 ```
 
-## CRITICAL: GitHub Workflow Parameter Format
+## GitHub Workflow Parameter Format
 
 The release workflow (`release.yml`) expects specific parameter formats:
 
@@ -48,7 +48,7 @@ Accepts one of:
 - **"all"**: Release all apps (excludes demo unless include_demo=true)
 
 ### Helm Charts Parameter (`-f helm_charts="..."`)
-**CRITICAL**: Chart names should be WITHOUT the "helm-" prefix!
+Chart names take no "helm-" prefix; the workflow adds it when tagging.
 - ✅ CORRECT: `"manmanv2-control-services"`
 - ❌ WRONG: `"helm-manmanv2-control-services"`
 
@@ -72,11 +72,11 @@ Accepts one of:
 4. **Confirm** - Final approval before execution
 5. **Execute** - Trigger the release via GitHub workflow
 
-**IMPORTANT**: The GitHub workflow handles all discovery and planning. Do NOT run bazel commands locally to discover apps or plan releases - just trigger the workflow with the appropriate parameters.
+The GitHub workflow handles all discovery and planning, so don't run bazel locally to discover apps or plan releases; trigger the workflow with the chosen parameters.
 
 ## User Interaction
 
-**IMPORTANT**: The workflow always runs on main branch (via `--ref "main"`), regardless of your local branch. You can trigger releases from any branch.
+The workflow always runs on main branch (via `--ref "main"`), regardless of your local branch. You can trigger releases from any branch.
 
 ### Step 1: Select Release Type
 
@@ -108,7 +108,6 @@ Options: (multiSelect: true)
   - "demo" - All demo charts
   - "all" - All production charts (excludes demo by default)
 ```
-**NOTE**: Chart names in the workflow are WITHOUT the "helm-" prefix!
 
 **For Apps (when "Apps Only" or "Both" is selected):**
 Ask which app(s) to release:
@@ -126,7 +125,7 @@ Options: (multiSelect: true)
 
 ### Step 3: Version Strategy
 
-**CRITICAL**: Always verify version upgrade intentionality.
+Confirm the user intends the version bump.
 
 ```
 Question: "How should we determine the version?"
@@ -154,7 +153,7 @@ Options: (multiSelect: true)
 
 ### Step 5: Review Release Plan
 
-**CRITICAL**: Show complete summary and require explicit confirmation.
+Show a complete summary and get explicit confirmation, since a release is public and hard to undo.
 
 Display a clear summary based on what's being released:
 
@@ -225,7 +224,7 @@ Options:
 
 Once confirmed, trigger the release via GitHub workflow.
 
-**IMPORTANT**: Always use `--ref "main"` to ensure the workflow runs against the main branch code. You can trigger this from any local branch, but the workflow itself will execute on main (no hotfix flow is supported).
+Use `--ref "main"` so the workflow runs against main code, from any local branch (no hotfix flow is supported).
 
 **For Helm Charts Only:**
 ```bash
@@ -236,7 +235,6 @@ gh workflow run release.yml \
   -f dry_run=false \
   -f include_demo=false
 ```
-**NOTE**: Chart name is WITHOUT "helm-" prefix!
 
 **For Apps Only (using domain name):**
 ```bash
@@ -269,7 +267,7 @@ gh workflow run release.yml \
 
 ## Safety Checks
 
-**ALWAYS perform these checks before execution:**
+Check these before execution:
 
 1. ✅ **Correct parameter format** - Chart names WITHOUT "helm-" prefix, apps use domain names
 2. ✅ **Version intentionality verified** - User explicitly confirmed version bump type
@@ -306,7 +304,6 @@ The GitHub Actions workflow will handle the rest.
 - The workflow handles all discovery, planning, building, and publishing
 - Images are pushed to ghcr.io/whale-net
 - Helm charts are published to https://charts.whalenet.dev/
-- Chart names in workflow parameters are WITHOUT "helm-" prefix
 - Use domain names for apps (like "manmanv2") rather than individual app names
 - Dry runs are recommended for first-time releases
 
