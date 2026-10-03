@@ -32,12 +32,13 @@ import (
 // than as two badges that happen to share a label.
 var badgeSpanRE = regexp.MustCompile(`<span class="(badge[^"]*)" data-krill="([^"]+)">([^<]*)</span>`)
 
-// The detail's two <dd>s: the one the lane value lives in and the one the
-// state values live in. Both used to hold bare text, which is why they
-// are the places a bare-text regression would show up.
+// The detail's lane <dd>, and the header container the state badges now
+// live in beside the h1 rather than in a properties <dd>. Both used to
+// hold bare text, which is why they are the places a bare-text regression
+// would show up.
 var (
 	detailLaneDD  = regexp.MustCompile(`(?s)Current lane</dt>\s*<dd[^>]*>(.*?)</dd>`)
-	detailStateDD = regexp.MustCompile(`(?s)<dd data-krill="task-state">(.*?)</dd>`)
+	detailStateDD = regexp.MustCompile(`(?s)<div[^>]*data-krill="task-state"[^>]*>(.*?)</div>`)
 )
 
 // badgePair is one page's rendering of a task's lane and state, kept as
@@ -144,6 +145,14 @@ func (f *parityStore) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([
 
 func (f *parityStore) GetClaimByID(context.Context, uuid.UUID) (store.Claim, error) {
 	return f.claim, nil
+}
+
+// GetEscalationEventByID is the detail's read behind current_escalation_id,
+// which the seeded summary and task both carry. It answers with a fixed
+// event: the badges under test come from the task row, not from here, so
+// what this returns cannot change which pair the three views render.
+func (f *parityStore) GetEscalationEventByID(context.Context, uuid.UUID) (store.EscalationEvent, error) {
+	return store.EscalationEvent{Reason: store.EscalationReasonManual}, nil
 }
 
 type parityFixture struct {

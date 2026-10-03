@@ -131,6 +131,14 @@ func (s *recordingProductTasks) GetClaimByID(context.Context, uuid.UUID) (store.
 	return store.Claim{}, store.ErrNotFound
 }
 
+// GetEscalationEventByID is the detail's read behind a task's own
+// current_escalation_id. None of this fixture's tasks is escalated, so the
+// read is never made; it is declared rather than left to the embedded nil
+// interface, which panics rather than refusing.
+func (s *recordingProductTasks) GetEscalationEventByID(context.Context, uuid.UUID) (store.EscalationEvent, error) {
+	return store.EscalationEvent{}, store.ErrNotFound
+}
+
 func (s *recordingProductTasks) ListProductTasks(_ context.Context, params store.ListProductTasksParams) (store.Page[store.ProductTaskRow], error) {
 	s.listed = append(s.listed, params)
 	if s.err != nil {

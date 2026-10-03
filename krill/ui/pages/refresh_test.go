@@ -113,6 +113,20 @@ func TestSpecFragmentIsExactlyItsSwapTarget(t *testing.T) {
 		{"personas", PersonasAnchor, Personas(PersonasPage{Path: "/spec/products/p"})},
 		{"non-goals", NonGoalsAnchor, NonGoals(NonGoalsPage{Path: "/spec/products/p"})},
 		{"delivery", DeliveryAnchor, Delivery(DeliveryPage{Path: "/spec/products/p/delivery"})},
+		// The task detail grew a breadcrumb, a header row and a two-column
+		// frame around the content its region always held, so the rule that
+		// keeps a Refresh click from splicing duplicates now has a page that
+		// could plausibly break it: hoisting any of those out of the section
+		// would give the fragment a second top-level node.
+		{"task detail", TaskDetailAnchor, TaskDetail(TaskDetailPage{
+			Path:  "/products/p/tasks/t",
+			Title: "A task",
+			Crumbs: []TaskCrumb{
+				{Label: "Product", Href: "/spec/products/p"},
+				{Label: "A task"},
+			},
+			Steps: []TaskLaneStep{{Label: "Scaffold", Passed: true}, {Label: "Testing", Current: true}},
+		})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// The fragment the handler's htmx branch serves.

@@ -126,6 +126,15 @@ func (legacyTasks) ListNotesForTask(context.Context, uuid.UUID, uuid.UUID) ([]st
 	return nil, nil
 }
 
+// GetEscalationEventByID is the read behind a task's own
+// current_escalation_id. This fixture's task carries none, so it is never
+// asked for; it is declared because store.TaskStore includes it and
+// leaving it to the embedded nil interface would panic the moment a
+// fixture did escalate a task.
+func (legacyTasks) GetEscalationEventByID(context.Context, uuid.UUID) (store.EscalationEvent, error) {
+	return store.EscalationEvent{}, store.ErrNotFound
+}
+
 var _ store.TaskStore = legacyTasks{}
 
 // legacyFixture is the world a legacy-URL test walks: one product holding
