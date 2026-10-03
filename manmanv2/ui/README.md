@@ -361,7 +361,7 @@ picker alone rather than failing the page.
 3. **Configuration**: Base game configuration files, images, environment templates, and addon path presets. Includes the "Edit Configuration" action.
 4. **Advanced**: Host deployment placements, container rebuilds, the "Deploy to Server" action, game metadata editing, and the delete-game Danger Zone confirmation gate.
 
-**Role Guarding**: If the authenticated user lacks administrative roles (neither `admin`, `server-manager`, nor dev wildcard `*` via `components.HasAdminRole`), the `Configuration` and `Advanced` tabs are omitted from the UI, and direct navigation via `?tab=configuration` or `?tab=advanced` defaults back to `Overview`.
+**Role Guarding**: If the authenticated user lacks administrative roles (neither `manmanv2-admin`, `server-manager`, nor dev wildcard `*` via `components.HasAdminRole`), the `Configuration` and `Advanced` tabs are omitted from the UI, and direct navigation via `?tab=configuration` or `?tab=advanced` defaults back to `Overview`.
 
 ## Documentation
 
