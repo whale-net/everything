@@ -81,10 +81,6 @@ type ProviderConfig struct {
 	// (defaultAuthCodeTTL), per OAuth 2.1 guidance that codes be
 	// short-lived.
 	AuthCodeTTL time.Duration
-
-	// GrantTypesSupported is advertised in RFC 8414 metadata. Defaults to
-	// ["authorization_code"].
-	GrantTypesSupported []string
 }
 
 // Provider is the object every OAuth2 endpoint this package serves hangs off:

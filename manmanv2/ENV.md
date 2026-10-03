@@ -129,13 +129,11 @@ The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 
 | `PG_DATABASE_URL` | yes | Postgres for `mcp_idempotency_record` (write-tool idempotency keys) |
 | `PORT` | no | Listen port (default `8081`) |
 | `MCP_PUBLIC_URL` | no (set in deployed envs) | Externally reachable MCP URL. Serves RFC 9728 metadata at `/.well-known/oauth-protected-resource` (unauthenticated, `authorization_servers` = `OIDC_ISSUER`) and is advertised in 401 challenges. Unset: no metadata, clients fall back to a manual bearer token |
-| `MCP_OAUTH_CLIENT_ID` / `MCP_OAUTH_CLIENT_SECRET` | no (set in deployed envs) | Confidential Keycloak client the MCP uses to sign users in on behalf of MCP clients (redirect URI `<MCP_PUBLIC_URL>/oauth/callback`; must emit `aud` = `OIDC_CLIENT_ID` and `realm_access.roles`). Set: the MCP serves its own `/register`, `/authorize`, `/token` (`libs/go/auth` `UpstreamProvider`) and metadata names itself as the authorization server. Unset: metadata names `OIDC_ISSUER` and clients need `--client-id` |
-| `MCP_OAUTH_STATE_KEY` | with `MCP_OAUTH_CLIENT_ID` | Shared secret sealing client registrations, pending sign-ins and auth codes (stateless; all replicas must share it) |
 | `MCP_RESOURCE_METADATA_URL` | no | Overrides the metadata URL advertised in 401 challenges (default derived from `MCP_PUBLIC_URL`) |
 | `CONTROL_API_URL` | yes | Control API gRPC address; caller token is forwarded on every call |
 
 Tilt: opt-in via `ENABLE_MANMANV2_MCP=true` with `MCP_OIDC_ISSUER` and `MCP_OIDC_CLIENT_ID` (required), optional `MCP_RESOURCE_METADATA_URL` and `MCP_CONTROL_API_URL`; forwarded to `localhost:8081`. Image `manmanv2-mcp` is also in the `manmanv2_chart` Helm composition. Helm: set `apps.manmanv2-mcp.env.{OIDC_ISSUER,OIDC_CLIENT_ID,PG_DATABASE_URL,CONTROL_API_URL}` (plus optional `MCP_RESOURCE_METADATA_URL`) in the deployment's values; the chart does not default them. Verified with `helm template --set apps.manmanv2-mcp.env.*`.
 
-With `MCP_OAUTH_CLIENT_ID` set, a plain `claude mcp add mm2 <url> --transport http` completes OAuth (dynamic registration is served by the MCP, not Keycloak). Without it, Keycloak is the authorization server and clients need a pre-registered public PKCE client, e.g. `--client-id manmanv2-mcp-prod`.
+Keycloak is the authorization server, so clients need a pre-registered public PKCE client (`manmanv2-mcp-{dev,prod}`), e.g. `claude mcp add mm2 <url> --transport http --client-id manmanv2-mcp-prod`.
 
 There is no unauthenticated mode: the server refuses to start without the OIDC settings. Callers need a `gamer`, `server-manager`, or `admin` realm role; any other caller is refused every tool.

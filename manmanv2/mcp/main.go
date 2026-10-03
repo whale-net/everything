@@ -18,7 +18,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
@@ -89,16 +88,10 @@ func run(logger *slog.Logger) error {
 	server.AddWorkshopTools(srv, manmanpb.NewWorkshopServiceClient(conn.GetConnection()), &server.Gate{Store: server.SQLConfirmationStore{DB: db}})
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
-	publicURL := os.Getenv("MCP_PUBLIC_URL")
-	var upstream *auth.UpstreamProvider
-	if publicURL == "" {
+	handler := server.NewHandler(mcpHandler, verifier, issuer, os.Getenv("MCP_PUBLIC_URL"), os.Getenv("MCP_RESOURCE_METADATA_URL"))
+	if os.Getenv("MCP_PUBLIC_URL") == "" {
 		logger.Warn("MCP_PUBLIC_URL unset: no protected-resource metadata served, clients cannot discover OAuth")
-	} else if upstream, err = auth.NewUpstreamProviderFromEnv(ctx, os.Getenv, issuer, publicURL, "manmanv2 MCP"); err != nil {
-		return fmt.Errorf("oauth authorization server: %w", err)
-	} else if upstream == nil {
-		logger.Warn("MCP_OAUTH_CLIENT_ID unset: advertising the OIDC issuer directly; clients need --client-id")
 	}
-	handler := server.NewHandler(mcpHandler, verifier, issuer, publicURL, os.Getenv("MCP_RESOURCE_METADATA_URL"), upstream)
 
 	port := os.Getenv("PORT")
 	if port == "" {
