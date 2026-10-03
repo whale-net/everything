@@ -361,7 +361,13 @@ templ ProductTaskTable(rows []ProductTaskRow) {
 						<td>@TaskLaneBadge(t.Lane)</td>
 						<td>@TaskBadges(t.Badges)</td>
 						<td class="text-right" data-krill="task-attempts">{ t.Attempts }</td>
-						<td data-krill="task-lease">{ t.LeaseExpiresAt }</td>
+						<td data-krill="task-lease">
+							if t.LeaseExpiresAt != "" {
+								<time data-krill="task-lease" datetime={ t.LeaseExpiresAt } title={ t.LeaseExpiresAt }>
+									{ t.LeaseExpiresAt }
+								</time>
+							}
+						</td>
 					</tr>
 				}
 			</tbody>

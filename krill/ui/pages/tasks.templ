@@ -143,7 +143,7 @@ templ TaskList(page TaskListPage) {
 						<span data-krill="task-attempts">{ t.Attempts }</span>
 						@TaskBadges(t.Badges)
 						if t.LeaseExpiresAt != "" {
-							<span class="text-base-content/70" data-krill="task-lease">lease until { t.LeaseExpiresAt }</span>
+							<span class="text-base-content/70" data-krill="task-lease">lease until <time data-krill="task-lease" datetime={ t.LeaseExpiresAt } title={ t.LeaseExpiresAt }>{ t.LeaseExpiresAt }</time></span>
 						}
 					</li>
 				}

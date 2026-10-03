@@ -90,7 +90,7 @@ templ TaskBoard(page TaskBoardPage) {
 										@TaskBadges(t.Badges)
 									</div>
 									if t.LeaseExpiresAt != "" {
-										<div class="text-base-content/70" data-krill="task-lease">lease until { t.LeaseExpiresAt }</div>
+										<div class="text-base-content/70" data-krill="task-lease">lease until <time data-krill="task-lease" datetime={ t.LeaseExpiresAt } title={ t.LeaseExpiresAt }>{ t.LeaseExpiresAt }</time></div>
 									}
 								</li>
 							}
