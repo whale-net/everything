@@ -312,6 +312,7 @@ go_test(
         "design_page_test.go",
         "design_sessions_list_test.go",
         "design_session_detail_shell_test.go",
+        "design_session_timeline_test.go",
         "design_session_new_blade_test.go",
     ],
     embed = [":ui_lib"],

@@ -146,9 +146,18 @@ func designSummary(id, productID uuid.UUID, opening string, stage store.Stage, c
 
 // fakeRevisionEvents is an in-memory RevisionEventStore returning canned,
 // already-ordered logs and open questions.
+//
+// logErr and questionsErr fail the two accessors INDEPENDENTLY, which is
+// the only way to reach FR e5ad1a5b's two degraded pages: with one shared
+// err, a "the log read failed" case necessarily also breaks the question
+// read, and a test cannot tell "the rail survives a log failure" apart from
+// "the rail fails too". err still fails both, for the older whole-store
+// cases.
 type fakeRevisionEvents struct {
 	bySession     map[uuid.UUID][]store.RevisionEvent
 	openQuestions map[uuid.UUID][]store.OpenQuestion
+	logErr        error
+	questionsErr  error
 	err           error
 }
 
@@ -160,12 +169,18 @@ func (f fakeRevisionEvents) ListBySession(_ context.Context, sessionID uuid.UUID
 	if f.err != nil {
 		return nil, f.err
 	}
+	if f.logErr != nil {
+		return nil, f.logErr
+	}
 	return f.bySession[sessionID], nil
 }
 
 func (f fakeRevisionEvents) ListOpenQuestions(_ context.Context, sessionID uuid.UUID) ([]store.OpenQuestion, error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.questionsErr != nil {
+		return nil, f.questionsErr
 	}
 	return f.openQuestions[sessionID], nil
 }
