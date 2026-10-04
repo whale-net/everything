@@ -29,6 +29,14 @@ func credentialRevokePath(id string) string {
 	return credentialsPath + "/" + id + "/revoke"
 }
 
+// credentialRowPath is one credential's own URL: the row, in whatever state
+// it is in. It is what Confirm's dismiss points at, so a dismissal is a
+// GET that answers with the row back in its default state rather than a
+// state flip that exists only in JavaScript.
+func credentialRowPath(id string) string {
+	return credentialsPath + "/" + id
+}
+
 // credentialsData lists the caller's LIVE credentials into a view model. A
 // list failure is reported inline rather than failing the page.
 //
@@ -39,6 +47,24 @@ func credentialRevokePath(id string) string {
 // as a register of what an operator has in the field, not re-sorted into a
 // notion of activity the store does not hold.
 func (app *App) credentialsData(r *http.Request) pages.CredentialsData {
+	return app.credentialsDataConfirming(r, "")
+}
+
+// credentialsDataConfirming lists the caller's LIVE credentials, with the
+// row whose id is confirming rendered in its confirmation state.
+//
+// An empty confirming renders every row in its default state, which is
+// what every page load and every post wants. A non-empty one renders
+// exactly that row confirming, which is what the row's confirm URL wants
+// -- and it is scoped to a single row on purpose: a confirmation that
+// appeared in every row, or in a row other than the one asked about, would
+// be an answer to a question nobody asked.
+//
+// A confirming id naming a row that is not in the caller's live list
+// (already revoked, or never theirs) leaves every row in its default
+// state, so the confirmation never names a credential the caller does not
+// hold.
+func (app *App) credentialsDataConfirming(r *http.Request, confirming string) pages.CredentialsData {
 	now := app.clock()
 	d := pages.CredentialsData{
 		MintAction: credentialsMintPath,
@@ -60,12 +86,16 @@ func (app *App) credentialsData(r *http.Request) pages.CredentialsData {
 		if c.RevokedAt != nil {
 			continue
 		}
+		id := c.ID.String()
 		row := pages.CredentialRow{
-			ID:              c.ID.String(),
-			Name:            c.Name,
-			CreatedRelative: relativeTime(c.CreatedAt, now),
-			CreatedExact:    c.CreatedAt.UTC().Format(time.RFC3339),
-			RevokeAction:    credentialRevokePath(c.ID.String()),
+			ID:                id,
+			Name:              c.Name,
+			CreatedRelative:   relativeTime(c.CreatedAt, now),
+			CreatedExact:      c.CreatedAt.UTC().Format(time.RFC3339),
+			RevokeAction:      credentialRevokePath(id),
+			RevokeConfirmHref: credentialRevokePath(id),
+			RevokeDismissHref: credentialRowPath(id),
+			Confirming:        confirming != "" && confirming == id,
 		}
 		if c.LastUsedAt != nil {
 			row.LastUsedRelative = relativeTime(*c.LastUsedAt, now)
@@ -172,28 +202,183 @@ func (app *App) handleMintCredential(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRevokeCredential revokes one of the operator's credentials. Revoke
-// is idempotent and owner-scoped in the store, so a stale or foreign id is a
-// no-op rather than an error.
+// handleRevokeConfirm serves one row's revoke step at its own URL: the
+// confirmation an htmx browser swaps into the row, and the whole page with
+// that one row confirming for a browser with no JavaScript.
+//
+// Two modes of one view, the same shape the create blade uses and for the
+// same reason: the question is a real address, so a reload, a bookmark and
+// a no-JS click all land on it.
+//
+// The response is the row's OWN region and nothing else. Returning the
+// whole results block here would work for the no-JS page but break the
+// htmx swap, whose target is the row region: the fragment has to be rooted
+// at the id being replaced, or htmx replaces the row region with markup
+// that carries a different id and the next Revoke has no target left.
+func (app *App) handleRevokeConfirm(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	id := r.PathValue("id")
+	if !isHtmxRequest(r) {
+		app.renderCredentials(w, r, app.credentialsDataConfirming(r, id))
+		return
+	}
+	row, ok := app.credentialRow(r, id)
+	if !ok {
+		// A row the caller does not hold gets its default state back, not
+		// an error and not a confirmation: this route must not become a way
+		// to ask whether a credential exists that is not the caller's.
+		// Returning the row's default state is exactly what asking for the
+		// row's URL asks for, so the two are the same answer.
+		row = pages.CredentialRow{ID: id}
+		app.renderCredentialRow(w, r, row, false)
+		return
+	}
+	app.renderCredentialRow(w, r, row, true)
+}
+
+// handleCredentialRow serves one credential's own URL, which answers with
+// the row in its DEFAULT state. It is the dismiss target: confirming asks
+// at the revoke URL, dismissing un-asks here, and both are GETs that render
+// the row.
+func (app *App) handleCredentialRow(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	id := r.PathValue("id")
+	row, ok := app.credentialRow(r, id)
+	if !ok {
+		row = pages.CredentialRow{ID: id}
+	}
+	if isHtmxRequest(r) {
+		app.renderCredentialRow(w, r, row, false)
+		return
+	}
+	app.renderCredentials(w, r, app.credentialsData(r))
+}
+
+// renderCredentialRow writes one row's revoke region, confirming or not.
+//
+// The confirming flag is passed rather than read off the row so this one
+// renderer serves all three callers -- the confirm route, the row route,
+// and the not-yours case -- from one template invocation.
+func (app *App) renderCredentialRow(w http.ResponseWriter, r *http.Request, row pages.CredentialRow, confirming bool) {
+	row.Confirming = confirming
+	if row.RevokeConfirmHref == "" {
+		row.RevokeConfirmHref = credentialRevokePath(row.ID)
+	}
+	if row.RevokeDismissHref == "" {
+		row.RevokeDismissHref = credentialRowPath(row.ID)
+	}
+	if row.RevokeAction == "" {
+		row.RevokeAction = credentialRevokePath(row.ID)
+	}
+	renderFragment(w, r, pages.CredentialRevokeRegion(row))
+}
+
+// credentialRow reads one of the caller's LIVE credentials by id, out of
+// the same read the list is built from.
+//
+// A miss is the store's own answer for an id that is already revoked or is
+// not the caller's at all, and the two are deliberately the same answer:
+// this page discloses nothing about a credential the caller does not hold.
+func (app *App) credentialRow(r *http.Request, id string) (pages.CredentialRow, bool) {
+	d := app.credentialsData(r)
+	for _, row := range d.Rows {
+		if row.ID == id {
+			return row, true
+		}
+	}
+	return pages.CredentialRow{}, false
+}
+
+// handleRevokeCredential revokes one of the operator's credentials on the
+// strength of the confirmation, and answers the two ways that confirmation
+// can be submitted.
+//
+// Revoke is idempotent and owner-scoped in the store, so a stale or
+// foreign id is a no-op rather than an error, and a revocation is filed
+// under the caller's OWN identity resolved from their session (LB4) --
+// nothing about the caller is posted or rendered.
+//
+// The two success paths are the same success: an htmx request gets the
+// list re-rendered in place at 200 plus one out-of-band toast, and a
+// no-JS browser gets a 303 back to the list carrying the message in the
+// one-shot flash cookie. A refusal is neither: it is a 200 with the list
+// re-rendered and the reason inline, because a swap target never sees a
+// status code and a bare error page would tell the operator nothing about
+// what to do next.
 func (app *App) handleRevokeCredential(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		d := app.credentialsData(r)
-		d.Error = "Invalid credential id."
-		app.renderCredentials(w, r, d)
+		app.renderRevokeOutcome(w, r, "Invalid credential id.", "")
 		return
 	}
 	identity, ok := app.operatorEncodedIdentity(r)
-	if ok {
-		err = app.credentials.Revoke(r.Context(), id, identity)
+	if !ok {
+		app.renderRevokeOutcome(w, r, "Could not resolve your identity; sign in again.", "")
+		return
 	}
-	d := app.credentialsData(r)
-	switch {
-	case !ok:
-		d.Error = "Could not resolve your identity; sign in again."
-	case err != nil:
+	// The name is read BEFORE the write, because the write is what takes
+	// the row out of the list. An id that is not the caller's resolves to
+	// no name here, and a revocation that names nothing confirms nothing
+	// -- which is the answer a foreign or already-revoked id gets, the
+	// same as it gets in the list itself.
+	name := app.credentialRowName(r, id.String())
+	err = app.credentials.Revoke(r.Context(), id, identity)
+	if err != nil {
 		slog.Error("revoke credential failed", "error", err)
-		d.Error = "Could not revoke the credential."
+		app.renderRevokeOutcome(w, r, "Could not revoke the credential.", "")
+		return
 	}
-	app.renderCredentials(w, r, d)
+	app.renderRevokeOutcome(w, r, "", name)
+}
+
+// credentialRowName is one credential's name if the caller holds it live,
+// and "" otherwise -- the caller-side answer to "is this id mine?", asked
+// before the write so the write can name what it removed.
+func (app *App) credentialRowName(r *http.Request, id string) string {
+	row, ok := app.credentialRow(r, id)
+	if !ok {
+		return ""
+	}
+	return row.Name
+}
+
+// renderRevokeOutcome is the one place a revoke's outcome is turned into a
+// response, so the two submit paths cannot drift apart: a confirmation
+// answers with the toast (or the flash cookie) on both, and a refusal
+// answers with the reason inline on both.
+//
+// revoked names the credential that was actually removed, and is empty
+// when the id named nothing the caller holds. An empty name is not a
+// failure and not a special case to be reported separately: withToast and
+// flashSuccess both render nothing for an empty message, so a stale or
+// foreign id gets a list that is unchanged and says nothing -- the same
+// answer in both, and one that reveals nothing about whether the credential
+// exists.
+func (app *App) renderRevokeOutcome(w http.ResponseWriter, r *http.Request, reason, revoked string) {
+	d := app.credentialsData(r)
+	// Only ever SET the reason, never clear one: credentialsData may already
+	// carry the re-read's own failure, and overwriting it with an empty
+	// string would render a list that failed to load as an empty one --
+	// a confident, wrong "No credentials yet." (the 200-re-render rule's
+	// "never render a read failure as an empty view").
+	if reason != "" {
+		d.Error = reason
+	}
+	message := ""
+	if reason == "" && revoked != "" {
+		message = "Revoked " + revoked + "."
+	}
+	if message == "" {
+		app.renderCredentials(w, r, d)
+		return
+	}
+	if isHtmxRequest(r) {
+		w.Header().Set("Cache-Control", "no-store")
+		renderFragment(w, r, withToast(message, pages.CredentialsResults(d)))
+		return
+	}
+	// A 303 has no body to carry the confirmation in, so the message rides
+	// the one-shot cookie the landing page renders as a success alert.
+	flashSuccess(w, message)
+	http.Redirect(w, r, credentialsPath, http.StatusSeeOther)
 }

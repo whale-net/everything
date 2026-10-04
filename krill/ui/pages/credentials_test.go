@@ -6,19 +6,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
 // liveRow is one live credential as the mapper hands it over.
 func liveRow(id, name, createdRelative, createdExact, lastUsedRelative, lastUsedExact string) CredentialRow {
 	return CredentialRow{
-		ID:              id,
-		Name:            name,
-		CreatedRelative: createdRelative,
-		CreatedExact:    createdExact,
-		LastUsedRelative: lastUsedRelative,
-		LastUsedExact:    lastUsedExact,
-		RevokeAction:    "/account/credentials/" + id + "/revoke",
+		ID:                id,
+		Name:              name,
+		CreatedRelative:   createdRelative,
+		CreatedExact:      createdExact,
+		LastUsedRelative:  lastUsedRelative,
+		LastUsedExact:     lastUsedExact,
+		RevokeAction:      "/account/credentials/" + id + "/revoke",
+		RevokeConfirmHref: "/account/credentials/" + id + "/revoke",
+		RevokeDismissHref: "/account/credentials/" + id,
 	}
+}
+
+// revokeRow is liveRow with the confirmation asked, which is the only
+// difference between a row at rest and a row being revoked.
+func revokeRow(id, name string) CredentialRow {
+	row := liveRow(id, name, "3 weeks ago", "2026-09-13T10:00:00Z", "2 min ago", "2026-10-04T20:58:00Z")
+	row.Confirming = true
+	return row
 }
 
 // The four columns the FR names, in its order. A table that grows a status
@@ -153,8 +165,8 @@ func TestCredentialsBladeSlot_OpenIsRootedAtTheSwapTarget(t *testing.T) {
 // the htmx path are the same form.
 func TestCredentialsBlade_OffersANameFieldAndBothHalvesOfTheForm(t *testing.T) {
 	body := renderBody(t, CredentialsBladeSlot(CredentialsData{
-		BladeOpen: true,
-		BladeName: "claude-code laptop",
+		BladeOpen:  true,
+		BladeName:  "claude-code laptop",
 		MintAction: "/account/credentials",
 		ListHref:   "/account/credentials",
 	}))
@@ -206,6 +218,108 @@ func TestCredentialsPage_CarriesBothHalvesOfTheCreateAction(t *testing.T) {
 	assert.Contains(t, body, `hx-target="#`+CredentialsBladeAnchor+`"`)
 	assert.Contains(t, body, `data-krill="page-title"`)
 	assert.NotContains(t, body, "Generate a token")
+}
+
+// The row's default state asks and posts nothing: there is no <form> in
+// the region at all, and the Revoke control carries both halves of the ask
+// -- a real href at the row's confirm URL and an hx-get of that same URL
+// into the row's OWN region. A destructive control that posts on click is
+// the thing this FR exists to remove (FR ab55875e).
+func TestCredentialRevokeRegion_DefaultStateAsksAndPostsNothing(t *testing.T) {
+	body := renderBody(t, CredentialRevokeRegion(liveRow("a", "ci runner", "", "", "", "")))
+
+	assert.NotContains(t, body, "<form", "nothing may post before the operator confirms")
+	assert.NotContains(t, body, "method=")
+	assert.NotContains(t, body, `data-krill="credential-revoke-form"`)
+	assert.NotContains(t, body, "Clients using it lose access immediately.",
+		"the consequence is asked about, not stated on the control")
+
+	assert.Contains(t, body, `data-krill="credential-revoke-region"`)
+	assert.Contains(t, body, `id="`+CredentialRevokeRegionID("a")+`"`)
+	assert.Contains(t, body, `data-krill="credential-revoke"`)
+	assert.Contains(t, body, `href="/account/credentials/a/revoke"`,
+		"a no-JS click follows a real link")
+	assert.Contains(t, body, `hx-get="/account/credentials/a/revoke"`)
+	assert.Contains(t, body, `hx-target="#`+CredentialRevokeRegionID("a")+`"`,
+		"the confirmation is asked in the row, not over the list")
+	assert.Equal(t, []string{"div"}, topLevelElements(body),
+		"the fragment must be exactly its swap target")
+	assert.NotContains(t, body, "<script")
+}
+
+// The confirmation names the credential and its consequence in the FR's own
+// wording, and the action row is htmxui.Confirm's: destructive intent (the
+// error-variant submit, no hand-rolled chrome), a dismiss affordance, and
+// an app-owned doubled form around it (FR 21f5f0d0, htmxui §9).
+func TestCredentialRevokeRegion_ConfirmNamesTheCredentialAndTheConsequence(t *testing.T) {
+	body := renderBody(t, CredentialRevokeRegion(revokeRow("a", "ci runner")))
+
+	assert.Contains(t, body, "Revoke ci runner? Clients using it lose access immediately.")
+	assert.NotContains(t, body, "Revoke a?", "the confirmation names the credential, not its id")
+
+	// The action row is Confirm's, not this page's: its submit is the
+	// error variant a destructive intent renders, beside a dismiss link.
+	confirm := renderBody(t, htmxui.Confirm(htmxui.ConfirmProps{
+		Intent:      htmxui.ConfirmDestructive,
+		Summary:     "Revoke ci runner? Clients using it lose access immediately.",
+		SubmitLabel: "Revoke",
+		CancelHref:  "/account/credentials/a",
+		CancelLabel: "Dismiss",
+	}, nil))
+	assert.Contains(t, body, confirm, "the action row must be htmxui.Confirm's own markup")
+
+	// The doubled form stays app-owned: no-JS path and htmx path, one
+	// route, and the swap lands on the whole list so the revoked row leaves.
+	assert.Contains(t, body, `data-krill="credential-revoke-form"`)
+	assert.Contains(t, body, `method="post"`)
+	assert.Contains(t, body, `action="/account/credentials/a/revoke"`)
+	assert.Contains(t, body, `hx-post="/account/credentials/a/revoke"`)
+	assert.Contains(t, body, `hx-target="#credentials-results"`)
+	assert.Contains(t, body, `hx-swap="outerHTML"`)
+	assert.NotContains(t, body, "<script")
+}
+
+// Dismiss returns the row by asking for it, so it works with JavaScript
+// off: the href is the row's own URL, which answers with the row at rest.
+func TestCredentialRevokeRegion_DismissReturnsTheRowByHref(t *testing.T) {
+	body := renderBody(t, CredentialRevokeRegion(revokeRow("a", "ci runner")))
+
+	assert.Contains(t, body, `href="/account/credentials/a"`)
+	assert.Contains(t, body, ">Dismiss<")
+	assert.NotContains(t, body, `hx-post="/account/credentials/a"`,
+		"dismissal must not be able to answer the question")
+}
+
+// Two regions, two ids: a confirmation that appeared in every row, or in
+// a row other than the one asked about, is an answer to a question nobody
+// asked.
+func TestCredentialRevokeRegion_EachRowHasItsOwnRegionID(t *testing.T) {
+	assert.NotEqual(t, CredentialRevokeRegionID("a"), CredentialRevokeRegionID("b"))
+
+	body := renderBody(t, CredentialsResults(CredentialsData{
+		Rows: []CredentialRow{revokeRow("a", "ci runner"), liveRow("b", "claude-code laptop", "", "", "", "")},
+	}))
+
+	assert.Contains(t, body, `id="`+CredentialRevokeRegionID("a")+`"`)
+	assert.Contains(t, body, `id="`+CredentialRevokeRegionID("b")+`"`)
+	assert.Equal(t, 1, strings.Count(body, "Clients using it lose access immediately."),
+		"only the row that was asked about may confirm")
+	assert.Equal(t, 1, strings.Count(body, `data-krill="credential-revoke"`),
+		"the row at rest still offers its Revoke control")
+	assert.Equal(t, 1, strings.Count(body, `data-krill="credential-revoke-form"`),
+		"and the asked row is the one showing the confirmation")
+}
+
+// Nothing here needs JavaScript, and a <script> would mean the ask is a
+// scripted state flip rather than something the server renders.
+func TestCredentialsResults_RevokeStepNeedsNoScript(t *testing.T) {
+	body := renderBody(t, CredentialsResults(CredentialsData{
+		Rows: []CredentialRow{liveRow("a", "ci runner", "", "", "", ""), revokeRow("b", "claude-code laptop")},
+	}))
+
+	assert.NotContains(t, body, "<script")
+	assert.NotContains(t, body, "hx-confirm",
+		"the confirmation is a rendered region, not a browser dialog")
 }
 
 func TestAreaIndex_RendersOneLinkedRowPerEntry(t *testing.T) {

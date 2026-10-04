@@ -1148,6 +1148,13 @@ func TestReadRoutes_AuthModeNoneAdmitsDevUser(t *testing.T) {
 // also refuses a duplicate name the way the real store does, and its
 // minted row joins its own listing so a test can see the list a mint
 // answers with.
+//
+// Revoke is real rather than a no-op: it stamps RevokedAt on the row it
+// names and leaves every other row alone, so the page's post-revoke re-read
+// is exercised rather than asserted. It is owner-scoped and idempotent the
+// way auth's store is -- a row belonging to another identity, or one
+// already revoked, is a silent no-op -- because a revoke handler's
+// disclosure behaviour is only testable against a store that has one.
 type fakeCredentials struct {
 	minted int
 	listed []auth.Credential
@@ -1156,6 +1163,12 @@ type fakeCredentials struct {
 	// in order.
 	mintedIdentities []string
 	mintedNames      []string
+
+	// revokedIDs and revokedIdentities are what each revoke was asked for,
+	// in order -- so a test can assert the store was reached with the
+	// CALLER's identity and the id the URL named.
+	revokedIDs        []uuid.UUID
+	revokedIdentities []string
 
 	// token is the raw token a mint hands back; empty means
 	// "raw-token".
@@ -1167,6 +1180,19 @@ type fakeCredentials struct {
 	// mintErr, when set, is returned by MintNamed instead of minting --
 	// standing in for the store's own refusals.
 	mintErr error
+
+	// revokeErr, when set, is returned by Revoke instead of revoking --
+	// standing in for a store refusal the page has to render inline.
+	revokeErr error
+
+	// listErr, when set, is returned by List instead of listing -- standing
+	// in for the read failure behind a post-revoke re-render, which must
+	// still answer with a reason inline rather than an empty list.
+	listErr error
+
+	// now is the instant a revoke stamps; zero means time.Now. Held still
+	// by the tests that read it back.
+	now time.Time
 }
 
 // rawToken is the raw token this fake hands back.
@@ -1209,9 +1235,38 @@ func (f *fakeCredentials) MintNamed(_ context.Context, identity, name string) (s
 	return f.rawToken(), cred, nil
 }
 
-func (f *fakeCredentials) Revoke(context.Context, uuid.UUID, string) error { return nil }
+// Revoke stamps the named row, and only when it is the caller's own and
+// still live -- the store's owner-scoped, idempotent no-op for anything
+// else. A test asserting non-disclosure depends on this being silent
+// rather than an error: the page must not be able to tell the two apart.
+func (f *fakeCredentials) Revoke(_ context.Context, id uuid.UUID, identity string) error {
+	f.revokedIDs = append(f.revokedIDs, id)
+	f.revokedIdentities = append(f.revokedIdentities, identity)
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
+	at := f.now
+	if at.IsZero() {
+		at = time.Now()
+	}
+	for i, c := range f.listed {
+		if c.ID != id || c.RevokedAt != nil {
+			continue
+		}
+		if c.Identity != "" && c.Identity != identity {
+			// Someone else's row: the store's answer is silence.
+			return nil
+		}
+		f.listed[i].RevokedAt = &at
+		return nil
+	}
+	return nil
+}
 
 func (f *fakeCredentials) List(context.Context, string) ([]auth.Credential, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return f.listed, nil
 }
 
