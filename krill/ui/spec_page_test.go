@@ -16,15 +16,25 @@ import (
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
-// specStubReader is an in-memory specReadClient whose every read succeeds
-// with empty data, so a handler renders its empty state. The one-route-
-// two-modes test below is about WHICH body a request is served, not about
-// what is in it; the populated paths are covered against the pure
-// builders instead.
-type specStubReader struct{}
+// specStubReader is an in-memory specReadClient whose every read succeeds,
+// so a handler renders whatever this value carries and never renders a
+// failure. The ZERO value carries nothing -- an empty document and an empty
+// listing, so every panel renders its empty state -- and that is what the
+// route-and-mode tests below want: they are about WHICH body a request is
+// served, not about what is in it.
+//
+// A caller that needs content sets Doc and Listing instead. Listing is what
+// the Capabilities tab's Milestone column is read from, so with an empty Doc
+// there are no feature rows for it to answer about and the served Milestone
+// badges were unreachable through the handler at all; a reader carrying both
+// is what spec_milestone_badge_test.go drives the handler with.
+type specStubReader struct {
+	Doc     slice.Document
+	Listing slice.DeliveryListing
+}
 
-func (specStubReader) ProductSlice(context.Context, uuid.UUID) (slice.Document, error) {
-	return slice.Document{}, nil
+func (r specStubReader) ProductSlice(context.Context, uuid.UUID) (slice.Document, error) {
+	return r.Doc, nil
 }
 
 func (specStubReader) Personas(context.Context, uuid.UUID) ([]store.Persona, error) {
@@ -35,8 +45,8 @@ func (specStubReader) NonGoals(context.Context, uuid.UUID) ([]store.NonGoal, err
 	return nil, nil
 }
 
-func (specStubReader) Delivery(context.Context, uuid.UUID, []store.MilestoneStatus) (slice.DeliveryListing, error) {
-	return slice.DeliveryListing{}, nil
+func (r specStubReader) Delivery(context.Context, uuid.UUID, []store.MilestoneStatus) (slice.DeliveryListing, error) {
+	return r.Listing, nil
 }
 
 func (specStubReader) DeliveryBreakdown(context.Context, uuid.UUID) (slice.Document, slice.Document, error) {
@@ -374,6 +384,22 @@ func TestNonCapabilitiesTabsShowEmptyStateOnlyOnASuccessfulEmptyRead(t *testing.
 // to the whole page body). It renders each panel with real content --
 // decisions, personas, and both kinds of non-goal -- because a panel with
 // nothing in it cannot carry attention content whatever it renders.
+//
+// THE MILESTONE CELL ON THE CAPABILITIES TAB IS DELIBERATELY NOT COVERED
+// HERE, and this guard's scope is the reason it reads as it does. It
+// renders the Decisions, Personas and Non-goals panels only, so its
+// colour-class arm reaches the non-goal kind badge (components.
+// NonGoalKindStyle) and nothing else. The Capabilities table's Milestone
+// cell is the one place on the Spec page where a badge's colour comes from
+// components.MilestoneStatusStyle instead, and whether that colour counts
+// as "attention or escalation content" is exactly what is UNDECIDED between
+// FR df5bffd1-fb14-4cad-8efa-5e67134230e8 and FR
+// 18afc5a8-cb70-4f00-93ec-49e83f34e107 -- see the decision-request note on
+// FeatureSet c9e7c443-ffb7-4ce4-8402-db5c6f38be99. This guard therefore
+// says nothing either way about it; adding the colour classes here, or
+// asserting their absence, would settle a question its author did not.
+// What the served cell actually carries is recorded separately in
+// TestServedCapabilitiesMilestoneBadgeCarriesTheSharedStatusMapper.
 func TestNonCapabilitiesTabsCarryNoAttentionContent(t *testing.T) {
 	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
 	product := store.Product{ID: productID, Name: "krill"}

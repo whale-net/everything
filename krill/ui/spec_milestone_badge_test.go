@@ -18,10 +18,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/net/html"
 
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
@@ -57,6 +61,7 @@ var milestoneBadgeIDs = struct {
 	milestoneA  string // the one milestone under every "exactly one" case
 	milestoneB  string
 	milestoneC  string
+	milestoneD  string // co-delivers multiOwner with milestoneC
 	milepebble1 string
 }{
 	product:     "11111111-0000-0000-0000-000000000001",
@@ -79,6 +84,7 @@ var milestoneBadgeIDs = struct {
 	milestoneA:  "11111111-0000-0000-0000-000000000021",
 	milestoneB:  "11111111-0000-0000-0000-000000000022",
 	milestoneC:  "11111111-0000-0000-0000-000000000023",
+	milestoneD:  "11111111-0000-0000-0000-000000000025",
 	milepebble1: "11111111-0000-0000-0000-000000000024",
 }
 
@@ -175,7 +181,7 @@ func milestoneBadgeListing(t *testing.T) slice.DeliveryListing {
 			},
 		},
 		{
-			ID:     id("11111111-0000-0000-0000-000000000025"),
+			ID:     id(milestoneBadgeIDs.milestoneD),
 			Name:   "Milestone D",
 			Status: store.MilestoneStatusNotStarted,
 			Delivers: slice.Document{
@@ -525,4 +531,254 @@ func TestMilestoneNamedBadgeMatchesTheMilestonesPageColour(t *testing.T) {
 			t.Errorf("the count badge shares the %q status variant", string(v))
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// the served fragment
+// ---------------------------------------------------------------------------
+
+// The coverage below drives the REAL handler -- GET /spec/products/{id} the
+// way specTabRequest issues it -- rather than rendering pages.CapabilityMap
+// directly, because until specStubReader gained a Delivery listing (see
+// spec_page_test.go) no milestone was populated on this tab through the
+// handler at all: the served fragment had no Milestone cell to read, so the
+// pure-builder tests above were the only place the colour was pinned, and a
+// template or handler that dropped the badge entirely would have passed them.
+//
+// WHAT THIS DOES AND DOES NOT DECIDE.
+//
+// The assertions below record what the served Milestone cell actually carries
+// for a milestone in a severity-bearing status, measured against the shared
+// mapper components.MilestoneStatusStyle rather than against a class spelled
+// out here. They state no verdict on whether that colour may appear. FR
+// df5bffd1-fb14-4cad-8efa-5e67134230e8 says the spec body "carries no
+// attention or escalation content (counts, badges or links)"; FR
+// 18afc5a8-cb70-4f00-93ec-49e83f34e107 requires the Milestone column to be
+// coloured by the milestone's own status. Whether a status colour is
+// "attention or escalation content" is UNDECIDED and belongs to a human spec
+// owner -- see the decision-request note on FeatureSet
+// c9e7c443-ffb7-4ce4-8402-db5c6f38be99, raised from the system-validator
+// finding d0ca951d-352f-4c31-b96a-b63c47e8e386. Each failure message below
+// names that note so a red run points at the open question rather than at a
+// settled rule.
+//
+// Note also the one-file asymmetry this coverage deliberately leaves in place:
+// components.NonGoalKindStyle refuses severity colours and cites df5bffd1 by
+// name, while the Milestone cell reuses MilestoneStatusStyle without such a
+// check. That inconsistency is the evidence the spec owner needs. Making the
+// two mappers symmetric, in either direction, would settle the question here
+// and is therefore out of scope for a coverage task.
+
+// servedMilestoneListing assigns milestoneA, milestoneB and milestoneC to the
+// three severity-bearing statuses above and delivers each of them to ONE
+// feature directly (Delivers.Features), which is the rule's first clause --
+// so each of those rows renders a NAMED cell rather than a count and is
+// therefore a cell whose colour the served fragment carries.
+//
+// milestoneD still co-delivers multiOwner, so the page rendered here also
+// exercises the count and blank cells: a served fragment in which every cell
+// is a named badge would not be a page the real one can produce.
+func servedMilestoneListing(t *testing.T) slice.DeliveryListing {
+	t.Helper()
+	id := func(s string) uuid.UUID { return mustID(t, s) }
+	ref := func(s string) slice.EntityRef { return slice.EntityRef{ID: id(s)} }
+
+	return slice.DeliveryListing{Milestones: []slice.MilestoneListingEntry{
+		{
+			ID: id(milestoneBadgeIDs.milestoneA), Name: "Milestone A",
+			Status:   store.MilestoneStatusInProgress,
+			Delivers: slice.Document{Features: []slice.FeatureEntity{{EntityRef: ref(milestoneBadgeIDs.named)}}},
+		},
+		{
+			ID: id(milestoneBadgeIDs.milestoneB), Name: "Milestone B",
+			Status:   store.MilestoneStatusPartiallyComplete,
+			Delivers: slice.Document{Features: []slice.FeatureEntity{{EntityRef: ref(milestoneBadgeIDs.viaOneReq)}}},
+		},
+		{
+			ID: id(milestoneBadgeIDs.milestoneC), Name: "Milestone C",
+			Status:   store.MilestoneStatusAbandoned,
+			Delivers: slice.Document{Features: []slice.FeatureEntity{{EntityRef: ref(milestoneBadgeIDs.viaManyReq)}}},
+		},
+		{
+			ID: id(milestoneBadgeIDs.milestoneD), Name: "Milestone D",
+			Status:   store.MilestoneStatusShipped,
+			Delivers: slice.Document{Features: []slice.FeatureEntity{{EntityRef: ref(milestoneBadgeIDs.multiOwner)}}},
+		},
+	}}
+}
+
+// servedMilestoneMux mounts the two handlers that render a Milestone cell --
+// the Capabilities tab and the quick-look blade over it -- at the paths
+// routes.go really registers, over a specReadClient carrying both reads.
+func servedMilestoneMux(t *testing.T) *http.ServeMux {
+	t.Helper()
+	doc, _ := milestoneBadgeDoc(t)
+	app := &App{
+		spec:   specStubReader{Doc: doc, Listing: servedMilestoneListing(t)},
+		scopes: chromeScopes{}, tasks: chromeTaskCounter{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+specProductPath, app.handleCapabilityMap)
+	mux.HandleFunc("GET "+specProductPath+specFeatureSuffix, app.handleSpecFeature)
+	return mux
+}
+
+// servedMilestoneRequest issues one request the way its caller would: an
+// htmx swap naming the region it replaces, which is what specTabRequest does
+// for a tab and what the Feature link does for a blade.
+func servedMilestoneRequest(t *testing.T, mux *http.ServeMux, path, hxTarget string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("HX-Target", hxTarget)
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// servedMilestoneBadges maps each rendered feature id to the named Milestone
+// badge in its row, read off the PARSED fragment. The class comes from
+// attrOf on that element rather than from a substring of the serialised tag,
+// for the reason tabIsActive documents: whole-token matching is the only way
+// to tell a class from a longer one that contains it.
+//
+// A row with no named badge is simply absent from the map rather than an
+// error: the count and blank cells render other hooks, and the caller is the
+// one that says which features it expects a named badge for.
+func servedMilestoneBadges(t *testing.T, markup string) map[string]*html.Node {
+	t.Helper()
+	badges := map[string]*html.Node{}
+	for _, row := range elementsWithHook(t, markup, "feature-row") {
+		for _, badge := range nodesWithHookWithin(row, "feature-milestone-name") {
+			badges[attrOf(t, row, "data-krill-feature-id")] = badge
+		}
+	}
+	return badges
+}
+
+// assertBadgeWearsTheStatusMapper records the class the shared mapper gives
+// this status, on the badge the served fragment actually carried for this
+// feature. Every expectation is read off components.MilestoneStatusStyle, so
+// a change to the mapper is a change this test follows rather than one it
+// contradicts.
+//
+// The soft treatment is compared rather than asserted: it is a rendering
+// flag on the style tuple, not a colour, and the two statuses sharing
+// components.BadgeWarning are told apart by nothing else.
+func assertBadgeWearsTheStatusMapper(t *testing.T, badge *html.Node, status store.MilestoneStatus, where string) {
+	t.Helper()
+	want := components.MilestoneStatusStyle(string(status))
+	classes := strings.Fields(attrOf(t, badge, "class"))
+
+	for _, token := range []string{string(want.Variant), string(want.Size)} {
+		if !slices.Contains(classes, token) {
+			t.Errorf("%s: the served Milestone badge's classes %q carry no %q token; "+
+				"components.MilestoneStatusStyle gives status %q that token. This records what the "+
+				"served cell carries and settles nothing -- see the decision-request note on FeatureSet "+
+				"c9e7c443-ffb7-4ce4-8402-db5c6f38be99 (FR df5bffd1 vs FR 18afc5a8)",
+				where, classes, token, status)
+		}
+	}
+	if got := slices.Contains(classes, "badge-soft"); got != want.Soft {
+		t.Errorf("%s: the served Milestone badge's classes %q carry the soft treatment = %t, "+
+			"components.MilestoneStatusStyle gives status %q Soft = %t; see the decision-request note "+
+			"on FeatureSet c9e7c443-ffb7-4ce4-8402-db5c6f38be99 (FR df5bffd1 vs FR 18afc5a8)",
+			where, classes, got, status, want.Soft)
+	}
+}
+
+// servedMilestoneCase is one feature of the fixture, named by its short key
+// so a test reads as a milestone-and-status pair rather than as a uuid.
+type servedMilestoneCase struct {
+	key    string
+	status store.MilestoneStatus
+	name   string
+}
+
+// servedMilestoneCases pairs the fixture features servedMilestoneListing
+// delivers directly with the status each of their milestones carries.
+//
+// All three are severity-bearing statuses, and "in progress" and "partially
+// complete" share components.BadgeWarning -- they are separated only by the
+// soft treatment -- so reading all three is what tells the statuses apart
+// rather than two of them sharing a colour.
+var servedMilestoneCases = []servedMilestoneCase{
+	{key: "named", status: store.MilestoneStatusInProgress, name: "Milestone A"},
+	{key: "viaOneReq", status: store.MilestoneStatusPartiallyComplete, name: "Milestone B"},
+	{key: "viaManyReq", status: store.MilestoneStatusAbandoned, name: "Milestone C"},
+}
+
+// TestServedCapabilitiesMilestoneBadgeCarriesTheSharedStatusMapper drives
+// GET /spec/products/{id} through the real handler and records, per feature,
+// the class the served Milestone cell carries for a milestone in a
+// severity-bearing status.
+//
+// Both read shapes the Capabilities tab has are covered. The collapsed
+// default and the URL-expanded variant reach the same cell through the same
+// delivery read -- capabilityMilestoneDelivery passes a nil status filter
+// whatever the open parameter says, so the expand query widens what is
+// rendered rather than what is read -- and both are driven here because the
+// expanded variant is the state the quick-look link is built from, and a
+// badge that appeared only in one of them would be a real defect this
+// package had no way to see. The blade over the tab renders the same cell
+// through a second handler and is covered by
+// TestServedBladeMilestoneBadgeCarriesTheSharedStatusMapper.
+//
+// No assertion here says the colour may or may not appear; see the section
+// comment above for the undecided question and where it is recorded.
+func TestServedCapabilitiesMilestoneBadgeCarriesTheSharedStatusMapper(t *testing.T) {
+	productID := mustID(t, milestoneBadgeIDs.product)
+	featureSetID := milestoneBadgeIDs.featureSet
+
+	shapes := []struct {
+		name  string
+		query string
+	}{
+		{"collapsed default", ""},
+		{"section expanded", "?open=" + featureSetID},
+	}
+
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			path := productPath(productID) + shape.query
+			rec := servedMilestoneRequest(t, servedMilestoneMux(t), path, pages.SpecPanelAnchor)
+			require.Equal(t, http.StatusOK, rec.Code, "GET %s = %d, want 200", path, rec.Code)
+
+			badges := servedMilestoneBadges(t, rec.Body.String())
+			for _, c := range servedMilestoneCases {
+				featureID := mustID(t, milestoneBadgeFeatures[c.key]).String()
+				badge, ok := badges[featureID]
+				if !ok {
+					t.Errorf("%s: the served fragment rendered no named Milestone badge for feature %s (%s), "+
+						"so the cell for status %q could not be read at all",
+						path, c.key, featureID, c.status)
+					continue
+				}
+				assert.Equal(t, c.name, textOf(badge),
+					"%s: feature %s must render the delivering milestone's name as served", path, c.key)
+				assertBadgeWearsTheStatusMapper(t, badge, c.status,
+					path+", feature "+c.key)
+			}
+		})
+	}
+}
+
+// TestServedBladeMilestoneBadgeCarriesTheSharedStatusMapper covers the
+// second handler that renders this cell: the quick-look blade, which reads
+// the same delivery listing and hands it to the same capabilityMilestoneCell
+// component. A blade that resolved the milestone differently from the table
+// it was opened over would be invisible to the pure-builder coverage, and the
+// served blade is the state a shared or reloaded URL reaches.
+func TestServedBladeMilestoneBadgeCarriesTheSharedStatusMapper(t *testing.T) {
+	productID := mustID(t, milestoneBadgeIDs.product)
+	featureID := mustID(t, milestoneBadgeIDs.named)
+	path := featureBladePath(productID, featureID, capabilityExpansion{Path: productPath(productID)})
+
+	rec := servedMilestoneRequest(t, servedMilestoneMux(t), path, "#"+pages.SpecBladeAnchor)
+	require.Equal(t, http.StatusOK, rec.Code, "GET %s = %d, want 200", path, rec.Code)
+
+	blade := theOneWithin(t, parsedBody(t, rec.Body.String()), "spec-blade")
+	badge := theOneWithin(t, blade, "feature-milestone-name")
+	assert.Equal(t, "Milestone A", textOf(badge), "the served blade must name the milestone as delivered")
+	assertBadgeWearsTheStatusMapper(t, badge, store.MilestoneStatusInProgress, path)
 }

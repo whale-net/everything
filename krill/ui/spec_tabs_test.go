@@ -257,10 +257,47 @@ func TestSpecTabOfResolvesUnknownValuesToCapabilities(t *testing.T) {
 	}
 }
 
+// specAttentionStrings is the ONE place the Spec page's attention-content
+// invariant is written down, so a future change to it is a visible edit to a
+// named list rather than a quiet divergence between two tests.
+//
+// FR df5bffd1-fb14-4cad-8efa-5e67134230e8 ("Spec is one page with
+// Capabilities, Decisions, Personas and Non-goals tabs") says the page's body
+// "carries no attention or escalation content (counts, badges or links)",
+// while FR 18afc5a8-cb70-4f00-93ec-49e83f34e107 ("Capabilities tab groups
+// features by feature set in collapsible sections") requires a Milestone
+// column coloured by each milestone's own status. The two are in tension over
+// one thing: whether a severity-bearing milestone's status colour is
+// "attention or escalation content". That is UNDECIDED and belongs to a human
+// spec owner -- see the decision-request note on FeatureSet
+// c9e7c443-ffb7-4ce4-8402-db5c6f38be99, raised from the system-validator
+// finding d0ca951d-352f-4c31-b96a-b63c47e8e386.
+//
+// So the colour classes are DELIBERATELY NOT IN THIS LIST. Leaving them out
+// is the point: it is neither a claim that badge-warning / badge-error are
+// attention content nor a claim that they are not. When the spec owner rules,
+// the ruling lands here as a one-line edit, and TestServedCapabilities-
+// MilestoneBadgeCarriesTheSharedStatusMapper records what the served cell
+// carries today either way.
+var specAttentionStrings = []string{"Needs attention", "escalated", "Escalate"}
+
+// specWriteMarkers are the markup an htmx request would need to write with.
+// They are listed separately from specAttentionStrings because they are a
+// statement about the page being read-only, which no question about colour
+// touches.
+var specWriteMarkers = []string{"<form", "hx-post", "hx-put", "hx-delete"}
+
 // TestSpecTabStripCarriesNoAttentionContent pins the read-only half of
 // the requirement: nothing in the served spec body escalates, and nothing
 // in it can write. The sidebar's Needs-attention badge is shell chrome
 // and lives outside the region this slices.
+//
+// It iterates specAttentionStrings and specWriteMarkers rather than
+// inlining them; see those lists' doc comments for what is deliberately
+// absent from them and why. The Capabilities tab's Milestone cell is
+// uncovered by this guard for that same reason, and what it actually
+// renders is recorded in
+// TestServedCapabilitiesMilestoneBadgeCarriesTheSharedStatusMapper.
 func TestSpecTabStripCarriesNoAttentionContent(t *testing.T) {
 	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
 
@@ -268,11 +305,11 @@ func TestSpecTabStripCarriesNoAttentionContent(t *testing.T) {
 		path := specTabHref(t, u.path, productID.String())
 		body := specTabRequest(t, path, pages.SpecPanelAnchor).Body.String()
 
-		for _, forbidden := range []string{"<form", "hx-post", "hx-put", "hx-delete"} {
-			assert.NotContains(t, strings.ToLower(body), forbidden,
-				"GET %s: the spec body is read-only and carries %q", path, forbidden)
+		for _, marker := range specWriteMarkers {
+			assert.NotContains(t, strings.ToLower(body), marker,
+				"GET %s: the spec body is read-only and carries %q", path, marker)
 		}
-		for _, forbidden := range []string{"Needs attention", "escalated", "Escalate"} {
+		for _, forbidden := range specAttentionStrings {
 			assert.NotContains(t, body, forbidden,
 				"GET %s: the spec body carries attention content (%q)", path, forbidden)
 		}
