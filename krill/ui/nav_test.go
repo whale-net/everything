@@ -1185,6 +1185,11 @@ type fakeCredentials struct {
 	// standing in for a store refusal the page has to render inline.
 	revokeErr error
 
+	// listErr, when set, is returned by List instead of listing -- standing
+	// in for the read failure behind a post-revoke re-render, which must
+	// still answer with a reason inline rather than an empty list.
+	listErr error
+
 	// now is the instant a revoke stamps; zero means time.Now. Held still
 	// by the tests that read it back.
 	now time.Time
@@ -1259,6 +1264,9 @@ func (f *fakeCredentials) Revoke(_ context.Context, id uuid.UUID, identity strin
 }
 
 func (f *fakeCredentials) List(context.Context, string) ([]auth.Credential, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return f.listed, nil
 }
 

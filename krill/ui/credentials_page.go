@@ -356,7 +356,14 @@ func (app *App) credentialRowName(r *http.Request, id string) string {
 // exists.
 func (app *App) renderRevokeOutcome(w http.ResponseWriter, r *http.Request, reason, revoked string) {
 	d := app.credentialsData(r)
-	d.Error = reason
+	// Only ever SET the reason, never clear one: credentialsData may already
+	// carry the re-read's own failure, and overwriting it with an empty
+	// string would render a list that failed to load as an empty one --
+	// a confident, wrong "No credentials yet." (the 200-re-render rule's
+	// "never render a read failure as an empty view").
+	if reason != "" {
+		d.Error = reason
+	}
 	message := ""
 	if reason == "" && revoked != "" {
 		message = "Revoked " + revoked + "."
