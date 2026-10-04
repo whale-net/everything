@@ -71,6 +71,13 @@ type MilestoneDetailPage struct {
 	// preselected rather than the operator reselecting it.
 	TasksPath string
 	BoardPath string
+
+	// Rail is the properties rail beside the content: the container's
+	// status, FR budget, task progress, status-history link and id. It is
+	// one value built from the page's own reads rather than something the
+	// template assembles, so a rail fact and the header fact it repeats
+	// come from the same resolved container.
+	Rail MilestoneRail
 }
 
 // milestoneDetailCrumbs renders the breadcrumb trail.
@@ -134,7 +141,161 @@ templ MilestoneDetail(page MilestoneDetailPage) {
 		@milestoneDetailHeader(page)
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="milestone-detail-frame">
 			<div class="min-w-0 space-y-4" data-krill="milestone-detail-main"></div>
-			<aside data-krill="milestone-detail-rail"></aside>
+			<aside data-krill="milestone-detail-rail">
+				@milestoneDetailRail(page.Rail)
+			</aside>
 		</div>
 	</section>
+}
+
+// MilestoneRail is the detail page's properties rail: five label/value rows
+// naming one container, beside the content at lg and stacked below it under.
+//
+// It is a value the handler reads rather than a second view: Status and Id
+// are the container's own facts, FR budget and Tasks come from the two reads
+// the page already makes, and the Status history row is a link whose count is
+// the length of the very list the status-history view renders. So a row here
+// cannot disagree with the page it sits beside.
+type MilestoneRail struct {
+	// Status renders through the same statusBadge the header and the
+	// Milestones table use, so one status is one colour on every page.
+	// The header already shows it; the rail repeats it because under lg
+	// the rail is the only thing below the name, and a stacked page must
+	// still say what state the container is in.
+	Status string
+
+	// FRBudget is the container's stored budget as the operator reads it,
+	// empty when the container declares none. A milepebble has no budget
+	// of its own (only a milestone does), so the row renders the same
+	// "not declared" empty value rather than a zero that reads as a plan.
+	FRBudget string
+
+	// Tasks carries the "N of M done" figures from the progress read,
+	// taken whole from the read's own Done()/Total() -- never re-summed
+	// here -- so this figure and the Milestones table's bar are one count.
+	Tasks ProgressCell
+
+	// StatusHistoryPath is the status-history view's URL for this
+	// container; StatusChanges is how many transitions that view will
+	// list. The two are read from one call, so the label's number and the
+	// page's rows cannot disagree.
+	StatusHistoryPath string
+	StatusChanges      int
+
+	// HistoryError is set when the status-history read failed. The link
+	// still renders -- the page it names may well answer -- but the count
+	// is replaced by the failure sentence, because "0 changes" printed
+	// over a failed read is a claim about the container the page never
+	// made.
+	HistoryError string
+
+	// ID is the container's own id, rendered as the copy chip.
+	ID string
+}
+
+// TasksLabel is the rail's Tasks sentence: "N of M done", or "No tasks yet"
+// for a container that holds none.
+//
+// It is the FR's own wording rather than the table's "N/M tasks done" bar
+// caption: this is a rail cell an operator reads as a fact, not a chart it
+// reads against an axis. The arithmetic is still ProgressCell's -- a
+// container that holds nothing renders as "No tasks yet" rather than "0 of 0
+// done", which would read as a stalled milestone rather than a new one.
+func (r MilestoneRail) TasksLabel() string {
+	if !r.Tasks.HasTasks() {
+		return "No tasks yet"
+	}
+	return itoa(r.Tasks.Done) + " of " + itoa(r.Tasks.Total) + " done"
+}
+
+// TasksErrored reports whether the Tasks figures could not be read, so the
+// rail shows the failure sentence in place of a count it does not have.
+func (r MilestoneRail) TasksErrored() bool { return r.Tasks.ProgressError != "" }
+
+// HistoryLabel is the Status history link's text: "N changes", and "1 change"
+// for a container whose register holds a single row.
+//
+// It is a method rather than a field so the singular case cannot be spelled
+// twice -- and it returns the failure sentence outright when the read failed,
+// so the count never renders as zero over a read that did not answer.
+func (r MilestoneRail) HistoryLabel() string {
+	if r.HistoryError != "" {
+		return r.HistoryError
+	}
+	if r.StatusChanges == 1 {
+		return "1 change"
+	}
+	return itoa(r.StatusChanges) + " changes"
+}
+
+// milestoneDetailRail renders the properties card: the FR's five rows, in
+// the FR's order.
+//
+// Each row's value is a read's own answer rather than anything re-derived
+// here, and a row with nothing behind it renders that "nothing" explicitly
+// rather than being dropped: the FR names five rows on this page, and an
+// absent FR-budget row would read as a rendering bug rather than as "this
+// container declares none".
+templ milestoneDetailRail(rail MilestoneRail) {
+	<div class="card bg-base-100 border border-base-300" data-krill="milestone-properties">
+		<dl class="card-body gap-3 text-sm">
+			<div>
+				<dt class="text-base-content/70">Status</dt>
+				<dd data-krill="milestone-properties-status">
+					@statusBadge(rail.Status)
+				</dd>
+			</div>
+			<div>
+				<dt class="text-base-content/70">FR budget</dt>
+				<dd data-krill="milestone-properties-fr-budget">
+					if rail.FRBudget != "" {
+						{ rail.FRBudget }
+					} else {
+						// The container declares no budget. Said plainly,
+						// because an empty cell would read as a value the
+						// page could not read.
+						<span class="text-base-content/70">No FR budget declared</span>
+					}
+				</dd>
+			</div>
+			<div>
+				<dt class="text-base-content/70">Tasks</dt>
+				<dd data-krill="milestone-properties-tasks">
+					if rail.TasksErrored() {
+						<span class="text-base-content/70">{ rail.Tasks.ProgressError }</span>
+					} else {
+						{ rail.TasksLabel() }
+					}
+				</dd>
+			</div>
+			<div>
+				<dt class="text-base-content/70">Status history</dt>
+				<dd data-krill="milestone-properties-status-history">
+					<a href={ templ.URL(rail.StatusHistoryPath) } class="link link-primary"
+						data-krill="milestone-status-history-link"
+						data-krill-change-count={ itoa(rail.StatusChanges) }>{ rail.HistoryLabel() }</a>
+				</dd>
+			</div>
+			<div>
+				<dt class="text-base-content/70">Id</dt>
+				<dd data-krill="milestone-properties-id">
+					// The task detail's id chip, carrying that chip's own
+					// data attributes verbatim so the head script already
+					// in every page binds this one too. Reusing the markers
+					// is what keeps there exactly ONE clipboard
+					// implementation: a chip that named its own attributes
+					// would render as a control that looks live and does
+					// nothing, which is the failure the script's disabled
+					// chip exists to prevent. So this ships disabled, and
+					// the script enables it.
+					<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
+						aria-label="Copy milestone id" data-krill="copy-task-id" data-task-id={ rail.ID }
+						disabled title="Copying the id needs JavaScript">
+						{ rail.ID }
+					</button>
+					<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
+				</dd>
+			</div>
+		</dl>
+	</div>
 }

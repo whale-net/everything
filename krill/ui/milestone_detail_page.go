@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/pages"
 )
@@ -69,8 +70,32 @@ func (app *App) handleProductMilestoneDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	app.renderShell(w, r, container.Name, r.URL.Path,
-		pages.MilestoneDetail(buildMilestoneDetailPage(product, container)))
+	page := buildMilestoneDetailPage(product, container)
+	page.Rail = app.buildMilestoneDetailRailFor(r, product, listing, container)
+	app.renderShell(w, r, container.Name, r.URL.Path, pages.MilestoneDetail(page))
+}
+
+// buildMilestoneDetailRailFor reads the rail's two figures and assembles the
+// rail.
+//
+// The reads are independent of each other and of the page, so both are
+// always attempted and neither can take the container's own header down: the
+// page answers the operator's question ("which work does this milestone
+// hold?") even when the progress aggregate or the status register cannot be
+// read, and the one row that lost its figure says so rather than reading as
+// a count of zero.
+func (app *App) buildMilestoneDetailRailFor(r *http.Request, product store.Product, listing slice.DeliveryListing, c taskContainer) pages.MilestoneRail {
+	reads := app.readMilestoneRailProgress(r.Context(), product.ID, c)
+	if reads.ProgressErr != nil {
+		logger.Error("milestone detail: progress read failed",
+			"container", c.ID.String(), "error", reads.ProgressErr)
+	}
+
+	history := app.readMilestoneRailHistory(r.Context(), c)
+	reads.History = history.History
+	reads.HistoryErr = history.HistoryErr
+
+	return buildMilestoneDetailRail(product.ID, milestoneRailEntry(listing, c.ID), c, reads)
 }
 
 // buildMilestoneDetailPage assembles the header's view model from the one
@@ -79,7 +104,9 @@ func (app *App) handleProductMilestoneDetail(w http.ResponseWriter, r *http.Requ
 // It is a pure function of the product and the container, so the page's
 // markup is checkable without a handler: the breadcrumb walk, the badge's
 // input and both hrefs all come from the same container, and a test can
-// assert the links without rendering through the shell.
+// assert the links without rendering through the shell. The rail is NOT
+// built here -- it is the one part of the page that needs reads, so it is
+// assembled separately and assigned by the handler.
 func buildMilestoneDetailPage(product store.Product, c taskContainer) pages.MilestoneDetailPage {
 	return pages.MilestoneDetailPage{
 		Product:   productHeaderOf(product),
