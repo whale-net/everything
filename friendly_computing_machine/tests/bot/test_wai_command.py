@@ -25,9 +25,10 @@ the real ones, against a real in-memory SQLite DB with the `fcm` schema.
 Two deliberate deviations from the production path, both documented in place:
 the bolt `App` is faked (importing a handler module would build a real App and
 make a network auth.test call), and the workflow body is driven by a local
-coroutine replaying its activity order -- this repo has no
-WorkflowEnvironment/time-skipping harness, the same constraint
-tests/test_whagent_workflow.py documents. The handler's choice of
+coroutine replaying its activity order -- the repo's only
+WorkflowEnvironment/time-skipping harness covers the music-poll
+workflow, the same constraint tests/test_whagent_workflow.py
+documents. The handler's choice of
 `SlackContextGeminiWorkflow.run` is asserted directly, so the chain is pinned
 from both ends.
 

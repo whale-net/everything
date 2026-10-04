@@ -1,11 +1,13 @@
 """The weekly music-poll schedule workflow (krill M5).
 
 The workflow delegates to the plain functions in
-temporal/music_poll/workflow.py -- the repo's workflow-test
-pattern (no WorkflowEnvironment harness exists here, as
-test_whagent_workflow.py documents), so the schedule,
+temporal/music_poll/workflow.py, so the schedule,
 staleness and idempotency decisions are exercised directly
 against a fake activity executor that records every call.
+The real-API counterpart -- the workflow run on a
+time-skipping WorkflowEnvironment against the real
+activities -- lives in
+test_music_poll_workflow_environment.py.
 """
 
 import asyncio

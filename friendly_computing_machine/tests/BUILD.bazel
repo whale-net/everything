@@ -113,6 +113,22 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# The weekly music-poll workflow on a real (in-process,
+# time-skipping) temporalio WorkflowEnvironment, running the
+# real activities through a real worker. Its own target, as
+# test_music_poll_activity is, because the activities run on
+# the shared engine singleton, which the module-scoped
+# fixture initializes once per process.
+py_test(
+    name = "test_music_poll_workflow_env",
+    size = "medium",
+    srcs = [
+        "conftest.py",
+        "test_music_poll_workflow_environment.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Scheduled-run posting activities (SQLite-backed, mocked Slack
 # client). Its own target, as test_poll_publish is, because the
 # activities run on the shared engine singleton, which the

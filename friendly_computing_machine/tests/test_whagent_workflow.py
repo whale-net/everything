@@ -1,12 +1,11 @@
 """Unit tests for the whagent thread relay's turn-queuing and turn-resolution logic.
 
-This repo has no existing WorkflowEnvironment/time-skipping Temporal test
-pattern anywhere (checked friendly_computing_machine/tests and the rest of
-the repo), so per AGENTS.md's guidance this exercises the queuing and
-resolution logic directly rather than inventing a new Temporal test
-harness: TurnQueue and resolve_turn_outcome (temporal/whagent/workflow.py)
-are plain, Temporal-free functions/classes the workflow delegates to for
-exactly this reason.
+The repo's only WorkflowEnvironment/time-skipping Temporal test is
+the music-poll workflow's (test_music_poll_workflow_environment.py);
+this still exercises the queuing and resolution logic directly
+rather than through one: TurnQueue and resolve_turn_outcome
+(temporal/whagent/workflow.py) are plain, Temporal-free
+functions/classes the workflow delegates to for exactly this reason.
 """
 
 from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.activity import (
