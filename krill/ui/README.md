@@ -1225,6 +1225,48 @@ request and gets the page in the shell. Deciding on the tab suffix instead
 would make a Refresh taken on a non-Capabilities tab serve a bare swap
 region for htmx to splice in beside the page.
 
+#### The Capabilities tab: collapsible feature-set sections (FR 18afc5a8)
+
+Each feature set is a daisyUI **collapse** section headed with its name, its
+feature count as a badge and its description, containing a `Feature` /
+`Requirements` table.
+
+**The expansion is a SET of feature-set ids in `?open=`, not one id.** Two
+sections open at once is the point — comparing one feature set against
+another is why an operator opens a second — and an expander that closed the
+first to open the second would make that comparison impossible. Every
+expand/collapse href re-states the **whole** set, the `milestoneExpansion`
+precedent's rule (`milestones_page.go`): an expander can never drop a sibling
+the operator had open. Ids are sorted so one set always yields one address
+(an href that reordered itself between renders would push a different
+history entry for the same state).
+
+**It is a `collapse` div driven by `collapse-open`, not a `<details>`.** The
+open state is the URL's answer; a `<details>` would open and close in the DOM
+while the address bar went on claiming a different section, and a reload, a
+shared link and the later quick-look round-trip would all land back on the
+default.
+
+**The default is the FIRST section open, and "drop the parameter" is not
+"collapsed".** Because the default is *open*, a collapse href must spell out
+the explicit `?open=none` rather than dropping the parameter — dropping it
+renders the default, so a Collapse control on the first section would
+re-render it open. Absent, empty and all-unparseable values are the default
+(never an error, never a fully-collapsed map: `?open=not-a-uuid` is a typo,
+and answering it with a shut map looks like a broken page). `withFirstOpen`
+resolves "the first" **in the builder**, where the page's feature sets are
+in hand, so the default is an answer about *this* page rather than a flag
+each href builder re-derived.
+
+**The Requirements count is `len(Requirements)` from the same slice rows the
+nested requirement list renders** — the tab-count rule above, one read, so
+the number an operator reads cannot disagree with the list beneath it.
+
+**The empty state renders only for a read that SUCCEEDED and found nothing.**
+A failed read is the inline alert / 500 path: `htmxui.EmptyState("No feature
+sets yet.")` is a claim about the product that a failed read is not entitled
+to make.
+
 **The strip marks itself with `aria-selected`, not `aria-current="page"`.**
 The shell's primary nav is the only region that claims to be *the* current
 page; a second `aria-current` in the body is what `primaryNavRegion`
