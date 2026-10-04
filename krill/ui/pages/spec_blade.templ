@@ -1,0 +1,161 @@
+package pages
+
+import "strconv"
+
+// The feature quick-look BLADE: the one panel that opens OVER the Spec
+// page rather than replacing a region of it.
+//
+// A blade is entered from the Capabilities table's Feature link, which
+// carries both a real href (the blade's own URL, so a no-JS click, a
+// reload and a shared link all land on the same thing) and an hx-get of
+// that same URL into the blade region. The Spec page UNDER a blade is
+// never re-rendered, so the tab and the open feature set are exactly what
+// they were when it opened; closing swaps the blade region back out.
+//
+// Blades go ONE level deep (FR f7eee645). Nothing in here is a link or an
+// hx-get except the close control, and the requirement lines are plain
+// text -- a blade that could open another blade would make "back" a
+// question with more than one answer.
+
+// SpecBladeAnchor is the DOM id of the swap region a blade replaces: the
+// hx-target every Feature link names, and the id the served blade
+// fragment's ROOT must carry. Without it on the root, htmx's outerHTML
+// deletes the element it was asked to replace and the region is gone for
+// good.
+//
+// It is rendered even with no blade open -- an empty region of the same
+// id -- because a Feature link's hx-target has to resolve whether or not
+// a blade is showing.
+const SpecBladeAnchor = "krill-spec-blade"
+
+// SpecBladePage is one blade region: which feature it is showing, and
+// where its close control goes.
+//
+// A page with no Feature is the CLOSED region -- the placeholder the Spec
+// page carries and the answer to a close, both the same empty element.
+type SpecBladePage struct {
+	Product ProductHeader
+	Feature *SpecBladeFeature
+
+	// CloseHref is the tab path with the expansion this blade was opened
+	// over, so closing returns to the view the operator came from. It is
+	// only read when a blade is showing.
+	CloseHref string
+}
+
+// SpecBladeFeature is the feature a blade shows quick-look detail for.
+type SpecBladeFeature struct {
+	ID          string // EntityRef.ID -- the surrogate id, shown as the copy chip
+	Number      int    // Cn -- the stored DisplayNumber, the number a reader cites
+	Name        string
+	Description string
+
+	// Milestone is the same cell the Capabilities table's Milestone column
+	// shows for this feature, built by the same derivation
+	// (capabilityMilestoneIndex.cell) -- a blade cannot report a different
+	// milestone for a feature than the table it was opened from does.
+	Milestone CapabilityMilestone
+
+	// Requirements are this feature's Requirements, each already carrying
+	// the `FRn`/`NFRn` citation //krill/render assigns, so a blade cites
+	// a requirement by the same number the rendered PRODUCT.md does.
+	Requirements []SpecBladeRequirement
+}
+
+// SpecBladeRequirement is one requirement line inside a blade.
+//
+// Citation and Name are TEXT. krill stores no display number for a
+// Requirement, so a line that linked anywhere would either carry no
+// citation or carry a second derivation of one -- and the whole point of
+// showing the citation here is that it matches the document.
+type SpecBladeRequirement struct {
+	ID       string // EntityRef.ID -- the surrogate id, so the line resolves exactly
+	Citation string // "FR7" / "NFR1", from render.RequirementCitations
+	Name     string
+}
+
+// SpecBladeSlot is the blade region itself: empty with no Feature, and the
+// blade with one. Both spellings carry SpecBladeAnchor, so a close can
+// swap one for the other without the region's identity moving.
+templ SpecBladeSlot(page SpecBladePage) {
+	<div id={ SpecBladeAnchor } data-krill="spec-blade">
+		if page.Feature != nil {
+			@specBlade(page)
+		}
+	</div>
+}
+
+// specBlade is one feature's quick look: its citation and name, the
+// milestone that delivers it, its id as a copy chip, its description, and
+// its requirements as plain cited lines.
+templ specBlade(page SpecBladePage) {
+	<article class="card bg-base-100 border border-base-300 shadow-sm" data-krill="spec-blade-body">
+		<div class="card-body p-4 gap-3">
+			<div class="flex items-start justify-between gap-4">
+				<h3 class="text-lg font-semibold" data-krill="spec-blade-name">C{ strconv.Itoa(page.Feature.Number) } — { page.Feature.Name }</h3>
+				@specBladeClose(page.CloseHref)
+			</div>
+			@specBladeID(page.Feature.ID)
+			<div class="flex flex-wrap items-center gap-2">
+				<span class="text-sm text-base-content/70">Milestone</span>
+				@capabilityMilestoneCell(page.Feature.Milestone)
+			</div>
+			if page.Feature.Description != "" {
+				<div class="text-sm text-base-content/70 krill-md" data-krill="spec-blade-description">@templ.Raw(renderMarkdown(page.Feature.Description))</div>
+			}
+			if len(page.Feature.Requirements) > 0 {
+				<div>
+					<h4 class="text-sm font-semibold text-base-content/70">Requirements</h4>
+					<ul class="mt-1 list-disc pl-5 space-y-1" data-krill="spec-blade-requirements">
+						for _, rq := range page.Feature.Requirements {
+							<li data-krill="spec-blade-requirement">
+								<strong>{ rq.Citation }</strong>: { rq.Name }
+							</li>
+						}
+					</ul>
+				</div>
+			}
+		</div>
+	</article>
+}
+
+// specBladeClose is the blade's only control: it goes back to the tab the
+// blade was opened over, carrying the expansion the URL named, so the tab
+// and the open section are exactly what they were.
+//
+// It swaps the BLADE region rather than the whole Spec page, which is what
+// keeps the page underneath untouched -- and it carries the tab's own path
+// as a plain href too, so a no-JS click is an ordinary navigation to that
+// same view.
+templ specBladeClose(href string) {
+	<a href={ templ.URL(href) }
+		class="btn btn-ghost btn-sm"
+		data-krill="spec-blade-close"
+		hx-get={ templ.URL(href) }
+		hx-target={ "#" + SpecBladeAnchor }
+		hx-swap="outerHTML"
+		hx-push-url="true">
+		Close
+	</a>
+}
+
+// specBladeID is the feature id as a copy chip.
+//
+// It is the task detail's own control -- same data-krill hook, same
+// data-task-id attribute, same head script (templ_render.go), shipped
+// disabled so a control that cannot work never looks live. It sits in a
+// <dd> because that is the scope the shared script looks in
+// (btn.closest('dd')); a chip outside one would copy correctly and then
+// confirm nothing at all.
+templ specBladeID(id string) {
+	<dl class="m-0">
+		<dd class="ml-0">
+			<button type="button" class="badge badge-ghost badge-sm font-mono disabled:opacity-50"
+				aria-label="Copy feature id" data-krill="copy-task-id" data-task-id={ id }
+				disabled title="Copying the feature id needs JavaScript">
+				{ id }
+			</button>
+			<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
+		</dd>
+	</dl>
+}

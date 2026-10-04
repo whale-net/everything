@@ -51,6 +51,11 @@ go_library(
         "//krill/apiclient",
         "//krill/identity",
         "//krill/mcp/server",
+        # The feature quick-look blade cites a requirement by the same
+        # FRn/NFRn number the rendered PRODUCT.md does, so it shares
+        # render.RequirementCitations rather than numbering its own way
+        # (FR f7eee645).
+        "//krill/render",
         "//krill/slice",
         "//krill/store",
         "//krill/ui/components",
@@ -203,6 +208,7 @@ go_test(
         "spec_tabs_test.go",
         "spec_capabilities_test.go",
         "spec_milestone_badge_test.go",
+        "spec_blade_test.go",
         "spec_parity_test.go",
         "delivery_page_test.go",
         "milestones_page_test.go",
@@ -247,6 +253,10 @@ go_test(
     deps = [
         "//krill/api/handlers",
         "//krill/mcp/tools",
+        # The blade's FRn/NFRn citations are checked against the render
+        # package's own rule for the same slice.Document, so the two are
+        # pinned to each other rather than to a restatement.
+        "//krill/render",
         "//krill/slice",
         "//krill/store",
         "//krill/ui/components",

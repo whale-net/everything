@@ -29,6 +29,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/render"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/components"
@@ -49,6 +50,12 @@ const (
 	decisionsSuffix = "/decisions"
 	personasSuffix  = "/personas"
 	nonGoalsSuffix  = "/non-goals"
+
+	// specFeatureSuffix is the quick-look blade's own suffix under a
+	// product, carrying the feature it shows. It is spelled once here so
+	// the route table, featureBladePath and the Capabilities table's
+	// Feature link cannot disagree about the address.
+	specFeatureSuffix = "/features/{fid}"
 )
 
 // specProductID validates the {id} path value as a product id, writing a
@@ -145,7 +152,12 @@ func (app *App) renderSpecPage(w http.ResponseWriter, r *http.Request, title str
 // Deciding on anything else -- the tab suffix, say -- would make a Refresh
 // taken on a non-Capabilities tab serve a bare swap region for htmx to
 // splice in beside the page.
-func (app *App) renderSpecTabPage(w http.ResponseWriter, r *http.Request, title string, productID uuid.UUID, panel templ.Component) {
+//
+// blade is the quick-look region the Spec page carries, nil for the tabs
+// that open no blade. It rides inside the swap region either way, because
+// a blade belongs to the panel it was opened from and a tab click replaces
+// both.
+func (app *App) renderSpecTabPage(w http.ResponseWriter, r *http.Request, title string, productID uuid.UUID, panel templ.Component, blade templ.Component) {
 	htmx := r.Header.Get("HX-Request") != ""
 	if htmx && !specTabSwapRequested(r) {
 		renderFragment(w, r, panel)
@@ -156,6 +168,7 @@ func (app *App) renderSpecTabPage(w http.ResponseWriter, r *http.Request, title 
 		Tabs:  specTabsOf(productID, tab),
 		Tab:   tab,
 		Panel: panel,
+		Blade: blade,
 	})
 	if htmx {
 		renderFragment(w, r, body)
@@ -245,6 +258,17 @@ func personasPath(id uuid.UUID) string  { return productPath(id) + personasSuffi
 func nonGoalsPath(id uuid.UUID) string  { return productPath(id) + nonGoalsSuffix }
 func deliveryPath(id uuid.UUID) string  { return productPath(id) + "/delivery" }
 
+// featureBladePath is one feature's quick-look URL: its OWN address, so a
+// reload, a shared link and a no-JavaScript click all land on the same
+// blade the Capabilities table opens in place.
+//
+// The expansion the blade was opened over travels as the tab's own query,
+// so the blade's Close returns to the section the operator came from and
+// not to whichever one happens to be first.
+func featureBladePath(productID, featureID uuid.UUID, section capabilityExpansion) string {
+	return productPath(productID) + "/features/" + featureID.String() + section.query()
+}
+
 // productNavFor builds the five per-product cross-links, marking the one
 // matching current as active. The component that renders them is
 // components.SubNav.
@@ -319,7 +343,8 @@ func (app *App) handleCapabilityMap(w http.ResponseWriter, r *http.Request) {
 	listing, deliveryErr := app.capabilityMilestoneDelivery(r, productID)
 
 	app.renderSpecTabPage(w, r, "Capability map", productID,
-		pages.CapabilityMap(capabilityPageWithMilestonesOf(doc, productID, parseCapabilityExpansion(r), listing, deliveryErr)))
+		pages.CapabilityMap(capabilityPageWithMilestonesOf(doc, productID, parseCapabilityExpansion(r), listing, deliveryErr)),
+		pages.SpecBladeSlot(pages.SpecBladePage{}))
 }
 
 // capabilityMilestoneDelivery reads the delivery listing the Milestone
@@ -374,6 +399,19 @@ func capabilityPageWithMilestonesOf(doc slice.Document, productID uuid.UUID, sec
 
 	milestones := capabilityMilestoneIndexOf(listing, deliveryErr)
 
+	// The first feature set is the default open one (FR 18afc5a8). Resolving
+	// it here, where the page's own feature sets are in hand, is what keeps
+	// "the default" an answer about THIS page rather than a bare flag the
+	// href builders would have to re-derive per section.
+	//
+	//
+	// It is resolved BEFORE the features are built, because a feature's
+	// quick-look href carries this expansion (featureBladePath): a link
+	// built from the unresolved state would drop the default section and
+	// land its own Close on a different section than the one it was
+	// opened from.
+	section = resolvedCapabilitySection(doc, section)
+
 	// Index requirements and features by parent id so the component can
 	// nest them without a second pass per level.
 	reqsByFeature := map[uuid.UUID][]pages.CapabilityRequirement{}
@@ -397,14 +435,8 @@ func capabilityPageWithMilestonesOf(doc slice.Document, productID uuid.UUID, sec
 			RequirementCount: len(reqsByFeature[f.ID]),
 			Requirements:     reqsByFeature[f.ID],
 			Milestone:        milestones.cell(f.ID, reqIDsByFeature[f.ID]),
+			QuickLookHref:    featureBladePath(productID, f.ID, section),
 		})
-	}
-	// The first feature set is the default open one (FR 18afc5a8). Resolving
-	// it here, where the page's own feature sets are in hand, is what keeps
-	// "the default" an answer about THIS page rather than a bare flag the
-	// href builders would have to re-derive per section.
-	if len(doc.FeatureSets) > 0 {
-		section = section.withFirstOpen(doc.FeatureSets[0].ID)
 	}
 
 	for _, fs := range doc.FeatureSets {
@@ -420,6 +452,145 @@ func capabilityPageWithMilestonesOf(doc slice.Document, productID uuid.UUID, sec
 		})
 	}
 	return page
+}
+
+// -- the feature quick-look blade -----------------------------------------
+
+// handleSpecFeature renders one feature's quick-look blade, opened from
+// the Capabilities table's Feature link (FR f7eee645).
+//
+// It answers in both modes off one route. An htmx request gets the blade
+// region alone, because the link names that region as its swap target and
+// the Spec page under it must NOT be re-rendered -- the tab and the open
+// feature set are what the operator chose, and re-deriving them here would
+// quietly hand back a different view. A browser request gets the WHOLE Spec
+// page with the blade open over it, so a reload, a shared link and a
+// no-JavaScript click all reach the same thing the link did.
+//
+// Blades go one level deep: this route renders one feature and its
+// requirements as text. Nothing below it opens another blade.
+func (app *App) handleSpecFeature(w http.ResponseWriter, r *http.Request) {
+	productID, ok := app.specProductID(w, r)
+	if !ok {
+		return
+	}
+
+	featureID, err := uuid.Parse(r.PathValue("fid"))
+	if err != nil {
+		app.renderSpecStatus(w, r, http.StatusBadRequest, pages.StatusPage{
+			Title:    "Bad feature id",
+			Detail:   "The feature id in the URL is not a UUID.",
+			BackHref: productPath(productID),
+			BackText: "Back to the capability map",
+		})
+		return
+	}
+
+	doc, err := app.spec.ProductSlice(r.Context(), productID)
+	if err != nil {
+		app.renderSpecError(w, r, pages.CapabilityMapAnchor, err)
+		return
+	}
+
+	section := parseCapabilityExpansion(r)
+	listing, deliveryErr := app.capabilityMilestoneDelivery(r, productID)
+
+	blade, found := specBladePageOf(doc, productID, featureID, section, listing, deliveryErr)
+	if !found {
+		app.renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
+			Title:    "Not found",
+			Detail:   "No current feature of this product matches that id.",
+			BackHref: productPath(productID) + section.query(),
+			BackText: "Back to the capability map",
+		})
+		return
+	}
+
+	if r.Header.Get("HX-Request") != "" {
+		renderFragment(w, r, pages.SpecBladeSlot(blade))
+		return
+	}
+	// The full page: the Capabilities tab, expanded as THIS URL names,
+	// with the blade sitting in its own region. The panel under it is the
+	// ordinary capability map -- the same builder, the same delivery read
+	// -- so the page a direct load shows and the page the link swapped into
+	// are one view, not two.
+	app.renderSpecTabPage(w, r, "Capability map", productID,
+		pages.CapabilityMap(capabilityPageWithMilestonesOf(doc, productID, section, listing, deliveryErr)),
+		pages.SpecBladeSlot(blade))
+}
+
+// specBladePageOf builds one feature's quick look, or reports that the id
+// names no current feature of this product's slice (an in-shell 404).
+//
+// The Milestone cell and the `FRn`/`NFRn` citations are the SAME two
+// derivations the Capabilities table and the rendered PRODUCT.md use --
+// capabilityMilestoneIndex.cell and render.RequirementCitations -- so a
+// blade cannot report a different milestone, or a different number, than
+// the row it was opened from or the document the operator is reading.
+//
+// Pure, so the whole of FR f7eee645's body is testable without a database.
+func specBladePageOf(doc slice.Document, productID, featureID uuid.UUID, section capabilityExpansion, listing slice.DeliveryListing, deliveryErr error) (pages.SpecBladePage, bool) {
+	section = resolvedCapabilitySection(doc, section)
+
+	var feature *slice.FeatureEntity
+	for i := range doc.Features {
+		if doc.Features[i].ID == featureID {
+			feature = &doc.Features[i]
+			break
+		}
+	}
+	if feature == nil {
+		return pages.SpecBladePage{}, false
+	}
+
+	citations := render.RequirementCitations(doc)
+	blade := pages.SpecBladeFeature{
+		ID:          feature.ID.String(),
+		Number:      feature.DisplayNumber,
+		Name:        feature.Name,
+		Description: deref(feature.Description),
+		Milestone:   capabilityMilestoneIndexOf(listing, deliveryErr).cell(featureID, requirementIDsOf(doc, featureID)),
+	}
+
+	// The feature's requirements, in the slice's own order -- the order
+	// render.RequirementCitations counted them in, so the citation on each
+	// line is the one the rendered document gives that same requirement.
+	// A requirement the citation map left unnumbered is shown by kind
+	// alone rather than with a number nobody else uses.
+	for _, rq := range doc.Requirements {
+		if rq.FeatureID != featureID {
+			continue
+		}
+		citation := citations[rq.ID]
+		if citation == "" {
+			citation = rq.Kind
+		}
+		blade.Requirements = append(blade.Requirements, pages.SpecBladeRequirement{
+			ID:       rq.ID.String(),
+			Citation: citation,
+			Name:     rq.Name,
+		})
+	}
+
+	return pages.SpecBladePage{
+		Product:   productHeaderOfEntity(doc.Product, productID),
+		Feature:   &blade,
+		CloseHref: productPath(productID) + section.query(),
+	}, true
+}
+
+// requirementIDsOf is one feature's requirement ids in slice order, for
+// the Milestone cell's rule (which counts the milestones delivering a
+// feature's REQUIREMENTS when none delivers the feature itself).
+func requirementIDsOf(doc slice.Document, featureID uuid.UUID) []uuid.UUID {
+	var ids []uuid.UUID
+	for _, rq := range doc.Requirements {
+		if rq.FeatureID == featureID {
+			ids = append(ids, rq.ID)
+		}
+	}
+	return ids
 }
 
 // -- the Milestone column ------------------------------------------------
@@ -665,6 +836,21 @@ func (e capabilityExpansion) withFirstOpen(first uuid.UUID) capabilityExpansion 
 	return e
 }
 
+// resolvedCapabilitySection is this request's expansion with the page's
+// DEFAULT applied -- the first feature set open -- which is what the
+// builders hand out.
+//
+// Both the capability map and the blade resolve through here, and they must:
+// a blade opened over the default state spells the default into its own
+// Close, so an unresolved expansion would read "nothing is open" and send
+// the operator to an all-shut page instead of the first section.
+func resolvedCapabilitySection(doc slice.Document, section capabilityExpansion) capabilityExpansion {
+	if len(doc.FeatureSets) == 0 {
+		return section
+	}
+	return section.withFirstOpen(doc.FeatureSets[0].ID)
+}
+
 // expandHref is the tab's URL with this section open alongside whatever is
 // already open; collapseHref is the same URL with this section shut. Both
 // are spelled out on every section rather than assumed, so the rendered
@@ -698,6 +884,21 @@ func withID(open map[uuid.UUID]bool, id uuid.UUID, present bool) map[uuid.UUID]b
 // parameter, because the bare path is the DEFAULT (first section open); see
 // capabilityExpansionNone.
 func (e capabilityExpansion) href(open map[uuid.UUID]bool) string {
+	return e.Path + expansionSuffix(open)
+}
+
+// query is this expansion's own "?open=..." suffix, for a URL that is not
+// the tab's own path -- the blade's, and its Close. It is href's own
+// second half, so the blade states the expansion set exactly as the tab's
+// expanders do, including the explicit "nothing open" value: a Close that
+// dropped it would land on the page's default (first section open) rather
+// than on the all-shut view the operator closed.
+func (e capabilityExpansion) query() string {
+	return expansionSuffix(e.Open)
+}
+
+// expansionSuffix spells one open set as the parameter's value.
+func expansionSuffix(open map[uuid.UUID]bool) string {
 	ids := make([]string, 0, len(open))
 	for id, present := range open {
 		if present {
@@ -705,10 +906,10 @@ func (e capabilityExpansion) href(open map[uuid.UUID]bool) string {
 		}
 	}
 	if len(ids) == 0 {
-		return e.Path + "?" + capabilityExpansionQueryParam + "=" + capabilityExpansionNone
+		return "?" + capabilityExpansionQueryParam + "=" + capabilityExpansionNone
 	}
 	sort.Strings(ids)
-	return e.Path + "?" + capabilityExpansionQueryParam + "=" + strings.Join(ids, ",")
+	return "?" + capabilityExpansionQueryParam + "=" + strings.Join(ids, ",")
 }
 
 // -- load-bearing decisions -----------------------------------------------
@@ -728,7 +929,8 @@ func (app *App) handleSpecDecisions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	app.renderSpecTabPage(w, r, "Decisions", productID, pages.Decisions(decisionsPageOf(doc, productID)))
+	app.renderSpecTabPage(w, r, "Decisions", productID, pages.Decisions(decisionsPageOf(doc, productID)),
+		pages.SpecBladeSlot(pages.SpecBladePage{}))
 }
 
 // decisionsPageOf assembles the decisions list, copying each decision's
@@ -771,7 +973,8 @@ func (app *App) handleSpecPersonas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	app.renderSpecTabPage(w, r, "Personas", productID, pages.Personas(personasPageOf(product, personas, productID)))
+	app.renderSpecTabPage(w, r, "Personas", productID, pages.Personas(personasPageOf(product, personas, productID)),
+		pages.SpecBladeSlot(pages.SpecBladePage{}))
 }
 
 // personasPageOf assembles the personas list, copying every field
@@ -820,7 +1023,8 @@ func (app *App) handleSpecNonGoals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	app.renderSpecTabPage(w, r, "Non-goals", productID, pages.NonGoals(nonGoalsPageOf(product, nonGoals, productID)))
+	app.renderSpecTabPage(w, r, "Non-goals", productID, pages.NonGoals(nonGoalsPageOf(product, nonGoals, productID)),
+		pages.SpecBladeSlot(pages.SpecBladePage{}))
 }
 
 // nonGoalsPageOf assembles the non-goals list, copying every field

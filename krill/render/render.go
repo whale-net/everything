@@ -565,7 +565,7 @@ func cleanRequirementTitle(name string) string {
 	return leadingFRLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
 }
 
-// requirementCitations assigns each Requirement its `FRn`/`NFRn` number.
+// RequirementCitations assigns each Requirement its `FRn`/`NFRn` number.
 // Unlike `Cn` and `LBn` there is no stored display number for a
 // Requirement -- migration 017 gave one to Features and LoadBearingDecisions
 // and not to these -- so per LB2 the number comes from render-time sibling
@@ -581,7 +581,14 @@ func cleanRequirementTitle(name string) string {
 // requirement. A Requirement whose parent Feature is not in the slice is
 // left unnumbered, because it has no position in the document to count
 // from.
-func requirementCitations(doc slice.Document) map[uuid.UUID]string {
+//
+// It is EXPORTED so the operator UI's requirement quick-look blade cites a
+// requirement by the same number this renderer does. The citation is
+// assigned here and nowhere else, so a blade that numbered its own way
+// would be free to disagree with the PRODUCT.md an operator is reading
+// beside it; sharing the function is what makes that impossible rather than
+// merely discouraged.
+func RequirementCitations(doc slice.Document) map[uuid.UUID]string {
 	byFeature := make(map[uuid.UUID]int, len(doc.Features))
 	for _, f := range doc.Features {
 		byFeature[f.ID] = f.DisplayNumber
@@ -619,7 +626,7 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document, detail boo
 	for _, rq := range doc.Requirements {
 		requirementsByFeature[rq.FeatureID] = append(requirementsByFeature[rq.FeatureID], rq)
 	}
-	citations := requirementCitations(doc)
+	citations := RequirementCitations(doc)
 
 	if !detail {
 		b.WriteString("Headlines only: each `Cn` is a capability, with the count of Requirements that specify it. Requirement bodies are not rendered here — read them with krill's `get_feature_slice` / `get_requirement_slice` MCP tools, or re-render with detail.\n\n")
