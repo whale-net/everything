@@ -179,6 +179,12 @@ func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid
 		logger.Error("design session open questions read failed", "design_session_id", id, "error", questionsErr)
 	}
 	openedBy, openedByTitle := openingOperatorLabel(summary.OpenedBy)
+	// SignedOff is the ONE derivation a signed-off session has: the stage
+	// the store already derived from the session's latest signoff, which
+	// is also what the badge beside the h1 shows. Reading it a second way
+	// here -- asking separately whether the last round was an approved
+	// signoff -- is how the badge and the form's presence would come to
+	// disagree about the same session.
 	page := pages.DesignSessionDetailPage{
 		ID:                     summary.ID.String(),
 		ProductID:              summary.ProductID.String(),
@@ -187,6 +193,7 @@ func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid
 		OpeningRequest:         firstLine(summary.OpeningSubmission),
 		OpeningSubmission:      summary.OpeningSubmission,
 		Stage:                  string(summary.Stage),
+		SignedOff:              summary.Stage == store.StageApproved,
 		OpenedBy:               openedBy,
 		OpenedByTitle:          openedByTitle,
 		OpenedByKrillSessionID: summary.OpenedByKrillSessionID.String(),

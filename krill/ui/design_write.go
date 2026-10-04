@@ -193,33 +193,43 @@ func transportFailureMessage(err error) string {
 	return "the request did not complete. Check the logs, then try again."
 }
 
-// renderAnswerFormFailure re-renders the "submit follow-up" form after a
-// rejected write, preserving the follow-up text and which resolve boxes
-// were ticked. Same 200-both-modes rule as renderOpenFormFailure.
+// renderAnswerFormFailure re-renders the follow-up round after a rejected
+// write, preserving the follow-up text and which resolve boxes were
+// ticked. Same 200-both-modes rule as renderOpenFormFailure.
+//
+// What comes back is the WHOLE round region -- timeline, rail, form --
+// not the form alone. The ticked boxes live in the rail, so an answer that
+// swapped only the form would silently drop the operator's own ticks on
+// exactly the request where they must not be dropped (FR 1942d934). The
+// rail inside it is re-derived from a FRESH read, so a question krill has
+// since resolved is gone rather than offered again.
 func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, productID, id uuid.UUID, err error, followUp string, resolved []string) {
 	checked := make(map[string]bool, len(resolved))
 	for _, qid := range resolved {
 		checked[qid] = true
 	}
-	// degradedForm is the form handed back when the detail read behind it
-	// failed: the open questions are genuinely unavailable, but the
-	// follow-up text and the ticked question ids are still known, so the
-	// operator's work is not lost.
-	degradedForm := func(message string) pages.DesignSessionDetailPage {
+	// degradedRound is the region handed back when the read behind it
+	// failed: the log and the open questions are genuinely unavailable,
+	// but the follow-up text and the ticked question ids are still known,
+	// so the operator's work is not lost. Both regions say so in place
+	// rather than rendering as empty -- an unread question list is not a
+	// session with nothing waiting on it (NFR ca90dc03).
+	degradedRound := func(message string) pages.DesignSessionDetailPage {
 		return pages.DesignSessionDetailPage{
 			ID:             id.String(),
 			Error:          message,
 			FollowUp:       followUp,
 			CheckedResolve: checked,
 			AnswersPath:    designAnswersPath(productID, id),
-			OpenQuestions:  nil,
+			LogError:       "This session's timeline could not be loaded.",
+			QuestionsError: "This session's open questions could not be loaded.",
 		}
 	}
 
 	var rejection *writeRejection
 	if !errors.As(err, &rejection) {
 		if isHXRequest(r) {
-			renderFragment(w, r, pages.FollowUpForm(degradedForm("Could not reach krill: "+transportFailureMessage(err))))
+			renderFragment(w, r, pages.DesignSessionRound(degradedRound("Could not reach krill: "+transportFailureMessage(err))))
 			return
 		}
 		writeWriteError(w, err)
@@ -227,10 +237,10 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 	}
 	detail, detailErr := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
 	if detailErr != nil {
-		logger.Error("failed to re-render answer form after rejection", "design_session_id", id, "error", detailErr)
+		logger.Error("failed to re-render the answer round after a rejection", "design_session_id", id, "error", detailErr)
 		if isHXRequest(r) {
-			renderFragment(w, r, pages.FollowUpForm(degradedForm(
-				fmt.Sprintf("%d: %s (this session's open questions could not be reloaded)", rejection.status, rejection.message))))
+			renderFragment(w, r, pages.DesignSessionRound(degradedRound(
+				fmt.Sprintf("%d: %s (this session's timeline and open questions could not be reloaded)", rejection.status, rejection.message))))
 			return
 		}
 		http.Error(w, rejection.message, rejection.status)
@@ -240,10 +250,36 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 	detail.FollowUp = followUp
 	detail.CheckedResolve = checked
 	if isHXRequest(r) {
-		renderFragment(w, r, pages.FollowUpForm(detail))
+		renderFragment(w, r, pages.DesignSessionRound(detail))
 		return
 	}
 	app.renderShell(w, r, "Design session", r.URL.Path, pages.DesignSessionDetail(detail))
+}
+
+// renderAnswerSuccess answers a successful htmx follow-up in place: 200,
+// and the same round region re-derived from a fresh read, so the timeline
+// carries the appended event, the rail no longer offers the questions the
+// round closed, and the textarea is empty. The confirmation is an
+// out-of-band toast rather than a navigation -- a success here is not a
+// move to a different page, and htmx cannot do a partial navigation.
+//
+// If the fresh read fails the write still landed, so the region comes back
+// degraded with that said out loud, and the toast still confirms: telling
+// an operator their answer was lost when it was not would cost them the
+// round they just spent.
+func (app *App) renderAnswerSuccess(w http.ResponseWriter, r *http.Request, productID, id uuid.UUID) {
+	detail, err := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
+	if err != nil {
+		logger.Error("follow-up saved, but the session could not be re-read", "design_session_id", id, "error", err)
+		detail = pages.DesignSessionDetailPage{
+			ID:             id.String(),
+			Error:          "Your follow-up was saved, but this session could not be reloaded.",
+			AnswersPath:    designAnswersPath(productID, id),
+			LogError:       "This session's timeline could not be loaded.",
+			QuestionsError: "This session's open questions could not be loaded.",
+		}
+	}
+	renderFragment(w, r, withToast(answerSuccessToast, pages.DesignSessionRound(detail)))
 }
 
 // hxRedirect answers a successful doubled-form write for an htmx caller:
@@ -351,16 +387,16 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := r.ParseForm(); err != nil {
+		// Nothing was submitted, so there is no operator work to preserve --
+		// but the answer is still the round region rather than a bare form,
+		// because that region is the form's hx-target and a fragment without
+		// its id would leave htmx deleting the element it was meant to
+		// replace (htmxui ARCHITECTURE, the swap-target rule).
 		logger.Error("could not parse the follow-up form body", "design_session_id", id, "error", err)
-		if isHXRequest(r) {
-			renderFragment(w, r, pages.FollowUpForm(pages.DesignSessionDetailPage{
-				ID:          id.String(),
-				AnswersPath: designAnswersPath(productID, id),
-				Error:       "The form could not be read, so nothing was submitted. Try again.",
-			}))
-			return
-		}
-		http.Error(w, "invalid form body", http.StatusBadRequest)
+		app.renderAnswerFormFailure(w, r, productID, id, &writeRejection{
+			status:  http.StatusBadRequest,
+			message: "The form could not be read, so nothing was submitted. Try again.",
+		}, "", nil)
 		return
 	}
 
@@ -415,15 +451,30 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Same redirect-after-post shape as opening a session: both outcomes
-	// navigate, so the confirmation rides the flash cookie.
-	flashSuccess(w, "Follow-up submitted.")
+	// The two outcomes answer differently, and both are right for their
+	// mode. A no-JS browser navigated, so it gets the POST/Redirect/Get it
+	// needs and the confirmation rides the flash cookie (a 303 has no body
+	// to carry a message in). An htmx browser does NOT navigate -- a round
+	// updates the page it is already on -- so it gets the round region
+	// re-derived from a fresh read, in place, plus an out-of-band toast.
+	//
+	// The htmx success used to HX-Redirect to this same page, which cannot
+	// express what actually happened: "the timeline gained an event, the
+	// rail lost a question, the textarea cleared" is a partial update, and
+	// a redirect is a full page load that throws the swap away.
 	if isHXRequest(r) {
-		hxRedirect(w, designSessionPath(productID, id))
+		app.renderAnswerSuccess(w, r, productID, id)
 		return
 	}
+	flashSuccess(w, answerSuccessToast)
 	http.Redirect(w, r, designSessionPath(productID, id), http.StatusSeeOther)
 }
+
+// answerSuccessToast is the one message a submitted follow-up reports, on
+// both paths: as a flash across the 303 for a no-JS browser, and as an
+// out-of-band toast in the swapped region for an htmx one. One string, so
+// the two modes cannot come to describe the same outcome differently.
+const answerSuccessToast = "Follow-up submitted."
 
 // newAnswerQuestionID mints the question id a follow-up answer opens. A UUID
 // keeps it unique within the session's ever-opened set (FR6 validates only

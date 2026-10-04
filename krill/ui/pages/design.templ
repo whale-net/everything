@@ -239,6 +239,12 @@ type DesignSessionDetailPage struct {
 	FollowUp               string
 	CheckedResolve         map[string]bool
 	AnswersPath            string
+	// SignedOff hides the follow-up form outright. It is the SAME
+	// derivation the stage badge shows -- the session's derived stage
+	// being store.StageApproved, which the store derives from its latest
+	// signoff -- read once here rather than restated as a second rule
+	// about which rounds a session may still be sent.
+	SignedOff bool
 }
 
 // LogError and QuestionsError are the two reads whose failure degrades this
@@ -476,11 +482,26 @@ templ newDesignSessionBladeBody(blade DesignSessionNewBlade) {
 // Tests slice on these rather than on a heading's markup, so restyling a
 // card never breaks a section-scoped assertion (htmxui ARCHITECTURE §14).
 const (
-	designSessionDetailAnchor     = "design-session-detail"
-	designSessionEventsAnchor      = "revision-events"
-	designSessionQuestionsAnchor   = "open-questions"
-	designSessionPropertiesAnchor  = "session-properties"
+	designSessionDetailAnchor    = "design-session-detail"
+	designSessionEventsAnchor     = "revision-events"
+	designSessionQuestionsAnchor  = "open-questions"
+	designSessionPropertiesAnchor = "session-properties"
 )
+
+// DesignSessionRoundAnchor is the ONE region a follow-up write re-derives
+// and swaps in place: the timeline, the rail's open questions, and the
+// form itself all live inside it, because all three are what an answer
+// round changes -- it appends an event, it closes the ticked questions,
+// and it empties the textarea.
+//
+// It is exported for the same reason FollowUpFormAnchor is: the form's own
+// hx-target names it, the write handler renders it as the fragment, and
+// the tests slice on it, and those three must never disagree about one
+// string. A swap that named the form alone would leave the timeline and
+// the rail showing the state from before the answer, and a refusal that
+// swapped the form alone would drop the operator's ticked questions on the
+// floor (FR 1942d934).
+const DesignSessionRoundAnchor = "design-session-round"
 
 // DesignSessionCrumb is one breadcrumb entry on the session detail. Href is
 // empty for the session's own title -- the page the reader is already on,
@@ -511,6 +532,30 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 			<h1 class="text-2xl font-semibold" data-krill="design-session-title">{ page.OpeningRequest }</h1>
 			@designSessionStageBadge(page.Stage)
 		</div>
+		@DesignSessionRound(page)
+		<p id="session-nav">
+			<a href={ templ.URL(page.ProductSessionsPath) }>Back to this product's sessions</a>
+		</p>
+	</section>
+}
+
+// DesignSessionRound is everything one follow-up round changes: the
+// session's log, its currently-open questions, and the form that appends
+// the next one. It is the swap target of the follow-up form, and the
+// fragment a successful or refused answer is answered with, so the three
+// can never be rendered from two different reads.
+//
+// The header stays OUTSIDE it. The stage badge is the page's subject line
+// and a round never changes the opening request, so re-rendering them would
+// churn a region whose content did not move -- and an answer on a
+// now-signed-off session has to be able to make the form disappear without
+// taking the breadcrumb with it.
+//
+// A signed-off session renders no form at all, which is why the round
+// region's contents are conditional while its own id is not: the id is the
+// swap target either way.
+templ DesignSessionRound(page DesignSessionDetailPage) {
+	<section id={ DesignSessionRoundAnchor } class="space-y-4">
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
 			<div class="min-w-0 space-y-4">
 				<section id="session-opening" class="krill-md">
@@ -523,12 +568,15 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 				@designSessionPropertiesCard(page)
 			</aside>
 		</div>
-		<p id="session-nav">
-			<a href={ templ.URL(page.ProductSessionsPath) }>Back to this product's sessions</a>
-		</p>
-		<h3>Submit follow-up</h3>
-		<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
-		@FollowUpForm(page)
+		if !page.SignedOff {
+			<h3>Submit follow-up</h3>
+			<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
+			@FollowUpForm(page)
+		} else {
+			<p data-krill="design-session-signed-off">
+				This session is signed off. Its latest signoff is approved, so it takes no further rounds -- open a new session if the design needs to move again.
+			</p>
+		}
 	</section>
 }
 
@@ -897,12 +945,18 @@ templ revisionEventDetail(ev RevisionEventRow) {
 	</details>
 }
 
-// FollowUpForm is the "submit follow-up" form, and the hx-post swap target
-// for it -- doubled exactly as the new-session blade's form is: method+action is the
-// no-JS path (303 back to this session's detail page), hx-post+hx-target+
-// hx-swap is the htmx path (HX-Redirect to the same page, because the
-// appended round changes the log, the open-question table, and this form's
-// own checkbox set -- all outside the swap target).
+// FollowUpForm is the "submit follow-up" form, and the hx-post of the round
+// region -- doubled exactly as the new-session blade's form is:
+// method+action is the no-JS path (303 back to this session's detail page),
+// hx-post+hx-target+hx-swap is the htmx path.
+//
+// Its swap target is DesignSessionRoundAnchor, NOT itself. A round changes
+// three things at once -- the log gains the event, the rail loses the
+// questions it closed, and this form's textarea empties -- and all three
+// live in that one region. Swapping only the form would leave the other two
+// showing the state from before the answer, and on a refusal it would drop
+// the operator's ticked questions entirely, because those boxes are in the
+// rail (FR 1942d934).
 //
 // It carries NO resolve checkboxes. The rail owns them: the wireframe puts
 // the boxes beside the timeline and the submit control here, and HTML's
@@ -923,7 +977,7 @@ templ FollowUpForm(page DesignSessionDetailPage) {
 		method="post"
 		action={ templ.URL(page.AnswersPath) }
 		hx-post={ page.AnswersPath }
-		hx-target="#follow-up-form"
+		hx-target={ "#" + DesignSessionRoundAnchor }
 		hx-swap="outerHTML"
 	>
 		if page.Error != "" {
