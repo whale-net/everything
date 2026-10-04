@@ -72,6 +72,18 @@ type MilestoneDetailPage struct {
 	TasksPath string
 	BoardPath string
 
+	// Outcome is this container's own outcome sentence, markdown-rendered
+	// by the card exactly as the Milestones table renders it. Empty means
+	// the container declares none, and the Outcome card renders nothing --
+	// the region is only an answer where there is an answer to give.
+	Outcome string
+
+	// Milepebbles are the containers cut from THIS one, in the delivery
+	// listing's own order, each with its own status and its own progress
+	// (FR 0f1fb763). Empty means none are cut, and the Milepebbles card
+	// renders nothing rather than a card with an empty table in it.
+	Milepebbles []MilestoneDetailMilepebble
+
 	// Delivery is this container's delivered scope, split into the items
 	// that have a shipment record and the items that do not. It is the
 	// get_delivery_breakdown read of the container named above, so the card
@@ -143,6 +155,7 @@ templ MilestoneDetail(page MilestoneDetailPage) {
 		@milestoneDetailHeader(page)
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="milestone-detail-frame">
 			<div class="min-w-0 space-y-4" data-krill="milestone-detail-main">
+				@milestoneDetailCards(page)
 				@MilestoneDelivery(page.Delivery)
 			</div>
 			<aside data-krill="milestone-detail-rail"></aside>

@@ -170,6 +170,23 @@ func (g grantSrc) TokenSource(subject, _ string) grpcauth.GrantTokenSource {
 	return tokSrc{tok: tok, err: !ok}
 }
 
+// fakeResolver maps "iss|sub" to a manmanv2 user sub.
+type fakeResolver map[string]string
+
+func (f fakeResolver) Resolve(_ context.Context, iss, sub string) (string, bool, error) {
+	u, ok := f[iss+"|"+sub]
+	return u, ok, nil
+}
+
+// testResolver links human-1 (and no-grant-user, who has no stored grant).
+func testResolver() fakeResolver {
+	return fakeResolver{
+		testUserIssuer + "|human-1":       "human-1",
+		testUserIssuer + "|no-grant-user": "no-grant-user",
+		testUserIssuer + "|alias-whagent": "human-1",
+	}
+}
+
 func testExchanger() grantflow.Exchanger {
 	return grantflow.Exchanger{
 		Source:   grantSrc{"human-1": "user-token"},
@@ -199,7 +216,7 @@ func newWhagentHarness(t *testing.T) wgHarness {
 		configs: map[int64]*manmanpb.ServerGameConfig{1: {ServerId: 10}},
 		hosts:   map[int64]*manmanpb.Server{10: {HostPublicAddress: "1.2.3.4"}},
 	})
-	srv.AddReceivingMiddleware(WhagentMiddleware(testExchanger()))
+	srv.AddReceivingMiddleware(WhagentMiddleware(testExchanger(), testResolver()))
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	cfg := WhagentAuthConfig{Verifier: f.verifier, Audience: testAudience, UserIssuer: testUserIssuer, WhagentIssuer: testWhagentIssuer}
 	direct := OIDCCallerVerifier(fakeVerifier{"direct": {Issuer: testUserIssuer, Subject: "human-1", Roles: []string{"gamer"}}})
@@ -264,14 +281,34 @@ func TestWhagentPersonaEqualsDirectCall(t *testing.T) {
 	}
 }
 
-func TestWhagentUnresolvableUserIsGenericToolError(t *testing.T) {
+func TestWhagentLinkedToDifferentUserActsAsLinkedUser(t *testing.T) {
+	h := newWhagentHarness(t)
+	s := h.session(t, h.f.mint(t, "alias-whagent", testUserIssuer, testAudience))
+	if res, text := callText(t, s); res.IsError || text == "" {
+		t.Fatalf("isError=%v text=%q", res.IsError, text)
+	}
+}
+
+func TestWhagentUnlinkedUserGetsLinkInstructions(t *testing.T) {
+	h := newWhagentHarness(t)
+	s := h.session(t, h.f.mint(t, "never-linked", testUserIssuer, testAudience))
+	res, text := callText(t, s)
+	if !res.IsError || text != ErrWhagentNotLinked || !strings.HasPrefix(text, ErrWhagentUnresolved) || !strings.Contains(text, "/grants") {
+		t.Fatalf("isError=%v text=%q", res.IsError, text)
+	}
+	if _, err := s.ListTools(context.Background(), nil); err == nil || !strings.Contains(err.Error(), ErrWhagentNotLinked) {
+		t.Fatalf("tools/list err = %v", err)
+	}
+}
+
+func TestWhagentLinkedWithoutGrantIsToolError(t *testing.T) {
 	h := newWhagentHarness(t)
 	s := h.session(t, h.f.mint(t, "no-grant-user", testUserIssuer, testAudience))
 	res, text := callText(t, s)
-	if !res.IsError || text != ErrWhagentUnresolved {
+	if !res.IsError || text != ErrWhagentNoAccess || !strings.HasPrefix(text, ErrWhagentUnresolved) {
 		t.Fatalf("isError=%v text=%q", res.IsError, text)
 	}
-	if _, err := s.ListTools(context.Background(), nil); err == nil || !strings.Contains(err.Error(), ErrWhagentUnresolved) {
+	if _, err := s.ListTools(context.Background(), nil); err == nil || !strings.Contains(err.Error(), ErrWhagentNoAccess) {
 		t.Fatalf("tools/list err = %v", err)
 	}
 	if out := h.log.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "whagent identity could not be resolved") {
@@ -283,7 +320,7 @@ func TestWhagentMiddlewareFallsThroughWithoutClaim(t *testing.T) {
 	called := false
 	next := mcp.MethodHandler(func(context.Context, string, mcp.Request) (mcp.Result, error) { called = true; return nil, nil })
 	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{}
-	if _, err := WhagentMiddleware(testExchanger())(next)(context.Background(), "tools/call", req); err != nil || !called {
+	if _, err := WhagentMiddleware(testExchanger(), testResolver())(next)(context.Background(), "tools/call", req); err != nil || !called {
 		t.Fatalf("err=%v called=%v", err, called)
 	}
 }
