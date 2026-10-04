@@ -136,44 +136,48 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 	return nil
 }
 
-// renderOpenFormFailure re-renders the new-session blade after a rejected
-// write, with the operator's opening text preserved so a rejection is never
-// a data-loss event. A *writeRejection is shown inline as the api's status +
-// named message; anything else never reached krill and falls back to
-// writeWriteError.
+// renderOpenFormFailure hands the new-session blade back after a refused
+// write, with the operator's opening text preserved so a refusal is never a
+// data-loss event (FR 4304fe60).
 //
-// An htmx caller must still see something on the transport-failure branch:
-// htmx does not swap on a non-2xx, so writeWriteError's 401/502 would leave
-// the operator with a blade that appears to do nothing at all. The blade is
-// re-rendered with the message and their typed submission intact.
+// Both modes answer 200, never the rejection's status: htmx does not swap on
+// an error status, so a 4xx or a 502 would leave the operator with a blade
+// that appears to do nothing at all -- the one case they most need to be
+// told about. The no-JS path gets the same blade inside the shell, never a
+// bare http.StatusText page.
+//
+// A *writeRejection is shown inline as api's own status + named message.
+// Anything else (no resolved operator, unresolvable scope, unreachable api)
+// never reached krill at all, so it gets the operator-facing half only --
+// the specific cause is logged, never rendered (transportFailureMessage).
 func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, productID uuid.UUID, opening string, err error) {
 	blade := app.newDesignSessionBlade(r, productID)
 	blade.OpeningSubmission = opening
 
 	var rejection *writeRejection
-	if !errors.As(err, &rejection) {
+	if errors.As(err, &rejection) {
+		blade.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+	} else {
 		blade.Error = "Could not reach krill: " + transportFailureMessage(err)
-		if isHXRequest(r) {
-			renderFragment(w, r, pages.NewDesignSessionBlade(blade))
-			return
-		}
-		writeWriteError(w, err)
-		return
 	}
-	blade.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+
 	page := app.designSessionListPage(r, productID, nil)
 	page.NewBlade = blade
-	sessions, listErr := app.designSessionRows(r.Context(), productID, time.Now())
-	if listErr != nil {
-		logger.Error("failed to re-read design sessions after a refusal", "product_id", productID, "error", listErr)
-		if isHXRequest(r) {
-			renderFragment(w, r, pages.NewDesignSessionBlade(blade))
-			return
+
+	// The list behind the page is a nicety; the blade is the subject. When
+	// the read fails the blade still comes back -- saying so inline, rather
+	// than rendering an empty table as though it were the whole answer --
+	// and the typed text survives either way.
+	if rejection != nil {
+		sessions, listErr := app.designSessionRows(r.Context(), productID, time.Now())
+		if listErr != nil {
+			logger.Error("failed to re-read design sessions after a refusal", "product_id", productID, "error", listErr)
+			blade.Error += " (the session list could not be reloaded)"
+		} else {
+			page.Sessions = sessions
 		}
-		http.Error(w, rejection.message, rejection.status)
-		return
 	}
-	page.Sessions = sessions
+
 	if isHXRequest(r) {
 		renderFragment(w, r, pages.NewDesignSessionBlade(blade))
 		return
@@ -282,7 +286,9 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 			renderFragment(w, r, pages.NewDesignSessionBlade(blade))
 			return
 		}
-		http.Error(w, "invalid form body", http.StatusBadRequest)
+		page := app.designSessionListPage(r, productID, nil)
+		page.NewBlade = blade
+		app.renderShell(w, r, "Design sessions", r.URL.Path, pages.DesignSessionList(page))
 		return
 	}
 	opening := strings.TrimSpace(r.PostFormValue("opening_submission"))
