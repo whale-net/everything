@@ -77,6 +77,30 @@ CREATE INDEX mcp_credential_person_id ON mcp_credential(person_id);
 
 The ASS consumer sets `StoreConfig{TableName: "mcp_credential", IdentityColumn: "person_id"}`.
 
+**Optional `name` column.** A consumer whose table also carries an
+operator-chosen credential name adds
+
+```sql
+ALTER TABLE mcp_credential ADD COLUMN name TEXT;
+CREATE UNIQUE INDEX mcp_credential_identity_name_live
+    ON mcp_credential(identity, name)
+    WHERE revoked_at IS NULL AND name IS NOT NULL;
+```
+
+and sets `StoreConfig.NameColumn: "name"`. The index's partial predicate is
+what makes revoking free the name for reuse; `name IS NOT NULL` keeps
+unnamed rows — every credential minted by `Mint` — out of the constraint
+entirely, so they never collide with each other.
+
+Leaving `NameColumn` unset (the default, and what every other domain does)
+leaves every generated SQL string byte-for-byte unchanged, so a table with
+no name column needs no migration at all. Only then does the store satisfy
+`NamedCredentialStore`, whose extra `MintNamed(ctx, identity, name)` refuses
+an empty name (`ErrCredentialNameRequired`) and a name already live on
+another of that identity's credentials (`ErrCredentialNameTaken`) — the two
+refusals a UI has to tell apart. `Mint` itself is unchanged on a
+name-configured store: it writes NULL.
+
 **Not SCD2.** The lifecycle here is mint-then-revoke — a one-way
 `revoked_at` soft close, not a dimension whose value changes over time and
 needs history. Do **not** add `valid_from`/`valid_to` to this table; if a
