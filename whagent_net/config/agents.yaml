@@ -44,11 +44,11 @@
 #                      the session ends capped instead of looping without
 #                      bound -- left at/near the default 10
 #                      (worker/caps.go's defaultMaxToolIterations)
-#   - required_role:  the Keycloak realm role FR9's authorization check
-#                      requires the acting subject to hold (api's
-#                      StartSession handler) -- see whagent_net/README.md
-#                      "Keycloak role" for how to grant it (Implementation
-#                      phase closes out that doc section)
+#   - required_role:  the Keycloak realm role the CALLER of StartSession
+#                      must hold -- never checked on the on_behalf_of user.
+#                      A delegating client (e.g. fcm) needs it on its own
+#                      service account; per-user authorization is the
+#                      domain MCP's job. See whagent_net/docs/INTEGRATING.md
 #   - tool_loading_mode: "bulk" (default) or "search" (M4 FR1) -- "bulk"
 #                      loads this definition's full tool_set up front, the
 #                      only behavior before M4; "search" is the FR3/FR4

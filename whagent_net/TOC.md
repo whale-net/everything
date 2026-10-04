@@ -17,6 +17,10 @@ Temporal session workflows, MCP surface, and an embeddable session UI.
   designing any whagent-net work.
 - [`ENV.md`](ENV.md) — Environment variables for all four M1 binaries
   (`migrate`, `api`, `worker`, `mcp`).
+- [`docs/INTEGRATING.md`](docs/INTEGRATING.md) — The two-layer
+  authorization model (`required_role` on the caller vs. per-user checks
+  in the domain MCP) and checklists for adding a domain MCP server or a
+  delegating client like fcm. Read before wiring any new integration.
 
 ## Product Docs
 
@@ -32,5 +36,7 @@ Temporal session workflows, MCP surface, and an embeddable session UI.
 - [`audience_score_system/TOC.md`](../audience_score_system/TOC.md) —
   first consumer: existing Go MCP server (M1 tool target) and the M3
   embedded research-agent host.
-- manmanv2 is a non-goal of this product (still idea phase; would need the
-  `ControlClient` extraction from #1552 first).
+- [`manmanv2/TOC.md`](../manmanv2/TOC.md) — second tool target: the
+  `manmanv2-ops` agent against manmanv2's MCP server.
+- [`friendly_computing_machine/docs/whagent_integration.md`](../friendly_computing_machine/docs/whagent_integration.md)
+  — fcm's Slack bot, the first delegating (`on_behalf_of`) client.

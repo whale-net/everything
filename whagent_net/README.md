@@ -342,6 +342,9 @@ Applied by hand per environment; nothing here is run by CI. Do dev first.
 
 ## Keycloak role
 
+The role is checked on the **caller**, never on an `on_behalf_of` user;
+see [`docs/INTEGRATING.md`](docs/INTEGRATING.md) for the full model.
+
 FR9's authorization check (`api`'s `StartSession` handler) requires the
 acting subject to hold the agent definition's `required_role` — a
 **realm role** (`libs/go/grpcauth/KEYCLOAK.md`'s "Gotcha 1": `grpcauth`
