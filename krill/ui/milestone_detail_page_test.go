@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -38,6 +39,10 @@ var (
 
 // milestoneDetailProduct is the product the URLs above are scoped to.
 var milestoneDetailProduct = store.Product{ID: milestoneDetailProductID, Name: "krill"}
+
+// otherDetailProductID is a second product in scope, so a case can name
+// a container that belongs to one product and request it under another.
+var otherDetailProductID = uuid.MustParse("66666666-6666-6666-6666-666666666666")
 
 // milestoneDetailListing is the delivery read's answer for that product:
 // a milestone the operator can reach, and a cut milestone whose milepebble
@@ -74,11 +79,17 @@ var milestoneDetailListing = slice.DeliveryListing{
 // actually registered for /milestones/{mid}.
 func milestoneDetailMux(t *testing.T, listing slice.DeliveryListing, listingErr error) *http.ServeMux {
 	t.Helper()
+	return detailMuxWithReader(t, []store.Product{milestoneDetailProduct},
+		&fakeSpecReader{listing: listing, listingErr: listingErr})
+}
+
+// detailMuxWithReader is the same mount against an arbitrary spec reader
+// and product set, for the cases whose subject is WHICH product the reader
+// answers for rather than what a single product's listing holds.
+func detailMuxWithReader(t *testing.T, products []store.Product, reader specReadClient) *http.ServeMux {
+	t.Helper()
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{
-		specReadClient: &fakeSpecReader{listing: listing, listingErr: listingErr},
-		products:       []store.Product{milestoneDetailProduct},
-	}
+	app.spec = scopedProductsReader{specReadClient: reader, products: products}
 	app.scopes = productScopeScopes{scope: store.Scope{ID: chromeScopeID}}
 	app.tasks = productScopeTasks{}
 	app.designSessions = navStubDesignSessions{}
@@ -342,18 +353,78 @@ func TestMilestoneDetailUnreadableListingIsA500(t *testing.T) {
 // in-shell 404 above trustworthy rather than a lookup that would follow
 // the id wherever in the deployment it lives.
 func TestMilestoneDetailOfAnotherProductIsNotReachableHere(t *testing.T) {
+	otherProduct := store.Product{ID: otherDetailProductID, Name: "other product"}
 	otherID := uuid.MustParse("55555555-5555-5555-5555-555555555555")
-	// The reader carries a listing that WOULD answer for the other
-	// product's id, so a handler that looked the id up globally rather
-	// than through the URL's own product would find it and render it.
-	mux := milestoneDetailMux(t, slice.DeliveryListing{
-		Milestones: []slice.MilestoneListingEntry{
-			{ID: otherID, Name: "M0 Other product's milestone", Status: store.MilestoneStatusShipped},
-		},
-	}, nil)
 
+	// The reader answers PER PRODUCT, so this product's listing genuinely
+	// does not hold the other product's id. A fake that ignored the
+	// product id would hand this product the other product's listing and
+	// the case would prove nothing -- the handler would be right for the
+	// wrong reason.
+	mux := detailMuxWithReader(t,
+		[]store.Product{milestoneDetailProduct, otherProduct},
+		perProductListing{
+			otherProduct.ID: slice.DeliveryListing{
+				Milestones: []slice.MilestoneListingEntry{
+					{ID: otherID, Name: "M0 Other product's milestone", Status: store.MilestoneStatusShipped},
+				},
+			},
+		})
+
+	// The control: on the product that DOES own the id, the same reader
+	// renders it. Without this the case would pass even if the reader
+	// answered nothing at all.
+	owned := fetch(t, mux, milestoneDetailHref(otherProduct.ID, otherID))
+	require.Equal(t, http.StatusOK, owned.Code,
+		"the owning product's own id must render, or this case is vacuous")
+	assert.Contains(t, owned.Body.String(), "M0 Other product")
+
+	// And from the URL that names the FIRST product, that same id is not
+	// reachable: it belongs to another product, so it must not render as
+	// that product's milestone.
 	rec := fetch(t, mux, milestoneDetailHref(milestoneDetailProductID, otherID))
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "M0 Other product",
 		"an id this product does not own renders no container at all")
 }
+
+// perProductListing answers Delivery with the listing registered for the
+// product being asked about, and an empty one for any other product.
+//
+// It is the product-scoped counterpart to fakeSpecReader, whose Delivery
+// ignores the product id entirely. A handler that resolved a container out
+// of the URL's OWN product's listing passes against this reader and fails
+// against one that answered every product the same thing.
+type perProductListing map[uuid.UUID]slice.DeliveryListing
+
+func (m perProductListing) ProductSlice(context.Context, uuid.UUID) (slice.Document, error) {
+	return slice.Document{}, nil
+}
+
+func (perProductListing) Personas(context.Context, uuid.UUID) ([]store.Persona, error) {
+	return nil, nil
+}
+
+func (perProductListing) NonGoals(context.Context, uuid.UUID) ([]store.NonGoal, error) {
+	return nil, nil
+}
+
+func (m perProductListing) Delivery(_ context.Context, pid uuid.UUID, _ []store.MilestoneStatus) (slice.DeliveryListing, error) {
+	return m[pid], nil
+}
+
+// Products is here only to satisfy specReadClient. scopedProductsReader
+// answers Products from its own product list, so this one is never called.
+func (perProductListing) Products(context.Context) ([]store.Product, error) {
+	return nil, nil
+}
+
+func (perProductListing) DeliveryBreakdown(context.Context, uuid.UUID) (slice.Document, slice.Document, error) {
+	return slice.Document{}, slice.Document{}, nil
+}
+
+func (perProductListing) Product(_ context.Context, pid uuid.UUID) (store.Product, error) {
+	return store.Product{ID: pid}, nil
+}
+
+var _ specReadClient = perProductListing{}

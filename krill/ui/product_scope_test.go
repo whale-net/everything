@@ -15,13 +15,28 @@ import (
 )
 
 // productScopeMux mounts the real product-scoped routes against a reader
-// holding the given products. The scope, task and design-session stores are
-// stubbed too, so the un-prefixed ops views mounted alongside and the
-// Overview's blocking-questions tile can render without one.
+// holding the given products and no delivery listing. The scope, task and
+// design-session stores are stubbed too, so the un-prefixed ops views
+// mounted alongside and the Overview's blocking-questions tile can render
+// without one.
+//
+// A container-addressed route (/milestones/{mid}) answers 404 against this
+// fixture, because a milestone id resolves out of the product's own
+// delivery listing and this one is empty. Callers whose subject is such a
+// route want productScopeMuxWithListing, which hands it a listing holding
+// the id under test.
 func productScopeMux(t *testing.T, products ...store.Product) *http.ServeMux {
 	t.Helper()
+	return productScopeMuxWithListing(t, slice.DeliveryListing{}, products...)
+}
+
+// productScopeMuxWithListing mounts the same routes against a reader that
+// answers Delivery with the given listing, for the routes whose URL names
+// a container rather than a product alone.
+func productScopeMuxWithListing(t *testing.T, listing slice.DeliveryListing, products ...store.Product) *http.ServeMux {
+	t.Helper()
 	app := newTestApp(t)
-	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{}, products: products}
+	app.spec = scopedProductsReader{specReadClient: &fakeSpecReader{listing: listing}, products: products}
 	app.scopes = productScopeScopes{scope: store.Scope{ID: uuid.New()}}
 	app.tasks = productScopeTasks{}
 	app.designSessions = navStubDesignSessions{}
@@ -341,7 +356,13 @@ func TestNoShellPageAsksForATypedProductID(t *testing.T) {
 func TestEveryProductScopedRouteResolvesItsOwnProduct(t *testing.T) {
 	pid := uuid.New()
 	mid := uuid.New()
-	mux := productScopeMux(t, store.Product{ID: pid, Name: "krill"})
+	// The {mid} row of the table is a container-addressed route, so the
+	// fixture has to hold the id that URL names: a milestone resolves out
+	// of the product's own delivery listing, and one that does not is a
+	// 404 by design rather than a product-resolution failure.
+	mux := productScopeMuxWithListing(t, slice.DeliveryListing{
+		Milestones: []slice.MilestoneListingEntry{{ID: mid, Name: "M0 Scoped milestone"}},
+	}, store.Product{ID: pid, Name: "krill"})
 
 	for _, target := range []string{
 		"/products/" + pid.String() + "/overview",
@@ -372,7 +393,9 @@ func TestEveryProductScopedRouteResolvesItsOwnProduct(t *testing.T) {
 // URL table above stated as the clause it exists to satisfy.
 func TestCopiedMilestoneDetailLinkOpensOnTheProductItNames(t *testing.T) {
 	a, b, mid := uuid.New(), uuid.New(), uuid.New()
-	mux := productScopeMux(t,
+	mux := productScopeMuxWithListing(t, slice.DeliveryListing{
+		Milestones: []slice.MilestoneListingEntry{{ID: mid, Name: "M0 Copied link's milestone"}},
+	},
 		store.Product{ID: a, Name: "product A"},
 		store.Product{ID: b, Name: "product B"},
 	)
@@ -392,7 +415,7 @@ func TestCopiedMilestoneDetailLinkOpensOnTheProductItNames(t *testing.T) {
 	// Product select lists every product in scope by design, so the
 	// cookie's product appearing as an unselected option says nothing
 	// about which product the page resolved.
-	if page := placeholderRegion(body); strings.Contains(page, "product B") {
+	if page := productPageRegion(body); strings.Contains(page, "product B") {
 		t.Errorf("copied milestone link rendered the cookie's product too: %s", page)
 	}
 	// The switcher marks the current product, so the cookie's product must
@@ -405,19 +428,28 @@ func TestCopiedMilestoneDetailLinkOpensOnTheProductItNames(t *testing.T) {
 	}
 }
 
-// placeholderRegion slices the product-placeholder body out of a page, so
-// an assertion about which product the page is about cannot be satisfied
-// by the name of a product the sidebar happens to offer.
-func placeholderRegion(body string) string {
-	start := strings.Index(body, `data-krill="product-placeholder"`)
-	if start < 0 {
-		return ""
+// productPageRegion slices the routed page's own region out of a shell
+// document, so an assertion about which product the page is about cannot
+// be satisfied by the name of a product the sidebar happens to offer.
+//
+// It slices whichever region the page rendered. A product-scoped URL now
+// lands on real content rather than the placeholder, so keying this to the
+// placeholder's marker would silently return "" and make every assertion
+// against it pass -- which is how a copied link resolving to the WRONG
+// product would go unnoticed.
+func productPageRegion(body string) string {
+	for _, marker := range []string{`data-krill="product-placeholder"`, `data-krill="milestone-detail"`} {
+		start := strings.Index(body, marker)
+		if start < 0 {
+			continue
+		}
+		end := strings.Index(body[start:], "</section>")
+		if end < 0 {
+			return body[start:]
+		}
+		return body[start : start+end]
 	}
-	end := strings.Index(body[start:], "</section>")
-	if end < 0 {
-		return body[start:]
-	}
-	return body[start : start+end]
+	return ""
 }
 
 // selectedOptionRegion slices the switcher's selected option out of a page.
