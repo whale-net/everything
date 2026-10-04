@@ -117,8 +117,17 @@ def handle_whagent_app_mention(event, say, client=None, body=None):
             # The one lookup below feeds both the gate and on_behalf_of below.
             team_id = _slack_team_id(event)
             slack_user_id = event.get("user", "")
+            if not slack_user_id:
+                # No human to act for: never fall back to running the agent
+                # as fcm's own service account.
+                logger.info(
+                    "ignoring whagent mention with no slack user channel=%s",
+                    channel_slack_id,
+                )
+                span.set_attribute("whagent.no_slack_user", True)
+                return
             identity = get_keycloak_identity(team_id, slack_user_id)
-            if slack_user_id and identity is None:
+            if identity is None:
                 web_public_url = _web_public_url()
                 if not web_public_url:
                     logger.error(
@@ -162,13 +171,11 @@ def handle_whagent_app_mention(event, say, client=None, body=None):
             first_message = _strip_bot_mention(event.get("text", ""))
             whagent_client = get_whagent_client()
 
-            # A linked user's session runs on behalf of their Keycloak
-            # identity so whagent-net (and downstream MCP servers) see the
-            # human, not the bot. Unlinked users keep the default unset
-            # behaviour; the Slack user never holds a credential -- the
-            # asserted subject is only data on fcm's service-credential call.
-            if identity is not None:
-                span.set_attribute("whagent.on_behalf_of", True)
+            # The session runs on behalf of the linked Keycloak identity so
+            # whagent-net (and downstream MCP servers) see the human, not the
+            # bot. The Slack user never holds a credential -- the asserted
+            # subject is only data on fcm's service-credential call.
+            span.set_attribute("whagent.on_behalf_of", True)
 
             workflow_id = workflow_id_for_thread(
                 get_app_env(), channel_slack_id, thread_ts
@@ -185,12 +192,8 @@ def handle_whagent_app_mention(event, say, client=None, body=None):
                     first_message=first_message,
                     slack_user_id=slack_user_id,
                     whagent_ui_public_url=whagent_client.ui_public_url,
-                    on_behalf_of_iss=(
-                        identity.keycloak_iss if identity is not None else None
-                    ),
-                    on_behalf_of_sub=(
-                        identity.keycloak_sub if identity is not None else None
-                    ),
+                    on_behalf_of_iss=identity.keycloak_iss,
+                    on_behalf_of_sub=identity.keycloak_sub,
                 ),
                 id=workflow_id,
                 task_queue=get_temporal_queue_name("main"),
