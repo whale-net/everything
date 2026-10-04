@@ -146,7 +146,12 @@ func legacyURLs() []legacyURL {
 		{Pattern: specProductPath + "/decisions", Serve: (*App).handleSpecDecisions},
 		{Pattern: specProductPath + "/personas", Serve: (*App).handleSpecPersonas},
 		{Pattern: specProductPath + "/non-goals", Serve: (*App).handleSpecNonGoals},
-		{Pattern: specProductPath + "/delivery", Serve: (*App).handleSpecDelivery},
+		// The delivery browser is the Milestones table, retitled and
+		// re-laid-out (FR 31cbd3eb), so this retires the same way the
+		// per-container task URLs do: a 302 into the replacement, carrying
+		// the query -- see legacyDeliverySuccessor for why that last part
+		// is the whole difficulty.
+		{Pattern: specProductPath + "/delivery", Successor: legacyDeliverySuccessor},
 		// The per-container list and board have been replaced by the
 		// product-wide Tasks and Board, scoped to the container this URL
 		// named (FR f41a352d). Both retire the same way: a 302 into the
@@ -259,6 +264,37 @@ func legacyTaskSuccessor(suffix string) func(*App, *http.Request) (string, bool)
 		}
 		return productTaskContainerHref(pid, suffix, container), true
 	}
+}
+
+// legacyDeliverySuccessor is the successor for the pre-redesign delivery
+// URL: the product's own Milestones table.
+//
+// Unlike the per-container successors this one makes no read -- the product
+// is in the path, and the replacement page resolves everything else -- so it
+// cannot fail the way those two can, and it answers for a product that has
+// no milestones at all just as readily as one that has thirty.
+//
+// The QUERY is the part worth stating. serveLegacy hands the successor a
+// bare path and hands http.Redirect that string, so a successor that
+// returns only the path silently drops every parameter the operator
+// arrived with -- and this URL is the one URL of the three whose arrival
+// can carry state: the status select and the inline expansion both submit
+// here. An operator who filtered the table to "shipped", followed a
+// bookmark, and came back would land on the unfiltered one and read the
+// loss as the data having changed. The parameters are therefore re-attached
+// from the request's own RawQuery rather than rebuilt from a list of the
+// names this page happens to use, so a filter added to the Milestones page
+// later survives this redirect without a second edit here.
+func legacyDeliverySuccessor(app *App, r *http.Request) (string, bool) {
+	pid, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		return "", false
+	}
+	target := productHref(pid, milestonesSuffix)
+	if q := r.URL.RawQuery; q != "" {
+		target += "?" + q
+	}
+	return target, true
 }
 
 // legacyTaskContainer is the container a pre-redesign per-container URL

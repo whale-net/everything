@@ -309,8 +309,13 @@ func (app *App) shellNavTargets(ctx context.Context, productID uuid.UUID) navTar
 // per request.
 func navGroupTable(t navTargets) []navGroup {
 	product := productPath(t.Product)
-	delivery := product + "/delivery"
 	overview := productHref(t.Product, overviewSuffix)
+	// The Delivery group's own item is the Milestones table itself, not the
+	// pre-redesign delivery URL it replaced (FR 31cbd3eb). The old href is a
+	// 302 now, so leaving it here would make every operator who clicked
+	// "Milestones" pay a redirect hop to reach the page it names -- and the
+	// hop is silent in the address bar, which reads as the link being wrong.
+	milestones := productHref(t.Product, milestonesSuffix)
 
 	// Tasks and Board are the two product-wide views of one scope, so both
 	// hrefs are the product's own pages and neither needs a milestone id
@@ -352,7 +357,7 @@ func navGroupTable(t navTargets) []navGroup {
 			{Label: "Board", Href: board, Path: board, AltPath: product + "/milestones/*/board"},
 		}},
 		{Title: "Delivery", Items: []navItem{
-			{Label: "Milestones", Href: delivery, Exact: true},
+			{Label: "Milestones", Href: milestones, Path: milestones},
 		}},
 		{Title: "Design", Items: []navItem{
 			{Label: "Design sessions", Href: designProductSessionsPath(t.Product)},
