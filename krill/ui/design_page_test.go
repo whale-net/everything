@@ -29,7 +29,6 @@ import (
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/store"
-	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // ---------------------------------------------------------------------------
@@ -41,6 +40,13 @@ import (
 type fakeDesignSessions struct {
 	byID      map[uuid.UUID]store.DesignSession
 	byProduct map[uuid.UUID][]store.DesignSession
+	// summaries is what SummarizeByProduct answers: the product-wide
+	// aggregate the sessions list now reads (FR d0a63ffb), supplied
+	// whole so a list test states each session's derived stage and open
+	// blocking-question count directly rather than re-deriving them the
+	// way the real SQL does -- which is store's own test's job, not this
+	// view's.
+	summaries map[uuid.UUID]store.ProductDesignSessionsSummary
 	err       error
 }
 
@@ -66,8 +72,38 @@ func (f fakeDesignSessions) ListByProduct(_ context.Context, productID uuid.UUID
 	return f.byProduct[productID], nil
 }
 
-func (f fakeDesignSessions) SummarizeByProduct(context.Context, uuid.UUID) (store.ProductDesignSessionsSummary, error) {
-	return store.ProductDesignSessionsSummary{}, f.err
+func (f fakeDesignSessions) SummarizeByProduct(_ context.Context, productID uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	if f.err != nil {
+		return store.ProductDesignSessionsSummary{}, f.err
+	}
+	summary, ok := f.summaries[productID]
+	if !ok {
+		// The real read distinguishes "no such product" from "no sessions
+		// yet"; the empty answer here is the second of those, which is
+		// the one an empty-list test wants.
+		return store.ProductDesignSessionsSummary{ProductID: productID, Sessions: []store.DesignSessionSummary{}}, nil
+	}
+	return summary, nil
+}
+
+// designSummaries is the aggregate a sessions-list test states directly:
+// one summary per session, in the order the read returns them.
+func designSummaries(productID uuid.UUID, sessions ...store.DesignSessionSummary) map[uuid.UUID]store.ProductDesignSessionsSummary {
+	byProduct := make(map[uuid.UUID]store.ProductDesignSessionsSummary, 1)
+	byProduct[productID] = store.ProductDesignSessionsSummary{ProductID: productID, Sessions: sessions}
+	return byProduct
+}
+
+// designSummary is one session's row of that aggregate, carrying the
+// opening submission's first line in the field the view shows it from.
+func designSummary(id, productID uuid.UUID, opening string, stage store.Stage, created time.Time, blocking int) store.DesignSessionSummary {
+	return store.DesignSessionSummary{
+		DesignSession: store.DesignSession{
+			ID: id, ProductID: productID, OpeningSubmission: opening, CreatedAt: created,
+		},
+		Stage:                 stage,
+		OpenBlockingQuestions: blocking,
+	}
 }
 
 // fakeRevisionEvents is an in-memory RevisionEventStore returning canned,
@@ -138,7 +174,10 @@ func newDesignReadApp(ds store.DesignSessionStore, re store.RevisionEventStore) 
 func designReadMux(app *App) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /design/products/{productID}/design-sessions", app.handleDesignSessionList)
-	mux.HandleFunc("GET /design/design-sessions/{id}", app.handleDesignSessionDetail)
+	mux.HandleFunc("GET /design/products/{productID}/design-sessions/{id}", app.handleDesignSessionDetail)
+	// The un-prefixed design root, which resolves a product and serves
+	// that product's list: one page at two URLs.
+	mux.HandleFunc("GET "+designPath, app.handleDesign)
 	return mux
 }
 
@@ -164,59 +203,6 @@ func event(seqNo int, et store.EventType) store.RevisionEvent {
 func strptr(s string) *string { return &s }
 
 func signoffptr(s store.SignoffStatus) *store.SignoffStatus { return &s }
-
-// ---------------------------------------------------------------------------
-// FR 0e9ccfc9 -- list every session, open and signed-off, as a working link
-// ---------------------------------------------------------------------------
-
-// TestDesignSessionList_LinksEverySessionAndTagsStatus is FR 0e9ccfc9: the
-// product's list shows every session -- an approved one (signed off), a
-// changes_requested one (reopened, so open), and a never-signed one (open)
-// -- and each is a working link to its own detail page, so a contributor
-// reaches a session without already holding its id.
-func TestDesignSessionList_LinksEverySessionAndTagsStatus(t *testing.T) {
-	productID := uuid.New()
-
-	signedOffID := uuid.New()
-	reopenedID := uuid.New()
-	openID := uuid.New()
-
-	approved := event(2, store.EventTypeSignoff)
-	approved.SignoffStatus = signoffptr(store.SignoffStatusApproved)
-
-	changes := event(3, store.EventTypeSignoff)
-	changes.SignoffStatus = signoffptr(store.SignoffStatusChangesRequested)
-
-	ds := fakeDesignSessions{byProduct: map[uuid.UUID][]store.DesignSession{productID: {
-		{ID: signedOffID, ProductID: productID, OpeningSubmission: "first submission", CreatedAt: time.Now()},
-		{ID: reopenedID, ProductID: productID, OpeningSubmission: "second submission", CreatedAt: time.Now()},
-		{ID: openID, ProductID: productID, OpeningSubmission: "third submission", CreatedAt: time.Now()},
-	}}}
-	re := fakeRevisionEvents{bySession: map[uuid.UUID][]store.RevisionEvent{
-		signedOffID: {event(1, store.EventTypeDraft), approved},
-		reopenedID:  {approved, changes}, // changes_requested after approval reopens it
-		openID:      {event(1, store.EventTypeDraft)},
-	}}
-	app := newDesignReadApp(ds, re)
-
-	rec := get(designReadMux(app), "/design/products/"+productID.String()+"/design-sessions")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	body := rec.Body.String()
-
-	// Every session is listed and links into its own detail page.
-	assert.Contains(t, body, signedOffID.String())
-	assert.Contains(t, body, reopenedID.String())
-	assert.Contains(t, body, openID.String())
-	for _, id := range []uuid.UUID{signedOffID, reopenedID, openID} {
-		assert.Contains(t, body, "/design/design-sessions/"+id.String(), "each session must link to its detail page")
-	}
-
-	// The approved session reads signed off; the changes_requested one and
-	// the never-signed one read open. Anchor on the status cell so a row's
-	// own submission text can never satisfy the count.
-	assert.Equal(t, 1, strings.Count(body, "<td>signed off</td>"), "only the approved signoff session is signed off")
-	assert.Equal(t, 2, strings.Count(body, "<td>open</td>"), "changes_requested and never-signed sessions both read open")
-}
 
 // ---------------------------------------------------------------------------
 // FR a1b955e4 -- the full ordered log, every event type, every wire field
@@ -257,7 +243,7 @@ func TestDesignSessionDetail_FullOrderedLog(t *testing.T) {
 	re := fakeRevisionEvents{bySession: map[uuid.UUID][]store.RevisionEvent{sessionID: log}}
 	app := newDesignReadApp(ds, re)
 
-	rec := get(designReadMux(app), "/design/design-sessions/"+sessionID.String())
+	rec := get(designReadMux(app), designSessionPath(productID, sessionID))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := rec.Body.String()
 
@@ -303,15 +289,16 @@ func TestDesignSessionDetail_SameFromListAndDirect(t *testing.T) {
 	sessionID := uuid.New()
 	productID := uuid.New()
 	ds := fakeDesignSessions{
-		byID:      map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}},
-		byProduct: map[uuid.UUID][]store.DesignSession{productID: {{ID: sessionID, ProductID: productID}}},
+		byID: map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}},
+		summaries: designSummaries(productID, designSummary(
+			sessionID, productID, "design the rollback story", store.StageInDraft, time.Now(), 0)),
 	}
 	re := fakeRevisionEvents{bySession: map[uuid.UUID][]store.RevisionEvent{sessionID: {event(1, store.EventTypeDraft)}}}
 	app := newDesignReadApp(ds, re)
 	mux := designReadMux(app)
 
 	// The list's DetailPath is exactly the URL the detail handler serves.
-	detailURL := designSessionPath(sessionID)
+	detailURL := designSessionPath(productID, sessionID)
 	listRec := get(mux, designProductSessionsPath(productID))
 	require.Equal(t, http.StatusOK, listRec.Code, listRec.Body.String())
 	assert.Contains(t, listRec.Body.String(), `href="`+detailURL+`"`, "the list must link to the detail path the handler serves")
@@ -343,7 +330,7 @@ func TestDesignSessionDetail_OpenQuestionsTagged(t *testing.T) {
 	}
 	app := newDesignReadApp(ds, re)
 
-	rec := get(designReadMux(app), "/design/design-sessions/"+sessionID.String())
+	rec := get(designReadMux(app), designSessionPath(productID, sessionID))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := rec.Body.String()
 
@@ -364,51 +351,30 @@ func TestDesignSessionDetail_OpenQuestionsTagged(t *testing.T) {
 
 func TestDesignSessionDetail_ErrorPaths(t *testing.T) {
 	sessionID := uuid.New()
-	okDS := fakeDesignSessions{byID: map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID}}}
+	productID := uuid.New()
+	okDS := fakeDesignSessions{byID: map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}}}
 	okRE := fakeRevisionEvents{}
 
 	t.Run("malformed id is 400", func(t *testing.T) {
-		rec := get(designReadMux(newDesignReadApp(okDS, okRE)), "/design/design-sessions/not-a-uuid")
+		rec := get(designReadMux(newDesignReadApp(okDS, okRE)),
+			"/design/products/"+uuid.NewString()+"/design-sessions/not-a-uuid")
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 		assert.NotEmpty(t, strings.TrimSpace(rec.Body.String()), "a 400 must carry a message, not a blank page")
 	})
 
-	t.Run("unknown id is 404", func(t *testing.T) {
-		rec := get(designReadMux(newDesignReadApp(okDS, okRE)), "/design/design-sessions/"+uuid.NewString())
-		assert.Equal(t, http.StatusNotFound, rec.Code)
+	t.Run("malformed product id is 400", func(t *testing.T) {
+		rec := get(designReadMux(newDesignReadApp(okDS, okRE)), "/design/products/not-a-uuid/design-sessions/"+uuid.NewString())
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.NotEmpty(t, strings.TrimSpace(rec.Body.String()), "a 400 must carry a message, not a blank page")
 	})
 
 	t.Run("store error is 500 with a message", func(t *testing.T) {
 		boom := fmt.Errorf("db is down")
 		app := newDesignReadApp(fakeDesignSessions{err: boom}, fakeRevisionEvents{err: boom})
-		rec := get(designReadMux(app), "/design/design-sessions/"+sessionID.String())
+		rec := get(designReadMux(app), designSessionPath(productID, sessionID))
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 		assert.NotEmpty(t, strings.TrimSpace(rec.Body.String()))
 		assert.NotContains(t, rec.Body.String(), "db is down", "a store error must not leak its text to the browser")
-	})
-}
-
-func TestDesignSessionList_ErrorPaths(t *testing.T) {
-	t.Run("malformed product id is 400", func(t *testing.T) {
-		app := newDesignReadApp(fakeDesignSessions{}, fakeRevisionEvents{})
-		rec := get(designReadMux(app), "/design/products/not-a-uuid/design-sessions")
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-		assert.NotEmpty(t, strings.TrimSpace(rec.Body.String()))
-	})
-
-	t.Run("store error is 500 with a message", func(t *testing.T) {
-		boom := fmt.Errorf("db is down")
-		app := newDesignReadApp(fakeDesignSessions{err: boom}, fakeRevisionEvents{})
-		rec := get(designReadMux(app), "/design/products/"+uuid.NewString()+"/design-sessions")
-		assert.Equal(t, http.StatusInternalServerError, rec.Code)
-		assert.NotContains(t, rec.Body.String(), "db is down")
-	})
-
-	t.Run("empty product renders an empty list, not an error", func(t *testing.T) {
-		app := newDesignReadApp(fakeDesignSessions{}, fakeRevisionEvents{})
-		rec := get(designReadMux(app), "/design/products/"+uuid.NewString()+"/design-sessions")
-		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Contains(t, rec.Body.String(), "No design sessions")
 	})
 }
 
@@ -470,6 +436,10 @@ var (
 // -- htmxui ARCHITECTURE §14: assert the claim, not the byte layout.
 const (
 	regionSessions     = `id="design-sessions"`
+	// regionSessionsEnd bounds that region: the table lives in a
+	// <section>, and slicing to the next shell landmark keeps an
+	// assertion about this page off the chrome around it.
+	regionSessionsEnd = "</section>"
 	regionRevisionLog  = `id="revision-events"`
 	regionOpenQuestion = `id="open-questions"`
 	regionSessionNav   = `id="session-nav"`
@@ -667,7 +637,7 @@ func TestDesignSessionDetail_LogMatchesGetDesignSessionWire(t *testing.T) {
 		fakeDesignSessions{byID: map[uuid.UUID]store.DesignSession{sessionID: ds}},
 		fakeRevisionEvents{bySession: map[uuid.UUID][]store.RevisionEvent{sessionID: log}},
 	)
-	rec := get(designReadMux(app), designSessionPath(sessionID))
+	rec := get(designReadMux(app), designSessionPath(productID, sessionID))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := rec.Body.String()
 
@@ -717,126 +687,6 @@ func TestDesignSessionDetail_LogMatchesGetDesignSessionWire(t *testing.T) {
 	}
 }
 
-// TestDesignSessionList_StatusMatchesLastSignoffWins is FR 0e9ccfc9's parity
-// criterion: every session ListByProduct returns gets exactly one row, and
-// its status cell matches the session's own last-signoff-wins derivation --
-// computed here independently of the view's.
-func TestDesignSessionList_StatusMatchesLastSignoffWins(t *testing.T) {
-	productID := uuid.New()
-
-	// wantSignedOff re-derives, in the test, the expected state from a
-	// session's log: the last signoff round decides.
-	wantSignedOff := func(events []store.RevisionEvent) bool {
-		signedOff := false
-		for _, ev := range events {
-			if ev.EventType != store.EventTypeSignoff {
-				continue
-			}
-			if ev.SignoffStatus != nil && *ev.SignoffStatus == store.SignoffStatusApproved {
-				signedOff = true
-			} else {
-				signedOff = false
-			}
-		}
-		return signedOff
-	}
-
-	approved := func(seq int) store.RevisionEvent {
-		ev := event(seq, store.EventTypeSignoff)
-		ev.SignoffStatus = signoffptr(store.SignoffStatusApproved)
-		return ev
-	}
-	changes := func(seq int) store.RevisionEvent {
-		ev := event(seq, store.EventTypeSignoff)
-		ev.SignoffStatus = signoffptr(store.SignoffStatusChangesRequested)
-		return ev
-	}
-	nilStatus := func(seq int) store.RevisionEvent {
-		ev := event(seq, store.EventTypeSignoff)
-		ev.SignoffStatus = nil
-		return ev
-	}
-
-	cases := []struct {
-		name   string
-		events []store.RevisionEvent
-	}{
-		{"never signed", []store.RevisionEvent{event(1, store.EventTypeDraft)}},
-		{"changes_requested only", []store.RevisionEvent{event(1, store.EventTypeDraft), changes(2)}},
-		{"approved", []store.RevisionEvent{event(1, store.EventTypeDraft), approved(2)}},
-		{"approved then changes_requested reopens", []store.RevisionEvent{approved(1), changes(2)}},
-		{"changes_requested then approved closes", []store.RevisionEvent{changes(1), approved(2)}},
-		{"approved twice stays closed", []store.RevisionEvent{approved(1), approved(2)}},
-		{"closed reopened then closed again", []store.RevisionEvent{approved(1), changes(2), approved(3)}},
-		{"signoff with no status reads open", []store.RevisionEvent{event(1, store.EventTypeDraft), nilStatus(2)}},
-	}
-
-	sessions := make([]store.DesignSession, 0, len(cases))
-	events := make(map[uuid.UUID][]store.RevisionEvent, len(cases))
-	for i, c := range cases {
-		id := uuid.New()
-		created := time.Date(2026, 3, 1, 8, i, 0, 0, time.UTC)
-		sessions = append(sessions, store.DesignSession{
-			ID: id, ProductID: productID,
-			OpeningSubmission: fmt.Sprintf("submission %s", c.name),
-			CreatedAt:         created,
-		})
-		events[id] = c.events
-	}
-
-	app := newDesignReadApp(
-		fakeDesignSessions{byProduct: map[uuid.UUID][]store.DesignSession{productID: sessions}},
-		fakeRevisionEvents{bySession: events},
-	)
-	rec := get(designReadMux(app), designProductSessionsPath(productID))
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-
-	rows := parseRenderedSessionRows(t, rec.Body.String())
-	require.Len(t, rows, len(sessions), "one row per session ListByProduct returned, no more, no fewer")
-
-	for i, ds := range sessions {
-		r := rows[i]
-		where := ds.OpeningSubmission
-		assert.Equal(t, ds.ID.String(), r.ID, "%s: session id", where)
-		assert.Equal(t, "/design/design-sessions/"+ds.ID.String(), r.DetailPath, "%s: detail link", where)
-		assert.Equal(t, ds.OpeningSubmission, r.OpeningSubmission, "%s: opening submission", where)
-		assert.Equal(t, ds.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), r.CreatedAt, "%s: created", where)
-
-		wantStatus := "open"
-		if wantSignedOff(events[ds.ID]) {
-			wantStatus = "signed off"
-		}
-		assert.Equal(t, wantStatus, r.Status, "%s: status cell vs last-signoff-wins", where)
-	}
-}
-
-type renderedSessionRow struct {
-	DetailPath        string
-	ID                string
-	OpeningSubmission string
-	Status            string
-	CreatedAt         string
-}
-
-var reSessionRow = regexp.MustCompile(
-	`<a href="([^"]+)"><code>([^<]+)</code></a></td>\s*<td>(.*?)</td>\s*<td>(signed off|open)</td>\s*<td>(.*?)</td>`)
-
-func parseRenderedSessionRows(t *testing.T, body string) []renderedSessionRow {
-	t.Helper()
-	region := pageSection(t, body, regionSessions, "")
-	var rows []renderedSessionRow
-	for _, m := range reSessionRow.FindAllStringSubmatch(region, -1) {
-		rows = append(rows, renderedSessionRow{
-			DetailPath:        m[1],
-			ID:                m[2],
-			OpeningSubmission: strings.TrimSpace(m[3]),
-			Status:            m[4],
-			CreatedAt:         strings.TrimSpace(m[5]),
-		})
-	}
-	return rows
-}
-
 // TestDesignSessionDetail_OpenQuestionsMatchListOpenQuestionsWire is FR
 // db08d930's parity criterion: the rendered open-questions table matches
 // ListOpenQuestionsResponse field by field, each question tagged blocking or
@@ -860,7 +710,7 @@ func TestDesignSessionDetail_OpenQuestionsMatchListOpenQuestionsWire(t *testing.
 			openQuestions: map[uuid.UUID][]store.OpenQuestion{sessionID: questions},
 		},
 	)
-	rec := get(designReadMux(app), designSessionPath(sessionID))
+	rec := get(designReadMux(app), designSessionPath(productID, sessionID))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	got := parseRenderedOpenQuestions(t, rec.Body.String())
@@ -917,17 +767,14 @@ func TestDesignRead_ErrorPaths_SeparateStores(t *testing.T) {
 			fakeDesignSessions{byID: map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}}},
 			fakeRevisionEvents{err: boom},
 		)
-		rec := get(designReadMux(app), designSessionPath(sessionID))
+		rec := get(designReadMux(app), designSessionPath(productID, sessionID))
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 		assert.NotEmpty(t, strings.TrimSpace(rec.Body.String()))
 		assert.NotContains(t, rec.Body.String(), "password authentication", "store error text must not reach the browser")
 	})
 
-	t.Run("list 500 when a session's log read fails", func(t *testing.T) {
-		app := newDesignReadApp(
-			fakeDesignSessions{byProduct: map[uuid.UUID][]store.DesignSession{productID: {{ID: sessionID, ProductID: productID}}}},
-			fakeRevisionEvents{err: boom},
-		)
+	t.Run("aggregate read error is 500 on the list", func(t *testing.T) {
+		app := newDesignReadApp(fakeDesignSessions{err: boom}, fakeRevisionEvents{})
 		rec := get(designReadMux(app), designProductSessionsPath(productID))
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 		assert.NotContains(t, rec.Body.String(), "password authentication")
@@ -936,7 +783,7 @@ func TestDesignRead_ErrorPaths_SeparateStores(t *testing.T) {
 	t.Run("unknown well-formed id is 404 on both pages", func(t *testing.T) {
 		unknown := uuid.NewString()
 		mux := designReadMux(newDesignReadApp(fakeDesignSessions{}, fakeRevisionEvents{}))
-		detail := get(mux, "/design/design-sessions/"+unknown)
+		detail := get(mux, designSessionPath(uuid.New(), uuid.MustParse(unknown)))
 		assert.Equal(t, http.StatusNotFound, detail.Code)
 		assert.NotEmpty(t, strings.TrimSpace(detail.Body.String()))
 
@@ -944,6 +791,37 @@ func TestDesignRead_ErrorPaths_SeparateStores(t *testing.T) {
 		list := get(mux, designProductSessionsPath(uuid.New()))
 		assert.Equal(t, http.StatusOK, list.Code)
 		assert.Contains(t, list.Body.String(), "No design sessions")
+	})
+}
+
+// the canonical detail route's own 404s: an unknown session, and a session
+// that belongs to another product. Both must be in-shell pages, not bare
+// http.Error text -- an operator who followed a stale link lands somewhere
+// they can navigate out of.
+func TestDesignSessionDetail_NotUnderTheProductIsInShell404(t *testing.T) {
+	productID, otherID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	app := newDesignReadApp(
+		fakeDesignSessions{byID: map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: otherID}}},
+		fakeRevisionEvents{},
+	)
+
+	t.Run("foreign product is 404 in the shell", func(t *testing.T) {
+		rec := get(designReadMux(app), designSessionPath(productID, sessionID))
+		require.Equal(t, http.StatusNotFound, rec.Code)
+		body := rec.Body.String()
+		assert.Contains(t, body, "<!DOCTYPE html>", "a 404 must render inside the shell, not as a bare error")
+		assert.Contains(t, body, "<main")
+		assert.Contains(t, body, "Design session not found")
+		assert.NotContains(t, body, sessionID.String(),
+			"a 404 must not leak another product's session into the page")
+	})
+
+	t.Run("an unknown session is 404 in the shell too", func(t *testing.T) {
+		empty := newDesignReadApp(fakeDesignSessions{}, fakeRevisionEvents{})
+		rec := get(designReadMux(empty), designSessionPath(productID, uuid.New()))
+		require.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Contains(t, rec.Body.String(), "<main",
+			"an unknown id must land in the shell, not on a bare http.Error")
 	})
 }
 
@@ -992,20 +870,6 @@ func TestHandleDesignGo(t *testing.T) {
 	})
 }
 
-// TestDesignRoot_AsksForNoProductID pins the root page's shape: it names
-// the resolved product and links to that product's session list, and
-// carries no input for the operator to type an id into (FR c4bd4bf8).
-func TestDesignRoot_AsksForNoProductID(t *testing.T) {
-	productID := uuid.New()
-	body := mustRenderComponent(pages.DesignRoot("krill", designProductSessionsPath(productID)))
-
-	assert.Contains(t, body, designProductSessionsPath(productID), "the root links to the resolved product's sessions")
-	assert.Contains(t, body, "krill", "the root names the product it resolved")
-	assert.NotContains(t, body, `name="product_id"`, "no shell page asks the operator for a product id")
-	assert.NotContains(t, body, "<input", "the root carries no text input at all")
-	assert.NotContains(t, body, "<script", "the root carries no inline script; the server owns the resolution")
-}
-
 // ---------------------------------------------------------------------------
 // one route, two modes: the HX-Request read fragments
 // ---------------------------------------------------------------------------
@@ -1028,8 +892,9 @@ func TestDesignReads_HXRequestRendersBareFragment(t *testing.T) {
 	productID := uuid.New()
 	sessionID := uuid.New()
 	ds := fakeDesignSessions{
-		byID:      map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}},
-		byProduct: map[uuid.UUID][]store.DesignSession{productID: {{ID: sessionID, ProductID: productID}}},
+		byID: map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}},
+		summaries: designSummaries(productID, designSummary(
+			sessionID, productID, "design the rollback story", store.StageInDraft, time.Now(), 0)),
 	}
 	re := fakeRevisionEvents{
 		bySession: map[uuid.UUID][]store.RevisionEvent{sessionID: {event(1, store.EventTypeDraft)}},
@@ -1046,7 +911,7 @@ func TestDesignReads_HXRequestRendersBareFragment(t *testing.T) {
 	})
 
 	t.Run("session detail", func(t *testing.T) {
-		rec := hxGet(mux, designSessionPath(sessionID))
+		rec := hxGet(mux, designSessionPath(productID, sessionID))
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		body := rec.Body.String()
 		assert.Contains(t, body, string(store.EventTypeDraft), "the fragment carries the same log the full page does")
@@ -1055,21 +920,8 @@ func TestDesignReads_HXRequestRendersBareFragment(t *testing.T) {
 	})
 
 	t.Run("a plain GET still gets the shell", func(t *testing.T) {
-		rec := get(mux, designSessionPath(sessionID))
+		rec := get(mux, designSessionPath(productID, sessionID))
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		assert.Contains(t, rec.Body.String(), "<main", "the no-JS half must keep the full chrome")
 	})
-}
-
-// TestDesignSessionList_EmptyState covers the htmxui.EmptyState case: a
-// product with no sessions is a deliberate empty state, not an error, and
-// it says so in the words the operator already reads.
-func TestDesignSessionList_EmptyState(t *testing.T) {
-	app := newDesignReadApp(fakeDesignSessions{}, fakeRevisionEvents{})
-	rec := get(designReadMux(app), designProductSessionsPath(uuid.New()))
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-
-	body := rec.Body.String()
-	assert.Contains(t, body, "No design sessions for this product yet.")
-	assert.NotContains(t, body, "<table", "an empty product renders the empty state, not an empty table")
 }

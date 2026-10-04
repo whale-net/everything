@@ -82,8 +82,20 @@ func (f writeSurfaceSessions) ListByProduct(_ context.Context, productID uuid.UU
 	return f.byProduct[productID], nil
 }
 
-func (f writeSurfaceSessions) SummarizeByProduct(context.Context, uuid.UUID) (store.ProductDesignSessionsSummary, error) {
-	return store.ProductDesignSessionsSummary{}, errors.New("the browser write path must not summarize sessions through the store")
+// SummarizeByProduct answers the product-wide aggregate the rejected-open
+// re-render reads the session list from, derived from byProduct the same
+// way the real read is derived from design_session. It is a READ, and the
+// browser write path may read: refusing it here would make the re-render's
+// own list unreadable and the refusal path untestable. What this surface
+// must never do is WRITE a session or a revision round, which is what the
+// two methods above refuse.
+func (f writeSurfaceSessions) SummarizeByProduct(_ context.Context, productID uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	rows := f.byProduct[productID]
+	sessions := make([]store.DesignSessionSummary, 0, len(rows))
+	for _, ds := range rows {
+		sessions = append(sessions, store.DesignSessionSummary{DesignSession: ds, Stage: store.StageOpened})
+	}
+	return store.ProductDesignSessionsSummary{ProductID: productID, Sessions: sessions}, nil
 }
 
 type writeSurfaceEvents struct {
@@ -163,7 +175,7 @@ func newDesignWriteEnv(t *testing.T) *designWriteEnv {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /design/products/{productID}/design-sessions", app.operatorRoute(app.handleOpenDesignSessionForm))
-	mux.HandleFunc("POST /design/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
+	mux.HandleFunc("POST /design/products/{productID}/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
 
 	return &designWriteEnv{
 		Mux: mux, API: api, Cookie: cookie,
@@ -205,7 +217,7 @@ func (e *designWriteEnv) openPath() string {
 }
 
 func (e *designWriteEnv) answerPath() string {
-	return "/design/design-sessions/" + e.SessionID.String() + "/answers"
+	return "/design/products/" + e.ProductID.String() + "/design-sessions/" + e.SessionID.String() + "/answers"
 }
 
 func (e *designWriteEnv) submitOpen(form url.Values) *httptest.ResponseRecorder {
@@ -368,7 +380,7 @@ func TestDesignWrite_OpenSession_RoundTrip(t *testing.T) {
 
 	rec := env.submitOpen(url.Values{"opening_submission": {submission}})
 	require.Equal(t, http.StatusSeeOther, rec.Code, rec.Body.String())
-	assert.Equal(t, designSessionPath(uuid.MustParse(env.API.createdSessionID)), rec.Header().Get("Location"),
+	assert.Equal(t, designSessionPath(env.ProductID, uuid.MustParse(env.API.createdSessionID)), rec.Header().Get("Location"),
 		"the redirect must land on the new session's detail page")
 
 	// Attribution: minted under the operator who just signed in, as both
@@ -413,7 +425,7 @@ func TestDesignWrite_Answer_RoundTrip(t *testing.T) {
 		"resolve":   {testClosedQuestion},
 	})
 	require.Equal(t, http.StatusSeeOther, rec.Code, rec.Body.String())
-	assert.Equal(t, designSessionPath(env.SessionID), rec.Header().Get("Location"),
+	assert.Equal(t, designSessionPath(env.ProductID, env.SessionID), rec.Header().Get("Location"),
 		"the redirect must land back on the session's detail page")
 
 	assertFreshOperatorAttribution(t, env.API, env.Iss, env.Sub)
@@ -707,7 +719,7 @@ func TestDesignWrite_OpenSession_HXSuccessRedirects(t *testing.T) {
 
 	rec := env.submitOpenHX(url.Values{"opening_submission": {submission}})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, designSessionPath(uuid.MustParse(env.API.createdSessionID)), rec.Header().Get("HX-Redirect"),
+	assert.Equal(t, designSessionPath(env.ProductID, uuid.MustParse(env.API.createdSessionID)), rec.Header().Get("HX-Redirect"),
 		"the htmx success must navigate to the new session's detail page")
 	assert.Empty(t, rec.Header().Get("Location"), "an htmx write redirects with HX-Redirect, not Location")
 
@@ -806,7 +818,7 @@ func TestDesignWrite_Answer_HXSuccessRedirects(t *testing.T) {
 
 	rec := env.submitAnswerHX(url.Values{"follow_up": {"here is the missing detail"}})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, designSessionPath(env.SessionID), rec.Header().Get("HX-Redirect"),
+	assert.Equal(t, designSessionPath(env.ProductID, env.SessionID), rec.Header().Get("HX-Redirect"),
 		"the htmx success navigates back to the session's detail page")
 	assert.Empty(t, rec.Header().Get("Location"), "an htmx write redirects with HX-Redirect, not Location")
 }
