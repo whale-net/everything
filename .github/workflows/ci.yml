@@ -323,6 +323,37 @@ jobs:
     name: Test Database Integration
     runs-on: ubuntu-latest
 
+    # One server per image for the whole job; dbtest (DBTEST_SERVERS) gives
+    # each test its own database inside it instead of every test binary
+    # starting its own container.
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: dbtest
+          POSTGRES_PASSWORD: dbtest
+          POSTGRES_DB: dbtest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dbtest"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+      timescale:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: dbtest
+          POSTGRES_PASSWORD: dbtest
+          POSTGRES_DB: dbtest
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U dbtest"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
@@ -341,13 +372,17 @@ jobs:
 
     - name: Pre-pull test container images
       run: |
-        # Pulled in parallel up front so a slow registry doesn't eat the
-        # per-test container startup timeout.
-        docker pull postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea &
-        docker pull cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1 &
-        wait
+        # Pulled up front so a slow registry doesn't eat the per-test
+        # container startup timeout. Postgres comes from the job services.
+        docker pull cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
 
     - name: Run container-backed database tests
+      env:
+        DBTEST_SERVERS: >-
+          {"postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea":
+          "postgres://dbtest:dbtest@localhost:5432/dbtest?sslmode=disable",
+          "timescale/timescaledb:latest-pg16":
+          "postgres://dbtest:dbtest@localhost:5433/dbtest?sslmode=disable"}
       run: |
         set -euo pipefail
 
@@ -425,7 +460,7 @@ jobs:
         echo "::group::Database Integration Tests"
         # No --test_tag_filters: combining it with explicit labels makes Bazel
         # report "No test targets were found" (see libs/go/dbtest/README.md).
-        bazel coverage --config=ci $TARGETS
+        bazel coverage --config=ci --test_env=DBTEST_SERVERS $TARGETS
         echo "::endgroup::"
         bazel shutdown
 
