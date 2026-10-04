@@ -315,6 +315,12 @@ func navGroupTable(t navTargets) []navGroup {
 	// 302 now, so leaving it here would make every operator who clicked
 	// "Milestones" pay a redirect hop to reach the page it names -- and the
 	// hop is silent in the address bar, which reads as the link being wrong.
+	//
+	// It still OWNS the pre-redesign path (its AltPath), for the reason the
+	// Tasks and Board items below keep theirs: an operator who followed a
+	// bookmarked /delivery link is on the Milestones page and the sidebar
+	// must say so. The wildcard-free AltPath is exact, so it cannot light
+	// for anything the item does not already own.
 	milestones := productHref(t.Product, milestonesSuffix)
 
 	// Tasks and Board are the two product-wide views of one scope, so both
@@ -357,7 +363,7 @@ func navGroupTable(t navTargets) []navGroup {
 			{Label: "Board", Href: board, Path: board, AltPath: product + "/milestones/*/board"},
 		}},
 		{Title: "Delivery", Items: []navItem{
-			{Label: "Milestones", Href: milestones, Path: milestones},
+			{Label: "Milestones", Href: milestones, Path: milestones, AltPath: product + "/delivery"},
 		}},
 		{Title: "Design", Items: []navItem{
 			{Label: "Design sessions", Href: designProductSessionsPath(t.Product)},

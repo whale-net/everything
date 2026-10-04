@@ -78,8 +78,12 @@ func productBoardPageOf(
 		OnlyStuck:  region.OnlyStuck,
 		UpdatedAt:  now.UTC().Format(time.RFC3339),
 		TasksPath:  tasksPath,
-		Shown:      len(rows),
-		Total:      region.Total,
+		// Read off the region rather than derived here, so the Board cannot
+		// disagree with the Tasks view about where "back to the roadmap"
+		// goes for this scope.
+		MilestonesPath: region.MilestonesPath,
+		Shown:          len(rows),
+		Total:          region.Total,
 	}
 	if progressErr != nil {
 		board.Error = boardProgressError

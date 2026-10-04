@@ -104,6 +104,13 @@ type ProductTaskRegion struct {
 	// than silently resetting them to the product-wide default.
 	RefreshPath string
 
+	// MilestonesPath is the way back to the delivery roadmap at THIS
+	// scope: the selected container's own detail when the scope names one,
+	// and the product's Milestones table when it does not (FR 31cbd3eb).
+	// The scope is what the region resolved to, not what the URL spelled,
+	// so the link cannot disagree with the "Scoped to" sentence above it.
+	MilestonesPath string
+
 	// Scope is the control both views share. It is the same value on the
 	// Tasks page and the Board page for the same URL, because both build
 	// it from the same resolved scope rather than each describing its own.
@@ -235,6 +242,9 @@ templ ProductTasks(d ProductTaskRegion) {
 			</div>
 			<div class="flex items-center gap-3">
 				@ProductTasksFreshness(d.UpdatedAt)
+				if d.MilestonesPath != "" {
+					<a href={ templ.URL(d.MilestonesPath) } class="link link-primary text-sm" data-krill="product-tasks-milestones-link">Milestones</a>
+				}
 				<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
 					hx-get={ templ.URL(d.RefreshPath) }
 					hx-target={ "#" + ProductTasksAnchor }

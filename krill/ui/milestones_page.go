@@ -395,6 +395,8 @@ func milestoneRow(productID uuid.UUID, m slice.MilestoneListingEntry, progress m
 		ID:           m.ID.String(),
 		Name:         m.Name,
 		DetailPath:   milestoneDetailHref(productID, m.ID),
+		TasksPath:    productTaskContainerHref(productID, tasksSuffix, milestoneRowContainer(m)),
+		BoardPath:    productTaskContainerHref(productID, boardSuffix, milestoneRowContainer(m)),
 		Status:       string(m.Status),
 		FRBudget:     frBudgetString(m.FRBudget),
 		Outcome:      deref(m.Outcome),
@@ -405,6 +407,21 @@ func milestoneRow(productID uuid.UUID, m slice.MilestoneListingEntry, progress m
 	}
 	row.ProgressCell = progressCell(progress[m.ID], m.ID)
 	return row
+}
+
+// milestoneRowContainer is the milestone a table row links from, in the
+// form the product-wide scope query needs.
+//
+// It is built here rather than read back through resolveTaskContainer: the
+// listing already holds the milestone and its kind, so resolving it again
+// would make a row's links depend on a second read of the same product.
+func milestoneRowContainer(m slice.MilestoneListingEntry) taskContainer {
+	return taskContainer{
+		ID:     m.ID,
+		Name:   m.Name,
+		Kind:   string(store.MilestoneKindMilestone),
+		Status: m.Status,
+	}
 }
 
 // progressCell is one container's progress figures, or the sentence saying
@@ -459,14 +476,20 @@ func milepebbleRows(productID uuid.UUID, m slice.MilestoneListingEntry, progress
 	rows := make([]pages.MilepebbleRow, 0, len(m.Milepebbles))
 	for _, mp := range m.Milepebbles {
 		rows = append(rows, pages.MilepebbleRow{
-			ID:      mp.ID.String(),
-			Name:    mp.Name,
-			Status:  string(mp.Status),
-			// The milepebble's own task list, scoped to the milepebble
-			// rather than the milestone: an operator expanding a milepebble
-			// is asking for the work cut from THAT cut, and a link to the
-			// parent's tasks would answer a different question.
+			ID:     mp.ID.String(),
+			Name:   mp.Name,
+			Status: string(mp.Status),
+			// The milepebble's own two work views, scoped to the
+			// milepebble rather than the milestone: an operator expanding a
+			// milepebble is asking for the work cut from THAT cut, and links
+			// to the parent's would answer a different question.
 			TasksPath: productTaskContainerHref(productID, tasksSuffix, taskContainer{
+				ID:     mp.ID,
+				Name:   mp.Name,
+				Kind:   string(store.MilestoneKindMilepebble),
+				Status: mp.Status,
+			}),
+			BoardPath: productTaskContainerHref(productID, boardSuffix, taskContainer{
 				ID:     mp.ID,
 				Name:   mp.Name,
 				Kind:   string(store.MilestoneKindMilepebble),

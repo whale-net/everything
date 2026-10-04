@@ -85,11 +85,11 @@ func mountSelfServeStubs(mux *http.ServeMux) {
 // is the shell's promise: every one of these is a real page.
 func requiredAreas(pid uuid.UUID) []string {
 	return []string{
-		opsPath,                        // Work: Needs attention
-		designProductSessionsPath(pid), // Design
-		productPath(pid),               // Spec: Capabilities
-		deliveryPath(pid),              // Delivery: Milestones
-		credentialsPath,                // Admin
+		opsPath,                            // Work: Needs attention
+		designProductSessionsPath(pid),     // Design
+		productPath(pid),                   // Spec: Capabilities
+		productHref(pid, milestonesSuffix), // Delivery: Milestones
+		credentialsPath,                    // Admin
 	}
 }
 
@@ -201,7 +201,12 @@ func TestActiveLinkPerRoute(t *testing.T) {
 		{path: designProductSessionsPath(pid), wantActive: "Design sessions"},
 		{path: productPath(pid), wantActive: "Capabilities"},
 		{path: decisionsPath(pid), wantActive: "Decisions"},
-		{path: deliveryPath(pid), wantActive: "Milestones"},
+		{path: productHref(pid, milestonesSuffix), wantActive: "Milestones"},
+		// The pre-redesign delivery URL is one of the retired ones now, so
+		// the walk follows the hop the way a browser does and asks what the
+		// operator lands on -- the same question the per-container URLs
+		// below already answer.
+		{path: deliveryPath(pid), wantActive: "Milestones", redirect: true},
 		// The per-milestone task list and board are pre-redesign URLs that
 		// now redirect into the product-wide views, so the walk follows the
 		// hop the way a browser does and asks what the operator lands on.
@@ -749,7 +754,7 @@ func TestPrimaryNavScanIgnoresTheProductSubNav(t *testing.T) {
 
 	// Pages that render their own product cross-nav, and pages that do
 	// not. The first group is where an unscoped scan would go wrong.
-	withSubNav := []string{productPath(pid), decisionsPath(pid), deliveryPath(pid)}
+	withSubNav := []string{productPath(pid), decisionsPath(pid), nonGoalsPath(pid)}
 	withoutSubNav := []string{milestoneTasksPath(pid, navMilestoneID)}
 
 	for _, path := range withSubNav {

@@ -106,6 +106,13 @@ func TestSpecRoutesDoNotCollide(t *testing.T) {
 // TestSpecBadProductIDIsBadRequest checks the {id} path-value guard: a
 // non-UUID product id is rejected with a shell-rendered 400 before any
 // store read, so the page never shows a bare http.Error string.
+//
+// The retired /delivery URL is absent from this list deliberately. It no
+// longer has a handler with a path-value guard -- it is a Successor, and
+// serveLegacy's contract is that an un- prefixed URL always LANDS somewhere,
+// so a successor that cannot resolve a product renders the product index
+// rather than refusing. See TestLegacyDeliveryRedirectsToMilestones for the
+// redirect itself.
 func TestSpecBadProductIDIsBadRequest(t *testing.T) {
 	mux := newTestMux(t)
 
@@ -114,7 +121,6 @@ func TestSpecBadProductIDIsBadRequest(t *testing.T) {
 		specProductPath + "/decisions",
 		specProductPath + "/personas",
 		specProductPath + "/non-goals",
-		specProductPath + "/delivery",
 	} {
 		target := strings.Replace(path, "{id}", "not-a-uuid", 1)
 		rec := fetch(t, mux, target)

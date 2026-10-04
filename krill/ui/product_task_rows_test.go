@@ -837,3 +837,54 @@ func TestTasksTableLeaseCellNamesTheExpiryACLaimedRowHolds(t *testing.T) {
 		})
 	}
 }
+
+// TestScopedTaskAndBoardLinkBackToTheRoadmapAtTheirScope is FR 31cbd3eb's
+// back-link: from a container-scoped Tasks or Board, the way back to the
+// delivery roadmap keeps that same scope.
+//
+// The scope is the whole assertion. A link to the product's Milestones
+// table from a page reading "Scoped to Middle milestone" resolves, renders,
+// and lands the operator somewhere else -- so the scoped case is checked
+// against the CONTAINER's detail and the unscoped one against the table, in
+// both views, rather than the same href being accepted for both.
+//
+// Driven through the real registrations rather than the builder, because
+// the failure this guards against is a field set on the view model and
+// never rendered: the Tasks and Board toggle between each other already, so
+// a page can carry that link and still have no way back to the roadmap.
+func TestScopedTaskAndBoardLinkBackToTheRoadmapAtTheirScope(t *testing.T) {
+	mux := productTaskMux(t, &recordingProductTasks{}, productTaskListing(), nil)
+	detail := milestoneDetailHref(productTaskProduct, productTaskMilestone)
+	table := productHref(productTaskProduct, milestonesSuffix)
+
+	for _, view := range []struct {
+		suffix   string
+		dataAttr string
+	}{
+		{tasksSuffix, `data-krill="product-tasks-milestones-link"`},
+		{boardSuffix, `data-krill="product-board-milestones-link"`},
+	} {
+		t.Run("scoped to a milestone", func(t *testing.T) {
+			body := fetch(t, mux, productHref(productTaskProduct, view.suffix)+
+				"?scope=milestone&container_id="+productTaskMilestone.String()).Body.String()
+
+			assert.Contains(t, body, view.dataAttr, "the %s view offers the way back", view.suffix)
+			assert.Contains(t, body, `href="`+detail+`"`,
+				"a container-scoped view goes back to THAT container's detail, not the whole table")
+		})
+		t.Run("scoped to a milepebble", func(t *testing.T) {
+			body := fetch(t, mux, productHref(productTaskProduct, view.suffix)+
+				"?scope=milepebble&container_id="+productTaskMilepebble.String()).Body.String()
+
+			assert.Contains(t, body, `href="`+milestoneDetailHref(productTaskProduct, productTaskMilepebble)+`"`,
+				"a milepebble-scoped view goes back to the MILEPEBBLE's detail")
+		})
+		t.Run("product-wide scope", func(t *testing.T) {
+			body := fetch(t, mux, productHref(productTaskProduct, view.suffix)).Body.String()
+
+			assert.Contains(t, body, view.dataAttr)
+			assert.Contains(t, body, `href="`+table+`"`,
+				"with no container chosen there is no detail to go back to, so the whole table is the answer")
+		})
+	}
+}

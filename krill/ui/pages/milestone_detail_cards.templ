@@ -26,11 +26,13 @@ type MilestoneDetailMilepebble struct {
 	// tasks link is checkable against the container it was built from.
 	ID string
 
-	// Name links to this milepebble's OWN task list -- the tasks cut from
-	// the milepebble, not the milestone's whole cut. What an operator
-	// opens a milepebble to see is that milepebble's work.
+	// TasksPath and BoardPath are this milepebble's own two views of its
+	// work -- the tasks cut from the milepebble, not the milestone's whole
+	// cut, each scoped to the milepebble. What an operator opens a
+	// milepebble to see is that milepebble's work, so both links name it.
 	Name      string
 	TasksPath string
+	BoardPath string
 
 	// Status renders through the shared statusBadge: a milepebble is its
 	// own container with its own status, and the parent's badge beside it
@@ -85,9 +87,8 @@ templ milestoneDetailMilepebbles(page MilestoneDetailPage) {
 							for _, mp := range page.Milepebbles {
 								<tr class="hover" data-krill="milestone-milepebble-row" data-krill-milepebble-id={ mp.ID }>
 									<td>
-										<a href={ templ.URL(mp.TasksPath) } class="link" data-krill="milestone-milepebble-name">
-											{ mp.Name }
-										</a>
+										<span data-krill="milestone-milepebble-name">{ mp.Name }</span>
+										@containerWorkLinks("milestone-milepebble", mp.TasksPath, mp.BoardPath)
 									</td>
 									<td>@statusBadge(mp.Status)</td>
 									<td>@milestoneProgress(mp.ProgressCell)</td>
