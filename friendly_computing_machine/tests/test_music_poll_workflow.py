@@ -20,6 +20,10 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.db.music
     PostScheduledPollOutcome,
     ScheduledPollRunRow,
     get_music_poll_channels_activity,
+    get_scheduled_poll_run_activity,
+    post_scheduled_poll_activity,
+    record_scheduled_poll_run_activity,
+    select_music_poll_options_activity,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.music_poll.workflow import (
     ALREADY_POSTED,
@@ -29,10 +33,15 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.music_po
     STALE_AFTER,
     RunIdentity,
     WeeklyMusicPollParams,
+    WeeklyMusicPollWorkflow,
     is_stale_run,
     resolve_run_identity,
     run_for_channel,
     run_for_channels,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.worker import (
+    ACTIVITIES,
+    WORKFLOWS,
 )
 
 # a Monday fire time, and a run that starts on the same Monday
@@ -148,6 +157,21 @@ def test_a_manual_run_is_identified_by_its_workflow_execution():
     assert identity.scheduled_fire_time is None
     assert identity.workflow_run_id == RUN_ID
     assert not identity.stale
+
+
+def test_a_scheduled_run_that_starts_late_is_marked_stale():
+    identity = resolve_run_identity(
+        # a worker came back more than 24h after the fire
+        # time the schedule started this run for
+        FIRE_TIME + datetime.timedelta(hours=25),
+        FIRE_TIME,
+        RUN_ID,
+        None,
+    )
+
+    assert identity.stale
+    assert identity.scheduled_fire_time == FIRE_TIME
+    assert identity.run_identity == FIRE_TIME.isoformat()
 
 
 def test_a_stale_run_posts_closes_and_records_nothing(caplog):
@@ -337,3 +361,21 @@ def test_a_failed_post_is_reported_for_the_channel():
 
     assert result.status == POST_FAILED
     assert result.error is not None
+
+
+# ----- the worker registration ---------------------------------
+
+
+def test_the_weekly_poll_workflow_and_its_activities_run_on_the_fcm_worker():
+    # the workflow is served by the FCM Temporal worker on
+    # the existing fcm-<env>-main task queue, and the taskpool
+    # music-poll tasks keep running alongside it
+    assert WeeklyMusicPollWorkflow in WORKFLOWS
+    for activity in (
+        get_music_poll_channels_activity,
+        get_scheduled_poll_run_activity,
+        record_scheduled_poll_run_activity,
+        post_scheduled_poll_activity,
+        select_music_poll_options_activity,
+    ):
+        assert activity in ACTIVITIES

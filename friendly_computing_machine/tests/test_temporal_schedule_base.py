@@ -16,12 +16,16 @@ import pytest
 from temporalio import workflow
 from temporalio.client import (
     ScheduleIntervalSpec,
+    SchedulePolicy,
     ScheduleSpec,
     ScheduleUpdateInput,
 )
 
 from friendly_computing_machine.src.friendly_computing_machine.temporal.base import (
     AbstractScheduleWorkflow,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.music_poll.workflow import (
+    WeeklyMusicPollWorkflow,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.util import (
     init_temporal,
@@ -81,3 +85,27 @@ def test_schedule_update_keeps_a_dashed_app_env_intact():
     assert update.schedule.action.id == (
         "fcm-prod-us-1-_EveryTwoMinutesWorkflow"
     )
+
+
+# ----- the weekly music-poll schedule (krill M5) -------------
+
+
+def test_the_weekly_music_poll_schedule_fires_every_monday_0000_utc():
+    spec = WeeklyMusicPollWorkflow().get_schedule_spec()
+
+    # every Monday 00:00 UTC, and nothing else
+    assert spec.cron_expressions == ["0 0 * * MON"]
+    assert spec.time_zone_name == "UTC"
+    assert spec.calendars == []
+    assert spec.intervals == []
+    assert spec.skip == []
+
+
+def test_the_weekly_music_poll_schedule_keeps_the_default_policy():
+    schedule = WeeklyMusicPollWorkflow().get_schedule("test")
+
+    # the schedule keeps the pattern's default policy: a
+    # worker outage delays a fire until a worker returns,
+    # and service-side missed fires are covered by the
+    # default catchup window -- so no custom policy is set
+    assert schedule.policy == SchedulePolicy()
