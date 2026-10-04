@@ -51,6 +51,11 @@ type Config struct {
 	UIPublicURL  string
 	MCPPublicURL string
 
+	// whagent-net identity linking (optional, needs the MCP OAuth settings):
+	// whagent-net's JWKS URL and public URL (the link assertion issuer).
+	WhagentUIJWKSURL string
+	WhagentUIIssuer  string
+
 	// Control API (gRPC)
 	ControlAPIURL string
 
@@ -93,6 +98,9 @@ func LoadConfig() *Config {
 		SessionSecret:    getEnv("SECRET_KEY", "dev-secret-key-change-in-production"),
 		UIPublicURL:      getEnv("UI_PUBLIC_URL", ""),
 		MCPPublicURL:     getEnv("MCP_PUBLIC_URL", ""),
+
+		WhagentUIJWKSURL: getEnv("WHAGENT_UI_JWKS_URL", ""),
+		WhagentUIIssuer:  strings.TrimRight(getEnv("WHAGENT_UI_ISSUER", ""), "/"),
 		ControlAPIURL:    getEnv("CONTROL_API_URL", "control-api-dev-service:50051"),
 		LogProcessorURL:  getEnv("LOG_PROCESSOR_URL", "log-processor:50053"),
 		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),

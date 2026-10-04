@@ -26,6 +26,7 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/whagent"
+	"github.com/whale-net/everything/manmanv2/identitylink"
 	"github.com/whale-net/everything/manmanv2/mcp/admin"
 	"github.com/whale-net/everything/manmanv2/mcp/server"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
@@ -113,7 +114,7 @@ func run(logger *slog.Logger) error {
 			return server.WhagentHTTPAuth(verify, cfg, metaURL)
 		}
 		// Added last, so it runs outermost: the Caller exists before persona gating.
-		srv.AddReceivingMiddleware(server.WhagentMiddleware(*ex, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}))
+		srv.AddReceivingMiddleware(server.WhagentMiddleware(*ex, identitylink.Store{DB: db}, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}))
 		logger.Info("whagent-net credentials accepted", "issuer", whagentEnv.Issuer)
 	}
 	handler := server.NewHandler(mcpHandler, verify, authServer, os.Getenv("MCP_PUBLIC_URL"), os.Getenv("MCP_RESOURCE_METADATA_URL"), wrap)

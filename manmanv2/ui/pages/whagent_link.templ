@@ -1,0 +1,51 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// WhagentLinkConfirmData is the confirmation shown after a whagent-net
+// assertion verifies and the user is signed in.
+type WhagentLinkConfirmData struct {
+	Layout       components.LayoutData
+	UserLabel    string
+	SubjectLabel string
+	Token        string
+}
+
+// WhagentLinkConfirm asks the signed-in user to confirm linking their
+// whagent-net identity to their manmanv2 account.
+templ WhagentLinkConfirm(data WhagentLinkConfirmData) {
+	@components.Layout(data.Layout) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm max-w-xl">
+			<div class="card-body">
+				<h1 class="card-title">Link whagent-net identity</h1>
+				<p class="text-base-content/70">
+					Let whagent-net agents act as <strong>{ data.UserLabel }</strong> in manmanv2?
+					This links the whagent-net identity <strong>{ data.SubjectLabel }</strong> to your manmanv2 account.
+				</p>
+				<form method="post" action="/link/whagent/confirm">
+					<input type="hidden" name="token" value={ data.Token }/>
+					<div class="card-actions justify-end">
+						<button type="submit" class="btn btn-primary">Confirm link</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+// WhagentLinkRejected explains a link request that could not be verified.
+templ WhagentLinkRejected(layout components.LayoutData) {
+	@components.Layout(layout) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm max-w-xl">
+			<div class="card-body">
+				<h1 class="card-title">Link request rejected</h1>
+				<p class="text-base-content/70">
+					This link request could not be verified. It may have expired or already been used.
+					Go back to whagent-net and choose "Link manmanv2 identity" again.
+				</p>
+			</div>
+		</div>
+	}
+}

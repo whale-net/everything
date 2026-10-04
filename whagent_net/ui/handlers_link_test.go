@@ -206,14 +206,14 @@ func TestHandleLinkASSResult_FourDistinctOutcomes(t *testing.T) {
 	assert.Contains(t, genericAbsent, "alert-error", "absent outcome must never render as success")
 }
 
-// TestMint_OnlyCalledFromHandleLinkASSStart asserts no code path in this
-// binary calls linkassert.Key.Mint other than handleLinkASSStart (FR1
-// "never silently automatic"). Parses every non-test .go source file in
+// TestMint_OnlyCalledFromStartLink asserts no code path in this binary calls
+// linkassert.Key.Mint other than startLink, and that startLink is only
+// called from the explicit POST handlers (FR1 "never silently automatic"). Parses every non-test .go source file in
 // this package via go/ast (same technique as
 // manmanv2/ui/nfr5_bulk_env_write_guard_test.go's guard) and fails if a
 // ".Mint(...)" call expression appears inside any function other than
 // handleLinkASSStart.
-func TestMint_OnlyCalledFromHandleLinkASSStart(t *testing.T) {
+func TestMint_OnlyCalledFromStartLink(t *testing.T) {
 	anchor, err := runfiles.Rlocation("_main/whagent_net/ui/main.go")
 	require.NoError(t, err, "is whagent_net/ui's ui_test data glob still present?")
 	dir := filepath.Dir(anchor)
@@ -232,6 +232,7 @@ func TestMint_OnlyCalledFromHandleLinkASSStart(t *testing.T) {
 	require.NotEmpty(t, srcFiles, "no non-test .go sources discovered in %s -- guard is not checking anything", dir)
 
 	mintCallSites := 0
+	allowedStartLinkCallers := map[string]bool{"handleLinkASSStart": true, "handleLinkManmanv2Start": true}
 	for _, srcFile := range srcFiles {
 		resolved := filepath.Join(dir, srcFile)
 		fset := token.NewFileSet()
@@ -250,16 +251,112 @@ func TestMint_OnlyCalledFromHandleLinkASSStart(t *testing.T) {
 					return true
 				}
 				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Mint" {
+				if !ok {
+					return true
+				}
+				if sel.Sel.Name == "startLink" && !allowedStartLinkCallers[fn.Name.Name] {
+					t.Errorf("%s: %s calls startLink -- only the explicit POST handlers may", srcFile, fn.Name.Name)
+				}
+				if sel.Sel.Name != "Mint" {
 					return true
 				}
 				mintCallSites++
-				if fn.Name.Name != "handleLinkASSStart" {
-					t.Errorf("%s: %s calls .Mint(...) -- FR1 requires linkassert.Key.Mint's only call site to be handleLinkASSStart", srcFile, fn.Name.Name)
+				if fn.Name.Name != "startLink" {
+					t.Errorf("%s: %s calls .Mint(...) -- linkassert.Key.Mint's only call site must be startLink", srcFile, fn.Name.Name)
 				}
 				return true
 			})
 		}
 	}
-	require.Positive(t, mintCallSites, "no .Mint(...) call site found at all -- guard is not checking anything (has handleLinkASSStart stopped calling Mint?)")
+	require.Positive(t, mintCallSites, "no .Mint(...) call site found at all -- guard is not checking anything (has startLink stopped calling Mint?)")
+}
+
+// TestHandleLinkManmanv2Start_RedirectsWithAssertion mirrors the ASS test:
+// POST /link/manmanv2 mints an assertion for the signed-in Operator and 303s
+// to the manmanv2 UI's /link/whagent with a return URL on this binary.
+func TestHandleLinkManmanv2Start_RedirectsWithAssertion(t *testing.T) {
+	linkKey, pub := newTestLinkAssertKey(t)
+	app := &App{
+		auth:            devModeAuthenticator(t),
+		oidcIssuer:      testIssuer,
+		publicURL:       "https://ui.example",
+		manmanv2LinkURL: "https://manman.example",
+		linkAssertKey:   linkKey,
+	}
+	wrapped := app.auth.RequireAuthFunc(app.handleLinkManmanv2Start)
+
+	w := httptest.NewRecorder()
+	wrapped(w, httptest.NewRequest(http.MethodPost, "/link/manmanv2", nil))
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	loc := w.Header().Get("Location")
+	require.True(t, strings.HasPrefix(loc, "https://manman.example/link/whagent?"), "Location = %q", loc)
+
+	parsedLoc, err := url.Parse(loc)
+	require.NoError(t, err)
+	parsed, err := jwt.ParseSigned(parsedLoc.Query().Get("token"), []jose.SignatureAlgorithm{jose.EdDSA})
+	require.NoError(t, err)
+	var claims linkAssertionClaims
+	require.NoError(t, parsed.Claims(pub, &claims))
+	assert.Equal(t, "dev-user", claims.Subject)
+	assert.Equal(t, testIssuer, claims.SubjectIssuer)
+	assert.Equal(t, "https://ui.example/link/manmanv2/result", claims.ReturnURL)
+}
+
+func TestLinkManmanv2_UnauthenticatedAndNotConfigured(t *testing.T) {
+	linkKey, _ := newTestLinkAssertKey(t)
+	app := &App{
+		auth: newTestOIDCAuthenticator(t), oidcIssuer: testIssuer, publicURL: "https://ui.example",
+		manmanv2LinkURL: "https://manman.example", linkAssertKey: linkKey,
+	}
+	w := httptest.NewRecorder()
+	app.auth.RequireAuthFunc(app.handleLinkManmanv2Start)(w, httptest.NewRequest(http.MethodPost, "/link/manmanv2", nil))
+	assert.True(t, requestWasAuthBlocked(w))
+	assert.NotContains(t, w.Header().Get("Location"), "manman.example")
+
+	unconfigured := &App{auth: devModeAuthenticator(t), oidcIssuer: testIssuer}
+	w = httptest.NewRecorder()
+	unconfigured.auth.RequireAuthFunc(unconfigured.handleLinkManmanv2Start)(w, httptest.NewRequest(http.MethodPost, "/link/manmanv2", nil))
+	assert.NotEqual(t, http.StatusInternalServerError, w.Code)
+	assert.Empty(t, w.Header().Get("Location"))
+	assert.Contains(t, strings.ToLower(w.Body.String()), "not configured")
+
+	w = httptest.NewRecorder()
+	unconfigured.auth.RequireAuthFunc(unconfigured.handleGrants)(w, httptest.NewRequest(http.MethodGet, "/grants", nil))
+	assert.NotContains(t, w.Body.String(), "Link manmanv2 identity")
+}
+
+func TestHandleGrants_ShowsLinkManmanv2ActionWhenConfigured(t *testing.T) {
+	app := &App{auth: devModeAuthenticator(t), oidcIssuer: testIssuer, manmanv2LinkURL: "https://manman.example"}
+	w := httptest.NewRecorder()
+	app.auth.RequireAuthFunc(app.handleGrants)(w, httptest.NewRequest(http.MethodGet, "/grants", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Link manmanv2 identity")
+	assert.Contains(t, w.Body.String(), `action="/link/manmanv2"`)
+}
+
+func TestHandleLinkManmanv2Result_DistinctOutcomes(t *testing.T) {
+	app := &App{auth: devModeAuthenticator(t)}
+	wrapped := app.auth.RequireAuthFunc(app.handleLinkManmanv2Result)
+	render := func(outcome string) string {
+		w := httptest.NewRecorder()
+		wrapped(w, httptest.NewRequest(http.MethodGet, "/link/manmanv2/result?outcome="+url.QueryEscape(outcome), nil))
+		require.Equal(t, http.StatusOK, w.Code)
+		return w.Body.String()
+	}
+	outcomes := []string{"linked", "already_linked", "conflict", "rejected", "garbage"}
+	bodies := map[string]string{}
+	for _, o := range outcomes {
+		bodies[o] = render(o)
+	}
+	assert.Contains(t, bodies["linked"], "alert-success")
+	assert.Contains(t, bodies["already_linked"], "alert-success")
+	for _, o := range []string{"conflict", "rejected", "garbage"} {
+		assert.Contains(t, bodies[o], "alert-error")
+	}
+	for i, a := range outcomes {
+		for _, b := range outcomes[i+1:] {
+			assert.NotEqual(t, bodies[a], bodies[b])
+		}
+	}
 }

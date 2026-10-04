@@ -56,7 +56,7 @@ func newWhagentWriteEnv(t *testing.T) wgWriteEnv {
 		Grant:    "g",
 		Verifier: fakeVerifier{"user-token": {Issuer: testUserIssuer, Subject: "human-1", Roles: []string{"server-manager"}}},
 	}
-	srv.AddReceivingMiddleware(WhagentMiddleware(ex))
+	srv.AddReceivingMiddleware(WhagentMiddleware(ex, testResolver()))
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	cfg := WhagentAuthConfig{Verifier: f.verifier, Audience: testAudience, UserIssuer: testUserIssuer, WhagentIssuer: testWhagentIssuer}
 	ts := httptest.NewServer(WhagentHTTPAuth(OIDCCallerVerifier(fakeVerifier{}), cfg, "")(h))
