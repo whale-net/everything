@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -168,7 +169,7 @@ func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, pr
 		writeWriteError(w, err)
 		return
 	}
-	sessions, listErr := app.listDesignSessions(r.Context(), productID)
+	sessions, listErr := app.designSessionRows(r.Context(), productID, time.Now())
 	if listErr != nil {
 		logger.Error("failed to re-render open-session form after rejection", "product_id", productID, "error", listErr)
 		if isHXRequest(r) {
@@ -211,7 +212,7 @@ func transportFailureMessage(err error) string {
 // renderAnswerFormFailure re-renders the "submit follow-up" form after a
 // rejected write, preserving the follow-up text and which resolve boxes
 // were ticked. Same 200-both-modes rule as renderOpenFormFailure.
-func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, id uuid.UUID, err error, followUp string, resolved []string) {
+func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, productID, id uuid.UUID, err error, followUp string, resolved []string) {
 	checked := make(map[string]bool, len(resolved))
 	for _, qid := range resolved {
 		checked[qid] = true
@@ -226,7 +227,7 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 			Error:          message,
 			FollowUp:       followUp,
 			CheckedResolve: checked,
-			AnswersPath:    designAnswersPath(id),
+			AnswersPath:    designAnswersPath(productID, id),
 			OpenQuestions:  nil,
 		}
 	}
@@ -338,10 +339,10 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 	// read next anyway.
 	flashSuccess(w, "Design session opened.")
 	if isHXRequest(r) {
-		hxRedirect(w, designSessionPath(id))
+		hxRedirect(w, designSessionPath(productID, id))
 		return
 	}
-	http.Redirect(w, r, designSessionPath(id), http.StatusSeeOther)
+	http.Redirect(w, r, designSessionPath(productID, id), http.StatusSeeOther)
 }
 
 // handleDesignSessionAnswerForm is the browser form action behind a session
@@ -355,6 +356,10 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 // untouched; the HX half answers 200 and either HX-Redirects on success or
 // re-renders this form with the error inline.
 func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Request) {
+	productID, err := parseUUIDPathValue(w, r, "productID", "product")
+	if err != nil {
+		return
+	}
 	id, err := parseUUIDPathValue(w, r, "id", "design session")
 	if err != nil {
 		return
@@ -364,7 +369,7 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		if isHXRequest(r) {
 			renderFragment(w, r, pages.FollowUpForm(pages.DesignSessionDetailPage{
 				ID:          id.String(),
-				AnswersPath: designAnswersPath(id),
+				AnswersPath: designAnswersPath(productID, id),
 				Error:       "The form could not be read, so nothing was submitted. Try again.",
 			}))
 			return
@@ -378,7 +383,7 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 	if followUp == "" && len(resolved) == 0 {
 		// An answer round with no follow-up text and nothing resolved records
 		// nothing meaningful; reject rather than append an empty `answer`.
-		app.renderAnswerFormFailure(w, r, id, &writeRejection{
+		app.renderAnswerFormFailure(w, r, productID, id, &writeRejection{
 			status:  http.StatusBadRequest,
 			message: "Write a follow-up, or tick an open question your answer closes.",
 		}, followUp, resolved)
@@ -420,7 +425,7 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 			"design-sessions/"+id.String()+"/revision-events", body, &appended)
 	})
 	if err != nil {
-		app.renderAnswerFormFailure(w, r, id, err, followUp, resolved)
+		app.renderAnswerFormFailure(w, r, productID, id, err, followUp, resolved)
 		return
 	}
 
@@ -428,10 +433,10 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 	// navigate, so the confirmation rides the flash cookie.
 	flashSuccess(w, "Follow-up submitted.")
 	if isHXRequest(r) {
-		hxRedirect(w, designSessionPath(id))
+		hxRedirect(w, designSessionPath(productID, id))
 		return
 	}
-	http.Redirect(w, r, designSessionPath(id), http.StatusSeeOther)
+	http.Redirect(w, r, designSessionPath(productID, id), http.StatusSeeOther)
 }
 
 // newAnswerQuestionID mints the question id a follow-up answer opens. A UUID

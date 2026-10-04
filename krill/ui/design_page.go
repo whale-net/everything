@@ -30,8 +30,19 @@ import (
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
-// designSessionPath is one session's detail page.
-func designSessionPath(id uuid.UUID) string {
+// designSessionPath is one session's detail page -- product-scoped, which is
+// what makes it canonical (FR a77852a9): a session id alone cannot answer
+// "is this session under the product in the URL?", so the pid the reader
+// arrived with has to be part of the address.
+func designSessionPath(productID, id uuid.UUID) string {
+	return designProductSessionsPath(productID) + "/" + id.String()
+}
+
+// legacyDesignSessionPath is the pre-redesign, unscoped detail URL. It is
+// spelled here rather than assembled from designSessionPath because it is a
+// different page's address, not this one's: it names no product, so it
+// cannot be the successor any URL redirects into.
+func legacyDesignSessionPath(id uuid.UUID) string {
 	return designPath + "/design-sessions/" + id.String()
 }
 
@@ -40,9 +51,13 @@ func designProductSessionsPath(productID uuid.UUID) string {
 	return designPath + "/products/" + productID.String() + "/design-sessions"
 }
 
-// designAnswersPath is one session's follow-up answer action.
-func designAnswersPath(id uuid.UUID) string {
-	return designSessionPath(id) + "/answers"
+// designAnswersPath is one session's follow-up answer action. It hangs off
+// the canonical, product-scoped detail for the same reason that detail
+// does: the handler answers 303 to the session it just wrote to, and a
+// redirect that then had to 302 again would make the write's own outcome a
+// two-hop navigation.
+func designAnswersPath(productID, id uuid.UUID) string {
+	return designSessionPath(productID, id) + "/answers"
 }
 
 // designGoPath is the design root's product-id browse target.
@@ -50,37 +65,54 @@ const designGoPath = designPath + "/go"
 
 // ── read helpers ─────────────────────────────────────────────────────────────
 
-// listDesignSessions returns productID's design sessions as list rows, ordered
-// oldest-first exactly as DesignSessionStore.ListByProduct returns them. Each
-// row's signed-off state is derived from that session's own revision-event
-// log, the one source of truth for a session's current state (the
-// design_session row itself is never updated -- FR1's boundary comment) --
-// via one ListLatestSignoffBySessionIDs call across every session, never a
-// per-session ListBySession fetch of the full log.
-func (app *App) listDesignSessions(ctx context.Context, productID uuid.UUID) ([]pages.DesignSessionRow, error) {
-	sessions, err := app.designSessions.ListByProduct(ctx, productID)
+// designSessionRows builds productID's session list rows from the
+// product-wide aggregate read (FR d0a63ffb), newest first, exactly as
+// DesignSessionStore.SummarizeByProduct orders them.
+//
+// One call, never the loop this replaced: the aggregate already carries
+// each session's derived Stage and its open blocking-question count, so
+// re-deriving either here would be a second notion of the two facts this
+// table is read for. Re-deriving the stage in particular is what would let
+// a list and a session's own detail disagree about what stage it is in.
+//
+// An unknown product is an empty list rather than an error, which is what
+// this page has always answered and what its read of the aggregate's
+// ErrNotFound preserves: the URL resolved and there is nothing behind it,
+// which the empty state says in as many words. Every other failure -- the
+// one that is a broken read rather than an empty product -- is returned.
+func (app *App) designSessionRows(ctx context.Context, productID uuid.UUID, now time.Time) ([]pages.DesignSessionRow, error) {
+	summary, err := app.designSessions.SummarizeByProduct(ctx, productID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]uuid.UUID, len(sessions))
-	for i, ds := range sessions {
-		ids[i] = ds.ID
-	}
-	signoffs, err := app.revisionEvents.ListLatestSignoffBySessionIDs(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	rows := make([]pages.DesignSessionRow, 0, len(sessions))
-	for _, ds := range sessions {
+	rows := make([]pages.DesignSessionRow, 0, len(summary.Sessions))
+	for _, s := range summary.Sessions {
 		rows = append(rows, pages.DesignSessionRow{
-			ID:                ds.ID.String(),
-			OpeningSubmission: ds.OpeningSubmission,
-			CreatedAt:         formatTime(ds.CreatedAt),
-			SignedOff:         signoffs[ds.ID] == store.SignoffStatusApproved,
-			DetailPath:        designSessionPath(ds.ID),
+			ID:                    s.ID.String(),
+			OpeningRequest:        firstLine(s.OpeningSubmission),
+			DetailPath:            designSessionPath(productID, s.ID),
+			Stage:                 string(s.Stage),
+			OpenBlockingQuestions: s.OpenBlockingQuestions,
+			OpenedRelative:        relativeTime(s.CreatedAt, now),
+			OpenedExact:           s.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
 	return rows, nil
+}
+
+// firstLine is an opening submission's first line: what the list shows,
+// where the full submission is the detail page's subject. Trimmed, because
+// a submission that opens with a blank line would otherwise render a row
+// whose title is empty.
+func firstLine(s string) string {
+	line := s
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	return strings.TrimSpace(line)
 }
 
 // buildDesignSessionDetail assembles one session's read view from the same
@@ -108,7 +140,7 @@ func (app *App) buildDesignSessionDetail(ctx context.Context, id uuid.UUID) (pag
 		ProductSessionsPath:    designProductSessionsPath(ds.ProductID),
 		Events:                 revisionEventRows(events),
 		OpenQuestions:          openQuestionRows(questions),
-		AnswersPath:            designAnswersPath(ds.ID),
+		AnswersPath:            designAnswersPath(ds.ProductID, ds.ID),
 	}, nil
 }
 
@@ -217,7 +249,7 @@ func (app *App) handleDesignGo(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDesignSessionList renders a product's design sessions -- the
-// open and signed-off ones alike -- so a contributor can navigate into one
+// open and approved ones alike -- so a contributor can navigate into one
 // without already holding its id. One route, two modes: an htmx request
 // gets the page body as a bare fragment at 200, everything else gets it
 // inside the shell.
@@ -227,16 +259,34 @@ func (app *App) handleDesignSessionList(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid product id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	sessions, err := app.listDesignSessions(r.Context(), productID)
+	app.renderDesignSessionList(w, r, productID, r.URL.Path)
+}
+
+// renderDesignSessionList is the session list, shared by the product-scoped
+// URL and by the un-prefixed /design root that resolved this product --
+// one page at two URLs, exactly as "/" and /products/{pid}/overview are one
+// Overview at two URLs.
+//
+// activePath is passed rather than read from r.URL.Path because the two
+// callers own different nav keys: the product-scoped URL is the Design
+// sessions nav item's own path, and /design is the area root, which owns no
+// nav item.
+func (app *App) renderDesignSessionList(w http.ResponseWriter, r *http.Request, productID uuid.UUID, activePath string) {
+	// now is read once, here, so every row's relative age is measured
+	// against one instant: a table whose rows disagree about "now" by the
+	// time the page took to render reads as a table of different ages.
+	rows, err := app.designSessionRows(r.Context(), productID, time.Now())
 	if err != nil {
 		logger.Error("failed to list design sessions", "product_id", productID, "error", err)
 		http.Error(w, "failed to list design sessions", http.StatusInternalServerError)
 		return
 	}
 	page := pages.DesignSessionListPage{
-		ProductID:  productID.String(),
-		Sessions:   sessions,
-		FormAction: designProductSessionsPath(productID),
+		ProductID:   productID.String(),
+		ProductName: app.productNameFor(r.Context(), productID),
+		Path:        designProductSessionsPath(productID),
+		Sessions:    rows,
+		FormAction:  designProductSessionsPath(productID),
 	}
 	if isHXRequest(r) {
 		renderFragment(w, r, pages.DesignSessionList(page))
@@ -247,21 +297,66 @@ func (app *App) handleDesignSessionList(w http.ResponseWriter, r *http.Request) 
 	// that turns out to be outside the scope is simply dropped when the
 	// cookie is read back, so this page needs no scope check of its own.
 	setLastViewedProductCookie(w, productID)
-	app.renderShell(w, r, "Design sessions", r.URL.Path, pages.DesignSessionList(page))
+	app.renderShell(w, r, "Design sessions", activePath, pages.DesignSessionList(page))
+}
+
+// productNameFor is the product's name for a page header. The design area's
+// URLs hang off /design rather than off the product prefix, so the request
+// carries no resolved product and the name is read from the scope listing.
+//
+// A listing that cannot be read yields the empty string rather than a
+// failure: the table's own rows are this page's subject, and a header line
+// is not worth taking the page down for. The empty header then names no
+// product, which is the honest rendering of "the name is unavailable".
+func (app *App) productNameFor(ctx context.Context, productID uuid.UUID) string {
+	if product, ok := currentProduct(ctx); ok && product.ID == productID {
+		return product.Name
+	}
+	products, err := app.scopeProducts(ctx)
+	if err != nil {
+		logger.Warn("design sessions: product name read failed", "product_id", productID, "error", err)
+		return ""
+	}
+	for _, p := range products {
+		if p.ID == productID {
+			return p.Name
+		}
+	}
+	return ""
 }
 
 // handleDesignSessionDetail renders one session's full ordered
 // revision-event log and its currently-open questions. One route, two
 // modes, exactly as handleDesignSessionList.
+//
+// The pid is in the path rather than inferred, because "is this session
+// under the product the reader is looking at?" is a question the reader
+// asked and the answer may be no (FR a77852a9). A session that is unknown,
+// or that belongs to another product, is an in-shell 404 rather than a
+// bare http.Error: an operator who followed a stale or hand-edited link
+// lands on a page that looks like the rest of the UI and says what is
+// missing, not on a plain-text error with no way back.
 func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request) {
+	productID, err := uuid.Parse(r.PathValue("productID"))
+	if err != nil {
+		http.Error(w, "invalid product id: must be a UUID", http.StatusBadRequest)
+		return
+	}
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "invalid design session id: must be a UUID", http.StatusBadRequest)
 		return
 	}
 	detail, err := app.buildDesignSessionDetail(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		http.Error(w, "design session not found", http.StatusNotFound)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && detail.ProductID != productID.String()) {
+		if err == nil {
+			logger.Info("design session not under the product the URL names",
+				"product_id", productID, "design_session_id", id)
+		}
+		app.renderShellStatus(w, r, "Not found", r.URL.Path, pages.SpecStatus(pages.StatusPage{
+			Title:  "Design session not found",
+			Detail: "No design session of this id exists under this product. It may have been opened under another product, or the link may be out of date.",
+		}), http.StatusNotFound)
 		return
 	}
 	if err != nil {
