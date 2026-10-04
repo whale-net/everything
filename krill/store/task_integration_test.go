@@ -1090,6 +1090,19 @@ func summarizeIncomplete(t *testing.T, ctx context.Context, s *store.Store, scop
 	return progress
 }
 
+// summarizeAll is summarizeIncomplete under the all-containers scope: every
+// milestone and milepebble of the product whatever its status.
+func summarizeAll(t *testing.T, ctx context.Context, s *store.Store, scopeID, productID uuid.UUID) store.ProductTaskProgress {
+	t.Helper()
+	progress, err := s.Tasks().SummarizeProductTaskProgress(ctx, store.ProductTaskProgressParams{
+		ScopeID:   scopeID,
+		ProductID: productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeAll},
+	})
+	require.NoError(t, err)
+	return progress
+}
+
 // containerRow finds the row for one container: the milepebble named by
 // milepebbleID when that is not uuid.Nil, else the milestone's own row.
 func containerRow(t *testing.T, progress store.ProductTaskProgress, milestoneID, milepebbleID uuid.UUID) store.ContainerTaskProgress {
@@ -1412,6 +1425,159 @@ func TestTaskStore_SummarizeProductTaskProgress_BacklogBucketIsNeverAContainer(t
 	// The task read agrees, so no caller can find the stranded task under
 	// one read and not the other.
 	assert.Equal(t, []uuid.UUID{ours.ID}, rowTaskIDs(listIncomplete(t, ctx, s, scopeID, fx.productID)))
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_AllScopeKeepsShippedContainers
+// is ProductTaskScopeAll's whole reason for existing: a surface listing the
+// product's WHOLE roadmap needs a shipped milestone's row, because its bar
+// at full is the answer an operator wants and the incomplete scope's
+// omission would read as "no tasks" rather than "all tasks finished".
+//
+// The abandoned milestone is here for the same reason -- it too leaves the
+// incomplete scope -- and a zero-task milestone proves the scope is about
+// containers rather than tasks: a container with nothing on it is still a
+// row, which is what renders as "No tasks yet".
+func TestTaskStore_SummarizeProductTaskProgress_AllScopeKeepsShippedContainers(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	shipped, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M3", "ships", nil, self, self)
+	require.NoError(t, err)
+	setContainerStatus(t, ctx, s, scopeID, shipped.ID, store.MilestoneStatusShipped, self)
+	// Both tasks Done, so the shipped milestone reports done==total -- the
+	// state its full bar is built from.
+	createLaneTask(t, ctx, s, scopeID, shipped.ID, "shipped one", store.LaneDone, self)
+	createLaneTask(t, ctx, s, scopeID, shipped.ID, "shipped two", store.LaneDone, self)
+
+	abandoned, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M4", "dropped", nil, self, self)
+	require.NoError(t, err)
+	setContainerStatus(t, ctx, s, scopeID, abandoned.ID, store.MilestoneStatusAbandoned, self)
+
+	empty, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, fx.productID, "M5", "nothing on it yet", nil, self, self)
+	require.NoError(t, err)
+
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "in flight", self)
+
+	incomplete := containerIDs(summarizeIncomplete(t, ctx, s, scopeID, fx.productID))
+	all := summarizeAll(t, ctx, s, scopeID, fx.productID)
+	ids := containerIDs(all)
+
+	assert.NotContains(t, incomplete, shipped.ID, "the shipped milestone leaves the incomplete scope")
+	assert.NotContains(t, incomplete, abandoned.ID, "the abandoned milestone leaves the incomplete scope")
+
+	for _, id := range []uuid.UUID{shipped.ID, abandoned.ID, empty.ID} {
+		assert.Contains(t, ids, id, "the all scope keeps every container whatever its status")
+	}
+	assert.NotContains(t, ids, fx.otherMilestoneID, "another product's milestone is still absent")
+
+	shippedRow := containerRow(t, all, shipped.ID, uuid.Nil)
+	assert.Equal(t, 2, shippedRow.Total(), "a shipped milestone's finished tasks still count")
+	assert.Equal(t, shippedRow.Total(), shippedRow.Done(),
+		"a shipped milestone shows done==total, which is what renders its bar full")
+	assert.Equal(t, store.MilestoneStatusShipped, shippedRow.Milestone.Status,
+		"the row carries the milestone's own status, so a caller can badge it")
+
+	emptyRow := containerRow(t, all, empty.ID, uuid.Nil)
+	assert.Equal(t, 0, emptyRow.Total(), "a zero-task milestone is a row with a zero total")
+	assert.Equal(t, 0, emptyRow.Done())
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_AllScopeKeepsMilepebblesAndExcludesBacklog
+// is the rest of the scope's contract: a shipped milestone's milepebbles
+// come back too (a roadmap lists a cut, not just its parent), and the
+// backlog bucket stays out under this scope exactly as it does under the
+// incomplete one -- "every container" means every delivery container, and a
+// progress bar for work that is not being delivered would be a lie.
+func TestTaskStore_SummarizeProductTaskProgress_AllScopeKeepsMilepebblesAndExcludesBacklog(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	// A shipped milestone whose own milepebble is still in design: under
+	// the incomplete scope the milestone leaves and only the milepebble
+	// stays; under the all scope both are rows.
+	setContainerStatus(t, ctx, s, scopeID, fx.cutID, store.MilestoneStatusShipped, self)
+	setContainerStatus(t, ctx, s, scopeID, fx.pebbleID, store.MilestoneStatusInDesign, self)
+	createProductTask(t, ctx, s, scopeID, fx.pebbleID, "still designing", self)
+
+	backlog, err := s.Recut().GetOrCreateBacklog(ctx, scopeID, fx.productID, self, self)
+	require.NoError(t, err)
+
+	incomplete := containerIDs(summarizeIncomplete(t, ctx, s, scopeID, fx.productID))
+	assert.NotContains(t, incomplete, fx.cutID, "the shipped milestone itself is out of the incomplete scope")
+	assert.Contains(t, incomplete, fx.pebbleID, "its in-design milepebble is judged on its own status")
+
+	all := summarizeAll(t, ctx, s, scopeID, fx.productID)
+	ids := containerIDs(all)
+	assert.Contains(t, ids, fx.cutID, "the all scope keeps the shipped milestone")
+	assert.Contains(t, ids, fx.pebbleID, "and the milepebble under it")
+	assert.NotContains(t, ids, backlog.ID, "the backlog bucket is never a container, under this scope either")
+
+	// A milepebble row still names its parent and its own status, so a
+	// caller can badge the milepebble rather than the milestone.
+	pebbleRow := containerRow(t, all, fx.cutID, fx.pebbleID)
+	require.NotNil(t, pebbleRow.Milepebble)
+	assert.Equal(t, store.MilestoneStatusInDesign, pebbleRow.Milepebble.Status)
+	assert.Equal(t, store.MilestoneStatusShipped, pebbleRow.Milestone.Status)
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_AllScopeRequiresNoContainer
+// pins the scope's own contract: it is product-wide, so it names no
+// container and RequiresContainer is false for it. A scope kind that
+// demanded a container id would make the Milestones table pass a
+// meaningless uuid, and the api/MCP parsers would start requiring one.
+func TestTaskStore_SummarizeProductTaskProgress_AllScopeRequiresNoContainer(t *testing.T) {
+	scope := store.ProductTaskScope{Kind: store.ProductTaskScopeAll}
+	assert.False(t, scope.RequiresContainer(),
+		"the all scope names no container")
+
+	assert.Contains(t, store.ValidProductProgressScopeKinds, store.ProductTaskScopeAll,
+		"the progress read's valid set names the kind it accepts")
+	assert.NotContains(t, store.ValidProductTaskScopeKinds, store.ProductTaskScopeAll,
+		"the task-LIST surfaces still refuse it: paging a shipped milestone's finished tasks is not their question")
+
+	// The read accepts it with no ContainerID at all.
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+	createProductTask(t, ctx, s, scopeID, fx.uncutID, "work", self)
+
+	progress, err := s.Tasks().SummarizeProductTaskProgress(ctx, store.ProductTaskProgressParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeAll},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, fx.productID, progress.ProductID)
+	assert.NotEmpty(t, progress.Containers)
+}
+
+// TestTaskStore_SummarizeProductTaskProgress_AllScopeRejectsAnUnknownKind
+// guards the switch's default branch: a kind the read does not implement
+// fails loudly rather than silently answering as "all". That matters most
+// for THIS scope, because a future kind that accidentally fell through
+// would return a whole roadmap to a caller that asked for one container.
+func TestTaskStore_SummarizeProductTaskProgress_AllScopeRejectsAnUnknownKind(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	fx := newProductTaskFixture(t, ctx, s, scopeID, self)
+
+	progress, err := s.Tasks().SummarizeProductTaskProgress(ctx, store.ProductTaskProgressParams{
+		ScopeID:   scopeID,
+		ProductID: fx.productID,
+		Scope:     store.ProductTaskScope{Kind: store.ProductTaskScopeKind("everything")},
+	})
+	require.Error(t, err)
+	assert.Empty(t, progress.Containers, "an unrecognised scope yields no rows at all")
 }
 
 // TestTaskStore_SummarizeProductTaskProgress_NoContainers_IsNotAnUnknownProduct

@@ -134,6 +134,7 @@ var wireClasses = map[string]map[string]wireFieldClass{
 		"outcome":            wireCarried, // nil optional: omitted, not a placeholder
 		"fr_budget":          wireCarried, // nil optional: omitted, never a bogus 0
 		"status":             wireCarried,
+		"position":           wireCarried, // the Milestones table's row order (FR 5aec68f6)
 		"delivers":           wireStructural,
 		"must_not_foreclose": wireStructural,
 		"deferrals":          wireStructural,

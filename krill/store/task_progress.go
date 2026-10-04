@@ -140,7 +140,11 @@ type ProductTaskProgressParams struct {
 // abandoned -- the same IsIncompleteContainerStatus predicate, and the
 // same incompleteContainerFilterSQL rendering of it, that read applies;
 // ProductTaskScopeMilestone walks one milestone and its milepebbles;
-// ProductTaskScopeMilepebble walks one milepebble whatever its status. The
+// ProductTaskScopeMilepebble walks one milepebble whatever its status;
+// ProductTaskScopeAll walks every milestone and milepebble of the product
+// whatever its status, which is what a surface listing the whole roadmap
+// (rather than its open work) needs -- a shipped container's finished
+// counts are an answer there and an omission in the in-flight scope. The
 // backlog bucket is never a container here, for the same reason it is
 // never one there. A container the product does not own is refused with
 // ErrMilestoneOutsideProduct, exactly as the task read refuses it, so the
@@ -188,6 +192,12 @@ func (s taskStore) SummarizeProductTaskProgress(ctx context.Context, params Prod
 	case ProductTaskScopeMilepebble:
 		containerFilter = " AND c.id = $3"
 		args = append(args, params.Scope.ContainerID)
+	case ProductTaskScopeAll:
+		// Every container but the backlog bucket, whatever its status. No
+		// status predicate at all: a shipped milestone's row is the answer
+		// a roadmap listing needs, and an in-flight-only read would answer
+		// "no tasks" for a container that is finished.
+		containerFilter = " AND c.kind <> 'backlog'"
 	default:
 		return ProductTaskProgress{}, fmt.Errorf("unknown product task scope kind %q", params.Scope.Kind)
 	}
