@@ -718,7 +718,7 @@ func TestDesignWrite_RejectedAnswer_RerendersFormInShell(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "a rejected write re-renders the page, not a status code: %s", body)
 	assertInShell(t, body)
 
-	assert.Contains(t, body, `class="alert alert-error"`)
+	assertFollowUpErrorShown(t, body)
 	assert.Contains(t, body, "409: question q-flag-store was never opened")
 	assert.NotContains(t, body, `{"error":`, "the raw JSON rejection must not leak into the page")
 	assert.NotContains(t, body, `"error":`)
@@ -745,6 +745,26 @@ func resolveBoxChecked(t *testing.T, body, questionID string) bool {
 	input := re.FindString(body)
 	require.NotEmpty(t, input, "no resolve box for %q in the rendered page", questionID)
 	return strings.Contains(input, " checked")
+}
+
+// assertFollowUpErrorShown fails unless body carries the follow-up form's
+// error alert.
+//
+// It asserts through the element's data-krill hook rather than through its
+// daisyUI class: the alert vocabulary belongs to htmxui.Alert, so a class
+// literal here would break the moment that primitive restyled itself without
+// any behaviour changing.
+//
+// What it pins is the severity REGISTER -- role="alert", which
+// htmxui.AlertSuccess does not carry -- so a refusal that stopped being a
+// refusal would fail here. It deliberately does not pin error-vs-warning,
+// which are the same register by design.
+func assertFollowUpErrorShown(t *testing.T, body string) {
+	t.Helper()
+	assert.Contains(t, body, `data-krill="design-session-follow-up-error"`,
+		"the refusal must render as an inline htmxui.Alert, not a status page")
+	assert.Contains(t, body, `role="alert"`,
+		"and it must be an announcement, not a success status: a refusal rendered as a success is a lie")
 }
 
 // formAttr is one attribute of the follow-up form, read off the SERVED
@@ -849,7 +869,6 @@ func TestDesignWrite_RejectsEmptySubmissionBeforeApi(t *testing.T) {
 			body := rec.Body.String()
 			require.Equal(t, http.StatusOK, rec.Code, "validation must re-render in-shell, not answer a bare 400: %s", body)
 			assertInShell(t, body)
-			assert.Contains(t, body, `class="alert alert-error"`)
 			assert.Contains(t, body, "Describe your idea in plain language before opening the session.")
 			assert.Empty(t, env.API.recorded(), "an empty submission must never reach krill")
 		})
@@ -862,7 +881,7 @@ func TestDesignWrite_RejectsEmptySubmissionBeforeApi(t *testing.T) {
 			body := rec.Body.String()
 			require.Equal(t, http.StatusOK, rec.Code, "validation must re-render in-shell, not answer a bare 400: %s", body)
 			assertInShell(t, body)
-			assert.Contains(t, body, `class="alert alert-error"`)
+			assertFollowUpErrorShown(t, body)
 			assert.Contains(t, body, "Write a follow-up, or tick an open question your answer closes.")
 			assert.Empty(t, env.API.recorded(), "an empty answer must never reach krill")
 		})
@@ -1008,7 +1027,7 @@ func TestDesignWrite_RejectedAnswer_HXReRendersTheRoundRegion(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "a refusal is 200, never the rejection's status: %s", body)
 	assert.Empty(t, rec.Header().Get("HX-Redirect"), "a refusal must not navigate away")
 	assert.NotContains(t, body, "<main", "the htmx half answers the fragment alone, with no shell chrome")
-	assert.Contains(t, body, `class="alert alert-error"`)
+	assertFollowUpErrorShown(t, body)
 	assert.Contains(t, body, "409: question q-flag-store was never opened")
 	assert.NotContains(t, body, `"error":`)
 
@@ -1382,7 +1401,7 @@ func TestDesignWrite_EmptyRound_RefusedAt200(t *testing.T) {
 			body := rec.Body.String()
 
 			require.Equal(t, http.StatusOK, rec.Code, "a refusal is 200, never a bare 400: %s", body)
-			assert.Contains(t, body, `class="alert alert-error"`)
+			assertFollowUpErrorShown(t, body)
 			assert.Contains(t, body, "Write a follow-up, or tick an open question your answer closes.")
 			assert.Contains(t, body, `id="`+pages.FollowUpFormAnchor+`"`,
 				"the operator gets the form back, not a dead end")
@@ -1473,7 +1492,7 @@ func TestDesignWrite_StaleAnswer_RefusedWithAFreshlyReadRail(t *testing.T) {
 			}, hx, env.Cookie)
 			body := rec.Body.String()
 			require.Equal(t, http.StatusOK, rec.Code, body)
-			assert.Contains(t, body, `class="alert alert-error"`)
+			assertFollowUpErrorShown(t, body)
 			assert.Contains(t, body, "409: question "+testClosedQuestion+" is not open")
 
 			// The rail is freshly read: a question krill no longer has
@@ -1578,7 +1597,7 @@ func TestDesignWrite_Answer_FailedReReadStillCarriesTheTicks(t *testing.T) {
 			assert.Contains(t, body, `name="resolve" value="`+testClosedQuestion+`"`,
 				"FR 1942d934: the ticked id survives even the failed re-read")
 			assert.Contains(t, body, ">"+followUp+"</textarea>")
-			assert.Contains(t, body, `class="alert alert-error"`)
+			assertFollowUpErrorShown(t, body)
 
 			// The unread regions SAY SO rather than rendering as empty:
 			// "this timeline is unavailable" and "this session has no

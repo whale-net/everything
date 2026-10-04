@@ -982,7 +982,9 @@ templ FollowUpForm(page DesignSessionDetailPage) {
 		hx-swap="outerHTML"
 	>
 		if page.Error != "" {
-			@htmxui.Alert(htmxui.AlertError, "Not saved: "+page.Error, nil)
+			@htmxui.Alert(htmxui.AlertError, "Not saved: "+page.Error, templ.Attributes{
+				"data-krill": "design-session-follow-up-error",
+			})
 		}
 		if len(page.OpenQuestions) == 0 && len(page.CheckedResolve) > 0 {
 			// The open questions could not be re-read, so there is nothing
