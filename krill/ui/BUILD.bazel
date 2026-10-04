@@ -200,6 +200,7 @@ go_test(
         "nav_badge_test.go",
         "legacy_urls_test.go",
         "spec_page_test.go",
+        "spec_tabs_test.go",
         "spec_parity_test.go",
         "delivery_page_test.go",
         "milestones_page_test.go",
