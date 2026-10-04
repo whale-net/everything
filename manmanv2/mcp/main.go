@@ -33,10 +33,22 @@ import (
 )
 
 func main() {
-	logging.Configure(logging.Config{ServiceName: "manmanv2-mcp", Domain: "manmanv2", AppType: "external-api", JSONFormat: true})
+	logging.Configure(logging.Config{
+		ServiceName:   "manmanv2-mcp",
+		Domain:        "manmanv2",
+		AppType:       "external-api",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
+	})
 	logger := logging.Get("manmanv2/mcp")
-	if err := run(logger); err != nil {
+	err := run(logger)
+	if err != nil {
 		logger.Error("manmanv2 mcp exited", "error", err)
+	}
+	// Flush buffered spans and logs before exit; os.Exit skips defers.
+	_ = logging.Shutdown(context.Background())
+	if err != nil {
 		os.Exit(1)
 	}
 }
