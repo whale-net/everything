@@ -1,14 +1,16 @@
 """The weekly music-poll schedule workflow (krill M5).
 
-Fired by a Temporal schedule every Monday 00:00 UTC, the run
-fans out over the channels configured for music polls: it
-picks each channel's options with the selection activity and
-publishes them through the bolt-free publish module. The
-workflow only orchestrates -- every selection, clock read and
-randomness lives in the activities it calls -- and it
-delegates its decisions to the plain functions below, so they
-are unit-testable without a Temporal runtime (the repo's
-workflow-test pattern, per temporal/whagent).
+Fired by a Temporal schedule every Monday 00:00 UTC, or
+started by hand from the Temporal UI, the run fans out
+over the channels configured for music polls: it picks
+each channel's options with the selection activity and
+publishes them through the bolt-free publish module.
+The workflow only orchestrates -- every selection, clock
+read and randomness lives in the activities it calls --
+and it delegates its decisions to the plain functions
+below, so they are unit-testable without a Temporal
+runtime (the repo's workflow-test pattern, per
+temporal/whagent).
 """
 
 import datetime
@@ -45,6 +47,8 @@ STALE_AFTER = datetime.timedelta(hours=24)
 POSTED = "posted"
 # a retry of a run that already posted in the channel
 ALREADY_POSTED = "already-posted"
+# a dry run: the options below are what it would have picked
+DRY_RUN = "dry-run"
 # fewer than 3 pickable songs: no poll, the previous one stays open
 SKIPPED_FEW_PICKABLE = "skipped-few-pickable"
 # the Slack post failed; the recorded run row waits for a retry
@@ -62,8 +66,18 @@ class WeeklyMusicPollParams:
 
     The schedule fires the workflow with no input, so any
     input marks the execution as a manual run: its identity is
-    the workflow run id, not a scheduled fire time.
+    the workflow run id, not a scheduled fire time. A manual
+    run behaves exactly like a scheduled run, over every
+    configured music-poll channel, unless the input narrows
+    it: `channel` limits the run to that one channel, and
+    `dry_run` picks and reports the options without posting,
+    closing or recording anything.
     """
+
+    # limit the run to one music-poll channel (its Slack id)
+    channel: str | None = None
+    # pick and report options, but touch nothing
+    dry_run: bool = False
 
 
 @dataclass
@@ -142,8 +156,14 @@ async def run_for_channel(
     execute: ExecuteActivity,
     slack_channel_slack_id: str,
     identity: RunIdentity,
+    dry_run: bool = False,
 ) -> ChannelResult:
     """Run the weekly poll for one channel.
+
+    A dry run only picks: it returns the options it
+    would have posted, but writes nothing -- no history
+    row, no post, no close -- so it has no effect on
+    the no-repeat rule either.
 
     The run's history row is written before the Slack post,
     keyed by (run identity, channel), so a retried or replayed
@@ -153,6 +173,11 @@ async def run_for_channel(
     that post with the recorded options rather than picking
     again.
     """
+    if dry_run:
+        return await _dry_run_for_channel(
+            execute, slack_channel_slack_id
+        )
+
     existing = await execute(
         get_scheduled_poll_run_activity,
         identity.run_identity,
@@ -224,10 +249,54 @@ async def run_for_channel(
     )
 
 
+async def _dry_run_for_channel(
+    execute: ExecuteActivity, slack_channel_slack_id: str
+) -> ChannelResult:
+    """Pick one channel's options without touching anything.
+
+    A dry run reads the channel's songs and reports the
+    options it would have picked, but records no history
+    row, posts no poll and closes nothing -- so the run
+    has no effect on the channel's no-repeat history.
+    """
+    options = await execute(
+        select_music_poll_options_activity, slack_channel_slack_id
+    )
+    if options is None:
+        # fewer than 3 pickable songs: the run would have
+        # skipped the week and left the previous poll open
+        logger.info(
+            "weekly music poll dry run skipped in %s: "
+            "fewer than 3 pickable songs",
+            slack_channel_slack_id,
+        )
+        return ChannelResult(
+            slack_channel_slack_id=slack_channel_slack_id,
+            status=SKIPPED_FEW_PICKABLE,
+        )
+    logger.info(
+        "weekly music poll dry run picked %s options for %s",
+        len(options),
+        slack_channel_slack_id,
+    )
+    return ChannelResult(
+        slack_channel_slack_id=slack_channel_slack_id,
+        status=DRY_RUN,
+        options=options,
+    )
+
+
 async def run_for_channels(
-    execute: ExecuteActivity, identity: RunIdentity
+    execute: ExecuteActivity,
+    identity: RunIdentity,
+    params: WeeklyMusicPollParams | None = None,
 ) -> list[ChannelResult]:
-    """Fan the run out over every configured music-poll channel."""
+    """Fan the run out over every configured music-poll channel.
+
+    A run started with a channel limit runs that one
+    channel only, exactly as the schedule's fan-out runs
+    all of them.
+    """
     if identity.stale:
         # a stale run posts nothing, closes nothing and records
         # nothing toward the 8-poll history
@@ -241,9 +310,18 @@ async def run_for_channels(
         )
         return []
 
+    dry_run = params is not None and params.dry_run
+    if params is not None and params.channel is not None:
+        # a manual run limited to one music-poll channel
+        return [
+            await run_for_channel(
+                execute, params.channel, identity, dry_run=dry_run
+            )
+        ]
+
     channels = await execute(get_music_poll_channels_activity)
     return [
-        await run_for_channel(execute, channel, identity)
+        await run_for_channel(execute, channel, identity, dry_run=dry_run)
         for channel in channels
     ]
 
@@ -273,7 +351,9 @@ class WeeklyMusicPollWorkflow(AbstractScheduleWorkflow):
             workflow.info().run_id,
             params,
         )
-        return await run_for_channels(_execute_activity, identity)
+        return await run_for_channels(
+            _execute_activity, identity, params
+        )
 
 
 async def _execute_activity(activity: Any, *args: Any) -> Any:
