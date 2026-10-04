@@ -61,6 +61,22 @@ AND NOT EXISTS (musicpollresponse for this instance)
 
 ## How a scheduled run picks its songs
 
+The weekly run itself is a Temporal schedule workflow
+(`temporal/music_poll/workflow.py`, `WeeklyMusicPollWorkflow`, fired
+Mondays 00:00 UTC on the `fcm-<env>-main` task queue) that only
+orchestrates: it fans out over the channels returned by
+`get_music_poll_channels`, and for each one calls the selection
+activity and publishes through `poll/publish.py`. A run is identified
+by its scheduled fire time — or, for a manually started run, its
+workflow run id — and its history row is written, keyed by
+(run identity, channel), before the Slack post, so a retried or
+replayed run never posts a second poll in a channel it already
+posted in and never closes the poll it posted. A run that starts
+more than 24h after its scheduled fire time is stale: it posts
+nothing, closes nothing and records nothing, and the skip is logged
+at WARNING. The existing taskpool music-poll tasks above keep running
+unchanged.
+
 The poll a scheduled (or manually started) weekly run posts is chosen by one
 Temporal activity (`temporal/db/music_poll_activity.py`), which runs the whole
 pick — the clock read and the random tie-breaks included — so the workflow that

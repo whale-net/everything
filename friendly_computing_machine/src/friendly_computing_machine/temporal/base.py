@@ -62,7 +62,16 @@ class AbstractScheduleWorkflow(ABC):
         # probably introduces some terrible race condition, but we'll deal with that later
         # upsert update will at least simplify development (hopefully)
         logger.debug("schedule update input: %s", input)
-        return ScheduleUpdate(schedule=self.get_schedule(input.description.id))
+        # the update must rebuild the schedule for the app_env the
+        # schedule was created with; the schedule id is
+        # wf-schedule-fcm-{app_env}-{ClassName}, so recover the
+        # app_env from it (the id itself was previously passed as
+        # app_env, which rebuilt the schedule under a wrong id)
+        schedule_id = input.description.id
+        prefix = f"wf-schedule-fcm-"
+        suffix = f"-{self.__class__.__name__}"
+        app_env = schedule_id[len(prefix) : len(schedule_id) - len(suffix)]
+        return ScheduleUpdate(schedule=self.get_schedule(app_env))
 
     def get_id(self, app_env) -> str:
         # For now, just use the class name. should be fine
