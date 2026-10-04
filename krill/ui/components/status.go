@@ -56,6 +56,28 @@ func MilestoneStatusStyle(status string) StatusStyle {
 	}
 }
 
+// ShipmentStyle maps an item's shipment state onto a daisyUI badge. It is
+// the only place that vocabulary acquires a colour, so every table that
+// shows a Shipment column shows it the same way.
+//
+// "shipped" is deliberately the SAME tuple MilestoneStatusStyle gives the
+// milestone status of the same name: an item with a shipment record is the
+// item that is done, and a second, near-identical green for the two words
+// would let one page disagree with itself about what shipped looks like.
+// "unshipped" is ghost -- the absence of a record, not a failure -- the same
+// treatment "not started" gets. The unknown-state fallback is neutral, as
+// everywhere else here.
+func ShipmentStyle(state string) StatusStyle {
+	switch state {
+	case "shipped":
+		return StatusStyle{htmxui.BadgeSuccess, htmxui.BadgeSizeSM, false}
+	case "unshipped":
+		return StatusStyle{htmxui.BadgeGhost, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
+
 // TaskLaneStyle maps krill's five canonical task lanes (store's
 // CanonicalLaneOrder, spelled out as strings so this package keeps no
 // //krill/store dependency) onto a daisyUI badge. It is the only place a

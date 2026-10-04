@@ -9,12 +9,14 @@
 // milestone_ref row: the id in the URL is all that says which, and the
 // delivery listing is what decides it.
 //
-// The header and the two read-only cards live here: the outcome sentence
-// and, for a milestone, the cuts taken from it with their progress (FR
-// 0f1fb763). The shipped/unshipped delivery tables and the properties
-// rail are separate tasks that build on this page rather than beside it,
-// which is why the handler resolves the container and hands it on rather
-// than building the whole view in one pass.
+// The header lives here, and so do the reads behind the cards under it: the
+// outcome sentence and, for a milestone, the cuts taken from it with their
+// progress (FR 0f1fb763), plus the shipped/unshipped split of what this
+// container delivers (FR 1d16afe2), read through the same
+// get_delivery_breakdown the MCP tool wraps. The properties rail is a
+// separate task that builds on this page rather than beside it, which is why
+// the handler resolves the container and hands it on rather than building the
+// whole view in one pass.
 package main
 
 import (
@@ -76,7 +78,50 @@ func (app *App) handleProductMilestoneDetail(w http.ResponseWriter, r *http.Requ
 	page.Outcome = milestoneDetailOutcomeOf(listing, container.ID)
 	page.Milepebbles = app.milestoneDetailMilepebbles(r.Context(), product.ID, container)
 
-	app.renderShell(w, r, container.Name, r.URL.Path, pages.MilestoneDetail(page))
+	app.renderShell(w, r, container.Name, r.URL.Path,
+		pages.MilestoneDetail(deliveryCardOn(page,
+			app.milestoneDeliveryBreakdown(r.Context(), container))))
+}
+
+// deliveryCardOn attaches a container's delivered scope to its own view
+// model.
+//
+// It is a separate step rather than a third argument to
+// buildMilestoneDetailPage because the header and the cards below it are
+// separate reads: the header is a pure function of the product and the
+// container, so its tests need no breakdown fixture, and a card that could
+// only be had by reading one would drag the read into every header case.
+func deliveryCardOn(page pages.MilestoneDetailPage, b *pages.DeliveryBreakdown) pages.MilestoneDetailPage {
+	page.Delivery = b
+	return page
+}
+
+// milestoneDeliveryBreakdown reads one container's delivered scope for the
+// Delivery card, through the same Querier.GetDeliveryBreakdown the MCP tool
+// get_delivery_breakdown wraps -- so the card and that tool can never
+// describe the same container differently.
+//
+// Unlike the roadmap's per-container pass, this read is not gated on the
+// container being partially complete. On its own detail page the delivered
+// scope IS the container's subject, and a shipped milestone answering "these
+// are the things it delivers, and all of them shipped" is a real answer, not
+// a missing one. The disagreement flag inside deliveryBreakdownOf is what
+// keeps that from reading as a contradiction.
+//
+// A read that fails is non-fatal in the same way the roadmap's is: the page
+// still renders the header, the name, the status and both work links, and
+// the one card that could not be read says so in its own place.
+func (app *App) milestoneDeliveryBreakdown(ctx context.Context, c taskContainer) *pages.DeliveryBreakdown {
+	shipped, unshipped, err := app.spec.DeliveryBreakdown(ctx, c.ID)
+	if err != nil {
+		logger.Error("milestone detail: delivery breakdown read failed",
+			"container", c.ID.String(), "error", err)
+		return &pages.DeliveryBreakdown{
+			Error: "This container's delivered scope could not be read. See the logs.",
+		}
+	}
+	b := deliveryBreakdownOf(c.Status, shipped, unshipped)
+	return &b
 }
 
 // buildMilestoneDetailPage assembles the header's view model from the one
