@@ -187,8 +187,6 @@ func TestHandleLinkASSResult_FourDistinctOutcomes(t *testing.T) {
 
 	assert.Contains(t, bodies["linked"], "alert-success")
 	assert.Contains(t, bodies["already_linked"], "alert-success")
-	assert.Contains(t, bodies["unlinked"], "alert-success")
-	assert.Contains(t, bodies["not_linked"], "alert-success")
 	assert.Contains(t, bodies["conflict"], "alert-error")
 	assert.Contains(t, bodies["rejected"], "alert-error")
 
@@ -388,6 +386,8 @@ func TestHandleLinkManmanv2Result_DistinctOutcomes(t *testing.T) {
 	}
 	assert.Contains(t, bodies["linked"], "alert-success")
 	assert.Contains(t, bodies["already_linked"], "alert-success")
+	assert.Contains(t, bodies["unlinked"], "alert-success")
+	assert.Contains(t, bodies["not_linked"], "alert-success")
 	for _, o := range []string{"conflict", "rejected", "garbage"} {
 		assert.Contains(t, bodies[o], "alert-error")
 	}

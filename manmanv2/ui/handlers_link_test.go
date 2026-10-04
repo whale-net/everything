@@ -241,7 +241,9 @@ func TestUnlinkShow(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `action="/unlink/whagent/confirm"`)
 
 	_, _, _, mux = newLinkHarness(t, fakeLinkVerifier{err: whagentlink.ErrExpired})
-	assert.Equal(t, linkOutcomeRejected, outcomeOf(t, do(mux, "GET", "/unlink/whagent?token=t", "", nil)))
+	w = do(mux, "GET", "/unlink/whagent?token=garbage", "", nil)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Link request rejected")
 }
 
 func TestUnlinkConfirm(t *testing.T) {
