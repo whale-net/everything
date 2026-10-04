@@ -74,6 +74,13 @@ def upgrade() -> None:
         schema="fcm",
     )
     op.create_index(
+        op.f("ix_fcm_scheduledpollrun_run_identity"),
+        "scheduledpollrun",
+        ["run_identity"],
+        unique=False,
+        schema="fcm",
+    )
+    op.create_index(
         op.f("ix_fcm_scheduledpollrun_poll_id"),
         "scheduledpollrun",
         ["poll_id"],
@@ -156,6 +163,11 @@ def downgrade() -> None:
     )
     op.drop_index(
         op.f("ix_fcm_scheduledpollrun_slack_channel_slack_id"),
+        table_name="scheduledpollrun",
+        schema="fcm",
+    )
+    op.drop_index(
+        op.f("ix_fcm_scheduledpollrun_run_identity"),
         table_name="scheduledpollrun",
         schema="fcm",
     )
