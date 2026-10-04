@@ -552,9 +552,14 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix+"/{tid}", app.readerRoute(app.handleProductTaskDetail))
 	mux.HandleFunc("GET "+productPathPrefix+boardSuffix, app.readerRoute(app.handleProductBoard))
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix, app.readerRoute(app.handleProductMilestones))
-	// Milestone detail ids hang beneath the milestones prefix, so a copied
-	// link to one resolves its product before the id is even looked at.
-	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}", app.readerRoute(app.handleProductPlaceholder))
+	// The Milestone detail (FR ef0a0ded), which the Milestones table's
+	// names and the Overview's in-flight rows already link to. Milestone
+	// and milepebble ids share the one wildcard: a milepebble is its own
+	// milestone_ref row, and the handler resolves which of them the id is
+	// out of the product's delivery listing. Ids hang beneath the
+	// milestones prefix, so a copied link resolves its product before the
+	// id is even looked at.
+	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}", app.readerRoute(app.handleProductMilestoneDetail))
 
 	// The sidebar's Product switcher (FR c4bd4bf8). A reader route: it
 	// reads the scope, records the pick as the last-viewed product, and
