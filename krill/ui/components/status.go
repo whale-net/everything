@@ -69,6 +69,81 @@ func MilestoneCountStyle() StatusStyle {
 	return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
 }
 
+// DesignSessionStageStyle maps a design session's derived Stage (store's
+// Stage, spelled out as strings so this package keeps no //krill/store
+// dependency) onto a daisyUI badge. It is the only place that vocabulary
+// acquires a colour, so the sessions table and the session detail's own
+// header show one stage the one way.
+//
+// The seven values read as progress towards an approved session: ghost for
+// a session nothing has happened in yet, the two info values for the two
+// rounds the operator is waiting on a reply to, secondary/primary for the
+// settled ones, error-soft for the one that sent the session back, and
+// success for the terminal approval. Distinctness is over the whole
+// (variant, soft) tuple, as everywhere else here, and the default arm
+// keeps an eighth stage from rendering as a blank badge.
+func DesignSessionStageStyle(stage string) StatusStyle {
+	switch stage {
+	case "opened":
+		return StatusStyle{htmxui.BadgeGhost, htmxui.BadgeSizeSM, false}
+	case "approved":
+		return StatusStyle{htmxui.BadgeSuccess, htmxui.BadgeSizeSM, false}
+	case "changes_requested":
+		return StatusStyle{htmxui.BadgeError, htmxui.BadgeSizeSM, true}
+	case "architect_review":
+		return StatusStyle{htmxui.BadgeInfo, htmxui.BadgeSizeSM, true}
+	case "in_draft":
+		return StatusStyle{htmxui.BadgeInfo, htmxui.BadgeSizeSM, false}
+	case "answered":
+		return StatusStyle{htmxui.BadgeSecondary, htmxui.BadgeSizeSM, false}
+	case "ruled":
+		return StatusStyle{htmxui.BadgePrimary, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
+
+// DesignSessionStageLabel is the human wording on a stage badge. The
+// store's values are snake_cased wire strings and a badge an operator
+// reads is not one, so the two live apart here rather than being spelled
+// apart at each call site. An unrecognised stage shows the wire value
+// itself rather than an empty badge.
+func DesignSessionStageLabel(stage string) string {
+	switch stage {
+	case "opened":
+		return "opened"
+	case "approved":
+		return "approved"
+	case "changes_requested":
+		return "changes requested"
+	case "architect_review":
+		return "architect review"
+	case "in_draft":
+		return "in draft"
+	case "answered":
+		return "answered"
+	case "ruled":
+		return "ruled"
+	case "":
+		return "unknown"
+	default:
+		return stage
+	}
+}
+
+// DesignSessionBlockingCountStyle is the badge for a session's open
+// BLOCKING question count -- the "N blocking" cell that names a session
+// needing an answer before it can move.
+//
+// Error, unlike MilestoneCountStyle's neutral: a count that asserts a
+// state (something is owed a reply) may take a state colour, and this is
+// the same error tone the blocking questions of every other surface wear.
+// It lives beside the mapper so that cell's colour has exactly one owner
+// and a future count badge cannot acquire a second, hand-picked tone.
+func DesignSessionBlockingCountStyle() StatusStyle {
+	return StatusStyle{htmxui.BadgeError, htmxui.BadgeSizeSM, false}
+}
+
 // ShipmentStyle maps an item's shipment state onto a daisyUI badge. It is
 // the only place that vocabulary acquires a colour, so every table that
 // shows a Shipment column shows it the same way.

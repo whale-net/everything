@@ -520,10 +520,10 @@ Two wrappers sit on the un-prefixed resolution, and which one a page
 calls is the design decision:
 
 - **`resolveUnprefixedProduct`** is for a page that cannot render a body
-  without a product — today only `/design`, whose whole job is to link to
-  one product's session list. It writes the cookie and answers an empty
-  scope with a designed empty state at 200, not a 404: the URL resolved
-  fine, there is simply nothing behind it yet.
+  without a product — today only `/design`, which serves that product's
+  Design sessions table. It writes the cookie and answers an empty scope
+  with a designed empty state at 200, not a 404: the URL resolved fine,
+  there is simply nothing behind it yet.
 - **`rememberUnprefixedProduct`** is for a page whose body is the same
   whichever product is current — `/`, `/ops`, the ops read views, the
   credentials page. It writes the cookie and never writes a response, so

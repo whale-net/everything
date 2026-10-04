@@ -310,11 +310,14 @@ go_test(
     srcs = [
         "shared_spec_readers_test.go",
         "design_page_test.go",
+        "design_sessions_list_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
         "//krill/api/handlers",
         "//krill/store",
+        "//krill/ui/components",
+        "//krill/ui/pages",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

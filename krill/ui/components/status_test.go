@@ -174,3 +174,98 @@ func TestNonGoalKindLabel_HumanWordingForEveryKindAndUnknownValues(t *testing.T)
 	// so a third kind added later is still readable rather than blank.
 	assert.Equal(t, "some-future-kind", NonGoalKindLabel("some-future-kind"))
 }
+
+// designSessionStages is store.Stage's full wire vocabulary, spelled out
+// here rather than imported: this package carries no //krill/store
+// dependency by design, and a test that read the list off the store type
+// would silently agree with any future edit to it.
+var designSessionStages = []string{
+	"opened",
+	"approved",
+	"changes_requested",
+	"architect_review",
+	"in_draft",
+	"answered",
+	"ruled",
+}
+
+// designSessionStageLabels is the operator wording for each of those, in
+// the same order. Snake_cased wire values are not what an operator reads.
+var designSessionStageLabels = []string{
+	"opened",
+	"approved",
+	"changes requested",
+	"architect review",
+	"in draft",
+	"answered",
+	"ruled",
+}
+
+// TestDesignSessionStageStyle_EveryStageIsVisuallyDistinct: the seven
+// stages are told apart by the (variant, soft) tuple, which is what keeps
+// the two info stages -- the two rounds an operator is waiting on -- from
+// rendering identically.
+func TestDesignSessionStageStyle_EveryStageIsVisuallyDistinct(t *testing.T) {
+	seen := map[StatusStyle]string{}
+	for _, stage := range designSessionStages {
+		style := DesignSessionStageStyle(stage)
+		if other, clash := seen[style]; clash {
+			t.Errorf("stages %q and %q both render as %+v: the table cannot tell them apart", other, stage, style)
+		}
+		seen[style] = stage
+	}
+
+	for _, stage := range designSessionStages {
+		assert.NotEqual(t, neutralStyle, DesignSessionStageStyle(stage),
+			"%q must not fall through to the unknown-stage fallback", stage)
+	}
+}
+
+// TestDesignSessionStageStyle_UnknownStageUsesNeutralFallback pins the
+// eighth stage's behaviour: a new store value renders as the neutral
+// badge rather than failing to compile, and never as a blank badge.
+func TestDesignSessionStageStyle_UnknownStageUsesNeutralFallback(t *testing.T) {
+	assert.Equal(t, neutralStyle, DesignSessionStageStyle("a stage this build does not know"))
+}
+
+// TestDesignSessionStageStyle_SizeIsUniform: every stage badge is the same
+// size, so a table row's stage column cannot be read at two different
+// scales depending on the stage.
+func TestDesignSessionStageStyle_SizeIsUniform(t *testing.T) {
+	for _, stage := range designSessionStages {
+		assert.Equal(t, htmxui.BadgeSizeSM, DesignSessionStageStyle(stage).Size, "%q", stage)
+	}
+}
+
+// TestDesignSessionStageLabel_HumanWordingForEveryStage: the label is the
+// operator's wording, never the wire value -- "changes_requested" is not
+// what a badge an operator scans for a blocked session should say.
+func TestDesignSessionStageLabel_HumanWordingForEveryStage(t *testing.T) {
+	for i, stage := range designSessionStages {
+		assert.Equal(t, designSessionStageLabels[i], DesignSessionStageLabel(stage), "%q", stage)
+	}
+	// Not one label may be blank: a badge with no words is a row an
+	// operator cannot read.
+	for _, stage := range designSessionStages {
+		assert.NotEmpty(t, DesignSessionStageLabel(stage), "%q", stage)
+	}
+}
+
+// TestDesignSessionStageLabel_UnknownAndEmptyNeverBlank: an unrecognised
+// stage shows its own value so a newly-added one is still readable, and
+// an empty one reads as "unknown" rather than as nothing at all.
+func TestDesignSessionStageLabel_UnknownAndEmptyNeverBlank(t *testing.T) {
+	assert.Equal(t, "a stage this build does not know", DesignSessionStageLabel("a stage this build does not know"))
+	assert.Equal(t, "unknown", DesignSessionStageLabel(""))
+}
+
+// TestDesignSessionBlockingCountStyle_IsTheErrorVariant: the "N blocking"
+// cell names a session an operator is being held up by, so it takes the
+// error tone rather than the neutral one a plain count badge wears.
+func TestDesignSessionBlockingCountStyle_IsTheErrorVariant(t *testing.T) {
+	style := DesignSessionBlockingCountStyle()
+	assert.Equal(t, htmxui.BadgeError, style.Variant)
+	assert.Equal(t, htmxui.BadgeSizeSM, style.Size)
+	assert.False(t, style.Soft,
+		"the blocking count is a stated fact about the session, not a tinted warning about it")
+}

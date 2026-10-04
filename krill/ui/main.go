@@ -519,16 +519,31 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	// user-controlled redirect target.
 	mux.HandleFunc("GET "+designGoPath, app.readerRoute(app.handleDesignGo))
 
+	// The design-session read routes that are not pre-redesign URLs: the
+	// product-scoped session DETAIL, which the list's rows link to and the
+	// pre-redesign unscoped detail 302s into (FR a77852a9). The list itself
+	// and the design root stay in legacyURLs -- they are pre-redesign URLs
+	// that happen not to have been replaced yet.
+	//
+	// It hangs beneath the product-scoped list because the canonical detail
+	// URL carries the pid: "is this session under the product in the URL?"
+	// is a question a copied link has to be answerable about. Registering
+	// the blade literal /design/products/{productID}/design-sessions/new
+	// alongside it is safe -- a literal segment outranks the {id} wildcard
+	// in the same Go 1.22 mux.
+	mux.HandleFunc("GET /design/products/{productID}/design-sessions/{id}", app.readerRoute(app.handleDesignSessionDetail))
+
 	// The design-session write surface (design_write.go), hung off the read
-	// views in legacyURLs: the list page's "open a session" form and a session
-	// detail page's "submit follow-up" form. Both are operatorRoute (RequireAuth
+	// views: the list page's "open a session" form and a session detail
+	// page's "submit follow-up" form. Both are operatorRoute (RequireAuth
 	// + requireOperator), so a write only ever proceeds with the signed-in
 	// operator's real (iss, sub) resolved onto the request context, and both
 	// reach krill only through withKrillSession. The open form posts to the
 	// same product-scoped path as the list view (POST vs GET on one pattern);
-	// the answer form posts to a sub-path of the detail route.
+	// the answer form posts to a sub-path of the canonical detail, so the
+	// 303 back to the session it wrote to is one hop.
 	mux.HandleFunc("POST /design/products/{productID}/design-sessions", app.operatorRoute(app.handleOpenDesignSessionForm))
-	mux.HandleFunc("POST /design/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
+	mux.HandleFunc("POST /design/products/{productID}/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
 
 	// The product-scoped prefixes (FR c4bd4bf8). Overview is the shell's
 	// home and serves its real page; every other sub-path serves a

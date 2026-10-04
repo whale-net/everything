@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
@@ -15,12 +16,41 @@ import (
 // htmxui ARCHITECTURE §14: assert the claim, not the byte layout.
 
 // DesignSessionRow is one row of a product's session list.
+//
+// Stage is the store's own derived stage (store.Stage, spelled as a string
+// so this package keeps no //krill/store dependency) rather than a
+// re-derivation from a signoff flag: the aggregate read owns that
+// derivation, and a view computing a second one is how a list and a detail
+// come to disagree about what stage a session is in. The badge resolves it
+// through components.DesignSessionStageStyle/Label.
+//
+// OpenedRelative is the age an operator scans for and OpenedExact the
+// instant behind it, both handed over pre-rendered for the reason the
+// status register's rows are: relative text needs a clock, and a view that
+// reads one cannot be asserted on.
 type DesignSessionRow struct {
-	ID                string
-	OpeningSubmission string
-	CreatedAt         string
-	SignedOff         bool
-	DetailPath        string
+	// ID is the session's own id, carried so the row is addressable and so
+	// a detail link can be checked against it.
+	ID string
+
+	// OpeningRequest is the opening submission's FIRST LINE, which is what
+	// the list shows; the full submission is the detail page's subject.
+	OpeningRequest string
+
+	// DetailPath is the canonical, product-scoped detail URL (FR a77852a9).
+	DetailPath string
+
+	// Stage is the derived stage's wire value.
+	Stage string
+
+	// OpenBlockingQuestions is the session's currently-open BLOCKING
+	// question count. The non-blocking count is deliberately not shown
+	// here: it is on the detail page's rail, where a question's text is,
+	// and a number here would be an action with nowhere to go.
+	OpenBlockingQuestions int
+
+	OpenedRelative string
+	OpenedExact    string
 }
 
 // DesignSessionListPage is the product-scoped session list. Error and
@@ -31,9 +61,12 @@ type DesignSessionRow struct {
 //
 // FormAction is the open form's own POST target, supplied by the caller so
 // the path shape stays owned by package main's designProductSessionsPath
-// rather than being rebuilt here.
+// rather than being rebuilt here. Path is this list's own URL, which the
+// empty state's action points at until the new-session blade takes over.
 type DesignSessionListPage struct {
 	ProductID         string
+	ProductName       string
+	Path              string
 	Sessions          []DesignSessionRow
 	Error             string
 	OpeningSubmission string
@@ -109,57 +142,109 @@ type DesignSessionDetailPage struct {
 // unticked, which is the GET handler's normal case.
 func (p DesignSessionDetailPage) IsChecked(id string) bool { return p.CheckedResolve[id] }
 
-// DesignRoot is the design root's landing body: the session list of the
-// product the server resolved for this un-prefixed URL, as one link. No
-// product id is asked for -- the resolution happens before the page is
-// built, so a pasted or mistyped id is not a failure mode this page has
-// (FR c4bd4bf8).
-//
-// The former typed-id form that browsed to /design/go stays registered and
-// keeps working; only the way in changed, so an old bookmark still lands.
-templ DesignRoot(productName, sessionsHref string) {
-	<h2>Design sessions</h2>
-	<p>
-		Browse a product's design sessions.
-		<a href={ templ.URL(sessionsHref) } class="link link-primary">{ productName }</a>
-		has none yet, or some to read through.
-	</p>
+// designSessionListAnchor is the DOM id this page's region carries, so a
+// test -- and the empty state's own action -- name one element rather than
+// a heading's markup.
+const designSessionListAnchor = "design-sessions"
+
+// designSessionStageBadge renders one row's stage. The colour, size and
+// soft treatment come from components.DesignSessionStageStyle and the
+// wording from components.DesignSessionStageLabel, so this file knows no
+// daisyUI class and the stage vocabulary has exactly one owner -- the same
+// chain statusBadge runs for the milestone statuses.
+templ designSessionStageBadge(stage string) {
+	{{ s := components.DesignSessionStageStyle(stage) }}
+	@htmxui.Badge(components.DesignSessionStageLabel(stage), s.Variant, s.Size, s.Soft, templ.Attributes{
+		"data-krill": "design-session-stage",
+	})
 }
 
-// DesignSessionList is the product-scoped session list, each session
-// linking into its own detail page.
+// designSessionBlockingCell renders the Open questions cell: the error
+// "N blocking" badge when the session owes at least one blocking answer,
+// and a plain 0 when it owes none.
+//
+// The two are different answers and never share a branch -- "one blocking
+// question is waiting" and "nothing is owed" are different facts, and
+// rendering the second with a badge would put a page with nothing to do in
+// the same visual register as one an operator is being held up by. The
+// badge's colour comes from components.DesignSessionBlockingCountStyle so
+// this cell has no daisyUI class of its own.
+templ designSessionBlockingCell(s DesignSessionRow) {
+	if s.OpenBlockingQuestions > 0 {
+		{{ style := components.DesignSessionBlockingCountStyle() }}
+		@htmxui.Badge(itoa(s.OpenBlockingQuestions)+" blocking", style.Variant, style.Size, style.Soft, templ.Attributes{
+			"data-krill": "design-session-blocking",
+		})
+	} else {
+		<span class="text-sm text-base-content/70" data-krill="design-session-blocking-none">0</span>
+	}
+}
+
+// designSessionOpenedAt renders one row's opening instant: the relative age
+// as the visible text, the exact instant in the datetime and the title so
+// hovering answers "exactly when", and the data-krill-updated-at hook the
+// status register and the task detail's Escalated row share.
+//
+// Relative is what renders server-side, so the page says something
+// readable with the head script absent; the exact instant is in the title
+// either way.
+templ designSessionOpenedAt(s DesignSessionRow) {
+	<time class="text-sm text-base-content/70" data-krill="design-session-opened-at"
+		data-krill-updated-at={ s.OpenedExact } datetime={ s.OpenedExact } title={ s.OpenedExact }>{ s.OpenedRelative }</time>
+}
+
+// DesignSessionList is the product's session table: every session of the
+// product newest-first, with its derived stage and its open blocking
+// question count.
+//
+// The primary action is still the inline OpenSessionForm below the header,
+// not a link to a new-session blade: the blade is the next task's page
+// (FR 44d7f1e2), and this page renders before it lands rather than after.
+// It is here for the same reason the empty state's action points at it --
+// there is exactly one way to open a session today, and this is it.
+//
+// The empty state points its action at the form's own id rather than at a
+// blade URL that does not resolve yet: an action whose destination 404s is
+// worse than one that scrolls to the control standing right above it.
 templ DesignSessionList(page DesignSessionListPage) {
-	<h2>Design sessions</h2>
-	<p>Product <code>{ page.ProductID }</code></p>
-	<h3>Open a new design session</h3>
-	<p>Describe your idea in plain language. krill records it as the session's opening submission; it does not create or change any spec entity here.</p>
-	@OpenSessionForm(page)
-	<div id="design-sessions">
+	<section id={ designSessionListAnchor } class="space-y-4">
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<h1 class="text-2xl font-semibold" data-krill="page-title">Design sessions</h1>
+		</div>
+		<p class="text-sm text-base-content/70">
+			{ page.ProductName } — every design session, most recently opened first.
+		</p>
+		@OpenSessionForm(page)
 		if len(page.Sessions) > 0 {
-			<table class="table table-sm">
-				<thead>
-					<tr>
-						<th>Session</th>
-						<th>Opening submission</th>
-						<th>Status</th>
-						<th>Created</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, s := range page.Sessions {
+			<div class="overflow-x-auto rounded-lg border border-base-300 bg-base-100">
+				<table class="table table-zebra" data-krill="design-session-table">
+					<thead>
 						<tr>
-							<td><a href={ templ.URL(s.DetailPath) }><code>{ s.ID }</code></a></td>
-							<td>{ s.OpeningSubmission }</td>
-							<td>{ sessionStatusLabel(s.SignedOff) }</td>
-							<td>{ s.CreatedAt }</td>
+							<th>Opening request</th>
+							<th>Stage</th>
+							<th class="text-right">Open questions</th>
+							<th>Opened</th>
 						</tr>
-					}
-				</tbody>
-			</table>
+					</thead>
+					<tbody>
+						for _, s := range page.Sessions {
+							<tr class="hover" data-krill="design-session-row" data-krill-design-session-id={ s.ID }>
+								<td>
+									<a href={ templ.URL(s.DetailPath) } class="link font-medium" data-krill="design-session-opening-request">{ s.OpeningRequest }</a>
+								</td>
+								<td>@designSessionStageBadge(s.Stage)</td>
+								<td class="text-right">@designSessionBlockingCell(s)</td>
+								<td>@designSessionOpenedAt(s)</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
 		} else {
-			@htmxui.EmptyState("No design sessions for this product yet.", "Open one above to start a design conversation.", "", "", nil)
+			@htmxui.EmptyState("No design sessions for this product yet.", "Open one above to start a design conversation.",
+				"New design session", "#open-session-form", templ.Attributes{"data-krill": "design-sessions-empty"})
 		}
-	</div>
+	</section>
 }
 
 // OpenSessionForm is the "open a design session" form, and the hx-post
@@ -357,15 +442,6 @@ templ FollowUpForm(page DesignSessionDetailPage) {
 		</p>
 		<p><button type="submit" class="btn btn-primary">Submit follow-up</button></p>
 	</form>
-}
-
-// sessionStatusLabel is the list row's status cell, read last-signoff-wins
-// by the builder that populates the row.
-func sessionStatusLabel(signedOff bool) string {
-	if signedOff {
-		return "signed off"
-	}
-	return "open"
 }
 
 // itoa keeps the #seq_no / #opened-at rendering free of a strconv import

@@ -171,10 +171,18 @@ func legacyURLs() []legacyURL {
 		{Pattern: specProductPath + "/milestones/{mid}/tasks/{tid}", Successor: legacyTaskDetailSuccessor},
 		{Pattern: specProductPath + "/milestones/{mid}/board", Successor: legacyTaskSuccessor(boardSuffix)},
 
-		// The design-session browser.
+		// The design-session browser. The list URL is pre-redesign (it
+		// named the sessions before the redesign) and keeps serving; the
+		// design root keeps serving too, and now serves the resolved
+		// product's list rather than a landing that asked for an id.
 		{Pattern: designPath, Serve: (*App).handleDesign},
 		{Pattern: "GET /design/products/{productID}/design-sessions", Serve: (*App).handleDesignSessionList},
-		{Pattern: "GET /design/design-sessions/{id}", Serve: (*App).handleDesignSessionDetail},
+		// The pre-redesign session DETAIL retires into the product-scoped
+		// one: the canonical URL carries the pid because "is this session
+		// under the product the reader is looking at?" is answerable only
+		// with it (FR a77852a9), and the successor resolves the pid from
+		// the session row so a bookmarked link still opens that session.
+		{Pattern: "GET /design/design-sessions/{id}", Successor: legacyDesignSessionDetailSuccessor},
 	}
 }
 
@@ -334,6 +342,31 @@ func legacyTaskContainer(app *App, r *http.Request, pid uuid.UUID) (taskContaine
 	return container, true
 }
 
+// legacyDesignSessionDetailSuccessor is the successor for the pre-redesign
+// session detail: the product-scoped detail, resolved from the session row
+// itself (FR a77852a9).
+//
+// The pid is not in the old URL, so this is the one successor that has to
+// read the store: the session's own ProductID is the pid the canonical URL
+// names, and it is the same row the page it redirects to reads. A session
+// that cannot be read resolves to no successor, and serveLegacy then
+// renders the product index -- an old link to a session that no longer
+// exists lands somewhere an operator can navigate out of, rather than on a
+// redirect to nowhere.
+func legacyDesignSessionDetailSuccessor(app *App, r *http.Request) (string, bool) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		return "", false
+	}
+	ds, err := app.designSessions.GetByID(r.Context(), id)
+	if err != nil {
+		logger.Warn("legacy design session URL: could not resolve the session's product; rendering the product index",
+			"design_session_id", id, "error", err)
+		return "", false
+	}
+	return designSessionPath(ds.ProductID, id), true
+}
+
 // legacyTaskDetailSuccessor is the successor for the pre-redesign
 // per-container task detail: the product-scoped detail, carrying the tid
 // alone (FR 0c03eac1).
@@ -394,19 +427,24 @@ func (app *App) handleOps(w http.ResponseWriter, r *http.Request) {
 	app.renderShell(w, r, "Ops console", opsPath, pages.AreaIndex("Ops console", opsIndexLinks))
 }
 
-// handleDesign is the design-session browser root. It is the entry point
-// into the read sub-pages registered under this prefix in mountShellRoutes
-// (design_page.go): a product's session list and one session's
-// revision-event log + open questions. "/design" names no product, so the
-// root resolves one server-side and links to that product's session list
-// rather than asking the operator for an id.
+// handleDesign is the design-session browser root. "/design" names no
+// product, so it resolves one server-side and serves that product's session
+// list -- one page, two URLs, exactly as "/" and /products/{pid}/overview
+// are one Overview at two URLs (FR c4bd4bf8).
+//
+// It used to render a landing that asked the operator which product to
+// look at by typing an id. That form is gone: the operator is never asked
+// to type an id, and the page they are sent to is the page they wanted.
 func (app *App) handleDesign(w http.ResponseWriter, r *http.Request) {
 	r, product, ok := app.resolveUnprefixedProduct(w, r)
 	if !ok {
 		return
 	}
-	app.renderShell(w, r, "Design sessions", designPath,
-		pages.DesignRoot(product.Name, designProductSessionsPath(product.ID)))
+	// designPath as the nav key, not the product-scoped list path: the
+	// sidebar's Design sessions item owns the product-scoped path, and the
+	// area root is a second address for the same page rather than the
+	// nav item's own page.
+	app.renderDesignSessionList(w, r, product.ID, designPath)
 }
 
 // handleSpec is the spec + delivery browser root. It is a static landing
