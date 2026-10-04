@@ -155,10 +155,11 @@ music-poll channel. Two keys narrow it:
 {"channel": "C0123456789"}
 ```
 
-- `dry_run` — pick and report without touching anything:
+- `dry_run` — pick and report without touching anything (combine it
+  with `channel` to dry-run one channel):
 
 ```json
-{"dry_run": true}
+{"channel": "C0123456789", "dry_run": true}
 ```
 
 A dry run posts nothing, closes nothing and records no history row —
@@ -172,15 +173,72 @@ run identity is its workflow execution id, not the scheduled fire
 time — so retrying or replaying the same execution never posts a
 second poll in a channel it already posted in.
 
-**Verifying a run's outcome.** Open the workflow execution in the
-Temporal UI and read its result: one entry per channel with a status
-of `posted` (the new poll's ids in `poll_id`), `dry-run` (the
-would-be options), `skipped-few-pickable`, `already-posted` (a
-replayed run), or `post-failed` (with the Slack error). The
-`scheduledpollrun` table holds the same history — one row per
-(run identity, channel) with the run's options and the posted poll's
-ids — and the closed previous poll shows in that channel's poll list
-with its final result.
+### Triggering the schedule on demand
+
+The worker creates the schedule on startup:
+`wf-schedule-fcm-<env>-WeeklyMusicPollWorkflow`, firing every
+Monday 00:00 UTC. To fire it without waiting for Monday, open
+**Schedules** in the Temporal UI, pick that schedule and press
+**Trigger now** (or
+`temporal schedule trigger --sid wf-schedule-fcm-<env>-WeeklyMusicPollWorkflow`).
+A triggered run is a scheduled run — the schedule starts the
+workflow with no input, so the run is identified by its fire time
+and the 24h staleness rule below applies to it.
+
+### Verifying a run's outcome
+
+Open the workflow execution in the Temporal UI and read its
+result: one entry per channel with a status of
+
+- `posted` — the poll went out. The entry carries the new poll's
+  id in `poll_id`, and the channel's previous scheduled poll was
+  auto-closed just before the post (the only way a scheduled poll
+  closes) — it now shows its final result in the channel.
+- `dry-run` — a dry run; the entry's `options` are what it would
+  have posted.
+- `skipped-few-pickable` — fewer than three pickable songs, so
+  nothing was posted, nothing was closed and nothing was recorded;
+  the previous poll stays open. The skip is logged at INFO
+  ("fewer than 3 pickable songs").
+- `already-posted` — a replayed run that already posted in that
+  channel; `poll_id` is the poll it posted the first time.
+- `post-failed` — the Slack post failed; `error` says why, and the
+  recorded run row waits for a retry of the same execution.
+
+A scheduled run that starts more than 24h after its fire time is
+stale: it returns an empty result (`[]`) and the skip is logged at
+WARNING with both timestamps — it posted nothing, closed nothing
+and recorded nothing toward the 8-poll history.
+
+The `scheduledpollrun` table holds the same history — one row per
+(run identity, channel) with the run's options and the posted
+poll's ids — so the outcome can be confirmed in the database too.
+
+### Running it locally against Tilt
+
+FCM's Tilt setup (`tilt up -f friendly_computing_machine/Tiltfile`)
+includes a Temporal dev server: the Web UI at
+http://localhost:8233 (namespace `default`), gRPC at
+localhost:7233. The local worker's app env is `dev`, so its task
+queue is `fcm-dev-main` and its schedule id is
+`wf-schedule-fcm-dev-WeeklyMusicPollWorkflow`. A manual dry run
+against Tilt is therefore:
+
+1. `tilt up -f friendly_computing_machine/Tiltfile` and wait for
+   the `worker` resource to be ready (it creates the schedule on
+   startup).
+2. Open http://localhost:8233 and switch to the `default`
+   namespace.
+3. **Workflows → Start Workflow**: type `WeeklyMusicPollWorkflow`,
+   task queue `fcm-dev-main`, input `{"dry_run": true}` (add
+   `"channel": "C0123456789"` to dry-run one channel).
+4. Open the run and read the result — per-channel `dry-run`
+   entries with the would-be options, or `skipped-few-pickable`.
+
+A non-dry manual run started the same way posts real polls in the
+channels configured in the bot's `music_poll_infos`, closes the
+previous scheduled poll and records history, exactly like the
+scheduled run.
 
 ## Diagnosing it: start here
 

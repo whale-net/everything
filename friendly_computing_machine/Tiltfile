@@ -3,9 +3,9 @@
 
 load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
-load('../tools/tilt/common.tilt', 
+load('../tools/tilt/common.tilt',
      'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
-     'setup_dev_util', 'setup_postgres',
+     'setup_dev_util', 'setup_postgres', 'setup_temporal',
      'build_apps_config', 'deploy_helm_chart',
      'get_env_bool', 'get_custom_or_default',
      'print_startup_banner', 'print_service_info', 'print_access_info', 'print_footer_info')
@@ -36,8 +36,15 @@ db_url = get_custom_or_default('FCM_BUILD_POSTGRES_ENV', 'FCM_POSTGRES_URL', db_
 # Use custom port to avoid conflict with ManMan
 k8s_resource(workload='postgres-dev', port_forwards='5433:5432')
 
+# Temporal dev server: the workflow worker connects to it,
+# upserts its schedules on startup (including the weekly
+# music-poll schedule) and runs workflows started by hand
+# from the Temporal UI -- the manual-run verification path
+temporal_info = setup_temporal(namespace)
+
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('FCM_BUILD_POSTGRES_ENV') == 'custom' else "local"))
+print("  Temporal:  {} (Web UI {})".format(temporal_info['grpc_target'], temporal_info['ui_service_info']))
 
 # ===========================
 # Application Configuration
@@ -99,7 +106,7 @@ apps_config = build_apps_config(
     env_vars={
         'POSTGRES_URL': db_url,
         'APP_ENV': 'dev',
-        'TEMPORAL_HOST': 'temporal-dev.fcm-local-dev.svc.cluster.local:7233',
+        'TEMPORAL_HOST': temporal_info['grpc_target'],
         'MANMAN_EXPERIENCE_API_URL': 'http://experience-api-dev.manman-local-dev.svc.cluster.local',
         'MANMAN_STATUS_API_URL': 'http://status-api-dev.manman-local-dev.svc.cluster.local',
         'MANMAN_WORKER_DAL_API_URL': 'http://worker-dal-api-dev.manman-local-dev.svc.cluster.local',
@@ -120,6 +127,16 @@ deploy_helm_chart(
     global_config={}
 )
 
+# The Temporal-connected apps wait for the temporal-dev
+# server instead of crash-looping until it is ready
+# (deploy_helm_chart renames each workload to its image
+# name, so the resource is referenced by that name)
+for _app in ('bot', 'taskpool', 'worker'):
+    k8s_resource(
+        workload=APPS[_app]['image_name'],
+        resource_deps=['temporal-dev'],
+    )
+
 # ===========================
 # Access Information
 # ===========================
@@ -129,6 +146,8 @@ print_access_info(
     APPS,
     additional_services={
         'PostgreSQL': db_info['service_info'],
+        'Temporal': temporal_info['service_info'],
+        'Temporal Web UI': temporal_info['ui_service_info'],
     }
 )
 
