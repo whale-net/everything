@@ -14,6 +14,7 @@ import (
 
 	"github.com/whale-net/everything/whagent_net/events"
 	whagentpb "github.com/whale-net/everything/whagent_net/protos"
+	"github.com/whale-net/everything/whagent_net/ui/components"
 )
 
 // This file guards issue #2248's Testing section, second bullet ("Live
@@ -115,7 +116,7 @@ func TestHandleSessionUsageEvents_PublishedEventProducesExactlyOneSwap(t *testin
 	stop()
 
 	body := w.Body.String()
-	if got := strings.Count(body, swapTarget(topic)); got != 2 { // connect (1/10) + the delivered event (2/10)
+	if got := strings.Count(body, swapTarget(topic, components.UsageSSERegion)); got != 2 { // connect (1/10) + the delivered event (2/10)
 		t.Fatalf("expected exactly 2 swaps for topic %s (connect + one delivered event), got %d in body %q", topic, got, body)
 	}
 	if !strings.Contains(body, "2 / 10") {

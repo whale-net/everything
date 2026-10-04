@@ -257,13 +257,14 @@ func TestHandleSessionEvents_PublishedEventProducesExactlyOneSwap(t *testing.T) 
 	<-done
 
 	body := w.Body.String()
-	if got := strings.Count(body, swapTarget(topic)); got != 2 { // connect (empty transcript) + the delivered event
+	if got := strings.Count(body, swapTarget(topic, components.TranscriptSSERegion)); got != 2 { // connect (empty transcript) + the delivered event
 		t.Errorf("expected exactly 2 swaps for topic %s (connect + one delivered event), got %d in body %q", topic, got, body)
 	}
 }
 
 // swapTarget is the hx-target marker htmxsse writes on a topic's swap frame
-// (keepalives never contain it), so counting it counts that topic's swaps.
-func swapTarget(topic string) string {
-	return `hx-target="[` + htmxsse.TopicAttr + `~='` + topic + `']"`
+// in region (keepalives never contain it), so counting it counts that
+// topic's swaps.
+func swapTarget(topic, region string) string {
+	return `hx-target="[` + htmxsse.TopicAttr + `~='` + topic + `'][` + htmxsse.RegionAttr + `='` + region + `']"`
 }

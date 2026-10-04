@@ -113,6 +113,12 @@ keepalives stay named (`event: <topic>-keepalive`). Topics must not contain
 whitespace, quotes, backslash, `<`, `>` or `&` (`Handler` panics at
 construction otherwise).
 
+Swaps are page-wide: two connections on one page that share a topic swap
+into each other's regions. Give each region a `data-sse-region`
+(`htmxsse.RegionAttr`) and pass `htmxsse.WithRegion("<region>")` to its
+`Handler`, which narrows the target to
+`[data-sse-topic~='TOPIC'][data-sse-region='<region>']`.
+
 On reconnect the extension sends `Last-Event-ID`; the server uses it to
 suppress duplicate swaps for unchanged state.
 
@@ -288,7 +294,7 @@ Closes the Hub, cancels the transport context, and cleans up all subscriptions.
 
 ### Handler
 
-#### `func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc`
+#### `func Handler(hub *Hub, topics []string, fragment Fragment, opts ...Option) http.HandlerFunc`
 
 Creates an HTTP handler that upgrades a request to SSE and streams events for the given topics.
 

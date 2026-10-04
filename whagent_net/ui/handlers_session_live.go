@@ -226,7 +226,7 @@ func (app *App) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
 	})
 
 	logger.Info("session live stream opened", "session_id", sessionID, "topics", len(topics))
-	htmxsse.Handler(app.sseHub, topics, fragment)(w, r)
+	htmxsse.Handler(app.sseHub, topics, fragment, htmxsse.WithRegion(components.TranscriptSSERegion))(w, r)
 	logger.Info("session live stream closed", "session_id", sessionID)
 }
 

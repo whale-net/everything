@@ -433,3 +433,25 @@ func TestTranscriptList_StatusChangeEventSkipsRow(t *testing.T) {
 		t.Errorf("expected surrounding ordinary events' content unchanged, got %q", body)
 	}
 }
+
+// TestTranscriptList_ToolLoopAssistantMessage covers a tool-loop
+// iteration's "assistant_message:<iteration>" event: text renders as an
+// assistant bubble, a tool-calls-only (empty) one renders no row.
+func TestTranscriptList_ToolLoopAssistantMessage(t *testing.T) {
+	evs := []TranscriptEventView{
+		{EventID: "e1", Seq: 1, Type: events.EventTypeAssistantMessage + ":0", Payload: []byte(`{"role":"assistant"}`)},
+		{EventID: "e2", Seq: 2, Type: events.EventTypeAssistantMessage + ":1", Payload: []byte(`{"role":"assistant","content":"checking"}`)},
+	}
+
+	body := renderTranscriptList(t, evs)
+
+	if strings.Contains(body, "Unrecognized event type") {
+		t.Errorf("expected no unrecognized row, got %q", body)
+	}
+	if strings.Contains(body, `data-event-id="e1"`) {
+		t.Errorf("expected empty loop message to be skipped, got %q", body)
+	}
+	if !strings.Contains(body, `data-event-id="e2"`) || !strings.Contains(body, "checking") {
+		t.Errorf("expected loop message with text to render, got %q", body)
+	}
+}
