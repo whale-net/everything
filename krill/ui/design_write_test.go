@@ -64,6 +64,11 @@ var (
 type writeSurfaceSessions struct {
 	byID      map[uuid.UUID]store.DesignSession
 	byProduct map[uuid.UUID][]store.DesignSession
+
+	// summarizeErr fails only the aggregate READ the refused-open re-render
+	// makes, so a test can reach the branch where the session list behind
+	// the blade is unavailable and the blade has to come back anyway.
+	summarizeErr error
 }
 
 func (f writeSurfaceSessions) Open(context.Context, uuid.UUID, uuid.UUID, string, store.SessionID) (store.DesignSession, error) {
@@ -90,6 +95,9 @@ func (f writeSurfaceSessions) ListByProduct(_ context.Context, productID uuid.UU
 // must never do is WRITE a session or a revision round, which is what the
 // two methods above refuse.
 func (f writeSurfaceSessions) SummarizeByProduct(_ context.Context, productID uuid.UUID) (store.ProductDesignSessionsSummary, error) {
+	if f.summarizeErr != nil {
+		return store.ProductDesignSessionsSummary{}, f.summarizeErr
+	}
 	rows := f.byProduct[productID]
 	sessions := make([]store.DesignSessionSummary, 0, len(rows))
 	for _, ds := range rows {
@@ -136,8 +144,10 @@ func (f writeSurfaceEvents) ListLatestSignoffBySessionIDs(_ context.Context, ids
 // uuid minted for this test alone, so the identity assertions cannot be
 // satisfied by a hardcoded subject.
 type designWriteEnv struct {
-	Mux       *http.ServeMux
-	API       *fakeAPI
+	Mux *http.ServeMux
+	App *App
+	API *fakeAPI
+	// Cookie is the signed-in operator's session.
 	Cookie    *http.Cookie
 	Iss       string
 	Sub       string
@@ -161,6 +171,13 @@ func newDesignWriteEnv(t *testing.T) *designWriteEnv {
 		CreatedAt:         time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC),
 	}
 	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	// The scope listing carries the product under test as well as the
+	// deployment's own, so a re-rendered blade can be asked which product
+	// it is opening a session under.
+	app.spec = scopedProductsReader{products: []store.Product{
+		{ID: testScopeID, Name: "krill"},
+		{ID: productID, Name: "krill"},
+	}}
 	app.designSessions = writeSurfaceSessions{
 		byID:      map[uuid.UUID]store.DesignSession{sessionID: ds},
 		byProduct: map[uuid.UUID][]store.DesignSession{productID: {ds}},
@@ -178,7 +195,7 @@ func newDesignWriteEnv(t *testing.T) *designWriteEnv {
 	mux.HandleFunc("POST /design/products/{productID}/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
 
 	return &designWriteEnv{
-		Mux: mux, API: api, Cookie: cookie,
+		Mux: mux, App: app, API: api, Cookie: cookie,
 		Iss: idp.server.URL, Sub: sub,
 		SessionID: sessionID, ProductID: productID,
 	}
@@ -821,4 +838,180 @@ func TestDesignWrite_Answer_HXSuccessRedirects(t *testing.T) {
 	assert.Equal(t, designSessionPath(env.ProductID, env.SessionID), rec.Header().Get("HX-Redirect"),
 		"the htmx success navigates back to the session's detail page")
 	assert.Empty(t, rec.Header().Get("Location"), "an htmx write redirects with HX-Redirect, not Location")
+}
+
+// ---------------------------------------------------------------------------
+// FR 4304fe60 -- the blade is what a refusal hands back
+//
+// Every case below is a refusal, and every one of them must answer 200
+// with the new-session BLADE -- not a bare status page, and never the
+// rejection's own status, which htmx does not swap on. What they share is
+// the load the operator's work must not lose.
+// ---------------------------------------------------------------------------
+
+// bladeRegion is the region id the blade URL's fragment carries and the
+// list's action swaps into. It is spelled as the raw marker the served
+// HTML contains so a renamed region fails here rather than silently.
+const bladeRegion = `id="design-session-new-blade"`
+
+// assertBladeSays fails unless body carries the blade, the alert variant a
+// refusal renders, the reason the operator is owed, and their own text
+// still in the textarea. The last of those is the whole point of the rule:
+// a refusal is not allowed to cost someone a paragraph.
+func assertBladeSays(t *testing.T, body, reason, typed string) {
+	t.Helper()
+	assert.Contains(t, body, bladeRegion, "a refusal re-renders the blade in its own region")
+	assert.Contains(t, body, `class="alert alert-error"`, "the reason rides inline through htmxui.Alert")
+	assert.Contains(t, body, reason, "the reason the operator is owed is shown")
+	assert.Contains(t, body, ">"+typed+"</textarea>",
+		"the operator's typed text survives a refusal")
+}
+
+// TestDesignWrite_RejectedOpen_HXReRendersTheBladeRegion is the htmx half
+// of FR 4304fe60: a refused open answers 200 with the bare blade region,
+// whose ROOT is the swap target the form's hx-target names. Without that
+// root id htmx's outerHTML deletes the region and the operator is left
+// with a page that cannot be typed into.
+func TestDesignWrite_RejectedOpen_HXReRendersTheBladeRegion(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	env.API.onRequest(func(req recordedRequest) (int, string) {
+		if req.Path == "/design-sessions" {
+			return http.StatusUnprocessableEntity, `{"error":"product is in another scope"}`
+		}
+		return 0, ""
+	})
+	const submission = "Operators need to bulk-export their incident list as CSV."
+
+	rec := env.submitOpenHX(url.Values{"opening_submission": {submission}})
+	body := rec.Body.String()
+	require.Equal(t, http.StatusOK, rec.Code, "a refusal is 200, never the rejection's status: %s", body)
+	assert.Empty(t, rec.Header().Get("HX-Redirect"), "a refusal must not navigate away")
+	assert.NotContains(t, body, "<main", "the htmx half answers the region alone, with no shell chrome")
+
+	root := strings.TrimLeft(body, " \t\r\n")
+	require.True(t, strings.HasPrefix(root, "<div "+bladeRegion) ||
+		strings.HasPrefix(root, "<div id=\"design-session-new-blade\""),
+		"the served fragment's ROOT must be the blade region, so outerHTML replaces it rather than deleting it: %s", body)
+	assertBladeSays(t, body, "422: product is in another scope", submission)
+	assert.Contains(t, body, `hx-post="`+env.openPath()+`"`, "the doubled form keeps its htmx wiring across a re-render")
+	assert.NotContains(t, body, `"error":`, "the raw JSON rejection must not leak into the fragment")
+}
+
+// TestDesignWrite_RejectedOpen_BladeKeepsTheProductAndTheTypedText is the
+// no-JS half: the same refusal, rendered inside the shell, with the blade
+// open over the list and the product it is opening a session under named
+// read-only.
+func TestDesignWrite_RejectedOpen_BladeKeepsTheProductAndTheTypedText(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	env.API.onRequest(func(req recordedRequest) (int, string) {
+		if req.Path == "/design-sessions" {
+			return http.StatusUnprocessableEntity, `{"error":"product is in another scope"}`
+		}
+		return 0, ""
+	})
+	const submission = "Operators need to bulk-export their incident list as CSV."
+
+	rec := env.submitOpen(url.Values{"opening_submission": {submission}})
+	body := rec.Body.String()
+	require.Equal(t, http.StatusOK, rec.Code, body)
+	assertInShell(t, body)
+	assertBladeSays(t, body, "422: product is in another scope", submission)
+
+	assert.Contains(t, body, `data-krill="design-session-new-product"`,
+		"the blade names the product it opens a session under")
+	assert.Contains(t, body, ">krill<", "and the name is the one the URL resolved")
+	assert.NotContains(t, bladeSectionOf(t, body), "<input",
+		"the blade carries no product field: the product came from the URL")
+	assert.Contains(t, body, `action="`+env.openPath()+`"`, "the form still posts to its own action")
+}
+
+// TestDesignWrite_TransportFailure_ReRendersTheBladeWithoutStoreText is
+// the case the 200-re-render rule is really about: api is unreachable, so
+// the write never reached krill at all.
+//
+// A 502 is the honest status and the useless one -- the operator gets a
+// plain-text page instead of the form they just filled in, and the cause
+// text (a URL, a driver message) is exactly what must not be rendered.
+// Both modes answer 200 with the blade, the operator-facing half of the
+// message, and their text.
+func TestDesignWrite_TransportFailure_ReRendersTheBladeWithoutStoreText(t *testing.T) {
+	const submission = "Operators need to bulk-export their incident list as CSV."
+
+	for _, hx := range []bool{false, true} {
+		name := "no-JS"
+		if hx {
+			name = "htmx"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newDesignWriteEnv(t)
+			// Take the whole api away: the session mint fails first, which
+			// is one of the two ways this failure happens in production.
+			env.API.server.Close()
+
+			rec := postForm(env.Mux, env.openPath(), url.Values{"opening_submission": {submission}}, hx, env.Cookie)
+			body := rec.Body.String()
+			require.Equal(t, http.StatusOK, rec.Code,
+				"an unreachable krill still answers 200 with the form, never a status page: %s", body)
+			assertBladeSays(t, body, "Could not reach krill: the request did not complete.", submission)
+			assert.NotContains(t, body, "connection refused",
+				"a transport failure's cause is logged, never rendered")
+			if hx {
+				assert.NotContains(t, body, "<main")
+			} else {
+				assertInShell(t, body)
+			}
+		})
+	}
+}
+
+// TestDesignWrite_RejectedOpen_UnreadableListStillReturnsTheBlade covers
+// the read behind the refusal failing too. The list is a nicety; the
+// operator's paragraph is not. The blade comes back with the rejection
+// stated AND the failed re-read said out loud, so an empty table is never
+// mistaken for the whole answer.
+func TestDesignWrite_RejectedOpen_UnreadableListStillReturnsTheBlade(t *testing.T) {
+	for _, hx := range []bool{false, true} {
+		name := "no-JS"
+		if hx {
+			name = "htmx"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newDesignWriteEnv(t)
+			env.API.onRequest(func(req recordedRequest) (int, string) {
+				if req.Path == "/design-sessions" {
+					return http.StatusUnprocessableEntity, `{"error":"product is in another scope"}`
+				}
+				return 0, ""
+			})
+			env.App.designSessions = writeSurfaceSessions{
+				summarizeErr: fmt.Errorf("pq: password authentication failed for user krill"),
+			}
+			const submission = "Operators need to bulk-export their incident list as CSV."
+
+			rec := postForm(env.Mux, env.openPath(), url.Values{"opening_submission": {submission}}, hx, env.Cookie)
+			body := rec.Body.String()
+			require.Equal(t, http.StatusOK, rec.Code, body)
+			assertBladeSays(t, body,
+				"422: product is in another scope (the session list could not be reloaded)", submission)
+			assert.NotContains(t, body, "password authentication", "store text must not reach the browser")
+			if hx {
+				assert.NotContains(t, body, "<main")
+			} else {
+				assertInShell(t, body)
+			}
+		})
+	}
+}
+
+// bladeSectionOf slices the open blade out of a whole in-shell page, so an
+// assertion about "what the blade carries" stays off the list and the
+// chrome around it.
+func bladeSectionOf(t *testing.T, body string) string {
+	t.Helper()
+	i := strings.Index(body, bladeRegion)
+	require.NotEqual(t, -1, i, "body must carry the blade region")
+	rest := body[i:]
+	j := strings.Index(rest, "</article>")
+	require.NotEqual(t, -1, j, "an open blade must contain its card")
+	return rest[:j]
 }
