@@ -69,39 +69,60 @@ func (app *App) handleSpecDelivery(w http.ResponseWriter, r *http.Request) {
 // the page renders an inline error in place of that one block rather than
 // taking down every container's status with it.
 func (app *App) deliveryBreakdowns(ctx context.Context, listing slice.DeliveryListing) map[uuid.UUID]pages.DeliveryBreakdown {
-	var ids []uuid.UUID
+	var wanted []containerRef
 	for _, m := range listing.Milestones {
 		if m.Status == store.MilestoneStatusPartiallyComplete {
-			ids = append(ids, m.ID)
+			wanted = append(wanted, containerRef{id: m.ID, status: m.Status})
 		}
 		for _, mp := range m.Milepebbles {
 			if mp.Status == store.MilestoneStatusPartiallyComplete {
-				ids = append(ids, mp.ID)
+				wanted = append(wanted, containerRef{id: mp.ID, status: mp.Status})
 			}
 		}
 	}
 
-	breakdowns := make(map[uuid.UUID]pages.DeliveryBreakdown, len(ids))
-	for _, id := range ids {
-		shipped, unshipped, err := app.spec.DeliveryBreakdown(ctx, id)
+	breakdowns := make(map[uuid.UUID]pages.DeliveryBreakdown, len(wanted))
+	for _, ref := range wanted {
+		shipped, unshipped, err := app.spec.DeliveryBreakdown(ctx, ref.id)
 		if err != nil {
-			logger.Error("delivery breakdown read failed", "container", id.String(), "error", err)
-			breakdowns[id] = pages.DeliveryBreakdown{Error: "This container's shipped/unshipped breakdown could not be read. See the logs."}
+			logger.Error("delivery breakdown read failed", "container", ref.id.String(), "error", err)
+			breakdowns[ref.id] = pages.DeliveryBreakdown{Error: "This container's shipped/unshipped breakdown could not be read. See the logs."}
 			continue
 		}
-		// Every id above is partially complete, so an empty unshipped list
-		// under such a badge is the status and the delivery scope telling
-		// different stories. The page names that rather than letting a
-		// confident badge sit over an empty outstanding list. No cause is
-		// asserted: which of the two is wrong is not observable from here.
-		unshippedEntities := deliveryEntitiesOf(unshipped)
-		breakdowns[id] = pages.DeliveryBreakdown{
-			Shipped:         deliveryEntitiesOf(shipped),
-			Unshipped:       unshippedEntities,
-			StatusDisagrees: len(unshippedEntities) == 0,
-		}
+		breakdowns[ref.id] = deliveryBreakdownOf(ref.status, shipped, unshipped)
 	}
 	return breakdowns
+}
+
+// containerRef is one container the roadmap wants a breakdown for, with the
+// status that made it worth reading.
+//
+// The status rides along because deliveryBreakdownOf needs it: an empty
+// unshipped list means one thing under a "partially complete" badge and
+// another under a "shipped" one, and the flag that says so has to be decided
+// from the same status the listing reported rather than re-guessed here.
+type containerRef struct {
+	id     uuid.UUID
+	status store.MilestoneStatus
+}
+
+// deliveryBreakdownOf turns one container's two breakdown Documents into the
+// block both surfaces render, deciding the disagreement flag from the
+// container's OWN status.
+//
+// The flag is one rule in one place because it is the one inference in the
+// whole breakdown: a container that reads "partially complete" while its
+// unshipped list is empty. The roadmap's per-container pass only ever offers
+// it partially-complete ids, so the status test is a no-op there; the
+// milestone detail offers every container, and a shipped milestone with
+// nothing outstanding is the normal end state rather than a disagreement.
+func deliveryBreakdownOf(status store.MilestoneStatus, shipped, unshipped slice.Document) pages.DeliveryBreakdown {
+	unshippedEntities := deliveryEntitiesOf(unshipped)
+	return pages.DeliveryBreakdown{
+		Shipped:         deliveryEntitiesOf(shipped),
+		Unshipped:       unshippedEntities,
+		StatusDisagrees: status == store.MilestoneStatusPartiallyComplete && len(unshippedEntities) == 0,
+	}
 }
 
 // deliveryPageOf assembles the roadmap from a delivery listing, attaching
@@ -154,18 +175,25 @@ func breakdownFor(breakdowns map[uuid.UUID]pages.DeliveryBreakdown, id uuid.UUID
 // deliveryEntitiesOf flattens a breakdown Document (a Feature or Requirement
 // set) into display rows, in Features-then-Requirements order. The Documents
 // a breakdown returns carry today's two delivers-able kinds.
+//
+// Kind is what the entity IS, which is not what Label's prefix says: "C4"
+// and "FR" are display numbers, so a table with a Kind column needs the two
+// apart. Label keeps carrying the number, because that is what the operator
+// cites.
 func deliveryEntitiesOf(doc slice.Document) []pages.DeliveryEntity {
 	entities := make([]pages.DeliveryEntity, 0, len(doc.Features)+len(doc.Requirements))
 	for _, f := range doc.Features {
 		entities = append(entities, pages.DeliveryEntity{
 			Label: fmt.Sprintf("C%d -- %s", f.DisplayNumber, f.Name),
 			ID:    f.ID.String(),
+			Kind:  "Feature",
 		})
 	}
 	for _, r := range doc.Requirements {
 		entities = append(entities, pages.DeliveryEntity{
 			Label: fmt.Sprintf("%s -- %s", r.Kind, r.Name),
 			ID:    r.ID.String(),
+			Kind:  "Requirement",
 		})
 	}
 	return entities
