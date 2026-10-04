@@ -160,6 +160,39 @@ func TestStartSession_NonAllowlistedCaller_PermissionDenied(t *testing.T) {
 	assertNoSessions(t, ctx, store)
 }
 
+// TestStartSession_DelegatedStart_RoleCheckedOnCallingClient proves a
+// delegated start checks required_role on the calling client, not the
+// asserted user, and the denial names that client so an operator knows
+// which Keycloak principal needs the role.
+func TestStartSession_DelegatedStart_RoleCheckedOnCallingClient(t *testing.T) {
+	srv, store := newOnBehalfOfTestServer(t, fcmClientID)
+	ctx := context.Background()
+	seedServiceTestAgent(t, ctx, store, "gated-agent", strPtr2("whagent-gated"))
+
+	_, err := srv.StartSession(delegatingClaims("fcm-service", fcmClientID), &pb.StartSessionRequest{
+		AgentId:    "gated-agent",
+		OnBehalfOf: subjectToTestProto(assertedUser),
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Contains(t, status.Convert(err).Message(), `caller lacks required role "whagent-gated"`)
+	assert.Contains(t, status.Convert(err).Message(), fcmClientID)
+	assertNoSessions(t, ctx, store)
+
+	// Granting the role to the calling client's service account is what admits it.
+	sessCtx := grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{
+		Subject:          "fcm-service",
+		ClientID:         fcmClientID,
+		IsServiceAccount: true,
+		Roles:            []string{"whagent-gated"},
+	})
+	_, err = srv.StartSession(sessCtx, &pb.StartSessionRequest{
+		AgentId:    "gated-agent",
+		OnBehalfOf: subjectToTestProto(assertedUser),
+	})
+	require.NoError(t, err)
+}
+
 // TestStartSession_EmptyAllowlist_FailsClosed proves case 3: an unset/empty
 // allowlist (the default deployment config) permits no delegated start at all,
 // and writes nothing.

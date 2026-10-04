@@ -103,6 +103,11 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 			return nil, status.Error(codes.Unauthenticated, "authentication required")
 		}
 		if !hasRole(claims.Roles, *def.RequiredRole) {
+			// The role is checked on the acting caller, never on_behalf_of, so a
+			// delegated start needs the role on the delegating client itself.
+			if req.OnBehalfOf != nil {
+				return nil, status.Errorf(codes.PermissionDenied, "caller lacks required role %q for agent %q: on a delegated start the role is checked on the calling client %q (grant it to that client's service account), not the on_behalf_of user", *def.RequiredRole, agentID, callerClientID)
+			}
 			return nil, status.Errorf(codes.PermissionDenied, "caller lacks required role %q for agent %q", *def.RequiredRole, agentID)
 		}
 	}
