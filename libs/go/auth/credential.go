@@ -475,14 +475,21 @@ func (s *pgxCredentialStore) resolvePersonaArg(ctx context.Context, identity str
 // (identity, name) refusing a second live credential. The driver message
 // itself never reaches a caller — only the named refusal does.
 //
-// The constraint name is matched against the configured NameColumn so a
-// token_hash collision (the table's other unique constraint) is never
-// reported to an operator as a name conflict.
+// Postgres names a unique-index violation after the index, so this matches
+// the configured NameColumn appearing in that name. token_hash is excluded
+// explicitly rather than relied on not matching: it is the table's other
+// unique constraint, and a substring collision there would report a
+// cryptographic near-impossible as an operator's name conflict.
 func (s *pgxCredentialStore) isCredentialNameTaken(err error) bool {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) &&
-		pgErr.Code == "23505" &&
-		strings.Contains(pgErr.ConstraintName, s.cfg.NameColumn)
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return false
+	}
+	constraint := strings.ToLower(pgErr.ConstraintName)
+	if strings.Contains(constraint, "token_hash") {
+		return false
+	}
+	return s.cfg.NameColumn != "" && strings.Contains(constraint, s.cfg.NameColumn)
 }
 
 // Verify hashes rawToken and resolves it to a live credential, stamping

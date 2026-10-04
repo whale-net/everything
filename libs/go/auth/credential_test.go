@@ -273,6 +273,11 @@ func TestIsCredentialNameTaken(t *testing.T) {
 	assert.False(t, s.isCredentialNameTaken(&pgconn.PgError{
 		Code: "23505", ConstraintName: "mcp_credential_token_hash_key",
 	}), "a token_hash collision is not a name conflict")
+	// ...including when the token_hash constraint's name also happens to
+	// contain the name column, which substring matching alone would misread.
+	assert.False(t, s.isCredentialNameTaken(&pgconn.PgError{
+		Code: "23505", ConstraintName: "mcp_credential_identity_name_token_hash_key",
+	}))
 	assert.False(t, s.isCredentialNameTaken(&pgconn.PgError{
 		Code: "23503", ConstraintName: "mcp_credential_identity_name_live",
 	}))
