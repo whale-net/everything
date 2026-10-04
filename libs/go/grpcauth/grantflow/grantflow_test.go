@@ -72,3 +72,34 @@ func TestGateAuthorizeSkipsConsentForActiveGrant(t *testing.T) {
 		t.Fatal("active grant should fall through to /authorize")
 	}
 }
+
+func TestBeginReportsFalseWhenNoConsentNeeded(t *testing.T) {
+	store := grpcauth.NewFakeStore()
+	if err := store.Persist(context.Background(), "u1", DefaultGrant, grpcauth.TokenMaterial{RefreshToken: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	active := &Consent{Components: Components{Store: store}, Grant: DefaultGrant, Subject: func(*http.Request) (string, bool) { return "u1", true }}
+	w := httptest.NewRecorder()
+	if started, err := active.Begin(w, httptest.NewRequest("GET", "/x", nil), "/x"); started || err != nil || w.Code != http.StatusOK {
+		t.Fatalf("active grant: started=%v err=%v code=%d", started, err, w.Code)
+	}
+	anon := &Consent{Subject: func(*http.Request) (string, bool) { return "", false }}
+	if started, err := anon.Begin(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil), "/x"); started || err != nil {
+		t.Fatalf("anonymous: started=%v err=%v", started, err)
+	}
+}
+
+func TestCanResume(t *testing.T) {
+	c := &Consent{ResumePrefixes: []string{"/link/whagent/complete"}}
+	for path, want := range map[string]bool{
+		"/authorize?x=1":                  true,
+		"/link/whagent/complete?return=u": true,
+		"/other":                          false,
+		"//evil.example/authorize":        false,
+		"https://evil.example/authorize":  false,
+	} {
+		if got := c.canResume(path); got != want {
+			t.Errorf("canResume(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

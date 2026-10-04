@@ -177,6 +177,11 @@ type config struct {
 	// rather than a 500 or a redirect to an empty host. This is what
 	// makes the feature safe to land ahead of ASS's own endpoint (#2600).
 	ASSLinkURL string
+
+	// Manmanv2LinkURL (WHAGENT_UI_MANMANV2_LINK_URL) is the manmanv2 UI's
+	// public base URL, the redirect target of handleLinkManmanv2Start. Same
+	// optional/degrading behaviour as ASSLinkURL: empty hides the action.
+	Manmanv2LinkURL string
 }
 
 func loadConfig() config {
@@ -206,6 +211,8 @@ func loadConfig() config {
 		LinkAssertSigningKeyID: getEnv("WHAGENT_UI_SIGNING_KEY_ID", ""),
 
 		ASSLinkURL: getEnv("WHAGENT_UI_ASS_LINK_URL", ""),
+
+		Manmanv2LinkURL: getEnv("WHAGENT_UI_MANMANV2_LINK_URL", ""),
 	}
 }
 
@@ -287,6 +294,10 @@ type App struct {
 	// host. Unlike linkAssertKey above, NewApp never fails startup over
 	// this being empty (NFR1 is scoped to the signing key, not this var).
 	assLinkURL string
+
+	// manmanv2LinkURL is cfg.Manmanv2LinkURL verbatim; empty means the
+	// "Link manmanv2 identity" flow is inert, like assLinkURL.
+	manmanv2LinkURL string
 
 	// publicURL is cfg.UIPublicURL verbatim -- `ui`'s own externally-
 	// reachable base URL. handlers_link.go's handleLinkASSStart uses this
@@ -383,7 +394,9 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		consentStore:  newConsentStore(cfg.SessionSecret),
 		linkAssertKey: linkAssertKey,
 		assLinkURL:    cfg.ASSLinkURL,
-		publicURL:     cfg.UIPublicURL,
+
+		manmanv2LinkURL: cfg.Manmanv2LinkURL,
+		publicURL:       cfg.UIPublicURL,
 	}
 
 	// auth.NewCredentialStore/NewPostgresClientRegistry/
@@ -626,6 +639,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// token-authenticated path to either (FR13).
 	mux.HandleFunc("POST /link/ass", app.auth.RequireAuthFunc(app.handleLinkASSStart))
 	mux.HandleFunc("GET /link/ass/result", app.auth.RequireAuthFunc(app.handleLinkASSResult))
+	mux.HandleFunc("POST /link/manmanv2", app.auth.RequireAuthFunc(app.handleLinkManmanv2Start))
+	mux.HandleFunc("GET /link/manmanv2/result", app.auth.RequireAuthFunc(app.handleLinkManmanv2Result))
 
 	// Admin all-operators grant list and revoke page (FR14/FR15/NFR3, issue
 	// #2433): app.grant.Store/Index is intentionally NOT threaded through

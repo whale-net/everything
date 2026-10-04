@@ -219,7 +219,8 @@ func (app *App) handleGrants(w http.ResponseWriter, r *http.Request) {
 			Active: "Grants",
 			User:   user,
 		},
-		ShowLinkASSAction: app.assLinkURL != "",
+		ShowLinkASSAction:      app.assLinkURL != "",
+		ShowLinkManmanv2Action: app.manmanv2LinkURL != "",
 	}
 
 	if user == nil {
