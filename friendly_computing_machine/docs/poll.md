@@ -225,8 +225,8 @@ queue is `fcm-dev-main` and its schedule id is
 against Tilt is therefore:
 
 1. `tilt up -f friendly_computing_machine/Tiltfile` and wait for
-   the `worker` resource to be ready (it creates the schedule on
-   startup).
+   the `friendly-computing-machine-worker` resource to be ready (it
+   creates the schedule on startup).
 2. Open http://localhost:8233 and switch to the `default`
    namespace.
 3. **Workflows → Start Workflow**: type `WeeklyMusicPollWorkflow`,
@@ -234,6 +234,10 @@ against Tilt is therefore:
    `"channel": "C0123456789"` to dry-run one channel).
 4. Open the run and read the result — per-channel `dry-run`
    entries with the would-be options, or `skipped-few-pickable`.
+   The channel list is the `musicpoll` table joined to
+   `slackchannel`, so a fresh local database with no music-poll
+   channels yields an empty result (`[]`) — the fan-out over zero
+   channels, not an error.
 
 A non-dry manual run started the same way posts real polls in the
 channels configured in the bot's `music_poll_infos`, closes the
