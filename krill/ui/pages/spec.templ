@@ -135,6 +135,14 @@ type CapabilityFeature struct {
 	// Milestone is the Milestone column's cell: which milestone delivers
 	// this feature, if any (FR 18afc5a8).
 	Milestone CapabilityMilestone
+
+	// QuickLookHref is the feature's own blade URL -- the address the
+	// name below is a real link to, so the quick look opens by
+	// navigation with JavaScript off and by an in-place swap with it on
+	// (FR f7eee645). It is carried rather than rebuilt in the template
+	// because the path is the routing table's spelling, not the
+	// component's.
+	QuickLookHref string
 }
 
 // CapabilityMilestone is one feature row's Milestone cell: the milestone
@@ -438,7 +446,14 @@ templ capabilityFeatureTable(fs CapabilityFeatureSet) {
 					for _, f := range fs.Features {
 						<tr data-krill="feature-row" data-krill-feature-id={ f.ID }>
 							<td>
-								<span class="font-medium" data-krill="feature-name">C{ strconv.Itoa(f.Number) } — { f.Name }</span>
+								<a href={ templ.URL(f.QuickLookHref) }
+									data-krill="feature-quick-look"
+									hx-get={ templ.URL(f.QuickLookHref) }
+									hx-target={ "#" + SpecBladeAnchor }
+									hx-swap="outerHTML"
+									hx-push-url="true">
+									<span class="link link-primary font-medium" data-krill="feature-name">C{ strconv.Itoa(f.Number) } — { f.Name }</span>
+								</a>
 								@entityID(f.ID)
 								if f.Description != "" {
 									<div class="text-sm text-base-content/70 krill-md" data-krill="feature-description">@templ.Raw(renderMarkdown(f.Description))</div>

@@ -143,6 +143,12 @@ func legacyURLs() []legacyURL {
 		{Pattern: specPath, Serve: (*App).handleSpec},
 		{Pattern: specProductsPath, Serve: (*App).handleSpecProducts},
 		{Pattern: specProductPath, Serve: (*App).handleCapabilityMap},
+		// The feature quick-look blade, opened from the Capabilities
+		// table's Feature link (FR f7eee645). It is a read like every
+		// other page here -- readerRoute, no form, no write route -- and
+		// it hangs off the product prefix so a shared blade link resolves
+		// its product before the feature id is even looked at.
+		{Pattern: specProductPath + specFeatureSuffix, Serve: (*App).handleSpecFeature},
 		{Pattern: specProductPath + "/decisions", Serve: (*App).handleSpecDecisions},
 		{Pattern: specProductPath + "/personas", Serve: (*App).handleSpecPersonas},
 		{Pattern: specProductPath + "/non-goals", Serve: (*App).handleSpecNonGoals},

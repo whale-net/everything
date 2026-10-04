@@ -51,10 +51,17 @@ type SpecTab struct {
 
 // SpecTabsPage is the whole Spec page: the strip and the active panel,
 // together, as one swap region.
+//
+// Blade is the quick-look region the panel's Feature links open into. It
+// lives inside the swap region so a tab click replaces it along with the
+// panel -- a blade belongs to the panel it was opened from -- and it is
+// rendered whether or not a blade is showing, because its id is the target
+// those links name.
 type SpecTabsPage struct {
 	Tabs  []SpecTab
 	Tab   string
 	Panel templ.Component
+	Blade templ.Component
 }
 
 // SpecTabs renders the strip above the active panel, both inside the one
@@ -65,6 +72,13 @@ templ SpecTabs(page SpecTabsPage) {
 		@specTabStrip(page.Tabs)
 		<div id={ SpecPanelBodyAnchor } role="tabpanel" aria-labelledby={ SpecTabID(page.Tab) } class="mt-4" data-krill="spec-panel-body">
 			@page.Panel
+		</div>
+		<div class="mt-4">
+			if page.Blade == nil {
+				@SpecBladeSlot(SpecBladePage{})
+			} else {
+				@page.Blade
+			}
 		</div>
 	</div>
 }
