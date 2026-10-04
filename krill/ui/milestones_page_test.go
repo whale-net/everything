@@ -11,6 +11,7 @@
 package main
 
 import (
+	gohtml "html"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,11 +33,15 @@ var milestonesProductID = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 
 // milestoneFixture is one milestone in a listing: the wire entry the
 // delivery read produces, plus the figures the progress read returns for
-// it.
+// it and for each milepebble cut from it.
 type milestoneFixture struct {
 	entry slice.MilestoneListingEntry
 	done  int
 	total int
+
+	// progress holds one ContainerTaskProgress per milepebble, so a fixture
+	// carries the whole cut's figures rather than only its own.
+	progress []store.ContainerTaskProgress
 }
 
 // noProgress is the figure set for a milestone the progress read did not
@@ -73,34 +78,72 @@ func listingOf(fixtures ...milestoneFixture) slice.DeliveryListing {
 }
 
 // progressOf is the progress read's answer for the same fixtures, indexed
-// the way milestoneProgressByID indexes it.
+// the way milestoneProgressByID indexes it: by the container's own id.
 func progressOf(fixtures ...milestoneFixture) map[uuid.UUID]store.ContainerTaskProgress {
 	byID := make(map[uuid.UUID]store.ContainerTaskProgress, len(fixtures))
 	for _, f := range fixtures {
-		counts := store.TaskLaneCounts{}
-		for i := 0; i < f.done; i++ {
-			counts.Done++
-		}
-		for i := f.done; i < f.total; i++ {
-			counts.Implementation++
-		}
-		byID[f.entry.ID] = store.ContainerTaskProgress{
-			Milestone: store.ProductTaskMilestoneRef{
-				ID:     f.entry.ID,
-				Name:   f.entry.Name,
-				Status: f.entry.Status,
-			},
-			PerLane: counts,
-		}
+		byID[f.entry.ID] = milestoneProgressFor(f.entry.ID, f.entry.Name, f.entry.Status, f.done, f.total)
 	}
 	return byID
 }
 
+// milestoneProgressFor is one container's own progress row.
+func milestoneProgressFor(id uuid.UUID, name string, status store.MilestoneStatus, done, total int) store.ContainerTaskProgress {
+	counts := store.TaskLaneCounts{}
+	for i := 0; i < done; i++ {
+		counts.Done++
+	}
+	for i := done; i < total; i++ {
+		counts.Implementation++
+	}
+	return store.ContainerTaskProgress{
+		Milestone: store.ProductTaskMilestoneRef{ID: id, Name: name, Status: status},
+		PerLane:   counts,
+	}
+}
+
+// milepebbleProgressOf is a milepebble's own progress row, keyed by the
+// milepebble's id.
+//
+// The Milestone ref is the PARENT, exactly as the real read returns it
+// (store.ContainerTaskProgress documents this). A fixture that put the
+// milepebble's own id there instead would hide the very mistake this
+// shape exists to catch: a milepebble's figures read off its parent's
+// entry.
+func milepebbleProgressOf(parent slice.MilestoneListingEntry, milepebble slice.MilepebbleListingEntry, done, total int) store.ContainerTaskProgress {
+	counts := store.TaskLaneCounts{}
+	for i := 0; i < done; i++ {
+		counts.Done++
+	}
+	for i := done; i < total; i++ {
+		counts.Implementation++
+	}
+	return store.ContainerTaskProgress{
+		Milestone: store.ProductTaskMilestoneRef{
+			ID: parent.ID, Name: parent.Name, Status: parent.Status,
+		},
+		Milepebble: &store.ProductTaskMilepebbleRef{
+			ID: milepebble.ID, Name: milepebble.Name, Status: milepebble.Status,
+		},
+		PerLane: counts,
+	}
+}
+
+// expandedFor builds the row-level state a request carrying this status
+// filter and this expanded milestone hands the builder.
+func expandedFor(status store.MilestoneStatus, mid uuid.UUID) milestoneExpansion {
+	return milestoneExpansion{
+		Path:     milestonesPath(milestonesProductID),
+		Status:   status,
+		Expanded: mid,
+	}
+}
+
 // rowsOf runs the view-model builder over a listing and returns the rows
-// it produced, in the order it produced them.
+// it produced, in the order it produced them. No row is expanded.
 func rowsOf(t *testing.T, listing slice.DeliveryListing, progress map[uuid.UUID]store.ContainerTaskProgress, status store.MilestoneStatus) []pages.MilestoneRow {
 	t.Helper()
-	return milestoneRowsOf(milestonesProductID, listing, progress, status)
+	return milestoneRowsOf(milestonesProductID, listing, progress, expandedFor(status, uuid.Nil))
 }
 
 // rowNames is the rendered order, as the names an operator reads down the
@@ -492,7 +535,7 @@ func TestMilestonesProgressErrorKeepsTheTable(t *testing.T) {
 	a := milestoneFixtureOf(t, "M1", 1, store.MilestoneStatusInProgress, 1, 2)
 	b := milestoneFixtureOf(t, "M2", 2, store.MilestoneStatusShipped, 3, 3)
 
-	rows := milestoneRowsWithoutProgress(milestonesProductID, listingOf(a, b), "")
+	rows := milestoneRowsWithoutProgress(milestonesProductID, listingOf(a, b), expandedFor("", uuid.Nil))
 	html := mustRenderComponent(pages.Milestones(pages.MilestonesPage{
 		Product:      pages.ProductHeader{Name: "krill"},
 		Path:         milestonesPath(milestonesProductID),
@@ -509,4 +552,283 @@ func TestMilestonesProgressErrorKeepsTheTable(t *testing.T) {
 	assert.NotContains(t, html, "No tasks yet",
 		"an unread milestone is not an empty one")
 	assert.Contains(t, html, milestonesProgressError)
+}
+// ---------------------------------------------------------------------------
+// 5. the inline milepebble expansion (FR a6a316e5)
+// ---------------------------------------------------------------------------
+
+// cutFixture is a milestone with milepebbles cut from it, and the progress
+// rows the read returns for the whole cut.
+//
+// The milepebbles' own progress rows are keyed by the MILEPEBBLE's id and
+// carry the PARENT milestone in Milestone, exactly as the real read does --
+// so a builder that still indexed by milestone id, or read a milepebble's
+// figures off its parent's entry, fails here rather than passing on a
+// fixture that happened to agree.
+func cutFixture(t *testing.T, name string, position int, status store.MilestoneStatus, done, total int, milepebbles ...slice.MilepebbleListingEntry) milestoneFixture {
+	t.Helper()
+	f := milestoneFixtureOf(t, name, position, status, done, total)
+	f.entry.Milepebbles = milepebbles
+	for _, mp := range milepebbles {
+		f.progress = append(f.progress, milepebbleProgressOf(f.entry, mp, 1, 2))
+	}
+	return f
+}
+
+// withMilepebbleProgress is progressOf plus the milepebbles' own rows.
+func withMilepebbleProgress(fixtures ...milestoneFixture) map[uuid.UUID]store.ContainerTaskProgress {
+	byID := progressOf(fixtures...)
+	for _, f := range fixtures {
+		for _, p := range f.progress {
+			byID[p.Milepebble.ID] = p
+		}
+	}
+	return byID
+}
+
+// TestCutMilestoneCarriesAnExpanderAndItsMilepebbles is the FR's expand
+// case end to end: a milestone with milepebbles cut shows an expander, and
+// expanding it renders each milepebble with its name, status badge, own
+// progress, and a link to that milepebble's own tasks.
+//
+// The assertions are against the rendered markup rather than the view
+// model, because a row can carry every field correctly and still never
+// reach the page -- which is the one way this feature ships broken.
+func TestCutMilestoneCarriesAnExpanderAndItsMilepebbles(t *testing.T) {
+	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
+		slice.MilepebbleListingEntry{
+			ID: uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name: "P0 console reads", Status: store.MilestoneStatusShipped,
+		},
+		slice.MilepebbleListingEntry{
+			ID: uuid.MustParse("22222222-2222-2222-2222-222222222202"),
+			Name: "P1 workspace shell", Status: store.MilestoneStatusInProgress,
+		},
+	)
+
+	rows := milestoneRowsOf(milestonesProductID, listingOf(cut),
+		withMilepebbleProgress(cut), expandedFor("", cut.entry.ID))
+
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].HasMilepebbles())
+	require.True(t, rows[0].Expanded, "the expand param named this milestone")
+
+	html := mustRenderComponent(pages.Milestones(pages.MilestonesPage{
+		Product:     pages.ProductHeader{Name: "krill"},
+		Path:        milestonesPath(milestonesProductID),
+		Statuses:    milestoneStatusOptions(""),
+		Rows:        rows,
+		EmptyDetail: milestonesEmptyDetail(""),
+	}))
+
+	// The expander, marked open, and the expansion it reveals.
+	assert.Contains(t, html, `data-krill="milestone-expand"`, "a cut milestone renders an expander")
+	assert.Contains(t, html, `aria-expanded="true"`, "the expanded row's expander says so")
+	assert.Contains(t, html, `data-krill="milepebble-expansion"`, "the milepebbles render beneath the row")
+
+	// Each milepebble: its name, its own badge, its own figures.
+	for _, mp := range cut.entry.Milepebbles {
+		assert.Contains(t, html, mp.Name)
+		assert.Contains(t, html, `data-krill-milepebble-id="`+mp.ID.String()+`"`)
+	}
+	assert.Contains(t, html, "1/2 tasks done",
+		"a milepebble shows ITS figures, not its parent's 2/5")
+
+	// Each name links to that milepebble's own task list, scoped to the
+	// milepebble rather than the milestone. The expected href is escaped
+	// the way it appears in the attribute, so this compares the rendered
+	// link and not a differently-encoded spelling of the same URL.
+	wantTasks := gohtml.EscapeString(productTaskContainerHref(milestonesProductID, tasksSuffix, taskContainer{
+		ID:     cut.entry.Milepebbles[1].ID,
+		Name:   cut.entry.Milepebbles[1].Name,
+		Kind:   string(store.MilestoneKindMilepebble),
+		Status: cut.entry.Milepebbles[1].Status,
+	}))
+	assert.Contains(t, html, `href="`+wantTasks+`"`,
+		"a milepebble links to its own tasks, in milepebble scope")
+	assert.Contains(t, html, "container_id="+cut.entry.Milepebbles[1].ID.String(),
+		"the link names the milepebble as the scope")
+	assert.Contains(t, html, "scope=milepebble", "in milepebble mode")
+}
+
+// TestUncutMilestoneRendersNoExpander is the FR's "a milestone with none
+// cut has no expander": no control, and nothing behind it waiting to be
+// revealed by one.
+func TestUncutMilestoneRendersNoExpander(t *testing.T) {
+	uncut := milestoneFixtureOf(t, "M1 Whole roadmap", 0, store.MilestoneStatusNotStarted, 0, 0)
+
+	// Expanded by name anyway: an id that names a row with no cut must
+	// still produce no expander, because the row has nothing to reveal.
+	rows := milestoneRowsOf(milestonesProductID, listingOf(uncut),
+		progressOf(uncut), expandedFor("", uncut.entry.ID))
+
+	require.Len(t, rows, 1)
+	assert.False(t, rows[0].HasMilepebbles())
+
+	html := mustRenderComponent(pages.Milestones(pages.MilestonesPage{
+		Product:     pages.ProductHeader{Name: "krill"},
+		Path:        milestonesPath(milestonesProductID),
+		Statuses:    milestoneStatusOptions(""),
+		Rows:        rows,
+		EmptyDetail: milestonesEmptyDetail(""),
+	}))
+
+	assert.NotContains(t, html, `data-krill="milestone-expand"`,
+		"an uncut milestone renders no expander at all")
+	assert.NotContains(t, html, `data-krill="milepebble-expansion"`,
+		"and nothing behind it")
+}
+
+// TestMilepebbleRowsStayHiddenUntilExpanded is the default state: a cut
+// milestone's milepebbles are on the row but NOT on the page, so the table
+// still reads as one row per milestone until someone asks.
+func TestMilepebbleRowsStayHiddenUntilExpanded(t *testing.T) {
+	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
+		slice.MilepebbleListingEntry{
+			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name:   "P0 console reads", Status: store.MilestoneStatusShipped,
+		},
+	)
+
+	rows := milestoneRowsOf(milestonesProductID, listingOf(cut),
+		withMilepebbleProgress(cut), expandedFor("", uuid.Nil))
+
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].HasMilepebbles(), "the row knows it has milepebbles")
+	require.False(t, rows[0].Expanded)
+
+	html := mustRenderComponent(pages.Milestones(pages.MilestonesPage{
+		Product:     pages.ProductHeader{Name: "krill"},
+		Path:        milestonesPath(milestonesProductID),
+		Statuses:    milestoneStatusOptions(""),
+		Rows:        rows,
+		EmptyDetail: milestonesEmptyDetail(""),
+	}))
+
+	assert.Contains(t, html, `data-krill="milestone-expand"`, "the expander is still there")
+	assert.Contains(t, html, `aria-expanded="false"`, "and reports the row as closed")
+	assert.NotContains(t, html, "P0 console reads", "a collapsed row reveals nothing")
+}
+
+// TestExpandingSurvivesTheStatusFilter is the FR's "Expanding does not ...
+// lose the status filter", asserted on the property that actually decides
+// it: the URL the expander points at.
+//
+// The check is deliberately on the href rather than on a rendered page,
+// because the filter is carried IN that URL. A swap that preserved the
+// filter by luck in one direction would still lose it the moment the
+// operator shared the link, reloaded, or submitted without JavaScript.
+func TestExpandingSurvivesTheStatusFilter(t *testing.T) {
+	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusShipped, 5, 5,
+		slice.MilepebbleListingEntry{
+			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name:   "P0 console reads", Status: store.MilestoneStatusShipped,
+		},
+	)
+
+	expansion := expandedFor(store.MilestoneStatusShipped, uuid.Nil)
+	expandHref := expansion.expandHref(cut.entry.ID)
+	collapseHref := expansion.collapseHref(cut.entry.ID)
+
+	assert.Contains(t, expandHref, "status=shipped",
+		"the expand link carries the active filter")
+	assert.Contains(t, expandHref, "expand="+cut.entry.ID.String(),
+		"and names the milestone being expanded")
+	assert.Contains(t, collapseHref, "status=shipped",
+		"so closing the row keeps the filter too")
+	assert.NotContains(t, collapseHref, "expand=",
+		"and the collapse link drops only the expansion")
+
+	// And the rendered page under that filter offers exactly that link, so
+	// the control an operator presses is the one this asserts about.
+	rows := milestoneRowsOf(milestonesProductID, listingOf(cut),
+		withMilepebbleProgress(cut), expansion)
+	html := mustRenderComponent(pages.Milestones(pages.MilestonesPage{
+		Product:     pages.ProductHeader{Name: "krill"},
+		Path:        milestonesPath(milestonesProductID),
+		Statuses:    milestoneStatusOptions(store.MilestoneStatusShipped),
+		Rows:        rows,
+		EmptyDetail: milestonesEmptyDetail(store.MilestoneStatusShipped),
+	}))
+
+	assert.Contains(t, html, `href="`+gohtml.EscapeString(expandHref)+`"`,
+		"the rendered expander points at that URL")
+	assert.Contains(t, html, "shipped", "and the filter itself still renders")
+}
+
+// TestExpanderSwapsInPlaceWithoutLeavingThePage is the other half of the
+// FR's in-place requirement: the expander is an htmx GET against the
+// page's own region, so the page does not navigate and the select -- which
+// lives inside the region -- comes back marked with the filter.
+func TestExpanderSwapsInPlaceWithoutLeavingThePage(t *testing.T) {
+	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
+		slice.MilepebbleListingEntry{
+			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name:   "P0 console reads", Status: store.MilestoneStatusInProgress,
+		},
+	)
+
+	html := mustRenderComponent(pages.MilestonesRows(pages.MilestonesPage{
+		Product:     pages.ProductHeader{Name: "krill"},
+		Path:        milestonesPath(milestonesProductID),
+		Statuses:    milestoneStatusOptions(store.MilestoneStatusInProgress),
+		Rows:        milestoneRowsOf(milestonesProductID, listingOf(cut),
+			withMilepebbleProgress(cut), expandedFor(store.MilestoneStatusInProgress, uuid.Nil)),
+		EmptyDetail: milestonesEmptyDetail(store.MilestoneStatusInProgress),
+	}))
+
+	assert.Contains(t, html, `hx-get="`, "the expander issues an htmx request")
+	assert.Contains(t, html, `hx-target="#`+pages.MilestonesAnchor+`"`,
+		"targeting the region, not the page")
+	assert.Contains(t, html, `hx-swap="outerHTML"`)
+	assert.Contains(t, html, `id="`+pages.MilestonesAnchor+`"`,
+		"the fragment carries the id its own swap removes")
+}
+
+// TestParseMilestoneExpansionNeverFails covers the parser: an absent or
+// unusable id expands nothing, which is a table that renders -- unlike a
+// mistyped STATUS, which would make the select lie about its own filter.
+func TestParseMilestoneExpansionNeverFails(t *testing.T) {
+	id := uuid.MustParse("22222222-2222-2222-2222-222222222201")
+
+	got := parseMilestoneExpansion(httptest.NewRequest(http.MethodGet,
+		"/products/x/milestones?expand="+id.String(), nil))
+	assert.Equal(t, id, got, "a valid id expands that milestone")
+
+	for _, query := range []string{"", "?expand=", "?expand=not-a-uuid", "?status=shipped"} {
+		assert.Equal(t, uuid.Nil,
+			parseMilestoneExpansion(httptest.NewRequest(http.MethodGet, "/products/x/milestones"+query, nil)),
+			"%q must mean nothing expanded", query)
+	}
+}
+
+// TestMilepebbleWithoutItsOwnProgressRowSaysSo is the "no tasks" vs "not
+// checked" distinction, one level down: a milepebble the read returned no
+// row for must not render "No tasks yet", which would claim the read
+// answered when it did not.
+func TestMilepebbleWithoutItsOwnProgressRowSaysSo(t *testing.T) {
+	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
+		slice.MilepebbleListingEntry{
+			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name:   "P0 console reads", Status: store.MilestoneStatusInProgress,
+		},
+	)
+	// The milestone's own row is present; the milepebble's is not.
+	rows := milestoneRowsOf(milestonesProductID, listingOf(cut),
+		progressOf(cut), expandedFor("", cut.entry.ID))
+
+	require.Len(t, rows, 1)
+	require.Len(t, rows[0].Milepebbles, 1)
+	assert.Equal(t, milestonesProgressError, rows[0].Milepebbles[0].ProgressError,
+		"the milepebble cell says its figures were not read")
+
+	html := mustRenderComponent(pages.Milestones(pages.MilestonesPage{
+		Product:     pages.ProductHeader{Name: "krill"},
+		Path:        milestonesPath(milestonesProductID),
+		Statuses:    milestoneStatusOptions(""),
+		Rows:        rows,
+		EmptyDetail: milestonesEmptyDetail(""),
+	}))
+	assert.Contains(t, html, milestonesProgressError)
+	assert.NotContains(t, html, "0/0", "and never invents a figure")
 }
