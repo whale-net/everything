@@ -65,7 +65,7 @@ type listDeploymentsOut struct {
 	Deployments []deploymentOut `json:"deployments"`
 }
 type getDeploymentIn struct {
-	DeploymentID int64 `json:"deployment_id" jsonschema:"the deployment (server game config) id"`
+	DeploymentID int64 `json:"deployment_id" jsonschema:"deployment id"`
 }
 type listServersOut struct {
 	Servers []serverOut `json:"servers"`

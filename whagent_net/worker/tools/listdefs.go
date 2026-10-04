@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 
+	"github.com/whale-net/everything/libs/go/whagent"
 	"github.com/whale-net/everything/whagent_net/api/persona"
 	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
@@ -150,12 +153,36 @@ func candidateDefinitions(ctx context.Context, issuer *persona.Issuer, sess *ses
 			defs = append(defs, llm.ToolDefinition{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  toParameters(t.InputSchema),
+				Parameters:  withoutIdempotencyKey(toParameters(t.InputSchema)),
 			})
 		}
 		cs.Close()
 	}
 	return defs, nil
+}
+
+// withoutIdempotencyKey hides whagent.IdempotencyKeyArgument from the
+// model-facing schema: Dispatch injects it, so the model never sets it.
+// Returns a copy; schema may be shared with the caller.
+func withoutIdempotencyKey(schema map[string]any) map[string]any {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return schema
+	}
+	if _, ok := props[whagent.IdempotencyKeyArgument]; !ok {
+		return schema
+	}
+	out := maps.Clone(schema)
+	newProps := maps.Clone(props)
+	delete(newProps, whagent.IdempotencyKeyArgument)
+	out["properties"] = newProps
+	switch req := schema["required"].(type) {
+	case []any:
+		out["required"] = slices.DeleteFunc(slices.Clone(req), func(r any) bool { return r == whagent.IdempotencyKeyArgument })
+	case []string:
+		out["required"] = slices.DeleteFunc(slices.Clone(req), func(r string) bool { return r == whagent.IdempotencyKeyArgument })
+	}
+	return out
 }
 
 // toParameters converts an mcp.Tool.InputSchema value (from the client

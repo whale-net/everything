@@ -23,7 +23,7 @@ type ConnectAddressAPI interface {
 }
 
 type connectAddressIn struct {
-	DeploymentID int64 `json:"deployment_id" jsonschema:"the deployment (server game config) id"`
+	DeploymentID int64 `json:"deployment_id" jsonschema:"deployment id"`
 }
 
 type connectAddressEntry struct {
