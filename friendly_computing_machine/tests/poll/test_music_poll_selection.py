@@ -158,14 +158,18 @@ def _window_chain(session, poll, channel, user, *started_at):
     return instances
 
 
-def _share(session, instance, channel, user, ts, url):
-    """A song link shared inside one window's week."""
+def _share(session, instance, channel, user, ts, url, *, recorded_at=None):
+    """A song link shared inside one window's week.
+
+    The row's recording time defaults to the share time; pass
+    `recorded_at` when the pickup recorded it later.
+    """
     message = _message(session, channel, user, url, ts)
     response = MusicPollResponse(
         music_poll_instance_id=instance.id,
         slack_user_id=user.id,
         slack_message_id=message.id,
-        created_at=ts,
+        created_at=recorded_at if recorded_at is not None else ts,
         url=url,
     )
     session.add(response)
@@ -429,6 +433,72 @@ def test_a_re_share_keeps_the_earliest_submission_and_stays_eligible(session):
     assert reshared.submission_date == datetime.datetime(2026, 8, 18, 9, tzinfo=datetime.UTC)
 
 
+def test_a_song_is_dated_by_its_message_not_its_recording(session):
+    channel = _channel(session)
+    poster = _user(session, "U1")
+    poll = _poll(session, channel)
+    instances = _window_chain(
+        session,
+        poll,
+        channel,
+        poster,
+        datetime.datetime(2026, 8, 31),
+        datetime.datetime(2026, 9, 7),
+        datetime.datetime(2026, 9, 14),
+        datetime.datetime(2026, 9, 21),
+        datetime.datetime(2026, 9, 28),
+    )
+    url = "https://songs.example/late-recording"
+    # the song was shared in the first window's week, but
+    # the pickup recorded the row only this week
+    _share(
+        session,
+        instances[0],
+        channel,
+        poster,
+        datetime.datetime(2026, 8, 31),
+        url,
+        recorded_at=datetime.datetime(2026, 9, 29, 9),
+    )
+    _share(
+        session,
+        instances[0],
+        channel,
+        _user(session, "U2"),
+        datetime.datetime(2026, 9, 2, 9),
+        "https://songs.example/one",
+    )
+    _share(
+        session,
+        instances[0],
+        channel,
+        _user(session, "U3"),
+        datetime.datetime(2026, 9, 3, 9),
+        "https://songs.example/two",
+    )
+    _share(
+        session,
+        instances[1],
+        channel,
+        _user(session, "U4"),
+        datetime.datetime(2026, 9, 8, 9),
+        "https://songs.example/three",
+    )
+
+    options = _pick(session)
+
+    assert options is not None
+    assert len(options) == 4
+    late = next(o for o in options if o.song_identity == url)
+    # five weeks old by the message, not under a week old
+    # by the recording -- the age and slot come from the
+    # message's original post time, read as UTC
+    assert late.submission_date == datetime.datetime(
+        2026, 8, 31, tzinfo=datetime.UTC
+    )
+    assert _weeks_old(late) == pytest.approx(5.0)
+
+
 # ----- exclusion: the grace period ------------------------------------
 
 
@@ -498,6 +568,101 @@ def test_the_two_most_recent_closed_windows_are_the_grace_period(session):
         "https://songs.example/old-one",
         "https://songs.example/old-three",
         "https://songs.example/old-two",
+    ]
+
+
+def test_window_order_comes_from_the_instance_chain_not_timestamps(session):
+    channel = _channel(session)
+    poster = _user(session, "U_ANNOUNCE")
+    poll = _poll(session, channel)
+    # four windows chained oldest to newest, but their
+    # created_at stamps run newest to oldest: only the
+    # next_instance_id chain says which windows are
+    # the most recent closed ones
+    started = [
+        datetime.datetime(2026, 8, 31),
+        datetime.datetime(2026, 9, 7),
+        datetime.datetime(2026, 9, 14),
+        datetime.datetime(2026, 9, 21),
+    ]
+    stamps = [
+        datetime.datetime(2026, 9, 28),
+        datetime.datetime(2026, 9, 14),
+        datetime.datetime(2026, 9, 21),
+        datetime.datetime(2026, 9, 7),
+    ]
+    instances = []
+    for week, stamp in zip(started, stamps):
+        announcement = _message(
+            session, channel, poster, ANNOUNCEMENT, week
+        )
+        instance = MusicPollInstance(
+            music_poll_id=poll.id,
+            slack_message_id=announcement.id,
+            created_at=stamp,
+        )
+        session.add(instance)
+        session.commit()
+        session.refresh(instance)
+        instances.append(instance)
+    for older, newer in zip(instances, instances[1:]):
+        older.next_instance_id = newer.id
+    session.commit()
+
+    # songs in the two most recent closed windows by the
+    # chain -- the first only looks old by its stamp
+    _share(
+        session,
+        instances[1],
+        channel,
+        _user(session, "U1"),
+        datetime.datetime(2026, 9, 8, 9),
+        "https://songs.example/chain-grace-one",
+    )
+    _share(
+        session,
+        instances[2],
+        channel,
+        _user(session, "U2"),
+        datetime.datetime(2026, 9, 15, 9),
+        "https://songs.example/chain-grace-two",
+    )
+    # songs in the chain's oldest closed window, whose
+    # stamp makes it look like the most recent one
+    _share(
+        session,
+        instances[0],
+        channel,
+        _user(session, "U3"),
+        datetime.datetime(2026, 9, 1, 9),
+        "https://songs.example/chain-pick-one",
+    )
+    _share(
+        session,
+        instances[0],
+        channel,
+        _user(session, "U4"),
+        datetime.datetime(2026, 9, 2, 9),
+        "https://songs.example/chain-pick-two",
+    )
+    _share(
+        session,
+        instances[0],
+        channel,
+        _user(session, "U5"),
+        datetime.datetime(2026, 9, 3, 9),
+        "https://songs.example/chain-pick-three",
+    )
+
+    options = _pick(session)
+
+    assert options is not None
+    # the stamp-ordered window would have swallowed the
+    # chain-pick songs and spared chain-grace-one
+    assert sorted(o.song_identity for o in options) == [
+        "https://songs.example/chain-pick-one",
+        "https://songs.example/chain-pick-three",
+        "https://songs.example/chain-pick-two",
     ]
 
 
