@@ -85,6 +85,13 @@ type fakeSpecReader struct {
 	breakdown   map[uuid.UUID]deliveryPair
 	breakdownEr map[uuid.UUID]error // per-container injected failure
 	queried     []uuid.UUID         // container ids DeliveryBreakdown was called for
+
+	// history and historyErr are the status-history read the Milestone
+	// detail's rail makes. The map is keyed by container id so a case can
+	// give one container a register and another none; historyErr fails the
+	// read outright, which is a different condition from an empty register.
+	history    map[uuid.UUID][]store.MilestoneStatusEvent
+	historyErr error
 }
 
 func (f *fakeSpecReader) ProductSlice(context.Context, uuid.UUID) (slice.Document, error) {

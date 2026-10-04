@@ -203,6 +203,7 @@ go_test(
         "delivery_page_test.go",
         "milestones_page_test.go",
         "milestone_detail_page_test.go",
+        "milestone_detail_rail_test.go",
         "task_page_test.go",
         "task_detail_page_test.go",
         "task_detail_slice_test.go",
