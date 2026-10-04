@@ -216,19 +216,31 @@ if(!btn.isConnected){return;}
 s.textContent='';btn.removeAttribute('data-copy-state');
 },RESET_MS);
 }
-// Selecting the chip's own text is the failure path's real fallback: the id
-// is readable either way, so selecting it makes the operator's next Ctrl+C
-// succeed without the clipboard API. Best effort -- a browser that refuses
-// the Range too still gets the message naming the manual step.
+// What this control copies. A chip normally holds the value itself, in
+// data-task-id or as its own text; a control carrying data-copy-source
+// reads the field it names instead, so a one-time secret appears once in
+// the page rather than twice (once in the field, once in the control).
+function valueOf(btn){
+var src=btn.getAttribute('data-copy-source');
+if(src){var el=document.getElementById(src);if(el&&typeof el.value==='string'){return el.value;}}
+return btn.getAttribute('data-task-id')||(btn.textContent||'').trim();
+}
+// Selecting the value is the failure path's real fallback: it is readable
+// either way, so selecting it makes the operator's next Ctrl+C succeed
+// without the clipboard API. Best effort -- a browser that refuses the
+// Range too still gets the message naming the manual step.
 function selectId(btn){
 try{
+var src=btn.getAttribute('data-copy-source');
+var el=src?document.getElementById(src):null;
+if(el&&typeof el.select==='function'){el.select();return;}
 var sel=window.getSelection();if(!sel){return;}
 var r=document.createRange();r.selectNodeContents(btn);
 sel.removeAllRanges();sel.addRange(r);
 }catch(e){}
 }
 function writeId(btn){
-var id=btn.getAttribute('data-task-id')||(btn.textContent||'').trim();
+var id=valueOf(btn);
 var clip=(typeof navigator!=='undefined')?navigator.clipboard:null;
 if(!clip||typeof clip.writeText!=='function'){return null;}
 try{return clip.writeText(id);}catch(e){return null;}
@@ -240,9 +252,10 @@ function bind(btn){
 if(btn.getAttribute('data-krill-bound')==='1'){return;}
 btn.setAttribute('data-krill-bound','1');
 // The upgrade the disabled chip was waiting for: it works now, and its
-// title says so instead of still blaming missing JavaScript.
+// title says so instead of still blaming missing JavaScript. The noun is
+// the control's to name: a token is not a task id.
 btn.removeAttribute('disabled');
-btn.setAttribute('title','Copy the task id to your clipboard');
+btn.setAttribute('title','Copy the '+(btn.getAttribute('data-copy-label')||'task id')+' to your clipboard');
 btn.addEventListener('click',function(ev){
 ev.preventDefault();
 var p=writeId(btn);

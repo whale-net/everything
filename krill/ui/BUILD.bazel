@@ -203,6 +203,7 @@ go_test(
         "shared_spec_readers_test.go",
         "nav_test.go",
         "nav_badge_test.go",
+        "credentials_test.go",
         "legacy_urls_test.go",
         "spec_page_test.go",
         "spec_tabs_test.go",
@@ -252,6 +253,10 @@ go_test(
     embed = [":ui_lib"],
     deps = [
         "//krill/api/handlers",
+        # The credentials handler tests resolve the caller's realm roles
+        # through the same RoleConfig api's reader gate uses, so the page's
+        # reader gate is checked against the one rule rather than a copy.
+        "//krill/mcp/server",
         "//krill/mcp/tools",
         # The blade's FRn/NFRn citations are checked against the render
         # package's own rule for the same slice.Document, so the two are

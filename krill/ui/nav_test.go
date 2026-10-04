@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -920,7 +921,13 @@ func TestCredentialsPageIsServerRendered(t *testing.T) {
 	app.mountShellRoutes(mux)
 
 	body := fetch(t, mux, credentialsPath).Body.String()
-	for _, want := range []string{`id="credentials-results"`, `hx-post="` + credentialsPath + `"`} {
+	for _, want := range []string{
+		`id="credentials-results"`,
+		// The mint moved into the create blade, so the list's own action is
+		// now the blade's GET -- carrying both halves of the doubling rule.
+		`href="` + credentialsNewPath + `"`,
+		`hx-get="` + credentialsNewPath + `"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("credentials page missing %q", want)
 		}
@@ -1132,24 +1139,74 @@ func TestReadRoutes_AuthModeNoneAdmitsDevUser(t *testing.T) {
 	}
 }
 
-// fakeCredentials is an in-memory auth.CredentialStore for handler tests.
+// fakeCredentials is an in-memory auth.NamedCredentialStore for handler
+// tests.
+//
+// It records what each mint was asked for -- the identity it was filed
+// under and the name it was given -- because those are the two facts a
+// credential handler can quietly get wrong and no rendered page shows. It
+// also refuses a duplicate name the way the real store does, and its
+// minted row joins its own listing so a test can see the list a mint
+// answers with.
 type fakeCredentials struct {
 	minted int
 	listed []auth.Credential
+
+	// mintedIdentities and mintedNames are what each mint was asked for,
+	// in order.
+	mintedIdentities []string
+	mintedNames      []string
+
+	// token is the raw token a mint hands back; empty means
+	// "raw-token".
+	token string
+
+	// live is the set of names a live credential already holds.
+	live map[string]bool
+
+	// mintErr, when set, is returned by MintNamed instead of minting --
+	// standing in for the store's own refusals.
+	mintErr error
 }
 
-func (f *fakeCredentials) Mint(context.Context, string) (string, auth.Credential, error) {
+// rawToken is the raw token this fake hands back.
+func (f *fakeCredentials) rawToken() string {
+	if f.token == "" {
+		return "raw-token"
+	}
+	return f.token
+}
+
+func (f *fakeCredentials) Mint(_ context.Context, identity string) (string, auth.Credential, error) {
 	f.minted++
-	return "raw-token", auth.Credential{ID: uuid.New()}, nil
+	f.mintedIdentities = append(f.mintedIdentities, identity)
+	return f.rawToken(), auth.Credential{ID: uuid.New()}, nil
 }
 
 func (f *fakeCredentials) Verify(context.Context, string) (string, auth.Credential, error) {
 	return "", auth.Credential{}, nil
 }
 
-func (f *fakeCredentials) MintNamed(_ context.Context, _, name string) (string, auth.Credential, error) {
+func (f *fakeCredentials) MintNamed(_ context.Context, identity, name string) (string, auth.Credential, error) {
 	f.minted++
-	return "raw-token", auth.Credential{ID: uuid.New(), Name: name}, nil
+	f.mintedIdentities = append(f.mintedIdentities, identity)
+	f.mintedNames = append(f.mintedNames, name)
+	if f.mintErr != nil {
+		return "", auth.Credential{}, f.mintErr
+	}
+	if name == "" {
+		return "", auth.Credential{}, auth.ErrCredentialNameRequired
+	}
+	if f.live[name] {
+		return "", auth.Credential{}, auth.ErrCredentialNameTaken
+	}
+	if f.live == nil {
+		f.live = map[string]bool{}
+	}
+	f.live[name] = true
+	cred := auth.Credential{ID: uuid.New(), Identity: identity, Name: name, CreatedAt: time.Now()}
+	f.listed = append([]auth.Credential{cred}, f.listed...)
+	return f.rawToken(), cred, nil
 }
 
 func (f *fakeCredentials) Revoke(context.Context, uuid.UUID, string) error { return nil }
