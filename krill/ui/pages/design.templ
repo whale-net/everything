@@ -974,6 +974,7 @@ templ revisionEventDetail(ev RevisionEventRow) {
 templ FollowUpForm(page DesignSessionDetailPage) {
 	<form
 		id={ FollowUpFormAnchor }
+		data-krill="design-session-follow-up-form"
 		method="post"
 		action={ templ.URL(page.AnswersPath) }
 		hx-post={ page.AnswersPath }

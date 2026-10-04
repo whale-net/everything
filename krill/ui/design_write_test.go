@@ -747,21 +747,18 @@ func resolveBoxChecked(t *testing.T, body, questionID string) bool {
 	return strings.Contains(input, " checked")
 }
 
-// htmlAttrOf returns the named attribute's value on the first tag
-// containing the marker. Used for the form's own hx-* wiring, which is a
-// claim about the WIRING rather than about styling -- but it is still read
-// off the served tag rather than off the template source, so a template
-// that stops emitting it fails here.
-func htmlAttrOf(t *testing.T, body, marker, attr string) string {
+// formAttr is one attribute of the follow-up form, read off the SERVED
+// element rather than off the template source, so a template that stops
+// emitting it fails here. The form is found by its data-krill hook, which
+// is what makes this a lookup rather than a scan for a substring that might
+// also appear inside the operator's own typed text.
+func formAttr(t *testing.T, body, attr string) string {
 	t.Helper()
-	i := strings.Index(body, marker)
-	require.NotEqual(t, -1, i, "body must contain %q", marker)
-	rest := body[i:]
-	end := strings.Index(rest, ">")
-	require.NotEqual(t, -1, end, "the tag carrying %q must close", marker)
-	tag := rest[:end]
+	re := regexp.MustCompile(`<form[^>]*data-krill="design-session-follow-up-form"[^>]*>`)
+	tag := re.FindString(body)
+	require.NotEmpty(t, tag, "the served page must carry the follow-up form")
 	m := regexp.MustCompile(regexp.QuoteMeta(attr) + `="([^"]*)"`).FindStringSubmatch(tag)
-	require.NotNil(t, m, "the tag carrying %q must have %s", marker, attr)
+	require.NotNil(t, m, "the follow-up form must carry %s", attr)
 	return m[1]
 }
 
@@ -1030,8 +1027,7 @@ func TestDesignWrite_RejectedAnswer_HXReRendersTheRoundRegion(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(body, `data-krill="open-question-resolve"`),
 		"one box per open question, and the rail still owns them")
 	assert.Contains(t, body, `hx-post="`+env.answerPath()+`"`, "the doubled form keeps its htmx wiring across a re-render")
-	assert.Equal(t, "#"+pages.DesignSessionRoundAnchor,
-		htmlAttrOf(t, body, `id="`+pages.FollowUpFormAnchor+`"`, "hx-target"),
+	assert.Equal(t, "#"+pages.DesignSessionRoundAnchor, formAttr(t, body, "hx-target"),
 		"the re-rendered form still points its swap at the round region, not at itself")
 }
 
@@ -1698,14 +1694,14 @@ func TestDesignWrite_Answer_FormIsDoubled(t *testing.T) {
 	env := newDesignWriteEnv(t)
 	html := env.getDetail(t, designSessionPath(env.ProductID, env.SessionID)).Body.String()
 
-	assert.Equal(t, env.answerPath(), htmlAttrOf(t, html, `id="`+pages.FollowUpFormAnchor+`"`, "action"),
+	assert.Equal(t, env.answerPath(), formAttr(t, html, "action"),
 		"the no-JS half posts to the answers action")
-	assert.Equal(t, "post", htmlAttrOf(t, html, `id="`+pages.FollowUpFormAnchor+`"`, "method"))
-	assert.Equal(t, env.answerPath(), htmlAttrOf(t, html, `id="`+pages.FollowUpFormAnchor+`"`, "hx-post"),
+	assert.Equal(t, "post", formAttr(t, html, "method"))
+	assert.Equal(t, env.answerPath(), formAttr(t, html, "hx-post"),
 		"the htmx half posts to the same route")
-	assert.Equal(t, "#"+pages.DesignSessionRoundAnchor, htmlAttrOf(t, html, `id="`+pages.FollowUpFormAnchor+`"`, "hx-target"),
+	assert.Equal(t, "#"+pages.DesignSessionRoundAnchor, formAttr(t, html, "hx-target"),
 		"and swaps the round region, because a round changes the timeline and the rail too")
-	assert.Equal(t, "outerHTML", htmlAttrOf(t, html, `id="`+pages.FollowUpFormAnchor+`"`, "hx-swap"))
+	assert.Equal(t, "outerHTML", formAttr(t, html, "hx-swap"))
 
 	// The swap target exists on the page the form is served into: an
 	// hx-target that resolves to nothing makes htmx return before it even
