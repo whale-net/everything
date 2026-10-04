@@ -30,6 +30,11 @@ type Credential struct {
 	// Persona is the persona resolved at Mint time. Empty unless the store
 	// was configured with StoreConfig.PersonaColumn (opt-in).
 	Persona string
+
+	// Name is the operator-chosen label on the credential. Empty unless the
+	// store was configured with StoreConfig.NameColumn (opt-in) — a store
+	// without one neither reads nor writes a name.
+	Name string
 }
 
 // PersonaResolver resolves an identity to the persona persisted on a newly
@@ -88,6 +93,17 @@ const (
 // its message never vary, and never include the presented token or its
 // hash.
 var ErrInvalidCredential = errors.New("auth: invalid or revoked credential")
+
+// ErrCredentialNameRequired is returned by MintNamed for an empty or
+// whitespace-only name — a refusal the caller must be able to state in its
+// own words.
+var ErrCredentialNameRequired = errors.New("auth: credential name is required")
+
+// ErrCredentialNameTaken is returned by MintNamed when another of identity's
+// credentials already holds the name and is still live. It is translated
+// from the partial unique index's violation, so callers never see a driver
+// message or an SQLSTATE.
+var ErrCredentialNameTaken = errors.New("auth: credential name is already in use")
 
 // identifierPattern is the strict allow-list StoreConfig.TableName,
 // StoreConfig.IdentityColumn, and StoreConfig.IdentityCast must match.
@@ -156,6 +172,38 @@ type StoreConfig struct {
 	// PersonaResolver supplies the persona written at Mint when
 	// PersonaColumn is set. With a nil resolver the column is written NULL.
 	PersonaResolver PersonaResolver
+
+	// NameColumn, when set, names a nullable TEXT column the store reads
+	// and writes a credential's operator-chosen name through (only via
+	// MintNamed). Unset (the default) leaves every generated SQL string
+	// byte-for-byte unchanged, so a consuming domain whose table has no
+	// name column is unaffected and needs no migration.
+	NameColumn string
+}
+
+// NamedCredentialStore is a CredentialStore whose backing table also carries
+// an operator-chosen credential name (StoreConfig.NameColumn).
+//
+// It is a separate interface rather than a widened CredentialStore on
+// purpose: the roughly two dozen in-memory and Postgres fakes across krill,
+// whagent_net, audience_score_system and this package that stand in for a
+// store implement CredentialStore today, and a mint-with-a-name requirement
+// does not apply to any of them.
+type NamedCredentialStore interface {
+	CredentialStore
+
+	// MintNamed issues a new credential for identity carrying name, under
+	// the same token/hash contract as Mint.
+	//
+	// An empty or whitespace-only name is refused with
+	// ErrCredentialNameRequired, and a name already live on another of
+	// identity's credentials with ErrCredentialNameTaken — so a caller can
+	// tell the two refusals apart and never sees a raw driver message.
+	// Revoking frees the name for reuse.
+	//
+	// Calling MintNamed on a store configured without NameColumn is a
+	// misconfiguration and returns an error naming NameColumn.
+	MintNamed(ctx context.Context, identity, name string) (rawToken string, cred Credential, err error)
 }
 
 // NewCredentialStore constructs a CredentialStore backed by cfg.Pool and
@@ -198,6 +246,11 @@ func NewCredentialStore(ctx context.Context, cfg StoreConfig) (CredentialStore, 
 			return nil, err
 		}
 	}
+	if cfg.NameColumn != "" {
+		if err := validateIdentifier(cfg.NameColumn, "NameColumn"); err != nil {
+			return nil, err
+		}
+	}
 
 	s := &pgxCredentialStore{cfg: cfg}
 
@@ -217,6 +270,7 @@ type pgxCredentialStore struct {
 }
 
 var _ CredentialStore = (*pgxCredentialStore)(nil)
+var _ NamedCredentialStore = (*pgxCredentialStore)(nil)
 
 // probeTable runs a minimal query against the configured table to confirm
 // it exists and is accessible. It uses the unqualified table name so it
@@ -300,6 +354,13 @@ func generateToken() (string, error) {
 func hashToken(rawToken string) string {
 	sum := sha256.Sum256([]byte(rawToken))
 	return hex.EncodeToString(sum[:])
+}
+
+// MintNamed is implemented in the Implementation phase of the credential-name
+// work; the scaffold ships only the declaration so consumers can be wired
+// against the new interface.
+func (s *pgxCredentialStore) MintNamed(ctx context.Context, identity, name string) (string, Credential, error) {
+	return "", Credential{}, errors.New("auth: MintNamed not yet implemented")
 }
 
 // Mint generates a fresh high-entropy token, persists only its SHA-256
