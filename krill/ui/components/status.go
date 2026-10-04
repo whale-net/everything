@@ -196,6 +196,42 @@ func NoteLifecycleStyle(status string) StatusStyle {
 	}
 }
 
+// NonGoalKindStyle maps a non-goal's kind -- the store's
+// NonGoalKind, spelled out as strings so this package keeps no
+// //krill/store dependency -- onto a daisyUI badge. It is the only place
+// that vocabulary acquires a colour, so the non-goals page and anything
+// that later shows a non-goal inline render a kind the same way.
+//
+// It takes a string for the reason MilestoneStatusStyle does: an
+// unrecognised kind falls through to the neutral fallback rather than
+// failing to compile when a third kind is added.
+func NonGoalKindStyle(kind string) StatusStyle {
+	switch kind {
+	case "permanent":
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	case "deferred":
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
+
+// NonGoalKindLabel is the human wording on a non-goal's kind badge. The
+// store's values are lowercase wire strings; a badge an operator reads is
+// not one, so the two live apart here rather than being spelled apart at
+// each call site. An unrecognised kind shows the wire value itself rather
+// than an empty badge.
+func NonGoalKindLabel(kind string) string {
+	switch kind {
+	case "permanent":
+		return "Permanent"
+	case "deferred":
+		return "Deferred"
+	default:
+		return kind
+	}
+}
+
 // EscalationReasonLabel is the human wording for one escalation reason.
 // The store's values are hyphenated wire strings; a badge an operator
 // reads is not one, so the two live apart here rather than being spelled
