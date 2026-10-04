@@ -79,6 +79,15 @@ func (r *railSpecReader) StatusHistory(_ context.Context, id uuid.UUID) ([]store
 	return r.history[id], nil
 }
 
+// DeliveryBreakdown answers empty, so the detail page's Delivery card --
+// which every container's page reads, gated on nothing -- renders beside the
+// rail without the fixture having to carry a delivered-scope document. The
+// rail cases say nothing about that card; the ones that do have their own
+// fixture and their own file.
+func (r *railSpecReader) DeliveryBreakdown(context.Context, uuid.UUID) (slice.Document, slice.Document, error) {
+	return slice.Document{}, slice.Document{}, nil
+}
+
 var _ specReadClient = (*railSpecReader)(nil)
 
 // railTasks is the progress read the rail makes, steerable per container

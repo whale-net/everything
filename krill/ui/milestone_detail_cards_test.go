@@ -186,6 +186,59 @@ func cardDetailOf(t *testing.T, containers []store.ContainerTaskProgress, id uui
 	return rec.Body.String()
 }
 
+// cardRowsOf calls the Milepebbles card's OWN read --
+// milestoneDetailMilepebbles, the function the handler calls -- and reports
+// both its rows and every progress read that call made.
+//
+// It exists because the page's read count stopped being the card's to
+// assert on: the properties rail beside the cards reads the same aggregate
+// for the same container (FR c208b777 wants a Tasks figure on every
+// container's page, cut or not), so a served page cannot say which of two
+// identical reads the cards issued. Calling the card's read on its own
+// answers the cards' questions exactly and is unaffected by whatever else
+// the page reads.
+func cardRowsOf(t *testing.T, containers []store.ContainerTaskProgress, id uuid.UUID) ([]pages.MilestoneDetailMilepebble, []store.ProductTaskProgressParams) {
+	t.Helper()
+	tasks := &cardFixtureTasks{containers: containers}
+	app := newTestApp(t)
+	app.scopes = productScopeScopes{scope: store.Scope{ID: chromeScopeID}}
+	app.tasks = tasks
+	rows := app.milestoneDetailMilepebbles(context.Background(), cardProductID, cardContainerOf(t, id))
+	return rows, tasks.calls
+}
+
+// findMilepebblesCard slices the Milepebbles card out of a rendered page, so
+// an assertion about one of its rows is about that row and cannot be
+// satisfied -- or broken -- by a sentence another section of the page prints.
+// The rail reports its OWN unreadable figure in the same words the card does,
+// so a whole-page substring check cannot tell the two apart.
+func findMilepebblesCard(html string) (string, bool) {
+	start := strings.Index(html, `data-krill="milestone-milepebbles"`)
+	if start < 0 {
+		return "", false
+	}
+	rest := html[start:]
+	end := strings.Index(rest, `data-krill="milestone-delivery-card"`)
+	if end < 0 {
+		end = strings.Index(rest, `data-krill="milestone-detail-rail"`)
+	}
+	if end < 0 {
+		return rest, true
+	}
+	return rest[:end], true
+}
+
+// milepebblesCard is findMilepebblesCard's asserting form: it REQUIRES the card,
+// so every assertion made against the result is about a card that rendered
+// rather than about the empty string.
+func milepebblesCard(t *testing.T, html string) string {
+	t.Helper()
+	region, ok := findMilepebblesCard(html)
+	require.True(t, ok, "the Milepebbles card did not render, so assertions against it would be vacuous")
+	require.NotEmpty(t, region, "the card rendered its marker but no rows:\n%s", html)
+	return region
+}
+
 // ---------------------------------------------------------------------------
 // 1. the Outcome card
 // ---------------------------------------------------------------------------
@@ -348,7 +401,7 @@ func TestMilestoneDetailMilepebbleRowIsAddressable(t *testing.T) {
 // omitted (empty means render nothing)". An empty card is the failure --
 // it reads as a milestone whose cuts were lost.
 func TestMilestoneDetailUncutMilestoneHasNoMilepebblesCard(t *testing.T) {
-	mux, tasks := cardMux(t, cardProgress, nil)
+	mux, _ := cardMux(t, cardProgress, nil)
 
 	rec := fetch(t, mux, milestoneDetailHref(cardProductID, cardUncutMilestoneID))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -363,9 +416,15 @@ func TestMilestoneDetailUncutMilestoneHasNoMilepebblesCard(t *testing.T) {
 	assert.Contains(t, body, `data-krill="page-title"`)
 	assert.Contains(t, body, "M7 Legacy docs")
 
-	// And nothing was read to fill a card that does not exist.
-	assert.Empty(t, tasks.calls,
-		"an uncut milestone's detail asks the store for no progress at all")
+	// And nothing was read to fill a card that does not exist. Scoped to
+	// the CARD's read rather than to the page's: the rail beside it
+	// legitimately reads this container's Tasks figure (FR c208b777), and
+	// an uncut milestone is still a container whose Tasks row the FR
+	// requires.
+	rows, calls := cardRowsOf(t, cardProgress, cardUncutMilestoneID)
+	assert.Nil(t, rows, "a milestone with no cuts has no rows to render")
+	assert.Empty(t, calls,
+		"the card asks the store for no progress at all when it renders nothing")
 }
 
 // TestMilestoneDetailOfAMilepebbleHasNoMilepebblesCard: a milepebble has
@@ -373,7 +432,7 @@ func TestMilestoneDetailUncutMilestoneHasNoMilepebblesCard(t *testing.T) {
 // it is the whole of what that region has to say. A milepebble's detail
 // must therefore render no Milepebbles card at all.
 func TestMilestoneDetailOfAMilepebbleHasNoMilepebblesCard(t *testing.T) {
-	mux, tasks := cardMux(t, cardProgress, nil)
+	mux, _ := cardMux(t, cardProgress, nil)
 
 	rec := fetch(t, mux, milestoneDetailHref(cardProductID, cardPebbleOneID))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -384,7 +443,13 @@ func TestMilestoneDetailOfAMilepebbleHasNoMilepebblesCard(t *testing.T) {
 		"a milepebble's own detail has no milepebbles of its own to list")
 	// The control: it is the milepebble's page, not a 404.
 	assert.Contains(t, body, "P0 Console reads")
-	assert.Empty(t, tasks.calls)
+
+	// Scoped to the card's own read for the same reason as the case above:
+	// the rail's Tasks read is a different section's, and a milepebble has
+	// no cuts for the card to be filling.
+	rows, calls := cardRowsOf(t, cardProgress, cardPebbleOneID)
+	assert.Nil(t, rows, "a milepebble has no cuts of its own to list")
+	assert.Empty(t, calls)
 }
 
 // ---------------------------------------------------------------------------
@@ -401,20 +466,41 @@ func TestMilestoneDetailOfAMilepebbleHasNoMilepebblesCard(t *testing.T) {
 // and would render them correctly; this case exists because the difference
 // is a wasted whole-product read that a test that only checked the
 // numbers could never see.
+//
+// It is asserted on the SCOPE OF EVERY READ THE PAGE MADE rather than on
+// how many reads it made. The detail page has more than one consumer of
+// this aggregate -- the cards' bars and the rail's Tasks figure both need
+// it -- so a raw count no longer says whose read it was counting, while
+// "no read on this page walked the whole roadmap" is a claim about all of
+// them at once and is exactly what this case is for.
 func TestMilestoneDetailProgressComesFromTheSingleContainerScope(t *testing.T) {
 	mux, tasks := cardMux(t, cardProgress, nil)
 
 	rec := fetch(t, mux, milestoneDetailHref(cardProductID, cardMilestoneID))
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	require.Len(t, tasks.calls, 1, "one progress read, not one per cut and not one per page")
-	call := tasks.calls[0]
-	assert.Equal(t, store.ProductTaskScopeMilestone, call.Scope.Kind,
-		"the detail reads the ONE milestone it is about")
-	assert.Equal(t, cardMilestoneID, call.Scope.ContainerID,
-		"and it is this milestone, resolved out of the URL's own product")
-	assert.Equal(t, cardProductID, call.ProductID)
-	assert.Equal(t, chromeScopeID, call.ScopeID)
+	require.NotEmpty(t, tasks.calls, "the page must read progress at all")
+	for i, call := range tasks.calls {
+		assert.Equal(t, store.ProductTaskScopeMilestone, call.Scope.Kind,
+			"read %d: the detail reads the ONE milestone it is about, never every container", i)
+		assert.Equal(t, cardMilestoneID, call.Scope.ContainerID,
+			"read %d: and it is this milestone, resolved out of the URL's own product", i)
+		assert.Equal(t, cardProductID, call.ProductID, "read %d", i)
+		assert.Equal(t, chromeScopeID, call.ScopeID, "read %d", i)
+	}
+
+	// And the cards' own read among them is a single-container read, once:
+	// not one per cut, and not a whole-roadmap read wearing this milestone's
+	// name. Called directly, so this is the card's read and not whichever
+	// section's happened to be recorded first.
+	rows, calls := cardRowsOf(t, cardProgress, cardMilestoneID)
+	require.Len(t, rows, 2)
+	require.Len(t, calls, 1, "one progress read for the card, not one per cut")
+	assert.Equal(t, store.ProductTaskScopeMilestone, calls[0].Scope.Kind,
+		"the card reads under the single-container scope")
+	assert.Equal(t, cardMilestoneID, calls[0].Scope.ContainerID)
+	assert.Equal(t, cardProductID, calls[0].ProductID)
+	assert.Equal(t, chromeScopeID, calls[0].ScopeID)
 }
 
 // TestMilestoneDetailUnreadableProgressStillListsTheCuts: a failed
@@ -440,13 +526,17 @@ func TestMilestoneDetailUnreadableProgressStillListsTheCuts(t *testing.T) {
 		`/tasks?container_id=`+cardPebbleOneID.String()+`&amp;scope=milepebble"`,
 		"the tasks link comes from the listing, so a failed read cannot take it")
 
-	// And every bar says the figures could not be read.
-	assert.Equal(t, 2, strings.Count(body, `data-krill="milestone-progress-error"`),
+	// And every bar says the figures could not be read. Scoped to the card:
+	// the rail has its own Tasks figure and reports its own unreadable one
+	// in the same words, so a whole-page count would be counting two
+	// sections' sentences against one section's rows.
+	card := milepebblesCard(t, body)
+	assert.Equal(t, 2, strings.Count(card, `data-krill="milestone-progress-error"`),
 		"one unreadable sentence per row, never a silent zero")
-	assert.Contains(t, body, "Task progress could not be read.")
-	assert.NotContains(t, body, "No tasks yet",
+	assert.Contains(t, card, "Task progress could not be read.")
+	assert.NotContains(t, card, "No tasks yet",
 		"an unread figure is never reported as an empty container")
-	assert.NotContains(t, body, `data-krill="milestone-no-tasks"`)
+	assert.NotContains(t, card, `data-krill="milestone-no-tasks"`)
 }
 
 // TestMilestoneDetailCutWithNoTasksSaysNoTasksYet is the OTHER end of the
@@ -469,13 +559,18 @@ func TestMilestoneDetailCutWithNoTasksSaysNoTasksYet(t *testing.T) {
 		},
 	}, cardMilestoneID)
 
-	require.Contains(t, html, `data-krill="milestone-milepebbles"`)
-	assert.Equal(t, 2, strings.Count(html, "No tasks yet"),
+	// Scoped to the card, because the rail beside it prints "No tasks yet"
+	// and the unreadable sentence too -- on this fixture the read accounts
+	// for the two cuts and not for the milestone, so the rail's own figure
+	// is legitimately a failure. A whole-page count here would be adding
+	// the rail's answer to the card's.
+	card := milepebblesCard(t, html)
+	assert.Equal(t, 2, strings.Count(card, "No tasks yet"),
 		"one sentence per cut, and no cut quietly rendered a bar")
-	assert.Equal(t, 2, strings.Count(html, `data-krill="milestone-no-tasks"`))
-	assert.NotContains(t, html, `data-krill="milestone-progress-error"`,
+	assert.Equal(t, 2, strings.Count(card, `data-krill="milestone-no-tasks"`))
+	assert.NotContains(t, card, `data-krill="milestone-progress-error"`,
 		"a container the read accounted for is not one it failed to read")
-	assert.NotContains(t, html, "Task progress could not be read.")
+	assert.NotContains(t, card, "Task progress could not be read.")
 }
 
 // TestMilestoneDetailCutMissingFromTheReadIsNotCalledEmpty: a row the read
@@ -489,10 +584,12 @@ func TestMilestoneDetailCutMissingFromTheReadIsNotCalledEmpty(t *testing.T) {
 		{Milestone: store.ProductTaskMilestoneRef{ID: cardMilestoneID}, PerLane: store.TaskLaneCounts{Done: 9}},
 	}, cardMilestoneID)
 
-	assert.Contains(t, html, `data-krill="milestone-progress-error"`,
+	// The card's region, for the same reason as the case above.
+	card := milepebblesCard(t, html)
+	assert.Contains(t, card, `data-krill="milestone-progress-error"`,
 		"a cut the read did not account for must not read as 'No tasks yet'")
-	assert.NotContains(t, html, "No tasks yet")
-	assert.NotContains(t, html, `value="9"`,
+	assert.NotContains(t, card, "No tasks yet")
+	assert.NotContains(t, card, `value="9"`,
 		"and it must not borrow the milestone's own figures either")
 }
 
