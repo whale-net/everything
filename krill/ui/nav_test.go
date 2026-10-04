@@ -743,22 +743,41 @@ func TestWorkspaceShellCarriesTheSwitcherAndToastHost(t *testing.T) {
 }
 
 // TestPrimaryNavScanIgnoresTheProductSubNav proves the data-krill hook is
-// load-bearing rather than decorative. Every per-product spec page
-// renders two navs -- the shell's and its own cross-nav -- and each marks
-// its own current page, so a page carries two aria-current="page"
-// anchors. An unscoped scan would report two active links and every
-// "exactly one" assertion built on it would be counting the sub-nav too.
+// load-bearing rather than decorative, on the page that still exercises
+// it: the delivery page renders two navs -- the shell's and its own
+// cross-nav -- and each marks its own current page, so an unscoped scan
+// would report two active links and every "exactly one" assertion built
+// on it would be counting the sub-nav too.
+//
+// The spec pages used to be the subject here. They no longer render a
+// cross-nav -- the tab strip replaced it, and marks its active tab with
+// aria-selected rather than aria-current -- so they are asserted to carry
+// exactly one aria-current in total, which is the property that keeps an
+// unscoped scan honest there too.
 func TestPrimaryNavScanIgnoresTheProductSubNav(t *testing.T) {
-	mux := navMux(t)
 	pid := navProductID
 
-	// Pages that render their own product cross-nav, and pages that do
-	// not. The first group is where an unscoped scan would go wrong.
-	withSubNav := []string{productPath(pid), decisionsPath(pid), nonGoalsPath(pid)}
-	withoutSubNav := []string{milestoneTasksPath(pid, navMilestoneID)}
+	// The delivery page, rendered through the shell seam's own composition
+	// rather than fetched: its URL is a Successor that redirects into the
+	// Milestones table, so the page that carries the sub-nav has no path
+	// left to fetch it from.
+	withSubNav := renderDeliveryCrossNavPage(store.Product{ID: pid, Name: "krill"}, pid)
+	if region := primaryNavRegion(withSubNav); region != "" {
+		t.Errorf("the bare delivery body rendered a %q region; this scan needs the shell around it", `data-krill="primary-nav"`)
+	}
 
-	for _, path := range withSubNav {
-		body := fetch(t, mux, path).Body.String()
+	// The unscoped count is what makes the hook worth having: where a page
+	// carries its own nav, an unscoped scan sees more than one current link.
+	if total := strings.Count(withSubNav, `aria-current="page"`); total != 1 {
+		t.Errorf("the delivery body carries %d aria-current anchors, want 1", total)
+	}
+
+	mux := navMux(t)
+	// The four spec tabs, none of which renders a cross-nav of its own.
+	for _, path := range []string{
+		productPath(pid), decisionsPath(pid), personasPath(pid), nonGoalsPath(pid),
+	} {
+		body := fetchPage(t, mux, path).Body.String()
 
 		if region := primaryNavRegion(body); region == "" {
 			t.Errorf("GET %s rendered no %q region", path, `data-krill="primary-nav"`)
@@ -767,24 +786,19 @@ func TestPrimaryNavScanIgnoresTheProductSubNav(t *testing.T) {
 		if got := activeLabels(body); len(got) != 1 {
 			t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
 		}
-		// The unscoped count is what makes this a real test rather than a
-		// restatement: it has to exceed the scoped one here, or the hook
-		// was never exercised on this page.
-		total := strings.Count(body, `aria-current="page"`)
-		if total <= 1 {
-			t.Errorf("GET %s carries %d aria-current anchors in total; the "+
-				"product sub-nav is not marking itself, so this page cannot "+
-				"prove the hook excludes it", path, total)
+		if total := strings.Count(body, `aria-current="page"`); total != 1 {
+			t.Errorf("GET %s carries %d aria-current anchors in total; the tab strip "+
+				"must mark itself with aria-selected so it cannot be counted here", path, total)
 		}
 	}
 
 	// The per-milestone task list is pre-redesign and redirects into the
 	// product-wide Tasks, so the scan runs on the page the operator lands
-	// on rather than on the 302's empty body.
-	for _, path := range withoutSubNav {
-		if got := activeLabels(fetchPage(t, mux, path).Body.String()); len(got) != 1 {
-			t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
-		}
+	// on rather than on the 302's empty body. That page carries the Tasks
+	// scope sub-nav, so only the scoped count is asserted here.
+	path := milestoneTasksPath(pid, navMilestoneID)
+	if got := activeLabels(fetchPage(t, mux, path).Body.String()); len(got) != 1 {
+		t.Errorf("GET %s: primary nav scan found %d active links (%v), want 1", path, len(got), got)
 	}
 }
 

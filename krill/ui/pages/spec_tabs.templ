@@ -1,0 +1,110 @@
+package pages
+
+// The Spec page's tab strip and the swap region the four tabs share.
+//
+// The four per-product spec URLs ARE the four tabs' addresses, so this
+// file owns no routing: the strip is built from the paths the handlers
+// already serve, and each tab's href is the real address its own page is
+// served at. A tab link is therefore both a plain link and an hx-get of
+// the same address -- with JavaScript off it navigates and lands on the
+// same tab, with it on the panel swaps in place.
+//
+// The strip is INSIDE the region rather than beside it. A strip that were
+// its own swap target would need the served fragment to carry two
+// top-level nodes -- the panel and the re-marked strip -- and htmx's
+// outerHTML inserts EVERY top-level node into the target, so each click
+// would splice a duplicate strip into the page (README's swap-target
+// rule, applied the way TaskDetailTabs applies it).
+
+// SpecPanelAnchor is the DOM id of the swap region: the hx-target every
+// tab names, and the id the served fragment's ROOT must carry. Without it
+// on the root, htmx deletes the element it was asked to replace and every
+// later tab click is a no-op that never reaches the server.
+const SpecPanelAnchor = "krill-spec-panel"
+
+// SpecPanelBodyAnchor is the inner region the active panel renders into,
+// and what each tab's aria-controls names.
+const SpecPanelBodyAnchor = "krill-spec-panel-body"
+
+// The four tab keys, one per spec URL.
+const (
+	SpecTabCapabilities = "capabilities"
+	SpecTabDecisions    = "decisions"
+	SpecTabPersonas     = "personas"
+	SpecTabNonGoals     = "non-goals"
+)
+
+// SpecTabID is one tab's DOM id in the strip, which is also what its
+// panel's aria-labelledby points at.
+func SpecTabID(key string) string {
+	return "krill-spec-tab-" + key
+}
+
+// SpecTab is one tab: the address it navigates to, and the in-place swap
+// of that same address.
+type SpecTab struct {
+	Key    string
+	Label  string
+	Href   string
+	Active bool
+}
+
+// SpecTabsPage is the whole Spec page: the strip and the active panel,
+// together, as one swap region.
+type SpecTabsPage struct {
+	Tabs  []SpecTab
+	Tab   string
+	Panel templ.Component
+}
+
+// SpecTabs renders the strip above the active panel, both inside the one
+// region every tab swaps. The rest of the page -- shell, header, product
+// banner -- sits outside it and is never re-derived by a tab click.
+templ SpecTabs(page SpecTabsPage) {
+	<div id={ SpecPanelAnchor } data-krill="spec-panel" data-krill-spec-tab={ page.Tab }>
+		@specTabStrip(page.Tabs)
+		<div id={ SpecPanelBodyAnchor } role="tabpanel" aria-labelledby={ SpecTabID(page.Tab) } class="mt-4" data-krill="spec-panel-body">
+			@page.Panel
+		</div>
+	</div>
+}
+
+// specTabStrip is the tablist: four real links, each carrying the htmx
+// attributes that swap the region in place and push the tab's own URL.
+//
+// aria-selected is emitted on every tab rather than only the active one,
+// because an omitted aria-selected on a role="tab" leaves its state
+// undefined rather than false.
+templ specTabStrip(tabs []SpecTab) {
+	<div role="tablist" class="tabs tabs-border" data-krill="spec-tabs">
+		for _, t := range tabs {
+			<a role="tab" id={ SpecTabID(t.Key) } href={ templ.URL(t.Href) }
+				class={ specTabClasses(t.Active) }
+				aria-selected={ specTabSelected(t.Active) }
+				aria-controls={ SpecPanelBodyAnchor }
+				hx-get={ templ.URL(t.Href) }
+				hx-target={ "#" + SpecPanelAnchor }
+				hx-swap="outerHTML"
+				hx-push-url="true"
+				data-krill="spec-tab" data-krill-spec-tab={ t.Key }>
+				{ t.Label }
+			</a>
+		}
+	</div>
+}
+
+// specTabClasses is one tab's daisyUI class, so the strip carries exactly
+// one active marking whichever tab the URL resolved to.
+func specTabClasses(active bool) string {
+	if active {
+		return "tab tab-active"
+	}
+	return "tab"
+}
+
+func specTabSelected(active bool) string {
+	if active {
+		return "true"
+	}
+	return "false"
+}

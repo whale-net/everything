@@ -434,9 +434,10 @@ Each area's real read surface has landed: the ops console's four read
 views (claimed / escalated / cancelled / open notes) with the four task
 interventions; the design-session browser (a product's session list, one
 session's revision-event log and open questions) with the open-session and
-follow-up writes; and the spec browser (product index, capability map,
-load-bearing decisions, personas, non-goals, and the delivery/roadmap
-view). Every view is a `templ` component under `krill/ui/pages/`, and
+follow-up writes; and the spec browser (product index, plus a per-product
+tabbed Spec page whose four tabs are the capability map, load-bearing
+decisions, personas and non-goals, and whose delivery/roadmap view is its
+own area). Every view is a `templ` component under `krill/ui/pages/`, and
 every mutating form is doubled so it works with and without JavaScript.
 [`ui/README.md`](ui/README.md) is the guide to adding the next one.
 
