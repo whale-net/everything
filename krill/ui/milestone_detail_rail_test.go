@@ -521,11 +521,6 @@ func TestMilestoneDetailRailStatusBadgeMatchesTheHeaderExactly(t *testing.T) {
 	header := regionBetween(t, html, `data-krill="milestone-detail-header"`, "</div>")
 	railStatus := regionBetween(t, railRegion(t, html), `data-krill="milestone-properties-status"`, "</dd>")
 
-	assert.Equal(t,
-		components.MilestoneStatusStyle(string(store.MilestoneStatusInProgress)).Variant,
-		components.MilestoneStatusStyle(string(store.MilestoneStatusInProgress)).Variant,
-		"the shared mapper is the one both cells resolve through")
-
 	// The badge's own rendered classes, which is what the operator sees.
 	badgeClasses := func(region string) string {
 		from := strings.Index(region, `class="badge`)
@@ -534,8 +529,24 @@ func TestMilestoneDetailRailStatusBadgeMatchesTheHeaderExactly(t *testing.T) {
 		to := strings.Index(rest, `"`)
 		return rest[:to]
 	}
+
+	// The classes components.MilestoneStatusStyle says this status gets --
+	// assembled here the way htmxui's own badgeClasses does, so the
+	// expectation is the shared mapper's answer rather than whatever the
+	// page happened to render.
+	style := components.MilestoneStatusStyle(string(store.MilestoneStatusInProgress))
+	want := "badge"
+	if style.Soft {
+		want += " badge-soft"
+	}
+	want += " " + string(style.Variant) + " " + string(style.Size)
+
+	assert.Equal(t, want, badgeClasses(header),
+		"the header's badge must be the shared mapper's, not a local one")
+	assert.Equal(t, want, badgeClasses(railStatus),
+		"the rail's badge must be the shared mapper's, not a local one")
 	assert.Equal(t, badgeClasses(header), badgeClasses(railStatus),
-		"the rail's status badge and the header's must resolve to the same variant")
+		"and the rail's status badge and the header's must resolve to the same variant")
 }
 
 // TestMilestoneDetailRailIdUsesTheCopyChipTheHeadScriptBinds: the chip
