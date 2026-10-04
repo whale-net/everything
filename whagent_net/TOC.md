@@ -25,6 +25,16 @@ Temporal session workflows, MCP surface, and an embeddable session UI.
   capability map (C1–C26), and milestone roadmap (M1–M3). Read before scoping
   or designing any whagent-net work; amended only via `/project-manager:product`.
 
+## Proposals
+
+- [`OMNIGENT_RUNTHROUGH_WORKFLOW_POC.md`](OMNIGENT_RUNTHROUGH_WORKFLOW_POC.md)
+  — discussion draft, not yet scoped: a short-lived Temporal workflow
+  representing one linear "run-through" of a plan/implement/validate loop
+  (like `krill-work:loop-plan-implement-validate`) over Omnigent-backed agent
+  sessions, contrasted with `SessionWorkflow`'s long-lived signal-per-turn
+  shape. Loop/retry judgment stays with the calling agent; Temporal only owns
+  the mechanical phase sequencing.
+
 ## Related
 
 - GitHub issue #1552 — the original manmanv2-scoped exploration this domain
