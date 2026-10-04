@@ -251,18 +251,141 @@ func revisionEventRows(events []store.RevisionEvent, now time.Time) []pages.Revi
 			EventType:         string(ev.EventType),
 			Acting:            acting,
 			OnBehalfOf:        onBehalfOf,
-			OnBehalfOfDiffers: onBehalfOf != acting,
+			OnBehalfOfDiffers: ev.OnBehalfOf.Sub != "" && onBehalfOf != acting,
 			VerifiedAgainst:   derefString(ev.VerifiedAgainst),
 			SignoffStatus:     derefSignoff(ev.SignoffStatus),
 			CreatedAt:         formatTime(ev.CreatedAt),
 			AtRelative:        relativeTime(ev.CreatedAt, now),
 			AtExact:           ev.CreatedAt.UTC().Format(time.RFC3339),
+			Summary:           revisionEventSummary(ev),
 			EntityDeltas:      deltas,
 			OpenedQuestions:   opened,
 			ResolvedQuestions: ev.OpenQuestionsDelta.Resolved,
 		})
 	}
 	return rows
+}
+
+// revisionEventSummary composes the one sentence a timeline box shows for
+// one round.
+//
+// It has to be composed rather than read: migration 008's revision_event has
+// no prose column at all -- a round is an event_type, two identity triples,
+// an entity_deltas array and an open_questions_delta object, and nothing
+// else. So the sentence an operator reads is derived here from the round's
+// OWN content, in the round's own store order, and derived in exactly one
+// place: a summary assembled at three call sites is three summaries that can
+// disagree.
+//
+// What each part contributes, in the order the schema stores them:
+//
+//   - entity_deltas: each entry's summary_line, which is the only human text
+//     an entity change carries. A delta with no summary_line contributes the
+//     bare count rather than an empty clause, so a round that touched three
+//     entities and wrote nothing down says "3 entity changes" -- which is
+//     true -- instead of saying nothing at all.
+//   - opened questions: the count, then each question's text, falling back to
+//     its id when the text is empty (migration 008 does not require one).
+//   - resolved question ids: there is no text for a resolution to restate,
+//     because resolving a question never mutates it -- so the ids ARE the
+//     content.
+//
+// Nothing here reads anything the round does not carry. A revision_event has
+// no persona column, so the acting identity rendered beside this sentence
+// comes from the recorded triples and is not repeated or re-interpreted here.
+func revisionEventSummary(ev store.RevisionEvent) string {
+	parts := make([]string, 0, 3)
+	if clause := entityDeltaSummary(ev.EntityDeltas); clause != "" {
+		parts = append(parts, clause)
+	}
+	if clause := openedQuestionsSummary(ev.OpenQuestionsDelta.Opened); clause != "" {
+		parts = append(parts, clause)
+	}
+	if clause := resolvedQuestionsSummary(ev.OpenQuestionsDelta.Resolved); clause != "" {
+		parts = append(parts, clause)
+	}
+	if len(parts) == 0 {
+		// A round that recorded nothing is a real state -- a signoff, or an
+		// answer that only closed a question elsewhere -- and saying so is
+		// better than rendering an empty line where a sentence belongs.
+		return "No further detail was recorded for this round."
+	}
+	return joinSentences(parts)
+}
+
+// entityDeltaSummary is the entity-change clause: the round's summary lines
+// verbatim, or a bare count when the round wrote none.
+func entityDeltaSummary(deltas []store.EntityDelta) string {
+	if len(deltas) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(deltas))
+	for _, d := range deltas {
+		if s := strings.TrimSpace(d.SummaryLine); s != "" {
+			lines = append(lines, s)
+		}
+	}
+	if len(lines) == 0 {
+		if len(deltas) == 1 {
+			return "1 entity change"
+		}
+		return fmt.Sprintf("%d entity changes", len(deltas))
+	}
+	return strings.Join(lines, "; ")
+}
+
+// openedQuestionsSummary is the clause for the questions this round opened:
+// how many, then what each asks.
+func openedQuestionsSummary(opened []store.OpenQuestionOpened) string {
+	if len(opened) == 0 {
+		return ""
+	}
+	texts := make([]string, 0, len(opened))
+	for _, q := range opened {
+		if t := strings.TrimSpace(q.Text); t != "" {
+			texts = append(texts, t)
+		} else {
+			// A question with no text is still a question; naming its id is
+			// the only honest description of it.
+			texts = append(texts, q.QuestionID)
+		}
+	}
+	if len(opened) == 1 {
+		return fmt.Sprintf("1 question opened: %s", texts[0])
+	}
+	return fmt.Sprintf("%d questions opened: %s", len(opened), strings.Join(texts, "; "))
+}
+
+// resolvedQuestionsSummary is the clause for the questions this round
+// closed: their ids, joined the way a sentence lists them.
+func resolvedQuestionsSummary(resolved []string) string {
+	switch len(resolved) {
+	case 0:
+		return ""
+	case 1:
+		return "resolved " + resolved[0]
+	case 2:
+		return "resolved " + resolved[0] + " and " + resolved[1]
+	default:
+		return "resolved " + strings.Join(resolved[:len(resolved)-1], ", ") + " and " + resolved[len(resolved)-1]
+	}
+}
+
+// joinSentences terminates each clause and separates them, leaving a clause
+// that already ends in its own punctuation -- an opened question's text ends
+// in "?" -- alone rather than following it with a stray period.
+func joinSentences(parts []string) string {
+	var b strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(p)
+		if !strings.HasSuffix(p, ".") && !strings.HasSuffix(p, "?") {
+			b.WriteByte('.')
+		}
+	}
+	return b.String()
 }
 
 func openQuestionRows(questions []store.OpenQuestion) []pages.OpenQuestionRow {
