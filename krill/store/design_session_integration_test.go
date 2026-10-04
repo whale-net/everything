@@ -528,3 +528,159 @@ func TestSummarizeByProduct_UnknownProduct_ReturnsErrNotFound(t *testing.T) {
 	_, err := f.store.DesignSessions().SummarizeByProduct(ctx, uuid.New())
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
+
+// ---------------------------------------------------------------------------
+// GetSummaryByID (design_session_summary.go, FR
+// a77852a9-35f0-4e05-b7f7-985f88db05f7 / d8146d9e-82a7-471f-ac00-7664e89073ed):
+// one session's aggregate, through the same statement and the same stage
+// derivation SummarizeByProduct runs.
+// ---------------------------------------------------------------------------
+
+// TestGetSummaryByID_UnknownSession_ReturnsErrNotFound is the 404 path: an
+// id that names no row is an error, never a zero summary. A zero summary
+// would render as a real session with an opened stage and an unreadable
+// identity, which is the one thing a detail page must never do.
+func TestGetSummaryByID_UnknownSession_ReturnsErrNotFound(t *testing.T) {
+	ctx := context.Background()
+	f := newDSSFixture(t, "whale-net/design-session-unknown-id-test")
+
+	_, err := f.store.DesignSessions().GetSummaryByID(ctx, uuid.New())
+	assert.ErrorIs(t, err, store.ErrNotFound)
+
+	// An id that is a valid UUID but never a session, and one that is a
+	// product's id, are both "no such session" -- the read does not widen
+	// its key space.
+	_, err = f.store.DesignSessions().GetSummaryByID(ctx, f.productID)
+	assert.ErrorIs(t, err, store.ErrNotFound, "a product id is not a session id")
+}
+
+// TestGetSummaryByID_AgreesWithSummarizeByProduct is the whole reason this
+// method exists rather than a caller re-deriving the stage: one session
+// read alone and the same session read out of the product-wide aggregate
+// must be the same answer.
+//
+// Every stage is walked, because the interesting failures are per-stage
+// (a signoff the single-session path forgets to consider, a question count
+// the product path replays but this one does not) and a single happy-path
+// case would pass under either a correct or a subtly-wrong derivation.
+func TestGetSummaryByID_AgreesWithSummarizeByProduct(t *testing.T) {
+	ctx := context.Background()
+	f := newDSSFixture(t, "whale-net/design-session-summary-parity-test")
+	sessionID := f.sessionIDs[0]
+
+	dssAppend(t, f, sessionID, store.EventTypeDraft, store.OpenQuestionsDelta{Opened: []store.OpenQuestionOpened{
+		{QuestionID: "q1", Blocking: true, Text: "which store?"},
+		{QuestionID: "q2", Blocking: false, Text: "wording"},
+	}})
+	dssAppend(t, f, sessionID, store.EventTypeReconciliation, store.OpenQuestionsDelta{
+		Resolved: []string{"q1"},
+	})
+	// An approval makes the stage terminal, which is the rule most likely
+	// to be re-derived differently by a second implementation.
+	dssAppendSignoff(t, f, sessionID, store.SignoffStatusApproved)
+
+	byID, err := f.store.DesignSessions().GetSummaryByID(ctx, sessionID)
+	require.NoError(t, err)
+
+	aggregate, err := f.store.DesignSessions().SummarizeByProduct(ctx, f.productID)
+	require.NoError(t, err)
+	fromProduct, ok := dssStageByID(t, aggregate)[sessionID]
+	require.True(t, ok, "the session must appear in its own product's aggregate")
+
+	assert.Equal(t, fromProduct.Stage, byID.Stage,
+		"the single-session read and the product-wide read derive one stage, or a list and a detail can disagree")
+	assert.Equal(t, fromProduct.OpenBlockingQuestions, byID.OpenBlockingQuestions)
+	assert.Equal(t, fromProduct.OpenNonBlockingQuestions, byID.OpenNonBlockingQuestions)
+	assert.Equal(t, fromProduct.DesignSession, byID.DesignSession,
+		"the underlying row is carried whole by both reads")
+
+	// Spelled out so a regression says which half moved: the approval is
+	// terminal, and q2's non-blocking count survives q1's resolution.
+	assert.Equal(t, store.StageApproved, byID.Stage)
+	assert.Equal(t, 0, byID.OpenBlockingQuestions)
+	assert.Equal(t, 1, byID.OpenNonBlockingQuestions)
+}
+
+// TestGetSummaryByID_SessionWithNoEventsIsOpened is the other end of the
+// derivation on its own, so the "no revision events" branch is proved
+// without a sibling session's events in the way.
+func TestGetSummaryByID_SessionWithNoEventsIsOpened(t *testing.T) {
+	ctx := context.Background()
+	f := newDSSFixture(t, "whale-net/design-session-get-by-id-opened-test")
+
+	summary, err := f.store.DesignSessions().GetSummaryByID(ctx, f.sessionIDs[0])
+	require.NoError(t, err)
+	assert.Equal(t, store.StageOpened, summary.Stage)
+	assert.Equal(t, 0, summary.OpenBlockingQuestions)
+	assert.Equal(t, 0, summary.OpenNonBlockingQuestions)
+}
+
+// TestGetSummaryByID_ReadsTheOpeningIdentityFromKrillSession is FR
+// d8146d9e's server-side half: the summary carries the acting subject of
+// the krill_session that gated the open call, read by the LEFT JOIN rather
+// than stored on the design_session row.
+func TestGetSummaryByID_ReadsTheOpeningIdentityFromKrillSession(t *testing.T) {
+	ctx := context.Background()
+	s, db := newDesignSessionTestStore(t)
+	scopeID := newDesignSessionTestScope(t, ctx, db, "whale-net/design-session-opened-by-test")
+	subject := store.Subject{Iss: "https://issuer.example.com", Sub: "alex", Kind: store.SubjectKindHuman}
+	krillSessionID := mintKrillSession(t, ctx, db, scopeID, subject)
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record substrate")
+	require.NoError(t, err)
+	ds, err := s.DesignSessions().Open(ctx, scopeID, product.ID, "an idea", krillSessionID)
+	require.NoError(t, err)
+
+	summary, err := s.DesignSessions().GetSummaryByID(ctx, ds.ID)
+	require.NoError(t, err)
+	assert.Equal(t, subject, summary.OpenedBy,
+		"the summary carries the operator who opened the session, as the server read it")
+	assert.Equal(t, krillSessionID, summary.OpenedByKrillSessionID)
+
+	// Both reads carry it, not just the one the detail page happens to use:
+	// a field populated by only one of two reads of the same row is a
+	// field whose answer depends on which accessor asked.
+	aggregate, err := s.DesignSessions().SummarizeByProduct(ctx, product.ID)
+	require.NoError(t, err)
+	require.Len(t, aggregate.Sessions, 1)
+	assert.Equal(t, subject, aggregate.Sessions[0].OpenedBy,
+		"the product-wide aggregate carries the opening identity too")
+}
+
+// TestGetSummaryByID_MissingKrillSessionYieldsZeroSubject is the boundary
+// the LEFT JOIN exists for: when the krill_session row behind
+// opened_by_krill_session_id is gone, the answer is the zero Subject.
+//
+// Not a Subject of empty strings pretending to name somebody -- a caller
+// that renders a label must be able to tell "nobody" from "somebody whose
+// details are blank", and only the zero value distinguishes them.
+func TestGetSummaryByID_MissingKrillSessionYieldsZeroSubject(t *testing.T) {
+	ctx := context.Background()
+	s, db := newDesignSessionTestStore(t)
+	scopeID := newDesignSessionTestScope(t, ctx, db, "whale-net/design-session-missing-session-row-test")
+	subject := dsTestSubject("agent-1")
+	krillSessionID := mintKrillSession(t, ctx, db, scopeID, subject)
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record substrate")
+	require.NoError(t, err)
+	ds, err := s.DesignSessions().Open(ctx, scopeID, product.ID, "an idea", krillSessionID)
+	require.NoError(t, err)
+
+	// Drop the referential guarantee and the row. The FK is what makes the
+	// dangling reference unrepresentable in practice; the LEFT JOIN is
+	// still correct without it, and this is the only way to drive the
+	// branch -- no production path deletes a krill_session (migration 003
+	// is append-only, no delete verb).
+	_, err = db.Pool.Exec(ctx, `ALTER TABLE design_session DROP CONSTRAINT design_session_opened_by_krill_session_id_fkey`)
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `DELETE FROM krill_session WHERE id = $1`, krillSessionID)
+	require.NoError(t, err)
+
+	summary, err := s.DesignSessions().GetSummaryByID(ctx, ds.ID)
+	require.NoError(t, err, "the session row is still there; only its session row is not")
+	assert.Equal(t, store.Subject{}, summary.OpenedBy,
+		"an unreadable krill_session yields the zero Subject, never a fabricated one")
+	assert.Empty(t, summary.OpenedBy.Sub)
+	assert.Empty(t, summary.OpenedBy.Iss)
+	// The provenance the design_session row does hold survives, or a
+	// missing join would cost the page the id it can still show.
+	assert.Equal(t, krillSessionID, summary.OpenedByKrillSessionID)
+}

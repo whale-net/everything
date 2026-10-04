@@ -311,6 +311,7 @@ go_test(
         "shared_spec_readers_test.go",
         "design_page_test.go",
         "design_sessions_list_test.go",
+        "design_session_detail_shell_test.go",
     ],
     embed = [":ui_lib"],
     deps = [

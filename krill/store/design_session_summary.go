@@ -133,6 +133,11 @@ type ProductDesignSessionsSummary struct {
 // inlined so the event-type vocabulary keeps exactly one owner (EventType's
 // constants) and neither statement can be edited into naming a different
 // round kind than the store does.
+//
+// It is concatenated with NO trailing comma, and callers join it to
+// designSessionSummaryColumns directly: a CTE list may not end in a comma,
+// and Postgres's "syntax error at or near SELECT" is the whole diagnostic
+// for getting that wrong.
 const designSessionAggregateCTEs = `
 		latest_event AS (
 			SELECT DISTINCT ON (re.session_id) re.session_id, re.event_type
@@ -269,7 +274,7 @@ func (s designSessionStore) SummarizeByProduct(ctx context.Context, productID uu
 			       ds.opened_by_krill_session_id, ds.created_at
 			FROM design_session ds, owning_product op
 			WHERE ds.product_id = op.id
-		),`+designSessionAggregateCTEs+`,`+designSessionSummaryColumns+`
+		),`+designSessionAggregateCTEs+designSessionSummaryColumns+`
 		ORDER BY ds.created_at DESC, ds.id DESC
 	`, string(EventTypeSignoff), productID)
 	if err != nil {
@@ -330,7 +335,7 @@ func (s designSessionStore) GetSummaryByID(ctx context.Context, id uuid.UUID) (D
 			       ds.opened_by_krill_session_id, ds.created_at
 			FROM design_session ds
 			WHERE ds.id = $2
-		),`+designSessionAggregateCTEs+`,`+designSessionSummaryColumns, string(EventTypeSignoff), id)
+		),`+designSessionAggregateCTEs+designSessionSummaryColumns, string(EventTypeSignoff), id)
 	if err != nil {
 		return DesignSessionSummary{}, fmt.Errorf("get design session summary by id: %w", err)
 	}
