@@ -32,7 +32,9 @@ py_test(
     size = "small",
     srcs = [
         "conftest.py",
+        "test_music_poll_workflow.py",
         "test_scheduled_abstract_task.py",
+        "test_temporal_schedule_base.py",
         "test_temporal_workflow_fix.py",
         "test_whagent_client.py",
         "test_whagent_markdown.py",
@@ -107,6 +109,19 @@ py_test(
         "poll/test_music_poll_pickup.py",
         "poll/test_music_poll_selection.py",
         "poll/test_scheduled_poll_dal.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Scheduled-run posting activities (SQLite-backed, mocked Slack
+# client). Its own target, as test_poll_publish is, because the
+# activities run on the shared engine singleton, which the
+# module-scoped fixture initializes once per process.
+py_test(
+    name = "test_music_poll_activity",
+    size = "small",
+    srcs = [
+        "test_music_poll_activity.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )

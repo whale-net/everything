@@ -28,7 +28,14 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.db.job_a
     upsert_slack_user_creates_activity,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.db.music_poll_activity import (
+    get_music_poll_channels_activity,
+    get_scheduled_poll_run_activity,
+    post_scheduled_poll_activity,
+    record_scheduled_poll_run_activity,
     select_music_poll_options_activity,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.music_poll.workflow import (
+    WeeklyMusicPollWorkflow,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.sample import (
     SayHello,
@@ -73,6 +80,7 @@ WORKFLOWS = [
     SlackMessageQODWorkflow,
     SlackUserInfoWorkflow,
     SlackThreadAgentWorkflow,
+    WeeklyMusicPollWorkflow,
 ]
 ACTIVITIES = [
     generate_context_prompt,
@@ -93,6 +101,10 @@ ACTIVITIES = [
     backfill_genai_text_slack_user_id_activity,
     backfill_genai_text_slack_channel_id_activity,
     fix_slack_tagging_activity,
+    get_music_poll_channels_activity,
+    get_scheduled_poll_run_activity,
+    post_scheduled_poll_activity,
+    record_scheduled_poll_run_activity,
     select_music_poll_options_activity,
     start_whagent_session_activity,
     send_whagent_turn_activity,

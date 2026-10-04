@@ -57,6 +57,7 @@ def create_poll(
     creator_slack_user_slack_id: str,
     anonymous: bool = False,
     vote_limit: int | None = None,
+    automated: bool = False,
     session: Session | None = None,
 ) -> PollSnapshot:
     """Insert a poll and its options in one transaction."""
@@ -67,6 +68,7 @@ def create_poll(
             creator_slack_user_slack_id=creator_slack_user_slack_id,
             anonymous=anonymous,
             vote_limit=vote_limit,
+            automated=automated,
             created_at=_now(),
         )
         session.add(poll)

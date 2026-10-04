@@ -37,7 +37,9 @@ from friendly_computing_machine.src.friendly_computing_machine.models.poll impor
     PollVote,
 )
 from friendly_computing_machine.src.friendly_computing_machine.poll.publish import (
+    ScheduledPollPost,
     publish_poll,
+    publish_scheduled_poll,
 )
 
 # /wpoll's own spec, as the command handler parses it.
@@ -120,6 +122,36 @@ def test_publish_poll_leaves_no_ts_when_the_post_fails(engine):
     error = publish_poll(client, _SPEC, "C1", "U0")
 
     assert error == _POST_ERROR
+    with Session(engine) as session:
+        snap = get_poll_snapshot(_latest_poll(engine), session=session)
+        assert snap.poll.slack_message_ts is None
+
+
+# ----- the scheduled poll's publish path ----------------------
+
+
+def test_publish_scheduled_poll_marks_the_poll_automated(engine):
+    post = publish_scheduled_poll(_client(), _SPEC, "C1", "U_BOT")
+
+    assert isinstance(post, ScheduledPollPost)
+    with Session(engine) as session:
+        snap = get_poll_snapshot(post.poll_id, session=session)
+        assert snap.poll.automated is True
+        assert snap.poll.creator_slack_user_slack_id == "U_BOT"
+        assert snap.poll.slack_message_ts == post.slack_message_ts
+
+
+def test_publish_scheduled_poll_returns_the_error_when_the_post_fails(
+    engine,
+):
+    client = Mock()
+    client.chat_postMessage.side_effect = SlackApiError(
+        "not_in_channel", {"error": "not_in_channel"}
+    )
+
+    post = publish_scheduled_poll(client, _SPEC, "C1", "U_BOT")
+
+    assert post == _POST_ERROR
     with Session(engine) as session:
         snap = get_poll_snapshot(_latest_poll(engine), session=session)
         assert snap.poll.slack_message_ts is None
