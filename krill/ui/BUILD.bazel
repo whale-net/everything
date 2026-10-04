@@ -202,6 +202,7 @@ go_test(
         "spec_page_test.go",
         "spec_tabs_test.go",
         "spec_capabilities_test.go",
+        "spec_milestone_badge_test.go",
         "spec_parity_test.go",
         "delivery_page_test.go",
         "milestones_page_test.go",
