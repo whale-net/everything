@@ -26,6 +26,8 @@
 #   - model:          an OpenRouter-served model id (llm.Catalog.Supports checks
 #                      this at StartSession time, api/handlers/start.go) --
 #                      exactly one of `model` / `model_definition` is required.
+#                      Default to z-ai/glm-5.3-flash; pick a premium model
+#                      (e.g. Claude Sonnet) only when the agent needs it.
 #   - model_definition: names a `model_definitions` entry below (its `name`)
 #                      instead of a model id directly -- preferred over `model`
 #                      when set, resolved at CallModel time
@@ -79,7 +81,7 @@
 agents:
   - agent_id: audience-score-system-research
     scope: audience_score_system
-    model: anthropic/claude-sonnet-4.5
+    model: z-ai/glm-5.3-flash
     tool_set:
       # In-cluster Tilt/deploy address for audience_score_system/mcp
       # (issue #2116's server_url target, port 8081, endpoint "/" per
@@ -99,7 +101,7 @@ agents:
 
   - agent_id: manmanv2-ops
     scope: manmanv2
-    model: anthropic/claude-sonnet-4.5
+    model: z-ai/glm-5.3-flash
     system_prompt: |
       You operate manmanv2 on behalf of the calling user, with read and
       deployment-lifecycle tools only. stop_deployment and restart_deployment
