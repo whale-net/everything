@@ -25,6 +25,7 @@ import (
 	"strconv"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
+	"github.com/whale-net/everything/krill/ui/components"
 )
 
 // Stable DOM ids each spec page's content region carries, so that page's
@@ -130,7 +131,70 @@ type CapabilityFeature struct {
 	// disagreeing answer about the same feature.
 	RequirementCount int
 	Requirements     []CapabilityRequirement
+
+	// Milestone is the Milestone column's cell: which milestone delivers
+	// this feature, if any (FR 18afc5a8).
+	Milestone CapabilityMilestone
 }
+
+// CapabilityMilestone is one feature row's Milestone cell: the milestone
+// that delivers the feature, a count of the several that deliver its
+// requirements, or the reason nothing could be said.
+//
+// The three states are separate fields rather than one optional struct so
+// the component never has to infer which case it is in: a feature nothing
+// delivers is an ordinary answer (Kind none, cell blank), while an
+// unreadable delivery listing is a failure the operator has to be told
+// about (Kind unread, cell carries Message).
+type CapabilityMilestone struct {
+	// Kind is which of the three states this cell is: CapabilityMilestoneNamed,
+	// CapabilityMilestoneSeveral, CapabilityMilestoneNone or
+	// CapabilityMilestoneUnread.
+	Kind string
+
+	// Name is the delivering milestone's name, set only for
+	// CapabilityMilestoneNamed.
+	Name string
+
+	// Status is that milestone's derived status string -- one of the
+	// eight-value store.MilestoneStatus set, spelled as the wire word.
+	// The badge's colour comes from components.MilestoneStatusStyle on this
+	// value, the same call the Milestones table makes, so the two pages can
+	// never disagree about what a status looks like.
+	Status string
+
+	// Count is how many distinct milestones deliver this feature's
+	// requirements, set only for CapabilityMilestoneSeveral (and for
+	// CapabilityMilestoneNamed it is 1).
+	Count int
+
+	// Message is what an unreadable delivery read states in every cell,
+	// set only for CapabilityMilestoneUnread. It is never empty there: a
+	// failed read must not render as a blank cell, which would be a claim
+	// about delivery that nobody could make.
+	Message string
+}
+
+// The four states a Milestone cell can be in.
+const (
+	// CapabilityMilestoneNamed: exactly one milestone delivers this
+	// feature, or -- when none delivers the feature itself -- exactly one
+	// delivers its requirements. The cell names it.
+	CapabilityMilestoneNamed = "named"
+
+	// CapabilityMilestoneSeveral: more than one milestone delivers the
+	// feature's requirements. The cell is a neutral "N milestones" badge
+	// rather than a name, because there is no single milestone to name.
+	CapabilityMilestoneSeveral = "several"
+
+	// CapabilityMilestoneNone: nothing delivers this feature or any of its
+	// requirements. The cell is blank -- a real answer, not a failure.
+	CapabilityMilestoneNone = "none"
+
+	// CapabilityMilestoneUnread: the delivery listing could not be read.
+	// The cell carries Message; it is never blank.
+	CapabilityMilestoneUnread = "unread"
+)
 
 // CapabilityRequirement is one FR or NFR under a Feature.
 type CapabilityRequirement struct {
@@ -352,8 +416,8 @@ templ capabilityFeatureSetExpander(fs CapabilityFeatureSet) {
 }
 
 // capabilityFeatureTable is one open section's features: the number and
-// name an operator cites, the feature's own description beneath it, and the
-// count of its requirements.
+// name an operator cites, the feature's own description beneath it, the
+// count of its requirements, and the milestone that delivers it.
 //
 // The count is the same slice rows the nested requirement list renders, so
 // the number and the list are one read (README's tab-count rule).
@@ -367,6 +431,7 @@ templ capabilityFeatureTable(fs CapabilityFeatureSet) {
 					<tr>
 						<th>Feature</th>
 						<th class="text-right">Requirements</th>
+						<th>Milestone</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -380,10 +445,11 @@ templ capabilityFeatureTable(fs CapabilityFeatureSet) {
 								}
 							</td>
 							<td class="text-right" data-krill="feature-requirement-count">{ strconv.Itoa(f.RequirementCount) }</td>
+							<td>@capabilityMilestoneCell(f.Milestone)</td>
 						</tr>
 						if len(f.Requirements) > 0 {
 							<tr data-krill="feature-requirements">
-								<td colspan="2" class="bg-base-200/60">
+								<td colspan="3" class="bg-base-200/60">
 									<ul class="list-disc pl-5 space-y-2">
 										for _, rq := range f.Requirements {
 											<li>
@@ -403,6 +469,49 @@ templ capabilityFeatureTable(fs CapabilityFeatureSet) {
 			</table>
 		</div>
 	}
+}
+
+// capabilityMilestoneCell is one feature row's Milestone cell (FR
+// 18afc5a8): the name of the one milestone that delivers the feature, a
+// neutral count when several deliver its requirements, a blank cell when
+// nothing does, and an explicit message when the delivery listing could not
+// be read.
+//
+// The blank and the failed read are deliberately different: nothing
+// delivering a feature is a real answer, while "we could not tell" must
+// say so rather than rendering as a blank cell -- which would be a claim
+// about delivery that nobody could make.
+templ capabilityMilestoneCell(m CapabilityMilestone) {
+	switch m.Kind {
+		case CapabilityMilestoneNamed:
+			@milestoneNameBadge(m.Name, m.Status)
+		case CapabilityMilestoneSeveral:
+			@milestoneCountBadge(m.Count)
+		case CapabilityMilestoneUnread:
+			<span class="text-sm text-base-content/70" data-krill="feature-milestone-unread">{ m.Message }</span>
+		default:
+			<span data-krill="feature-milestone-none"></span>
+	}
+}
+
+// milestoneNameBadge is a milestone's NAME in the colour its status earns.
+//
+// It goes through components.MilestoneStatusStyle exactly as the shared
+// statusBadge does -- a named milestone here is the same colour that
+// milestone's status badge is on the Milestones page, so the two can never
+// disagree about it. The text is the name rather than the status word,
+// which is what this cell is for.
+templ milestoneNameBadge(name, status string) {
+	{{ s := components.MilestoneStatusStyle(status) }}
+	@htmxui.Badge(name, s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "feature-milestone-name"})
+}
+
+// milestoneCountBadge is the neutral "N milestones" cell: several
+// milestones deliver this feature's requirements and there is no single one
+// to name. Neutral, because there is no status to colour it by.
+templ milestoneCountBadge(count int) {
+	{{ s := components.MilestoneCountStyle() }}
+	@htmxui.Badge(strconv.Itoa(count)+" milestones", s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "feature-milestone-count"})
 }
 
 // Decisions lists a product's current LoadBearingDecisions with their
