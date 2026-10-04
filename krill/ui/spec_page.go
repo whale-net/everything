@@ -500,38 +500,51 @@ func (idx capabilityMilestoneIndex) cell(featureID uuid.UUID, requirementIDs []u
 	if idx.Unread {
 		return pages.CapabilityMilestone{Kind: pages.CapabilityMilestoneUnread, Message: capabilityMilestoneUnreadMessage}
 	}
-	if m := idx.named(idx.byEntity[featureID]); m != nil {
-		return *m
+	// A milestone delivering the feature itself decides the cell outright,
+	// at whatever count -- the requirement's requirements are never consulted
+	// once the feature itself is delivered. Falling through to them on the
+	// several case would report a milestone count about something else.
+	if delivering := distinctMilestones(idx.byEntity[featureID]); len(delivering) > 0 {
+		return idx.cellOf(delivering)
 	}
-	// No milestone delivers the feature itself, so fall to its
-	// requirements -- deduplicated by milestone id, since two of one
-	// feature's requirements under one milestone is still one milestone.
-	var delivering []milestoneBadgeSource
+	return idx.cellOf(distinctMilestonesAcross(idx.byEntity, requirementIDs))
+}
+
+// distinctMilestonesAcross unions the delivering milestones of several
+// entities, deduplicated by milestone id: two of one feature's requirements
+// delivered by one milestone is still ONE milestone, and a count that read
+// it as two would be a fact about the listing, not about delivery.
+func distinctMilestonesAcross(byEntity map[uuid.UUID][]milestoneBadgeSource, entityIDs []uuid.UUID) []milestoneBadgeSource {
+	var out []milestoneBadgeSource
 	seen := map[uuid.UUID]bool{}
-	for _, id := range requirementIDs {
-		for _, m := range idx.byEntity[id] {
+	for _, id := range entityIDs {
+		for _, m := range byEntity[id] {
 			if !seen[m.id] {
 				seen[m.id] = true
-				delivering = append(delivering, m)
+				out = append(out, m)
 			}
 		}
 	}
-	return idx.cellOf(delivering)
+	return out
 }
 
-// named is the single-delivering-milestone cell, or nil when sources is not
-// exactly one. The name/status come from the listing; nothing is re-derived
-// from the other read.
-func (idx capabilityMilestoneIndex) named(sources []milestoneBadgeSource) *pages.CapabilityMilestone {
-	if len(sources) != 1 {
-		return nil
+// distinctMilestones deduplicates one entity's delivering milestones by id,
+// for the same reason distinctMilestonesAcross does.
+func distinctMilestones(sources []milestoneBadgeSource) []milestoneBadgeSource {
+	var out []milestoneBadgeSource
+	seen := map[uuid.UUID]bool{}
+	for _, m := range sources {
+		if !seen[m.id] {
+			seen[m.id] = true
+			out = append(out, m)
+		}
 	}
-	c := idx.cellOf(sources)
-	return &c
+	return out
 }
 
 // cellOf turns a set of delivering milestones into a cell: one names it,
-// several count, none is blank.
+// several count, none is blank. The name and status come from the listing;
+// nothing here is re-derived from the other read.
 func (idx capabilityMilestoneIndex) cellOf(sources []milestoneBadgeSource) pages.CapabilityMilestone {
 	switch len(sources) {
 	case 0:
