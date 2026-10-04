@@ -2,8 +2,9 @@
 identity on whagent-net StartSession (FR7/FR8, US2/US6).
 
 Three guarantees, exercised against fakes rather than a live Temporal
-worker or gRPC channel (this repo has no WorkflowEnvironment harness --
-see test_whagent_workflow.py's note):
+worker or gRPC channel (the repo's one WorkflowEnvironment harness
+covers the music-poll workflow -- see test_whagent_workflow.py's
+note):
 
 1. The client puts the linked (iss, sub) on StartSessionRequest.on_behalf_of
    with kind=human, and leaves the field unset for an unlinked start.
