@@ -507,7 +507,11 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 // alongside a doctored copy of the legacy table -- the shape the phase
 // that replaces a page will actually mount.
 func (app *App) mountShellPages(mux *http.ServeMux) {
+	// The list, the create blade's own URL, and the two writes. All four
+	// sit behind the reader gate: a reader manages their own credentials,
+	// so the page is not an operator-only surface (FR 5e1af175).
 	mux.HandleFunc("GET "+credentialsPath, app.readerRoute(app.handleCredentials))
+	mux.HandleFunc("GET "+credentialsNewPath, app.readerRoute(app.handleNewCredentialBlade))
 	mux.HandleFunc("POST "+credentialsMintPath, app.readerRoute(app.handleMintCredential))
 	mux.HandleFunc("POST "+credentialsPath+"/{id}/revoke", app.readerRoute(app.handleRevokeCredential))
 

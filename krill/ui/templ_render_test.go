@@ -381,7 +381,10 @@ func TestCopyTaskIdScript_EnablesTheChipInsideTheBindItGuards(t *testing.T) {
 		t.Errorf("the copy script still carries the disabled chip's \"needs JavaScript\" title text; "+
 			"the script must replace it, not ship it. script: %s", copyTaskIdScript)
 	}
-	if !strings.Contains(copyTaskIdScript, "btn.setAttribute('title','Copy the task id to your clipboard')") {
+	// The noun is the control's to name (a one-time token is not a task
+	// id), but it defaults to the task id every existing chip wants.
+	if !strings.Contains(copyTaskIdScript, "btn.setAttribute('title','Copy the '+") ||
+		!strings.Contains(copyTaskIdScript, "||'task id')") {
 		t.Errorf("the script enables the chip but never retitles it, so it keeps promising it needs "+
 			"JavaScript while working. script: %s", copyTaskIdScript)
 	}
@@ -475,7 +478,9 @@ func TestCopyTaskIdScript_ConfirmsBothOutcomesInWords(t *testing.T) {
 // for a chip that somehow lost it, and the fallback trimmed (the template
 // renders the id on its own line, so the raw text carries whitespace).
 func TestCopyTaskIdScript_PrefersTheIdAttributeOverTheButtonText(t *testing.T) {
-	read := copyScriptIndex(t, "var id=btn.getAttribute('data-task-id')||(btn.textContent||'').trim();")
+	// valueOf is the one place the "which value" rule lives; its last line
+	// is the attribute-first, trimmed-text-fallback claim this test pins.
+	read := copyScriptIndex(t, "return btn.getAttribute('data-task-id')||(btn.textContent||'').trim();")
 	write := copyScriptIndex(t, "var p=writeId(btn);")
 	clip := copyScriptIndex(t, "clip.writeText(id)")
 
