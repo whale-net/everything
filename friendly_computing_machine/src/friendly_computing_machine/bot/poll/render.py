@@ -83,12 +83,17 @@ def render_poll_blocks(snapshot: PollSnapshot) -> list[dict]:
                 }
             )
 
-    footer = [
-        f"Created by <@{poll.creator_slack_user_slack_id}>",
-        "created with /wpoll",
-    ]
-    if poll.anonymous:
-        footer.append("anonymous")
+    # a scheduled poll credits the schedule, not a person,
+    # and closes only through the next run's auto-close
+    if poll.automated:
+        footer = ["automated poll"]
+    else:
+        footer = [
+            f"Created by <@{poll.creator_slack_user_slack_id}>",
+            "created with /wpoll",
+        ]
+        if poll.anonymous:
+            footer.append("anonymous")
     if poll.vote_limit is not None:
         footer.append(f"{_plural(poll.vote_limit, 'vote')} per person")
     footer.append(_plural(snapshot.total_votes, "vote"))
@@ -101,7 +106,9 @@ def render_poll_blocks(snapshot: PollSnapshot) -> list[dict]:
         }
     )
 
-    if not is_closed:
+    # an automated poll has no creator to close it, so
+    # it shows no Close button; only the next run closes it
+    if not is_closed and not poll.automated:
         blocks.append(
             {
                 "type": "actions",
