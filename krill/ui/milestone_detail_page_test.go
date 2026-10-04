@@ -170,6 +170,36 @@ func TestMilestoneDetailPageIsTheSameForAMilepebble(t *testing.T) {
 		page.BoardPath)
 }
 
+// TestAMilepebbleDetailPageRendersBothOfItsOwnWorkLinks is the rendered
+// half of the case above. That one reads the view model, so it cannot
+// tell a page that renders both links from a page that holds them and
+// drops them -- the field being set is precisely what makes a link
+// look finished.
+//
+// It is rendered through the real registrations rather than the builder,
+// because the milepebble and its parent answer at the SAME URL: {mid} is
+// one wildcard, so a handler that resolved the cut as the milestone
+// renders this page happily, under the right path, with the parent's
+// name -- and two links scoped to the parent. The parent milestone's id
+// is asserted absent from the anchors for that reason.
+func TestAMilepebbleDetailPageRendersBothOfItsOwnWorkLinks(t *testing.T) {
+	mux := milestoneDetailMux(t, milestoneDetailListing, nil)
+	body := fetch(t, mux, milestoneDetailHref(milestoneDetailProductID, milestoneDetailPebbleID)).Body.String()
+
+	for _, view := range []struct{ suffix, label string }{
+		{tasksSuffix, `data-krill="milestone-open-tasks"`},
+		{boardSuffix, `data-krill="milestone-board-link"`},
+	} {
+		assert.Contains(t, body, view.label,
+			"a milepebble's page offers the %s view of its own cut", view.suffix)
+		assert.Contains(t, body, `href="/products/`+milestoneDetailProductID.String()+
+			view.suffix+`?container_id=`+milestoneDetailPebbleID.String()+`&amp;scope=milepebble"`,
+			"and it points at THIS milepebble's %s, not its parent's", view.suffix)
+	}
+	assert.NotContains(t, body, `container_id=`+milestoneDetailParentID.String()+`&amp;scope=`,
+		"a milepebble's work links never carry the parent milestone's id")
+}
+
 // TestMilestoneDetailCrumbsWalkProductMilestonesName is the FR's
 // breadcrumb: product, Milestones, the container's own name.
 //
