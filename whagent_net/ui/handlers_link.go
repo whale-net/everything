@@ -34,27 +34,38 @@ const (
 	outcomeAlreadyLinked = "already_linked"
 	outcomeConflict      = "conflict"
 	outcomeRejected      = "rejected"
+
+	// Outcomes of the manmanv2 unlink flow.
+	outcomeUnlinked  = "unlinked"
+	outcomeNotLinked = "not_linked"
 )
 
 // handleLinkASSStart is POST /link/ass (FR1/FR2). See startLink.
 func (app *App) handleLinkASSStart(w http.ResponseWriter, r *http.Request) {
-	app.startLink(w, r, app.assLinkURL, "ASS", "/link/ass/result")
+	app.startLink(w, r, app.assLinkURL, "ASS", "/link/whagent", "/link/ass/result")
 }
 
 // handleLinkManmanv2Start is POST /link/manmanv2: the same flow as
 // handleLinkASSStart, redirecting to the manmanv2 UI's link endpoint.
 func (app *App) handleLinkManmanv2Start(w http.ResponseWriter, r *http.Request) {
-	app.startLink(w, r, app.manmanv2LinkURL, "manmanv2", "/link/manmanv2/result")
+	app.startLink(w, r, app.manmanv2LinkURL, "manmanv2", "/link/whagent", "/link/manmanv2/result")
+}
+
+// handleUnlinkManmanv2Start is POST /unlink/manmanv2: mints the same
+// assertion and redirects to the manmanv2 UI's unlink endpoint, which removes
+// the mapping after the Operator confirms there.
+func (app *App) handleUnlinkManmanv2Start(w http.ResponseWriter, r *http.Request) {
+	app.startLink(w, r, app.manmanv2LinkURL, "manmanv2", "/unlink/whagent", "/link/manmanv2/result")
 }
 
 // startLink answers a plain "not configured" message when baseURL is empty
 // -- never a 500, never a redirect to an empty host. Otherwise it mints a
 // linkassert.Key assertion for the signed-in Operator (iss = app.publicURL,
 // sub/sub_iss = the Operator's own Keycloak identity) and 303-redirects to
-// baseURL's /link/whagent carrying it on the "token" query parameter. This
+// baseURL+targetPath carrying it on the "token" query parameter. This
 // is the only call site in this binary that invokes linkassert.Key.Mint
 // (FR1's "never silently automatic").
-func (app *App) startLink(w http.ResponseWriter, r *http.Request, baseURL, label, resultPath string) {
+func (app *App) startLink(w http.ResponseWriter, r *http.Request, baseURL, label, targetPath, resultPath string) {
 	logger := logging.Get("main")
 
 	if baseURL == "" {
@@ -76,7 +87,7 @@ func (app *App) startLink(w http.ResponseWriter, r *http.Request, baseURL, label
 		return
 	}
 
-	dest := baseURL + "/link/whagent?" + url.Values{"token": {token}}.Encode()
+	dest := baseURL + targetPath + "?" + url.Values{"token": {token}}.Encode()
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
@@ -159,6 +170,18 @@ func linkManmanv2ResultMessage(outcome string) pages.LinkManmanv2ResultData {
 			Heading: "Already linked to a different user",
 			Message: "Your account is already linked to a different manmanv2 user. There is no automatic re-link -- contact an administrator if this is unexpected.",
 			Success: false,
+		}
+	case outcomeUnlinked:
+		return pages.LinkManmanv2ResultData{
+			Heading: "Unlinked",
+			Message: "Your account is no longer linked. Agent calls made on your behalf can no longer act as your manmanv2 user.",
+			Success: true,
+		}
+	case outcomeNotLinked:
+		return pages.LinkManmanv2ResultData{
+			Heading: "Not linked",
+			Message: "Your account was not linked to manmanv2 -- nothing changed.",
+			Success: true,
 		}
 	case outcomeRejected:
 		return pages.LinkManmanv2ResultData{

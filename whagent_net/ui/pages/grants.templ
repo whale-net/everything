@@ -90,8 +90,9 @@ type GrantsData struct {
 	// binary's own POST /link/ass, never directly to ASS.
 	ShowLinkASSAction bool
 
-	// ShowLinkManmanv2Action gates the "Link manmanv2 identity" action the
-	// same way; it posts to this binary's own POST /link/manmanv2.
+	// ShowLinkManmanv2Action gates the "Link manmanv2 identity" and
+	// "Unlink manmanv2 identity" actions the same way; they post to this
+	// binary's own POST /link/manmanv2 and POST /unlink/manmanv2.
 	ShowLinkManmanv2Action bool
 }
 
@@ -182,10 +183,15 @@ templ Grants(data GrantsData) {
 		}
 		if data.ShowLinkManmanv2Action {
 			<h2 class="text-xl font-bold text-base-content mt-8 mb-2">Link manmanv2 identity</h2>
-			<p class="opacity-70 mb-4">Link this account to your manmanv2 login so agent calls made on your behalf act as you in manmanv2.</p>
-			<form method="post" action="/link/manmanv2">
-				<button type="submit" class="btn btn-sm btn-primary">Link manmanv2 identity</button>
-			</form>
+			<p class="opacity-70 mb-4">Link this account to your manmanv2 login so agent calls made on your behalf act as you in manmanv2. Unlinking revokes that access; manmanv2 asks you to confirm.</p>
+			<div class="flex gap-2">
+				<form method="post" action="/link/manmanv2">
+					<button type="submit" class="btn btn-sm btn-primary">Link manmanv2 identity</button>
+				</form>
+				<form method="post" action="/unlink/manmanv2">
+					<button type="submit" class="btn btn-sm btn-outline btn-error">Unlink manmanv2 identity</button>
+				</form>
+			</div>
 		}
 		if len(data.AvailableScopes) > 0 {
 			<h2 class="text-xl font-bold text-base-content mt-8 mb-2">Available grants</h2>

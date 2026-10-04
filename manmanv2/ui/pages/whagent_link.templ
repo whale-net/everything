@@ -35,6 +35,28 @@ templ WhagentLinkConfirm(data WhagentLinkConfirmData) {
 	}
 }
 
+// WhagentUnlinkConfirm asks the signed-in user to confirm removing the link
+// between a whagent-net identity and manmanv2.
+templ WhagentUnlinkConfirm(data WhagentLinkConfirmData) {
+	@components.Layout(data.Layout) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm max-w-xl">
+			<div class="card-body">
+				<h1 class="card-title">Unlink whagent-net identity</h1>
+				<p class="text-base-content/70">
+					Stop whagent-net agents acting in manmanv2 for the whagent-net identity <strong>{ data.SubjectLabel }</strong>?
+					This takes effect immediately; you can link again later from whagent-net.
+				</p>
+				<form method="post" action="/unlink/whagent/confirm">
+					<input type="hidden" name="token" value={ data.Token }/>
+					<div class="card-actions justify-end">
+						<button type="submit" class="btn btn-error">Confirm unlink</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	}
+}
+
 // WhagentLinkRejected explains a link request that could not be verified.
 templ WhagentLinkRejected(layout components.LayoutData) {
 	@components.Layout(layout) {

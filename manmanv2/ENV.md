@@ -148,7 +148,7 @@ Tilt: opt-in via `ENABLE_MANMANV2_MCP=true` with `MCP_OIDC_ISSUER` and `MCP_OIDC
 | `MCP_WHAGENT_JWKS_URL` | `http://whagent-net-api.<ns>.svc:8090/.well-known/jwks.json` (api's `additionalPorts` JWKS port, `WHAGENT_JWKS_ADDR`) |
 | `MCP_WHAGENT_ISSUER` | The env's whagent-net api `iss` value (must match what `WHAGENT_ISSUER`-style config on whagent-net-api mints) |
 
-**Linking a whagent-net identity (UI).** The manmanv2 UI serves `GET /link/whagent`, `POST /link/whagent/confirm` and `GET /link/whagent/complete`; whagent-net's `/grants` page starts the flow ("Link manmanv2 identity"). Requires the MCP OAuth settings above (`MCP_PUBLIC_URL`, `UI_PUBLIC_URL`, `GRANT_*`, `AUTH_MODE=oidc`, `PG_DATABASE_URL`), plus per env on `apps.manmanv2-ui.env`:
+**Linking a whagent-net identity (UI).** The manmanv2 UI serves `GET /link/whagent`, `POST /link/whagent/confirm` and `GET /link/whagent/complete`, plus `GET /unlink/whagent` and `POST /unlink/whagent/confirm` to remove a link; whagent-net's `/grants` page starts both flows ("Link manmanv2 identity" / "Unlink manmanv2 identity"). Requires the MCP OAuth settings above (`MCP_PUBLIC_URL`, `UI_PUBLIC_URL`, `GRANT_*`, `AUTH_MODE=oidc`, `PG_DATABASE_URL`), plus per env on `apps.manmanv2-ui.env`:
 
 | Key | Value |
 |---|---|

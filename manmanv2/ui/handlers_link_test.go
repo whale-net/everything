@@ -65,6 +65,13 @@ func (f *fakeLinkStore) Link(_ context.Context, iss, sub, userSub string) (ident
 	return identitylink.Created, nil
 }
 
+func (f *fakeLinkStore) Unlink(_ context.Context, iss, sub string) (bool, error) {
+	k := iss + "|" + sub
+	_, ok := f.links[k]
+	delete(f.links, k)
+	return ok, nil
+}
+
 type fakeGrants struct {
 	start    bool
 	err      error
@@ -101,6 +108,8 @@ func newLinkHarness(t *testing.T, v fakeLinkVerifier) (*whagentLinkHandlers, *fa
 	mux.HandleFunc("GET /link/whagent", auth.RequireAuthFunc(h.handleShow))
 	mux.HandleFunc("POST /link/whagent/confirm", auth.RequireAuthFunc(h.handleConfirm))
 	mux.HandleFunc("GET "+linkCompletePath, auth.RequireAuthFunc(h.handleComplete))
+	mux.HandleFunc("GET /unlink/whagent", auth.RequireAuthFunc(h.handleUnlinkShow))
+	mux.HandleFunc("POST /unlink/whagent/confirm", auth.RequireAuthFunc(h.handleUnlinkConfirm))
 	return h, store, grants, mux
 }
 
@@ -222,4 +231,40 @@ func TestLinkComplete(t *testing.T) {
 	assert.Contains(t, do(mux, "GET", linkCompletePath+"?"+q.Encode(), "", nil).Body.String(), "Link request rejected")
 	q = url.Values{"return": {linkTestReturn}, "outcome": {linkOutcomeConflict}}
 	assert.Contains(t, do(mux, "GET", linkCompletePath+"?"+q.Encode(), "", nil).Body.String(), "Link request rejected")
+}
+
+func TestUnlinkShow(t *testing.T) {
+	_, _, _, mux := newLinkHarness(t, fakeLinkVerifier{assertion: validAssertion()})
+	w := do(mux, "GET", "/unlink/whagent?token=t", "", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Confirm unlink")
+	assert.Contains(t, w.Body.String(), `action="/unlink/whagent/confirm"`)
+
+	_, _, _, mux = newLinkHarness(t, fakeLinkVerifier{err: whagentlink.ErrExpired})
+	assert.Equal(t, linkOutcomeRejected, outcomeOf(t, do(mux, "GET", "/unlink/whagent?token=t", "", nil)))
+}
+
+func TestUnlinkConfirm(t *testing.T) {
+	_, store, _, mux := newLinkHarness(t, fakeLinkVerifier{assertion: validAssertion()})
+	store.links["https://kc/realms/x|op-1"] = "someone"
+	store.links["https://kc/realms/x|op-2"] = "someone"
+
+	assert.Equal(t, linkOutcomeUnlinked, outcomeOf(t, do(mux, "POST", "/unlink/whagent/confirm", confirmBody(), nil)))
+	assert.NotContains(t, store.links, "https://kc/realms/x|op-1")
+	assert.Contains(t, store.links, "https://kc/realms/x|op-2", "only the asserted identity is unlinked")
+
+	// The assertion is single-use.
+	assert.Equal(t, linkOutcomeRejected, outcomeOf(t, do(mux, "POST", "/unlink/whagent/confirm", confirmBody(), nil)))
+
+	_, _, _, mux = newLinkHarness(t, fakeLinkVerifier{assertion: validAssertion()})
+	assert.Equal(t, linkOutcomeNotLinked, outcomeOf(t, do(mux, "POST", "/unlink/whagent/confirm", confirmBody(), nil)))
+}
+
+func TestUnlinkConfirm_RefusesCrossSite(t *testing.T) {
+	_, store, _, mux := newLinkHarness(t, fakeLinkVerifier{assertion: validAssertion()})
+	store.links["https://kc/realms/x|op-1"] = "someone"
+	w := do(mux, "POST", "/unlink/whagent/confirm", confirmBody(), map[string]string{"Sec-Fetch-Site": "cross-site"})
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, store.links, "https://kc/realms/x|op-1")
+	assert.Empty(t, store.consumed)
 }

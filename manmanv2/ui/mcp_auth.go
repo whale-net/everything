@@ -87,7 +87,7 @@ func (app *App) mountMCPAuth(ctx context.Context, mux *http.ServeMux) (http.Hand
 	return consent.Mount(mux), nil
 }
 
-// mountWhagentLink serves the whagent-net identity link endpoints. Disabled
+// mountWhagentLink serves the whagent-net identity link and unlink endpoints. Disabled
 // (no routes) unless both WHAGENT_UI_JWKS_URL and WHAGENT_UI_ISSUER are set.
 func (app *App) mountWhagentLink(ctx context.Context, mux *http.ServeMux, consent *grantflow.Consent) error {
 	cfg := app.config
@@ -110,6 +110,8 @@ func (app *App) mountWhagentLink(ctx context.Context, mux *http.ServeMux, consen
 	mux.HandleFunc("GET /link/whagent", app.auth.RequireAuthFunc(h.handleShow))
 	mux.HandleFunc("POST /link/whagent/confirm", app.auth.RequireAuthFunc(h.handleConfirm))
 	mux.HandleFunc("GET "+linkCompletePath, app.auth.RequireAuthFunc(h.handleComplete))
+	mux.HandleFunc("GET /unlink/whagent", app.auth.RequireAuthFunc(h.handleUnlinkShow))
+	mux.HandleFunc("POST /unlink/whagent/confirm", app.auth.RequireAuthFunc(h.handleUnlinkConfirm))
 	log.Printf("whagent-net identity linking enabled (issuer %s)", cfg.WhagentUIIssuer)
 	return nil
 }
