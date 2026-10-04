@@ -64,6 +64,20 @@ func designAnswersPath(productID, id uuid.UUID) string {
 	return designSessionPath(productID, id) + "/answers"
 }
 
+// designNewSessionBladePath is the new-session blade's own URL (FR 44d7f1e2).
+//
+// It is a literal segment under the list, so it outranks the {id} wildcard
+// the session detail registers at the same position in the same Go 1.22
+// mux -- a session can never be addressed as "new".
+//
+// The blade being an ADDRESS rather than only a pane is the point: the
+// list's primary action carries this as a real href, so a no-JS click, a
+// reload and a shared link all open it, and a browser Back returns to the
+// list underneath.
+func designNewSessionBladePath(productID uuid.UUID) string {
+	return designProductSessionsPath(productID) + "/new"
+}
+
 // designGoPath is the design root's product-id browse target.
 const designGoPath = designPath + "/go"
 
@@ -266,6 +280,85 @@ func (app *App) handleDesignSessionList(w http.ResponseWriter, r *http.Request) 
 	app.renderDesignSessionList(w, r, productID, r.URL.Path)
 }
 
+// designSessionListPage builds the list page's view model around rows the
+// caller has already read, so the list URL, the un-prefixed design root and
+// the new-session blade's full-page render are one page rather than three.
+//
+// Path shapes come from here and nowhere else: the blade URL the primary
+// action links at, and the POST target the blade's own form carries, are
+// both owned by package main.
+func (app *App) designSessionListPage(r *http.Request, productID uuid.UUID, rows []pages.DesignSessionRow) pages.DesignSessionListPage {
+	return pages.DesignSessionListPage{
+		ProductID:    productID.String(),
+		ProductName:  app.productNameFor(r.Context(), productID),
+		Path:         designProductSessionsPath(productID),
+		NewBladePath: designNewSessionBladePath(productID),
+		Sessions:     rows,
+		FormAction:   designProductSessionsPath(productID),
+	}
+}
+
+// newDesignSessionBlade builds the blade view for productID: the product the
+// blade's URL named, resolved server-side and shown read-only, plus the two
+// paths the blade's controls go to.
+//
+// Error and OpeningSubmission stay empty here. A blade opened fresh has
+// nothing to report and nothing typed yet; the write handler fills both in
+// when it hands the blade back after a refusal.
+func (app *App) newDesignSessionBlade(r *http.Request, productID uuid.UUID) *pages.DesignSessionNewBlade {
+	return &pages.DesignSessionNewBlade{
+		ProductID:   productID.String(),
+		ProductName: app.productNameFor(r.Context(), productID),
+		FormAction:  designProductSessionsPath(productID),
+		ListPath:    designProductSessionsPath(productID),
+	}
+}
+
+// handleDesignSessionNew is the new-session blade over the list (FR
+// 44d7f1e2). One route, two modes, exactly as the Spec feature blade
+// answers.
+//
+// An htmx request gets the blade REGION alone, because the list's action
+// names that region as its swap target and the list underneath it must NOT
+// be re-rendered -- the rows the operator was reading are what they chose.
+// A browser request gets the whole Design sessions page with the blade open
+// over it, so a reload, a shared link and a no-JavaScript click all reach
+// the same thing the action did.
+//
+// The list is read only for that second mode. Opening the blade is a page
+// the operator can reach even when the session list cannot be read, so the
+// fragment branch never depends on the read succeeding.
+//
+// Blades go one level deep: this renders the blade and nothing below it
+// opens another one.
+func (app *App) handleDesignSessionNew(w http.ResponseWriter, r *http.Request) {
+	productID, err := uuid.Parse(r.PathValue("productID"))
+	if err != nil {
+		http.Error(w, "invalid product id: must be a UUID", http.StatusBadRequest)
+		return
+	}
+	blade := app.newDesignSessionBlade(r, productID)
+	if isHXRequest(r) {
+		renderFragment(w, r, pages.NewDesignSessionBlade(blade))
+		return
+	}
+	// now is read once, here, so every row's relative age is measured
+	// against one instant: a table whose rows disagree about "now" by the
+	// time the page took to render reads as a table of different ages.
+	rows, err := app.designSessionRows(r.Context(), productID, time.Now())
+	if err != nil {
+		logger.Error("failed to list design sessions", "product_id", productID, "error", err)
+		http.Error(w, "failed to list design sessions", http.StatusInternalServerError)
+		return
+	}
+	page := app.designSessionListPage(r, productID, rows)
+	page.NewBlade = blade
+	setLastViewedProductCookie(w, productID)
+	// The nav key is the LIST's own path, not this blade's: the blade is a
+	// view over the sessions page, so that is the item the operator is on.
+	app.renderShell(w, r, "Design sessions", designProductSessionsPath(productID), pages.DesignSessionList(page))
+}
+
 // renderDesignSessionList is the session list, shared by the product-scoped
 // URL and by the un-prefixed /design root that resolved this product --
 // one page at two URLs, exactly as "/" and /products/{pid}/overview are one
@@ -285,13 +378,7 @@ func (app *App) renderDesignSessionList(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "failed to list design sessions", http.StatusInternalServerError)
 		return
 	}
-	page := pages.DesignSessionListPage{
-		ProductID:   productID.String(),
-		ProductName: app.productNameFor(r.Context(), productID),
-		Path:        designProductSessionsPath(productID),
-		Sessions:    rows,
-		FormAction:  designProductSessionsPath(productID),
-	}
+	page := app.designSessionListPage(r, productID, rows)
 	if isHXRequest(r) {
 		renderFragment(w, r, pages.DesignSessionList(page))
 		return

@@ -136,66 +136,46 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 	return nil
 }
 
-// renderOpenFormFailure re-renders the "open a session" form after a
-// rejected write, with the operator's opening text preserved so a rejection
-// is never a data-loss event. A *writeRejection is shown inline as the
-// api's status + named message; anything else (no resolved operator,
-// unresolvable scope, unreachable api) never reached krill and falls back
-// to writeWriteError's 502. If the page's own read fails to re-render,
-// fall back to a plain status page.
+// renderOpenFormFailure re-renders the new-session blade after a rejected
+// write, with the operator's opening text preserved so a rejection is never
+// a data-loss event. A *writeRejection is shown inline as the api's status +
+// named message; anything else never reached krill and falls back to
+// writeWriteError.
 //
-// Both modes answer 200, never the rejection's status: the no-JS path
-// re-renders the whole page in-shell, and the htmx path answers the form
-// fragment alone so hx-swap="outerHTML" can drop the error in place.
+// An htmx caller must still see something on the transport-failure branch:
+// htmx does not swap on a non-2xx, so writeWriteError's 401/502 would leave
+// the operator with a blade that appears to do nothing at all. The blade is
+// re-rendered with the message and their typed submission intact.
 func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, productID uuid.UUID, opening string, err error) {
+	blade := app.newDesignSessionBlade(r, productID)
+	blade.OpeningSubmission = opening
+
 	var rejection *writeRejection
 	if !errors.As(err, &rejection) {
-		// A transport failure (api unreachable, session mint failed) is
-		// not a rejection and has no status to render. An htmx caller
-		// must still see something: htmx does not swap on a non-2xx, so
-		// writeWriteError's 401/502 would leave the operator with a form
-		// that appears to do nothing at all -- the one case they most
-		// need to be told about. Re-render the form with the message and
-		// their typed submission intact.
+		blade.Error = "Could not reach krill: " + transportFailureMessage(err)
 		if isHXRequest(r) {
-			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
-				ProductID:         productID.String(),
-				OpeningSubmission: opening,
-				FormAction:        designProductSessionsPath(productID),
-				Error:             "Could not reach krill: " + transportFailureMessage(err),
-			}))
+			renderFragment(w, r, pages.NewDesignSessionBlade(blade))
 			return
 		}
 		writeWriteError(w, err)
 		return
 	}
+	blade.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+	page := app.designSessionListPage(r, productID, nil)
+	page.NewBlade = blade
 	sessions, listErr := app.designSessionRows(r.Context(), productID, time.Now())
 	if listErr != nil {
-		logger.Error("failed to re-render open-session form after rejection", "product_id", productID, "error", listErr)
+		logger.Error("failed to re-read design sessions after a refusal", "product_id", productID, "error", listErr)
 		if isHXRequest(r) {
-			// The session list could not be re-read, so it is genuinely
-			// unavailable -- but the operator's typed submission is still
-			// known, and handing the form back with it costs nothing.
-			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
-				ProductID:         productID.String(),
-				OpeningSubmission: opening,
-				FormAction:        designProductSessionsPath(productID),
-				Error:             fmt.Sprintf("%d: %s (the session list could not be reloaded)", rejection.status, rejection.message),
-			}))
+			renderFragment(w, r, pages.NewDesignSessionBlade(blade))
 			return
 		}
 		http.Error(w, rejection.message, rejection.status)
 		return
 	}
-	page := pages.DesignSessionListPage{
-		ProductID:         productID.String(),
-		Sessions:          sessions,
-		Error:             fmt.Sprintf("%d: %s", rejection.status, rejection.message),
-		OpeningSubmission: opening,
-		FormAction:        designProductSessionsPath(productID),
-	}
+	page.Sessions = sessions
 	if isHXRequest(r) {
-		renderFragment(w, r, pages.OpenSessionForm(page))
+		renderFragment(w, r, pages.NewDesignSessionBlade(blade))
 		return
 	}
 	app.renderShell(w, r, "Design sessions", r.URL.Path, pages.DesignSessionList(page))
@@ -277,11 +257,13 @@ func hxRedirect(w http.ResponseWriter, to string) {
 
 // ── handlers ─────────────────────────────────────────────────────────────────
 
-// handleOpenDesignSessionForm is the browser form action behind the product
-// session list's "open a session" form. productID is the path value; the
-// form's only field is opening_submission. On success it redirects
+// handleOpenDesignSessionForm is the browser form action behind the
+// new-session blade. productID is the path value; the form's only field is
+// opening_submission, so the write body stays product_id +
+// opening_submission -- no entity reference, no identity, no session id
+// read from the browser (LB4). On success it redirects
 // (POST/Redirect/Get) to the new session's detail page, so a refresh cannot
-// re-open the session. A rejected write re-renders the list in-shell with the
+// re-open the session. A refused write re-renders the blade with the
 // operator's text preserved (renderOpenFormFailure).
 //
 // The form is doubled, so one route serves both a no-JS browser and an htmx
@@ -294,12 +276,10 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 	}
 	if err := r.ParseForm(); err != nil {
 		logger.Error("could not parse the open-session form body", "product_id", productID, "error", err)
+		blade := app.newDesignSessionBlade(r, productID)
+		blade.Error = "The form could not be read, so nothing was submitted. Try again."
 		if isHXRequest(r) {
-			renderFragment(w, r, pages.OpenSessionForm(pages.DesignSessionListPage{
-				ProductID:  productID.String(),
-				FormAction: designProductSessionsPath(productID),
-				Error:      "The form could not be read, so nothing was submitted. Try again.",
-			}))
+			renderFragment(w, r, pages.NewDesignSessionBlade(blade))
 			return
 		}
 		http.Error(w, "invalid form body", http.StatusBadRequest)
