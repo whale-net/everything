@@ -1183,6 +1183,54 @@ panel that owns them, so the failure costs that panel alone and the header,
 rail and other panels still render. The tab's empty state is a real "No
 notes." and a failed read must never render as it.
 
+#### The Spec tabs: four URLs, one page (FR df5bffd1)
+
+A product's Spec is **one page with four tabs** — Capabilities,
+Decisions, Personas, Non-goals — and **the four tab addresses are the four
+URLs that already existed**: `/spec/products/{id}` and its `/decisions`,
+`/personas`, `/non-goals` suffixes. There is no second spelling and no
+`?tab=` parameter, because the sidebar's four Spec links (`nav.go`) already
+point at exactly those paths: a tab is navigation, the four keep
+resolving, and the tab strip is built from the same `specTabsOf` the
+sidebar's destinations are spelled from. `specTabOf` is the whole of the
+unknown-value policy and never returns an error — an unrecognised suffix
+resolves to Capabilities, since a hand-edited or stale link reaches here as
+readily as a copied one.
+
+**The strip and the active panel are ONE region** (`#krill-spec-panel`,
+`data-krill="spec-panel"`), for the same reason the task-detail facet
+region is: a strip that is its own swap target needs the fragment to carry
+two top-level nodes, and htmx's `outerHTML` inserts *every* one of them
+into the target, so each click would splice a duplicate strip into the
+page. `pages.SpecTabs` (`pages/spec_tabs.templ`) is the region;
+`pages.CapabilityMap` / `Decisions` / `Personas` / `NonGoals` are its
+panels, unchanged, each still rendering its own section root and its own
+Refresh button.
+
+**Each tab is a real `href` *and* an `hx-get` of that same href**, with
+`hx-target="#krill-spec-panel"`, `hx-swap="outerHTML"` and
+`hx-push-url="true"`. The href is the whole mechanism: htmx takes its
+address from the link, so the address bar, the served page and the strip's
+`aria-selected` cannot disagree, and with JavaScript off the tab is plain
+navigation that still lands on the right tab.
+
+**Three modes off the four routes, told apart by `HX-Target`**
+(`specTabSwapRequested`). A tab names the swap region and gets it back
+whole — strip and panel together, so the active marking travels with the
+panel. The panel's **Refresh button** names the panel's *content* region
+(`#krill-spec-decisions` and friends) and gets just that region; because it
+re-requests the tab's own path, a Refresh stays on the tab the operator is
+on rather than dropping back to Capabilities. Anything else is a browser
+request and gets the page in the shell. Deciding on the tab suffix instead
+would make a Refresh taken on a non-Capabilities tab serve a bare swap
+region for htmx to splice in beside the page.
+
+**The strip marks itself with `aria-selected`, not `aria-current="page"`.**
+The shell's primary nav is the only region that claims to be *the* current
+page; a second `aria-current` in the body is what `primaryNavRegion`
+exists to exclude from the nav scan, and the spec area no longer has a
+cross-nav to need that exclusion.
+
 #### The Notes and Dependencies panels (FR 7e463e31)
 
 **Both panels list EVERY row, in the store's order.** Notes render in

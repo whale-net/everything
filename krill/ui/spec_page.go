@@ -1,12 +1,17 @@
-// The spec browser: a product's capability map, its load-bearing
-// decisions, its personas, and its non-goals, each rendered inside the
-// shell chrome. Every page is scoped to one product at /spec/products/{id}
-// and reads through app.spec (readclient.go) -- the same //krill/slice
-// Querier and //krill/store readers the MCP tools get_product_slice /
-// list_personas / list_non_goals call underneath, so a page and the
-// matching tool always show the same current spec.
+// The spec browser: ONE tabbed page per product, whose four tabs are
+// that product's capability map, load-bearing decisions, personas, and
+// non-goals. Each tab is its own URL -- /spec/products/{id} and its three
+// suffix paths -- and the sidebar's four Spec links point at exactly
+// those, so switching tabs is navigation and the four keep resolving
+// (FR df5bffd1).
 //
-// All four pages render current revisions only: the reader's GetCurrent /
+// The page is scoped to one product and reads through app.spec
+// (readclient.go) -- the same //krill/slice Querier and //krill/store
+// readers the MCP tools get_product_slice / list_personas / list_non_goals
+// call underneath, so a page and the matching tool always show the same
+// current spec.
+//
+// All four tabs render current revisions only: the reader's GetCurrent /
 // ListCurrentByProduct methods never touch history, so a superseded
 // revision is never surfaced.
 //
@@ -232,8 +237,8 @@ func productPath(id uuid.UUID) string {
 
 // decisionsPath, personasPath, nonGoalsPath are the other three per-product
 // spec pages; deliveryPath is the delivery/roadmap view (delivery_page.go).
-// All four hang off the /spec/products/{id} prefix, so the cross-nav and the
-// route table agree on one spelling.
+// All four hang off the /spec/products/{id} prefix, so the route table and
+// the tab strip agree on one spelling.
 func decisionsPath(id uuid.UUID) string { return productPath(id) + decisionsSuffix }
 func personasPath(id uuid.UUID) string  { return productPath(id) + personasSuffix }
 func nonGoalsPath(id uuid.UUID) string  { return productPath(id) + nonGoalsSuffix }
@@ -241,11 +246,11 @@ func deliveryPath(id uuid.UUID) string  { return productPath(id) + "/delivery" }
 
 // productNavFor builds the five per-product cross-links, marking the one
 // matching current as active. The component that renders them is
-// components.SubNav, shared with the delivery page so the two spell the
-// cross-nav once.
+// components.SubNav.
 //
-// The links are plain <a> navigation rather than htmx swaps: moving
-// between them is navigation, not a refresh of the current view.
+// It survives for the delivery page alone: the spec area's own four links
+// are the tab strip's tabs (specTabsOf), which reach three of these paths
+// and no longer cross into Delivery.
 func productNavFor(id uuid.UUID, current string) []components.NavLink {
 	links := []components.NavLink{
 		{Label: "Capability map", Href: productPath(id)},
@@ -314,7 +319,6 @@ func (app *App) handleCapabilityMap(w http.ResponseWriter, r *http.Request) {
 func capabilityPageOf(doc slice.Document, productID uuid.UUID) pages.CapabilityPage {
 	page := pages.CapabilityPage{
 		Product: productHeaderOfEntity(doc.Product, productID),
-		Nav:     productNavFor(productID, productPath(productID)),
 		Path:    productPath(productID),
 	}
 
@@ -376,7 +380,6 @@ func (app *App) handleSpecDecisions(w http.ResponseWriter, r *http.Request) {
 func decisionsPageOf(doc slice.Document, productID uuid.UUID) pages.DecisionsPage {
 	page := pages.DecisionsPage{
 		Product: productHeaderOfEntity(doc.Product, productID),
-		Nav:     productNavFor(productID, decisionsPath(productID)),
 		Path:    decisionsPath(productID),
 	}
 	for _, d := range doc.Decisions {
@@ -420,7 +423,6 @@ func (app *App) handleSpecPersonas(w http.ResponseWriter, r *http.Request) {
 func personasPageOf(product store.Product, personas []store.Persona, productID uuid.UUID) pages.PersonasPage {
 	page := pages.PersonasPage{
 		Product: productHeaderOf(product),
-		Nav:     productNavFor(productID, personasPath(productID)),
 		Path:    personasPath(productID),
 	}
 	for _, p := range personas {
@@ -471,7 +473,6 @@ func (app *App) handleSpecNonGoals(w http.ResponseWriter, r *http.Request) {
 func nonGoalsPageOf(product store.Product, nonGoals []store.NonGoal, productID uuid.UUID) pages.NonGoalsPage {
 	page := pages.NonGoalsPage{
 		Product: productHeaderOf(product),
-		Nav:     productNavFor(productID, nonGoalsPath(productID)),
 		Path:    nonGoalsPath(productID),
 	}
 	// Only non-empty kinds become a group, so the "no non-goals" state

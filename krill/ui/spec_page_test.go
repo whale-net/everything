@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/slice"
@@ -273,6 +274,10 @@ func TestNonGoalsFieldParityAndKinds(t *testing.T) {
 // adjacency: components.SubNav puts its styling class between the two, and
 // htmxui ARCHITECTURE §14 asks tests to assert the behavioural claim
 // (which link is current) rather than the presentational markup.
+//
+// It now has one caller: the delivery page, the last area that carries a
+// cross-nav. The spec area's cross-links are the tab strip's tabs, marked
+// with aria-selected rather than aria-current.
 func subnavAnchor(html, href string) string {
 	idx := strings.Index(html, `href="`+href+`"`)
 	if idx < 0 {
@@ -293,22 +298,65 @@ func renderDeliveryCrossNavPage(product store.Product, productID uuid.UUID) stri
 	return mustRenderComponent(pages.Delivery(deliveryPageOf(product, slice.DeliveryListing{}, nil, productID)))
 }
 
-// TestProductPagesCrossLink pins the cross-nav: every per-product page links
-// to the other four, so an operator who lands anywhere under
-// /spec/products/{id} can reach decisions, personas, non-goals, and delivery
-// (and back to the capability map) without retyping a URL.
-func TestProductPagesCrossLink(t *testing.T) {
+// TestSpecTabStripCrossLinks pins the promise the spec area's cross-nav
+// used to make: an operator who lands on any of the four spec URLs can
+// reach the other three without retyping a URL. The tab strip now carries
+// it, one real href per tab, at the very paths the pages are served at.
+func TestSpecTabStripCrossLinks(t *testing.T) {
 	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
 	product := store.Product{ID: productID, Name: "krill"}
 	doc := slice.Document{Product: &slice.ProductEntity{Name: "krill"}}
 
-	bodies := map[string]string{
-		"capability": mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID))),
-		"decisions":  mustRenderComponent(pages.Decisions(decisionsPageOf(doc, productID))),
-		"personas":   mustRenderComponent(pages.Personas(personasPageOf(product, nil, productID))),
-		"non-goals":  mustRenderComponent(pages.NonGoals(nonGoalsPageOf(product, nil, productID))),
-		"delivery":   renderDeliveryCrossNavPage(product, productID),
+	panels := map[string]templ.Component{
+		pages.SpecTabCapabilities: pages.CapabilityMap(capabilityPageOf(doc, productID)),
+		pages.SpecTabDecisions:    pages.Decisions(decisionsPageOf(doc, productID)),
+		pages.SpecTabPersonas:     pages.Personas(personasPageOf(product, nil, productID)),
+		pages.SpecTabNonGoals:     pages.NonGoals(nonGoalsPageOf(product, nil, productID)),
 	}
+	links := []string{
+		productPath(productID),
+		decisionsPath(productID),
+		personasPath(productID),
+		nonGoalsPath(productID),
+	}
+
+	for tab, panel := range panels {
+		body := mustRenderComponent(pages.SpecTabs(pages.SpecTabsPage{
+			Tabs:  specTabsOf(productID, tab),
+			Tab:   tab,
+			Panel: panel,
+		}))
+
+		for _, href := range links {
+			if subnavAnchor(body, href) == "" {
+				t.Errorf("%s tab missing a link to %s", tab, href)
+			}
+		}
+		// Exactly one tab is marked current.
+		if got := strings.Count(body, `aria-selected="true"`); got != 1 {
+			t.Errorf("%s tab marks %d tabs active, want 1", tab, got)
+		}
+	}
+
+	// Delivery is not one of the four tabs: it is its own area, reached
+	// from the sidebar, and the strip must not have inherited it.
+	body := mustRenderComponent(pages.SpecTabs(pages.SpecTabsPage{
+		Tabs:  specTabsOf(productID, pages.SpecTabCapabilities),
+		Tab:   pages.SpecTabCapabilities,
+		Panel: panels[pages.SpecTabCapabilities],
+	}))
+	if subnavAnchor(body, deliveryPath(productID)) != "" {
+		t.Errorf("the spec tab strip carries a link to %s; delivery is its own area", deliveryPath(productID))
+	}
+}
+
+// TestDeliveryKeepsItsCrossNav pins that removing the cross-nav from the
+// spec area did not take it out of delivery, the one area that still has
+// one.
+func TestDeliveryKeepsItsCrossNav(t *testing.T) {
+	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
+	body := renderDeliveryCrossNavPage(store.Product{ID: productID, Name: "krill"}, productID)
+
 	links := []string{
 		productPath(productID),
 		decisionsPath(productID),
@@ -316,27 +364,20 @@ func TestProductPagesCrossLink(t *testing.T) {
 		nonGoalsPath(productID),
 		deliveryPath(productID),
 	}
-
-	for name, body := range bodies {
-		for _, href := range links {
-			if subnavAnchor(body, href) == "" {
-				t.Errorf("%s page missing cross-link to %s", name, href)
-			}
-		}
-		// Exactly one link is the current page.
-		if got := strings.Count(body, `aria-current="page"`); got != 1 {
-			t.Errorf("%s page has %d active cross-links, want 1", name, got)
+	for _, href := range links {
+		if subnavAnchor(body, href) == "" {
+			t.Errorf("delivery page missing cross-link to %s", href)
 		}
 	}
-
-	// On the delivery page, Delivery is the active link (aria-current), and
-	// the other four are present but not marked current.
-	delivery := bodies["delivery"]
-	if !strings.Contains(subnavAnchor(delivery, deliveryPath(productID)), `aria-current="page"`) {
+	// Exactly one link is the current page.
+	if got := strings.Count(body, `aria-current="page"`); got != 1 {
+		t.Errorf("delivery page has %d active cross-links, want 1", got)
+	}
+	if !strings.Contains(subnavAnchor(body, deliveryPath(productID)), `aria-current="page"`) {
 		t.Errorf("delivery page does not mark the Delivery cross-link as the current page")
 	}
-	for _, href := range []string{productPath(productID), decisionsPath(productID), personasPath(productID), nonGoalsPath(productID)} {
-		if strings.Contains(subnavAnchor(delivery, href), `aria-current="page"`) {
+	for _, href := range links[:4] {
+		if strings.Contains(subnavAnchor(body, href), `aria-current="page"`) {
 			t.Errorf("delivery page wrongly marks %s as the current page", href)
 		}
 	}
@@ -415,25 +456,41 @@ func TestSpecPagesCarryAManualRefresh(t *testing.T) {
 	}
 }
 
-// TestSpecSubNavIsPlainNavigation pins that the per-product cross-nav
-// stays plain <a> links rather than htmx swaps: moving between them is
-// navigation, not a refresh of the current view.
-func TestSpecSubNavIsPlainNavigation(t *testing.T) {
+// TestSpecTabStripIsRealNavigation pins that every tab is a REAL link to
+// its own path and not only an htmx request: with JavaScript off, a tab
+// has to be a plain navigation that still lands on the right tab.
+func TestSpecTabStripIsRealNavigation(t *testing.T) {
 	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
-	body := mustRenderComponent(pages.Decisions(decisionsPageOf(slice.Document{
-		Product: &slice.ProductEntity{Name: "krill"},
-	}, productID)))
+	body := mustRenderComponent(pages.SpecTabs(pages.SpecTabsPage{
+		Tabs:  specTabsOf(productID, pages.SpecTabDecisions),
+		Tab:   pages.SpecTabDecisions,
+		Panel: pages.Decisions(decisionsPageOf(slice.Document{
+			Product: &slice.ProductEntity{Name: "krill"},
+		}, productID)),
+	}))
 
-	idx := strings.Index(body, `data-krill="product-nav"`)
+	idx := strings.Index(body, `data-krill="spec-tabs"`)
 	if idx < 0 {
-		t.Fatalf("the per-product cross-nav did not render as the shared sub-nav region; got: %s", body)
+		t.Fatalf("the tab strip did not render; got: %s", body)
 	}
-	nav := body[idx:]
-	if end := strings.Index(nav, `data-krill="primary-nav"`); end >= 0 {
-		nav = nav[:end]
+	strip := body[idx:]
+	if end := strings.Index(strip, `data-krill="spec-panel-body"`); end >= 0 {
+		strip = strip[:end]
 	}
-	if strings.Contains(nav, "hx-") {
-		t.Errorf("the per-product cross-nav carries hx-* attributes; cross-links are navigation, not swaps")
+	for _, href := range []string{
+		productPath(productID),
+		decisionsPath(productID),
+		personasPath(productID),
+		nonGoalsPath(productID),
+	} {
+		tag := subnavAnchor(strip, href)
+		if tag == "" {
+			t.Errorf("the tab strip has no tab linking to %s", href)
+			continue
+		}
+		if !strings.Contains(tag, `hx-get="`+href+`"`) {
+			t.Errorf("tab %s does not hx-get its own href %s", href, href)
+		}
 	}
 }
 

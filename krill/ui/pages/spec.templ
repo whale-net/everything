@@ -5,6 +5,12 @@ package pages
 // a templ component the shell seam composes into either the full chrome
 // (renderShell) or a bare fragment (renderFragment).
 //
+// The four per-product bodies are the four PANELS of one tabbed Spec
+// page; the tab strip and the region they swap live in spec_tabs.templ.
+// Each component below still renders its own section root and its own
+// Refresh button, so a panel can be swapped on its own -- which is what
+// a Refresh press asks for.
+//
 // Each view-model struct is declared here, beside the component that
 // renders it; the pure builders that populate them stay in //krill/ui
 // (package main), so the field-parity tests keep exercising the same
@@ -18,7 +24,6 @@ package pages
 import (
 	"strconv"
 
-	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
@@ -83,7 +88,6 @@ type CapabilityRequirement struct {
 // CapabilityPage is one product's capability map, nested by parent.
 type CapabilityPage struct {
 	Product     ProductHeader
-	Nav         []components.NavLink
 	Path        string
 	FeatureSets []CapabilityFeatureSet
 }
@@ -99,7 +103,6 @@ type DecisionItem struct {
 // DecisionsPage is one product's load-bearing decisions.
 type DecisionsPage struct {
 	Product   ProductHeader
-	Nav       []components.NavLink
 	Path      string
 	Decisions []DecisionItem
 }
@@ -114,7 +117,6 @@ type PersonaItem struct {
 // PersonasPage is one product's personas.
 type PersonasPage struct {
 	Product  ProductHeader
-	Nav      []components.NavLink
 	Path     string
 	Personas []PersonaItem
 }
@@ -138,7 +140,6 @@ type NonGoalGroup struct {
 // NonGoalsPage is one product's non-goals, bucketed by kind.
 type NonGoalsPage struct {
 	Product ProductHeader
-	Nav     []components.NavLink
 	Path    string
 	Groups  []NonGoalGroup
 }
@@ -218,7 +219,6 @@ templ Products(page ProductsPage) {
 templ CapabilityMap(page CapabilityPage) {
 	<section id={ CapabilityMapAnchor } data-krill="capability-map">
 		@pageHeader(CapabilityMapAnchor, page.Path, page.Product.Name+" — capability map", page.Product.Vision)
-		@components.SubNav(page.Nav)
 		if len(page.FeatureSets) == 0 {
 			@htmxui.EmptyState("No feature sets yet.", "The FeatureSets, Features, and Requirements recorded for this product.", "", "", templ.Attributes{})
 		} else {
@@ -266,7 +266,6 @@ templ CapabilityMap(page CapabilityPage) {
 templ Decisions(page DecisionsPage) {
 	<section id={ DecisionsAnchor } data-krill="decisions">
 		@pageHeader(DecisionsAnchor, page.Path, page.Product.Name+" — load-bearing decisions", page.Product.Vision)
-		@components.SubNav(page.Nav)
 		if len(page.Decisions) == 0 {
 			@htmxui.EmptyState("No load-bearing decisions yet.", "The decisions later capabilities of this product depend on.", "", "", templ.Attributes{})
 		} else {
@@ -290,7 +289,6 @@ templ Decisions(page DecisionsPage) {
 templ Personas(page PersonasPage) {
 	<section id={ PersonasAnchor } data-krill="personas">
 		@pageHeader(PersonasAnchor, page.Path, page.Product.Name+" — personas", page.Product.Vision)
-		@components.SubNav(page.Nav)
 		if len(page.Personas) == 0 {
 			@htmxui.EmptyState("No personas yet.", "Who this product serves.", "", "", templ.Attributes{})
 		} else {
@@ -314,7 +312,6 @@ templ Personas(page PersonasPage) {
 templ NonGoals(page NonGoalsPage) {
 	<section id={ NonGoalsAnchor } data-krill="non-goals">
 		@pageHeader(NonGoalsAnchor, page.Path, page.Product.Name+" — non-goals", page.Product.Vision)
-		@components.SubNav(page.Nav)
 		if len(page.Groups) == 0 {
 			@htmxui.EmptyState("No non-goals yet.", "What this product deliberately will not do.", "", "", templ.Attributes{})
 		} else {
