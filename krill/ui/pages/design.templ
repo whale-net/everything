@@ -53,24 +53,60 @@ type DesignSessionRow struct {
 	OpenedExact    string
 }
 
-// DesignSessionListPage is the product-scoped session list. Error and
-// OpeningSubmission are set only when an "open a session" submission is
-// rejected and the form is re-rendered: Error is the readable api status +
-// message shown inline, and OpeningSubmission is the operator's typed text,
-// preserved so a rejection is not a data-loss event.
+// DesignSessionNewBlade is the "new design session" blade (FR 44d7f1e2):
+// what the operator types when the blade is open, and where it goes.
 //
-// FormAction is the open form's own POST target, supplied by the caller so
-// the path shape stays owned by package main's designProductSessionsPath
-// rather than being rebuilt here. Path is this list's own URL, which the
-// empty state's action points at until the new-session blade takes over.
-type DesignSessionListPage struct {
+// ProductName is READ-ONLY context -- the product the blade's own URL named,
+// resolved server-side, never a field. There is deliberately no product id
+// input, no session id input, and no identity input anywhere in this blade:
+// the write body carries product_id and opening_submission only, and the
+// product reaches krill from the path the operator arrived on.
+//
+// Error and OpeningSubmission are set only when a submission is refused and
+// the blade is re-rendered: Error is the readable api status + message shown
+// inline, and OpeningSubmission is the operator's typed text, preserved so a
+// rejection is not a data-loss event (FR 4304fe60).
+type DesignSessionNewBlade struct {
 	ProductID         string
 	ProductName       string
-	Path              string
-	Sessions          []DesignSessionRow
-	Error             string
 	OpeningSubmission string
-	FormAction        string
+	Error             string
+
+	// FormAction is the blade form's own POST target and ListPath is the URL
+	// Cancel returns to, both supplied by the caller so the path shapes stay
+	// owned by package main rather than being rebuilt here.
+	FormAction string
+	ListPath   string
+}
+
+// DesignSessionNewBladeAnchor is the DOM id of the region the new-session
+// blade swaps into: the hx-target the list's "New design session" action
+// names, and the id the served blade fragment's ROOT must carry. Without it
+// on the root, htmx's outerHTML deletes the element it was asked to replace
+// and the region is gone for good.
+//
+// It is rendered even with no blade open -- an empty region of the same id
+// -- because the list's action has to resolve whether or not a blade is
+// showing.
+const DesignSessionNewBladeAnchor = "design-session-new-blade"
+
+// DesignSessionListPage is the product-scoped session list.
+//
+// NewBlade is the blade region: nil is the CLOSED blade -- the placeholder
+// the list always carries -- and a value is an open blade. NewBladePath is
+// the URL the "New design session" action and the empty state's action point
+// at, which is a real href so a no-JS click, a reload and a shared link all
+// reach the same blade. FormAction is that blade form's own POST target,
+// supplied by the caller so the path shape stays owned by package main's
+// designProductSessionsPath rather than being rebuilt here.
+type DesignSessionListPage struct {
+	ProductID    string
+	ProductName  string
+	Path         string
+	Sessions     []DesignSessionRow
+	NewBlade     *DesignSessionNewBlade
+	NewBladePath string
+	FormAction   string
 }
 
 // EntityDeltaRow is one spec entity a revision event touched.
@@ -121,10 +157,33 @@ type OpenQuestionRow struct {
 //
 // AnswersPath is the follow-up form's own POST target, supplied by the
 // caller so the path shape stays owned by package main.
+//
+// OpeningRequest is the opening submission's FIRST LINE -- the same string
+// the sessions list links by, so the two pages agree on what this session
+// is called -- while OpeningSubmission is the full prose, rendered as
+// markdown in the main column because this page is the only place it is
+// readable in full.
+//
+// Stage is the store's own derived stage, spelled as a string, exactly as
+// DesignSessionRow.Stage is: the badge beside the h1 resolves through the
+// same components mapper the list's Stage cell uses, so the two cannot
+// render one session's stage two different ways.
+//
+// OpenedBy is the operator's subject -- what the server read, never what a
+// reader typed (LB4) -- and OpenedByTitle the full (subject, issuer) pair
+// for the title attribute. Both are empty when the krill_session row could
+// not be read, which is rendered as an absent "Opened by" line rather than
+// a blank or invented one.
 type DesignSessionDetailPage struct {
 	ID                     string
 	ProductID              string
+	ProductName            string
+	ProductOverviewPath    string
+	OpeningRequest         string
 	OpeningSubmission      string
+	Stage                  string
+	OpenedBy               string
+	OpenedByTitle          string
 	OpenedByKrillSessionID string
 	CreatedAt              string
 	ProductSessionsPath    string
@@ -197,24 +256,25 @@ templ designSessionOpenedAt(s DesignSessionRow) {
 // product newest-first, with its derived stage and its open blocking
 // question count.
 //
-// The primary action is still the inline OpenSessionForm below the header,
-// not a link to a new-session blade: the blade is the next task's page
-// (FR 44d7f1e2), and this page renders before it lands rather than after.
-// It is here for the same reason the empty state's action points at it --
-// there is exactly one way to open a session today, and this is it.
+// The primary action is a link to the new-session blade (FR 44d7f1e2), not
+// an inline form: the action carries a real href to the blade's own URL, so
+// a no-JS click, a reload and a shared link all open the same blade, while
+// htmx swaps it into DesignSessionNewBladeAnchor in place. The empty state's
+// action is that same link -- one affordance to open a session.
 //
-// The empty state points its action at the form's own id rather than at a
-// blade URL that does not resolve yet: an action whose destination 404s is
-// worse than one that scrolls to the control standing right above it.
+// The blade region itself lives inside this section, so opening and closing
+// the blade are both a swap of this page's own body rather than of two
+// regions an operator has to correlate.
 templ DesignSessionList(page DesignSessionListPage) {
 	<section id={ designSessionListAnchor } class="space-y-4">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<h1 class="text-2xl font-semibold" data-krill="page-title">Design sessions</h1>
+			@newDesignSessionAction(page.NewBladePath)
 		</div>
 		<p class="text-sm text-base-content/70">
 			{ page.ProductName } — every design session, most recently opened first.
 		</p>
-		@OpenSessionForm(page)
+		@NewDesignSessionBlade(page.NewBlade)
 		if len(page.Sessions) > 0 {
 			<div class="overflow-x-auto rounded-lg border border-base-300 bg-base-100">
 				<table class="table table-zebra" data-krill="design-session-table">
@@ -242,62 +302,211 @@ templ DesignSessionList(page DesignSessionListPage) {
 			</div>
 		} else {
 			@htmxui.EmptyState("No design sessions for this product yet.", "Open one above to start a design conversation.",
-				"New design session", "#open-session-form", templ.Attributes{"data-krill": "design-sessions-empty"})
+				"New design session", page.NewBladePath, templ.Attributes{"data-krill": "design-sessions-empty"})
 		}
 	</section>
 }
 
-// OpenSessionForm is the "open a design session" form, and the hx-post
-// swap target for it.
+// newDesignSessionAction is the list's primary action: a link to the
+// new-session blade's own URL.
 //
-// The form is doubled (htmxui ARCHITECTURE §9: the <form> element and its
+// It is doubled the way every mutating control in this binary is: the href
+// is the whole no-JS half, and hx-get of that same URL into
+// DesignSessionNewBladeAnchor is the htmx half. hx-push-url makes the blade
+// URL the address bar, so a reload or a copied address reopens the blade --
+// the blade is an address, not only a pane.
+//
+// A <button> rather than an <a> would break the no-JS half outright: a
+// button has no destination to fall back on when htmx never runs.
+templ newDesignSessionAction(bladePath string) {
+	<a href={ templ.URL(bladePath) }
+		class="btn btn-primary btn-sm"
+		data-krill="design-sessions-new"
+		hx-get={ templ.URL(bladePath) }
+		hx-target={ "#" + DesignSessionNewBladeAnchor }
+		hx-swap="outerHTML"
+		hx-push-url="true">
+		New design session
+	</a>
+}
+
+// NewDesignSessionBlade is the blade region itself: empty with no blade, and
+// the blade with one. Both spellings carry DesignSessionNewBladeAnchor, so
+// opening the blade can swap one for the other without the region's identity
+// moving -- which is what the list action's hx-target resolves against
+// whether or not a blade is already showing.
+templ NewDesignSessionBlade(blade *DesignSessionNewBlade) {
+	<div id={ DesignSessionNewBladeAnchor } data-krill="design-session-new-blade">
+		if blade != nil {
+			@newDesignSessionBladeBody(*blade)
+		}
+	</div>
+}
+
+// newDesignSessionBladeBody is the open blade: the product it opens a
+// session under, the one thing the operator types, and the two controls
+// that commit or abandon it.
+//
+// The form is doubled (htmxui ARCHITECTURE 9: the <form> element and its
 // hx-* wiring stay app-owned): method+action is the no-JS path, which
 // answers 303 to the new session's detail page, and hx-post+hx-target+
 // hx-swap is the htmx path, which answers HX-Redirect to that same page.
+// Both target the BLADE REGION rather than the form, because a refusal
+// re-renders the whole blade -- the form is not the only thing in it.
 //
-// That doubling is the payoff: the no-HX half is byte-for-byte the form
-// this page has always rendered, so the eight 303 + Location assertions in
-// design_write_test.go keep passing verbatim while the HX half is new.
-// A refusal answers 200 with this same fragment carrying Error inline and
-// the operator's typed text preserved, so a rejection is never a
-// data-loss event and never a status code the swap target cannot render.
-templ OpenSessionForm(page DesignSessionListPage) {
-	<form
-		id="open-session-form"
-		method="post"
-		action={ templ.URL(page.FormAction) }
-		hx-post={ page.FormAction }
-		hx-target="#open-session-form"
-		hx-swap="outerHTML"
-	>
-		if page.Error != "" {
-			@htmxui.Alert(htmxui.AlertError, "Not saved: "+page.Error, nil)
-		}
-		<p>
-			<label class="label" for="opening-submission">Your idea or user story</label>
-			<textarea id="opening-submission" name="opening_submission" rows="4" required placeholder="Users need to bulk-export their data as CSV" class="textarea textarea-bordered w-full max-w-2xl">{ page.OpeningSubmission }</textarea>
-		</p>
-		<p><button type="submit" class="btn btn-primary">Open design session</button></p>
-	</form>
+// It carries one input. There is no product field (the product came from the
+// URL), no session id field, and no identity field (LB4, FR 6d8c70b2): the
+// krill session the write rides is minted from the sign-in, and the api body
+// this form produces has no field for any of them.
+//
+// Blades go one level deep: nothing in here is a link or an hx-get except
+// Cancel, which is a plain link back to the list.
+templ newDesignSessionBladeBody(blade DesignSessionNewBlade) {
+	<article class="card bg-base-100 border border-base-300 shadow-sm" data-krill="design-session-new-blade-body">
+		<div class="card-body gap-3">
+			<h2 class="card-title text-lg" data-krill="design-session-new-title">New design session</h2>
+			<div class="flex flex-wrap items-center gap-2">
+				<span class="text-sm text-base-content/70">Product</span>
+				if blade.ProductName != "" {
+					@htmxui.Badge(blade.ProductName, htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false, templ.Attributes{
+						"data-krill": "design-session-new-product",
+					})
+				}
+			</div>
+			<form
+				id="design-session-new-form"
+				method="post"
+				action={ templ.URL(blade.FormAction) }
+				hx-post={ blade.FormAction }
+				hx-target={ "#" + DesignSessionNewBladeAnchor }
+				hx-swap="outerHTML"
+			>
+				if blade.Error != "" {
+					@htmxui.Alert(htmxui.AlertError, "Not saved: "+blade.Error, nil)
+				}
+				<p>
+					<label class="label" for="design-session-new-submission">What should be designed?</label>
+					<textarea id="design-session-new-submission" name="opening_submission" rows="5" required
+						placeholder="Describe the feature or change in a few sentences"
+						class="textarea textarea-bordered w-full">{ blade.OpeningSubmission }</textarea>
+				</p>
+				<div class="flex flex-wrap justify-end gap-2">
+					<a href={ templ.URL(blade.ListPath) } class="btn btn-ghost" data-krill="design-session-new-cancel">Cancel</a>
+					@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeMD, false, templ.Attributes{
+						"type": "submit",
+						"data-krill": "design-session-new-submit",
+					}) {
+						Open session
+					}
+				</div>
+			</form>
+		</div>
+	</article>
 }
 
-// DesignSessionDetail is one session's full ordered revision-event log and
-// its currently-open questions.
+// designSessionDetailRegions are the stable ids the two columns carry.
+// Tests slice on these rather than on a heading's markup, so restyling a
+// card never breaks a section-scoped assertion (htmxui ARCHITECTURE §14).
+const (
+	designSessionDetailAnchor     = "design-session-detail"
+	designSessionEventsAnchor      = "revision-events"
+	designSessionQuestionsAnchor   = "open-questions"
+	designSessionPropertiesAnchor  = "session-properties"
+)
+
+// DesignSessionCrumb is one breadcrumb entry on the session detail. Href is
+// empty for the session's own title -- the page the reader is already on,
+// and so the one crumb that is not a link.
+type DesignSessionCrumb struct {
+	Label string
+	Href  string
+}
+
+// DesignSessionDetail is one session: its opening statement, its full
+// ordered revision-event log, and its currently-open questions.
+//
+// The shape is the wireframe's two columns -- a main column that reads
+// (opening statement, then the log) and a rail that keeps the questions and
+// the properties beside it -- and the regions inside them carry the stable
+// ids the tests slice on. What goes in each region is deliberately this
+// page's existing markup: the log and the question table move wholesale
+// into their new homes rather than being rewritten, so this page's
+// structure can merge without also renegotiating its contents.
+//
+// Nothing here asks for an identity. The properties card shows who the
+// server read, and there is no input anywhere on the page for an operator
+// to say they are someone else (LB4).
 templ DesignSessionDetail(page DesignSessionDetailPage) {
-	<h2>Design session</h2>
-	<dl class="grid grid-cols-1 gap-x-6 sm:grid-cols-3">
-		<dt class="font-medium">ID</dt>
-		<dd class="sm:col-span-2"><code>{ page.ID }</code></dd>
-		<dt class="font-medium">Product</dt>
-		<dd class="sm:col-span-2"><code>{ page.ProductID }</code></dd>
-		<dt class="font-medium">Opening submission</dt>
-		<dd class="sm:col-span-2 krill-md">@templ.Raw(renderMarkdown(page.OpeningSubmission))</dd>
-		<dt class="font-medium">Opened by krill session</dt>
-		<dd class="sm:col-span-2"><code>{ page.OpenedByKrillSessionID }</code></dd>
-		<dt class="font-medium">Created</dt>
-		<dd class="sm:col-span-2">{ page.CreatedAt }</dd>
-	</dl>
-	<section id="revision-events">
+	<section id={ designSessionDetailAnchor } class="space-y-4">
+		@designSessionDetailCrumbs(page)
+		<div class="flex flex-wrap items-center gap-3">
+			<h1 class="text-2xl font-semibold" data-krill="design-session-title">{ page.OpeningRequest }</h1>
+			@designSessionStageBadge(page.Stage)
+		</div>
+		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+			<div class="min-w-0 space-y-4">
+				<section id="session-opening" class="krill-md">
+					@templ.Raw(renderMarkdown(page.OpeningSubmission))
+				</section>
+				@designSessionEventsRegion(page)
+			</div>
+			<aside class="space-y-4">
+				@designSessionQuestionsRegion(page)
+				@designSessionPropertiesCard(page)
+			</aside>
+		</div>
+		<p id="session-nav">
+			<a href={ templ.URL(page.ProductSessionsPath) }>Back to this product's sessions</a>
+		</p>
+		<h3>Submit follow-up</h3>
+		<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
+		@FollowUpForm(page)
+	</section>
+}
+
+// designSessionDetailCrumbs is where the operator has been: the product,
+// its Design sessions list, and then this session -- named by its own
+// opening request, the same string the list links by, so the trail reads
+// as the list's own row expanded.
+templ designSessionDetailCrumbs(page DesignSessionDetailPage) {
+	<nav class="breadcrumbs text-sm" aria-label="Breadcrumb" data-krill="design-session-breadcrumb">
+		<ul>
+			for _, c := range designSessionCrumbs(page) {
+				<li data-krill="breadcrumb-crumb">
+					if c.Href == "" {
+						<span>{ c.Label }</span>
+					} else {
+						<a href={ templ.URL(c.Href) }>{ c.Label }</a>
+					}
+				</li>
+			}
+		</ul>
+	</nav>
+}
+
+// designSessionCrumbs assembles the trail. The product crumb and the list
+// crumb are links; the session's own title is not, because it is where the
+// reader already is.
+//
+// A product whose name could not be read contributes no crumb rather than
+// an empty one: a blank link in a breadcrumb looks like a rendering fault
+// and navigates nowhere useful, while its absence leaves the list crumb,
+// which is the one that navigates.
+func designSessionCrumbs(page DesignSessionDetailPage) []DesignSessionCrumb {
+	var crumbs []DesignSessionCrumb
+	if page.ProductName != "" {
+		crumbs = append(crumbs, DesignSessionCrumb{Label: page.ProductName, Href: page.ProductOverviewPath})
+	}
+	return append(crumbs,
+		DesignSessionCrumb{Label: "Design sessions", Href: page.ProductSessionsPath},
+		DesignSessionCrumb{Label: page.OpeningRequest},
+	)
+}
+
+// designSessionEventsRegion is the session's ordered log, in the main
+// column.
+templ designSessionEventsRegion(page DesignSessionDetailPage) {
+	<section id={ designSessionEventsAnchor }>
 		<h3>Revision events</h3>
 		if len(page.Events) > 0 {
 			<ol class="space-y-3">
@@ -309,7 +518,12 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 			<p>No revision events yet.</p>
 		}
 	</section>
-	<section id="open-questions">
+}
+
+// designSessionQuestionsRegion is the rail's open-questions card, holding
+// the question table this page has always shown.
+templ designSessionQuestionsRegion(page DesignSessionDetailPage) {
+	<section id={ designSessionQuestionsAnchor }>
 		<h3>Open questions</h3>
 		if len(page.OpenQuestions) > 0 {
 			<table class="table table-sm">
@@ -334,12 +548,62 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 			<p>No open questions.</p>
 		}
 	</section>
-	<p id="session-nav">
-		<a href={ templ.URL(page.ProductSessionsPath) }>Back to this product's sessions</a>
-	</p>
-	<h3>Submit follow-up</h3>
-	<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
-	@FollowUpForm(page)
+}
+
+// designSessionPropertiesCard is the rail's properties card: who opened the
+// session, and the krill session it was opened through.
+//
+// The id is the copy chip the whole app shares -- same data-krill hook, same
+// data attribute, same head script -- so the clipboard behaviour is the one
+// already in use on the task detail, the milestone detail and the spec
+// blade. The chip shows the first eight characters with the whole value on
+// hover and in the clipboard, which is what a UUID read at a glance needs.
+//
+// A session whose krill_session row could not be read shows the id chip and
+// NO "Opened by" line. The card does not offer an input to supply one: the
+// page's subject is a recorded conversation, and letting an operator type
+// an identity into it would put a name on a session nobody typed it for
+// (LB4).
+templ designSessionPropertiesCard(page DesignSessionDetailPage) {
+	<section id={ designSessionPropertiesAnchor }>
+		<h3>Properties</h3>
+		<dl class="grid grid-cols-1 gap-x-6 gap-y-2">
+			if page.OpenedBy != "" {
+				<div>
+					<dt class="text-base-content/70">Opened by</dt>
+					<dd data-krill="design-session-opened-by" title={ page.OpenedByTitle }>{ page.OpenedBy }</dd>
+				</div>
+			}
+			<div>
+				<dt class="text-base-content/70">Krill session</dt>
+				<dd data-krill="design-session-id">
+					// The app's own id chip: disabled until the head script
+					// binds it, so a control that cannot work never looks
+					// live. It sits in a <dd> because that is the scope the
+					// shared script looks in.
+					<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
+						aria-label="Copy design session id" data-krill="copy-task-id"
+						data-task-id={ page.OpenedByKrillSessionID }
+						disabled title="Copying the id needs JavaScript">
+						{ sessionChipText(page.OpenedByKrillSessionID) }
+					</button>
+					<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
+				</dd>
+			</div>
+		</dl>
+	</section>
+}
+
+// sessionChipText is what the chip shows: the first eight characters of a
+// UUID, or the whole value when it is shorter (which only a malformed id
+// ever is). Truncated because a full 36-character id is unreadable at chip
+// size; the whole value stays in data-task-id, in the title the script sets,
+// and in what the clipboard receives.
+func sessionChipText(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // revisionEvent is one round of the session's ordered log. The #seq type
@@ -387,7 +651,7 @@ templ revisionEvent(ev RevisionEventRow) {
 }
 
 // FollowUpForm is the "submit follow-up" form, and the hx-post swap target
-// for it -- doubled exactly as OpenSessionForm is: method+action is the
+// for it -- doubled exactly as the new-session blade's form is: method+action is the
 // no-JS path (303 back to this session's detail page), hx-post+hx-target+
 // hx-swap is the htmx path (HX-Redirect to the same page, because the
 // appended round changes the log, the open-question table, and this form's

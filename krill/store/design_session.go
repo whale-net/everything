@@ -46,6 +46,15 @@ type DesignSessionStore interface {
 	// ListOpenQuestions per session. See design_session_summary.go for the
 	// Stage vocabulary and the derivation both it and this method share.
 	SummarizeByProduct(ctx context.Context, productID uuid.UUID) (ProductDesignSessionsSummary, error)
+
+	// GetSummaryByID returns one session's DesignSessionSummary -- its row,
+	// its derived Stage, its open-question counts, and the identity that
+	// opened it -- through the same statement and the same derivation
+	// SummarizeByProduct runs for a whole product, narrowed to this one
+	// session. It is what a session's own detail page reads, so a list and
+	// the detail it links to cannot disagree about that session's stage or
+	// its open blocking count. ErrNotFound when no such row exists.
+	GetSummaryByID(ctx context.Context, id uuid.UUID) (DesignSessionSummary, error)
 }
 
 // designSessionStore is the pgx-backed DesignSessionStore implementation.

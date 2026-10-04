@@ -64,6 +64,20 @@ func designAnswersPath(productID, id uuid.UUID) string {
 	return designSessionPath(productID, id) + "/answers"
 }
 
+// designNewSessionBladePath is the new-session blade's own URL (FR 44d7f1e2).
+//
+// It is a literal segment under the list, so it outranks the {id} wildcard
+// the session detail registers at the same position in the same Go 1.22
+// mux -- a session can never be addressed as "new".
+//
+// The blade being an ADDRESS rather than only a pane is the point: the
+// list's primary action carries this as a real href, so a no-JS click, a
+// reload and a shared link all open it, and a browser Back returns to the
+// list underneath.
+func designNewSessionBladePath(productID uuid.UUID) string {
+	return designProductSessionsPath(productID) + "/new"
+}
+
 // designGoPath is the design root's product-id browse target.
 const designGoPath = designPath + "/go"
 
@@ -119,11 +133,27 @@ func firstLine(s string) string {
 	return strings.TrimSpace(line)
 }
 
-// buildDesignSessionDetail assembles one session's read view from the same
-// three store reads get_design_session (GetByID + ListBySession) and
-// list_open_questions (GetByID + ListOpenQuestions) perform.
-func (app *App) buildDesignSessionDetail(ctx context.Context, id uuid.UUID) (pages.DesignSessionDetailPage, error) {
-	ds, err := app.designSessions.GetByID(ctx, id)
+// buildDesignSessionDetail assembles one session's read view.
+//
+// Three reads, each named for what it is the browser's twin of:
+//
+//   - GetSummaryByID is the aggregate the sessions LIST already reads this
+//     same session out of, narrowed to one row. It supplies the derived
+//     stage and the opening identity, so the badge beside this page's h1
+//     is the same badge the row linking here showed. Reading the stage any
+//     other way -- a ListLatestSignoffBySessionIDs call, or a second
+//     derivation here -- is how a list and a detail come to disagree about
+//     the same session's stage.
+//   - ListBySession and ListOpenQuestions are the exact accessors
+//     get_design_session and list_open_questions call, so the log and the
+//     question set an operator reads are the ones an MCP client reads.
+//
+// The product's name and link come from the request the route already
+// resolved (productNameFor), not from a read of the product here: the pid
+// is in the path, so a second product lookup would be the same row asked
+// for twice.
+func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid.UUID) (pages.DesignSessionDetailPage, error) {
+	summary, err := app.designSessions.GetSummaryByID(ctx, id)
 	if err != nil {
 		return pages.DesignSessionDetailPage{}, err
 	}
@@ -135,17 +165,41 @@ func (app *App) buildDesignSessionDetail(ctx context.Context, id uuid.UUID) (pag
 	if err != nil {
 		return pages.DesignSessionDetailPage{}, err
 	}
+	openedBy, openedByTitle := openingOperatorLabel(summary.OpenedBy)
 	return pages.DesignSessionDetailPage{
-		ID:                     ds.ID.String(),
-		ProductID:              ds.ProductID.String(),
-		OpeningSubmission:      ds.OpeningSubmission,
-		OpenedByKrillSessionID: ds.OpenedByKrillSessionID.String(),
-		CreatedAt:              formatTime(ds.CreatedAt),
-		ProductSessionsPath:    designProductSessionsPath(ds.ProductID),
+		ID:                     summary.ID.String(),
+		ProductID:              summary.ProductID.String(),
+		ProductName:            app.productNameFor(ctx, productID),
+		ProductOverviewPath:    productHref(productID, overviewSuffix),
+		OpeningRequest:         firstLine(summary.OpeningSubmission),
+		OpeningSubmission:      summary.OpeningSubmission,
+		Stage:                  string(summary.Stage),
+		OpenedBy:               openedBy,
+		OpenedByTitle:          openedByTitle,
+		OpenedByKrillSessionID: summary.OpenedByKrillSessionID.String(),
+		CreatedAt:              formatTime(summary.CreatedAt),
+		ProductSessionsPath:    designProductSessionsPath(summary.ProductID),
 		Events:                 revisionEventRows(events),
 		OpenQuestions:          openQuestionRows(questions),
-		AnswersPath:            designAnswersPath(ds.ProductID, ds.ID),
+		AnswersPath:            designAnswersPath(summary.ProductID, summary.ID),
 	}, nil
+}
+
+// openingOperatorLabel renders the identity that opened a session for the
+// properties card: the bare subject an operator recognises, with the full
+// (issuer, subject) pair in the element's title for the case where the sub
+// alone is ambiguous across issuers.
+//
+// An unreadable krill_session row is the zero Subject, and it renders as
+// two empty strings -- not as a placeholder identity. The card then shows
+// the session id chip with no "Opened by" line at all, which is the honest
+// rendering: the page records that a session was opened and by which krill
+// session, and says nothing at all about a person it could not read.
+func openingOperatorLabel(s store.Subject) (label, title string) {
+	if s.Sub == "" {
+		return "", ""
+	}
+	return s.Sub, s.Sub + "@" + s.Iss
 }
 
 func revisionEventRows(events []store.RevisionEvent) []pages.RevisionEventRow {
@@ -266,6 +320,85 @@ func (app *App) handleDesignSessionList(w http.ResponseWriter, r *http.Request) 
 	app.renderDesignSessionList(w, r, productID, r.URL.Path)
 }
 
+// designSessionListPage builds the list page's view model around rows the
+// caller has already read, so the list URL, the un-prefixed design root and
+// the new-session blade's full-page render are one page rather than three.
+//
+// Path shapes come from here and nowhere else: the blade URL the primary
+// action links at, and the POST target the blade's own form carries, are
+// both owned by package main.
+func (app *App) designSessionListPage(r *http.Request, productID uuid.UUID, rows []pages.DesignSessionRow) pages.DesignSessionListPage {
+	return pages.DesignSessionListPage{
+		ProductID:    productID.String(),
+		ProductName:  app.productNameFor(r.Context(), productID),
+		Path:         designProductSessionsPath(productID),
+		NewBladePath: designNewSessionBladePath(productID),
+		Sessions:     rows,
+		FormAction:   designProductSessionsPath(productID),
+	}
+}
+
+// newDesignSessionBlade builds the blade view for productID: the product the
+// blade's URL named, resolved server-side and shown read-only, plus the two
+// paths the blade's controls go to.
+//
+// Error and OpeningSubmission stay empty here. A blade opened fresh has
+// nothing to report and nothing typed yet; the write handler fills both in
+// when it hands the blade back after a refusal.
+func (app *App) newDesignSessionBlade(r *http.Request, productID uuid.UUID) *pages.DesignSessionNewBlade {
+	return &pages.DesignSessionNewBlade{
+		ProductID:   productID.String(),
+		ProductName: app.productNameFor(r.Context(), productID),
+		FormAction:  designProductSessionsPath(productID),
+		ListPath:    designProductSessionsPath(productID),
+	}
+}
+
+// handleDesignSessionNew is the new-session blade over the list (FR
+// 44d7f1e2). One route, two modes, exactly as the Spec feature blade
+// answers.
+//
+// An htmx request gets the blade REGION alone, because the list's action
+// names that region as its swap target and the list underneath it must NOT
+// be re-rendered -- the rows the operator was reading are what they chose.
+// A browser request gets the whole Design sessions page with the blade open
+// over it, so a reload, a shared link and a no-JavaScript click all reach
+// the same thing the action did.
+//
+// The list is read only for that second mode. Opening the blade is a page
+// the operator can reach even when the session list cannot be read, so the
+// fragment branch never depends on the read succeeding.
+//
+// Blades go one level deep: this renders the blade and nothing below it
+// opens another one.
+func (app *App) handleDesignSessionNew(w http.ResponseWriter, r *http.Request) {
+	productID, err := uuid.Parse(r.PathValue("productID"))
+	if err != nil {
+		http.Error(w, "invalid product id: must be a UUID", http.StatusBadRequest)
+		return
+	}
+	blade := app.newDesignSessionBlade(r, productID)
+	if isHXRequest(r) {
+		renderFragment(w, r, pages.NewDesignSessionBlade(blade))
+		return
+	}
+	// now is read once, here, so every row's relative age is measured
+	// against one instant: a table whose rows disagree about "now" by the
+	// time the page took to render reads as a table of different ages.
+	rows, err := app.designSessionRows(r.Context(), productID, time.Now())
+	if err != nil {
+		logger.Error("failed to list design sessions", "product_id", productID, "error", err)
+		http.Error(w, "failed to list design sessions", http.StatusInternalServerError)
+		return
+	}
+	page := app.designSessionListPage(r, productID, rows)
+	page.NewBlade = blade
+	setLastViewedProductCookie(w, productID)
+	// The nav key is the LIST's own path, not this blade's: the blade is a
+	// view over the sessions page, so that is the item the operator is on.
+	app.renderShell(w, r, "Design sessions", designProductSessionsPath(productID), pages.DesignSessionList(page))
+}
+
 // renderDesignSessionList is the session list, shared by the product-scoped
 // URL and by the un-prefixed /design root that resolved this product --
 // one page at two URLs, exactly as "/" and /products/{pid}/overview are one
@@ -285,13 +418,7 @@ func (app *App) renderDesignSessionList(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "failed to list design sessions", http.StatusInternalServerError)
 		return
 	}
-	page := pages.DesignSessionListPage{
-		ProductID:   productID.String(),
-		ProductName: app.productNameFor(r.Context(), productID),
-		Path:        designProductSessionsPath(productID),
-		Sessions:    rows,
-		FormAction:  designProductSessionsPath(productID),
-	}
+	page := app.designSessionListPage(r, productID, rows)
 	if isHXRequest(r) {
 		renderFragment(w, r, pages.DesignSessionList(page))
 		return
@@ -351,7 +478,7 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid design session id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	detail, err := app.buildDesignSessionDetail(r.Context(), id)
+	detail, err := app.buildDesignSessionDetail(r.Context(), productID, id)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && detail.ProductID != productID.String()) {
 		if err == nil {
 			logger.Info("design session not under the product the URL names",
