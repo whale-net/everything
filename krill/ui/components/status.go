@@ -202,15 +202,27 @@ func NoteLifecycleStyle(status string) StatusStyle {
 // that vocabulary acquires a colour, so the non-goals page and anything
 // that later shows a non-goal inline render a kind the same way.
 //
+// Neither kind is a failure and neither is in flight, so neither takes a
+// severity colour: warning would put a spec-page badge into the same
+// visual register as a task needing a human, which the Spec page's
+// read-only, no-attention invariant (FR df5bffd1) rules out of its body.
+// Instead the pair separates SETTLED from STILL OPEN. Permanent is
+// secondary (slate -- DESIGN_SYSTEM's "Inactive, Stopped, Secondary"),
+// because it is a closed boundary the product will not cross. Deferred is
+// info (indigo -- "Info, Deployed, Primary"), because it is explicitly
+// not foreclosed: it is a live statement about a door left ajar, and
+// ghost -- the absence treatment, and what a note's "deferred" lifecycle
+// takes -- would read as "nothing here" rather than "not yet".
+//
 // It takes a string for the reason MilestoneStatusStyle does: an
 // unrecognised kind falls through to the neutral fallback rather than
 // failing to compile when a third kind is added.
 func NonGoalKindStyle(kind string) StatusStyle {
 	switch kind {
 	case "permanent":
-		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+		return StatusStyle{htmxui.BadgeSecondary, htmxui.BadgeSizeSM, false}
 	case "deferred":
-		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+		return StatusStyle{htmxui.BadgeInfo, htmxui.BadgeSizeSM, false}
 	default:
 		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
 	}

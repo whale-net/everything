@@ -117,8 +117,17 @@ var wireClasses = map[string]map[string]wireFieldClass{
 		"name":        wireCarried,
 		"description": wireCarried,
 	},
-	// list_non_goals' wire (FR b4c1c77f). kind is grouped into the
-	// permanent/deferred sections rather than shown as a raw token.
+	// list_non_goals' wire (FR b4c1c77f). kind stays wireGrouped rather
+	// than becoming wireCarried: it selects which section the row renders
+	// under, and the per-row badge shows it as a capitalised label
+	// ("Permanent"), not as the literal lowercase wire value. What changed
+	// under the badge (FR fe0ebe94) is that kind now ALSO surfaces per
+	// row -- so the grouped classification is no longer a claim about a
+	// field the page only uses for bucketing, and
+	// TestNonGoalsCarryEveryWireField now asserts the badge per row
+	// alongside the sections. Reclassifying it wireCarried would instead
+	// assert that "permanent" appears as a raw token, which the label
+	// deliberately is not.
 	"NonGoalSummary": {
 		"id":   wireCarried,
 		"kind": wireGrouped,

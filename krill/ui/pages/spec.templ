@@ -582,8 +582,10 @@ templ NonGoals(page NonGoalsPage) {
 						<ul class="mt-3 list-disc pl-5 space-y-4">
 							for _, n := range g.NonGoals {
 								<li id={ n.ID }>
-									<strong>{ n.Name }</strong>
-									@nonGoalKindBadge(n.Kind)
+									<div class="flex flex-wrap items-center gap-2">
+										<strong>{ n.Name }</strong>
+										@nonGoalKindBadge(n.Kind)
+									</div>
 									@entityID(n.ID)
 									if n.Body != "" {
 										<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(n.Body))</div>
