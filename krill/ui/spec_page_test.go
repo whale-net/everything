@@ -45,6 +45,12 @@ func (specStubReader) Product(context.Context, uuid.UUID) (store.Product, error)
 	return store.Product{}, nil
 }
 
+// StatusHistory answers with no transitions: this stub's subject is which
+// body a route serves, never a container's status register.
+func (specStubReader) StatusHistory(context.Context, uuid.UUID) ([]store.MilestoneStatusEvent, error) {
+	return nil, nil
+}
+
 func (specStubReader) Products(context.Context) ([]store.Product, error) { return nil, nil }
 
 // specModeMux mounts the four per-product spec handlers against the stub

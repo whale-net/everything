@@ -36,6 +36,13 @@ type specReadClient interface {
 	NonGoals(ctx context.Context, productID uuid.UUID) ([]store.NonGoal, error)
 	Delivery(ctx context.Context, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error)
 	DeliveryBreakdown(ctx context.Context, containerID uuid.UUID) (shipped, unshipped slice.Document, err error)
+	// StatusHistory is get_milestone_status_history: one container's whole
+	// status-transition register, oldest first, each entry carrying its own
+	// status, note, actor pair and instant. The Milestone detail's rail
+	// reads it for the change count and the status-history view reads the
+	// same list to render it, so the label an operator follows can never
+	// disagree with the page it lands on.
+	StatusHistory(ctx context.Context, containerID uuid.UUID) ([]store.MilestoneStatusEvent, error)
 	Product(ctx context.Context, productID uuid.UUID) (store.Product, error)
 	Products(ctx context.Context) ([]store.Product, error)
 }
@@ -121,6 +128,27 @@ func (r *specReader) DeliveryBreakdown(ctx context.Context, containerID uuid.UUI
 		return slice.Document{}, slice.Document{}, fmt.Errorf("delivery breakdown: %w", err)
 	}
 	return shipped, unshipped, nil
+}
+
+// StatusHistory is get_milestone_status_history: every status transition
+// one container has recorded, oldest first.
+//
+// It is store.MilestoneStatusEventStore.ListTransitions -- the same read the
+// MCP tool calls underneath -- rather than a second query, so the count the
+// Milestone detail's rail prints and the list the status-history view renders
+// are two renderings of one register and cannot disagree.
+//
+// milestoneID is a milestone_ref id of either Kind: a milepebble is its own
+// milestone_ref row, so the same call answers for one. A container with no
+// transition at all returns an empty slice rather than an error: absence of
+// history is a real answer (its current status is "not started"), not a
+// failed read.
+func (r *specReader) StatusHistory(ctx context.Context, containerID uuid.UUID) ([]store.MilestoneStatusEvent, error) {
+	events, err := r.store.MilestoneStatus().ListTransitions(ctx, containerID)
+	if err != nil {
+		return nil, fmt.Errorf("list milestone status transitions: %w", err)
+	}
+	return events, nil
 }
 
 // Product returns the Product's own current row -- the header every
