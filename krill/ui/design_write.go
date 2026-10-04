@@ -208,47 +208,57 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 	for _, qid := range resolved {
 		checked[qid] = true
 	}
-	// degradedRound is the region handed back when the read behind it
-	// failed: the log and the open questions are genuinely unavailable,
-	// but the follow-up text and the ticked question ids are still known,
-	// so the operator's work is not lost. Both regions say so in place
-	// rather than rendering as empty -- an unread question list is not a
-	// session with nothing waiting on it (NFR ca90dc03).
-	degradedRound := func(message string) pages.DesignSessionDetailPage {
-		return pages.DesignSessionDetailPage{
+
+	// The reason, in the one sentence rule the two failure shapes share: a
+	// rejection that reached krill shows api's own status and named
+	// message, and anything else never reached krill at all, so it gets
+	// the operator-facing half only -- the specific cause is logged, never
+	// rendered (transportFailureMessage).
+	var rejection *writeRejection
+	message := "Could not reach krill: " + transportFailureMessage(err)
+	if errors.As(err, &rejection) {
+		message = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+	}
+
+	// The rail is re-read for EVERY refusal, not only the rejected-write
+	// one: the read rides a different client from the write, so it can
+	// still succeed when the write never reached krill, and a question
+	// krill has resolved in the meantime must not come back as a box to
+	// tick again.
+	detail, detailErr := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
+	if detailErr != nil {
+		// The re-read failed too. The operator's work is still not lost:
+		// both regions say so in place rather than rendering as empty --
+		// an unread question list is not a session with nothing waiting on
+		// it (NFR ca90dc03) -- and the ticked ids ride as hidden inputs,
+		// because there is no rail left to render a box in.
+		logger.Error("failed to re-render the answer round after a refusal", "design_session_id", id, "error", detailErr)
+		detail = pages.DesignSessionDetailPage{
 			ID:             id.String(),
-			Error:          message,
+			Error:          message + " (this session's timeline and open questions could not be reloaded)",
 			FollowUp:       followUp,
 			CheckedResolve: checked,
 			AnswersPath:    designAnswersPath(productID, id),
 			LogError:       "This session's timeline could not be loaded.",
 			QuestionsError: "This session's open questions could not be loaded.",
 		}
+	} else {
+		detail.Error = message
+		detail.FollowUp = followUp
+		detail.CheckedResolve = checked
 	}
 
-	var rejection *writeRejection
-	if !errors.As(err, &rejection) {
-		if isHXRequest(r) {
-			renderFragment(w, r, pages.DesignSessionRound(degradedRound("Could not reach krill: "+transportFailureMessage(err))))
-			return
-		}
+	// Both modes answer 200, never the rejection's status: htmx does not
+	// swap on an error status, and a bare status page would cost the
+	// operator the paragraph they just typed.
+	//
+	// An unresolved operator identity is the one exception. A 401 is the
+	// signal a browser acts on -- it is what tells the operator to sign in
+	// again -- and no amount of prose in a 200 page replaces it.
+	if errors.Is(err, errNoOperator) && !isHXRequest(r) {
 		writeWriteError(w, err)
 		return
 	}
-	detail, detailErr := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
-	if detailErr != nil {
-		logger.Error("failed to re-render the answer round after a rejection", "design_session_id", id, "error", detailErr)
-		if isHXRequest(r) {
-			renderFragment(w, r, pages.DesignSessionRound(degradedRound(
-				fmt.Sprintf("%d: %s (this session's timeline and open questions could not be reloaded)", rejection.status, rejection.message))))
-			return
-		}
-		http.Error(w, rejection.message, rejection.status)
-		return
-	}
-	detail.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
-	detail.FollowUp = followUp
-	detail.CheckedResolve = checked
 	if isHXRequest(r) {
 		renderFragment(w, r, pages.DesignSessionRound(detail))
 		return
