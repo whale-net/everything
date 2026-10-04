@@ -23,6 +23,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/a-h/templ"
@@ -349,18 +350,22 @@ func capabilityPageOf(doc slice.Document, productID uuid.UUID, section capabilit
 			Requirements:     reqsByFeature[f.ID],
 		})
 	}
-	for i, fs := range doc.FeatureSets {
-		// The first section is the default open one, so an id naming no
-		// section on this page still renders a readable map rather than
-		// one entirely collapsed.
-		expanded := section.isExpanded(fs.ID, i)
+	// The first feature set is the default open one (FR 18afc5a8). Resolving
+	// it here, where the page's own feature sets are in hand, is what keeps
+	// "the default" an answer about THIS page rather than a bare flag the
+	// href builders would have to re-derive per section.
+	if len(doc.FeatureSets) > 0 {
+		section = section.withFirstOpen(doc.FeatureSets[0].ID)
+	}
+
+	for _, fs := range doc.FeatureSets {
 		page.FeatureSets = append(page.FeatureSets, pages.CapabilityFeatureSet{
 			ID:           fs.ID.String(),
 			Name:         fs.Name,
 			Description:  deref(fs.Description),
 			Features:     featsBySet[fs.ID],
 			FeatureCount: len(featsBySet[fs.ID]),
-			Expanded:     expanded,
+			Expanded:     section.isExpanded(fs.ID),
 			ExpandHref:   section.expandHref(fs.ID),
 			CollapseHref: section.collapseHref(fs.ID),
 		})
@@ -381,79 +386,141 @@ const capabilityExpansionQueryParam = "open"
 const capabilityExpansionNone = "none"
 
 // capabilityExpansion is the capability map's section-expansion state: the
-// page's own path, and which feature set this request opens.
+// page's own path, and the set of feature sets this request shows open.
 //
 // It is one value rather than two arguments for the same reason
 // milestoneExpansion is: path and expansion travel together into every
 // expander href, and a caller able to pass one from a different request
 // would build a link that silently drops the other.
+//
+// It is a SET rather than one id because two sections can be open at once:
+// comparing one section against another is the reason to open a second, and
+// an expander that closed the first to open the second would make that
+// comparison impossible. It follows the milestones page in spelling --
+// every expand/collapse href re-states the whole set -- so an expander can
+// never drop a sibling the operator had open.
+//
+// The ZERO value is the default state (first section open), which is what
+// a caller that never mentions expansion gets: the default is the ordinary
+// case, so it should not need spelling out.
 type capabilityExpansion struct {
 	// Path is the Capabilities tab's own URL, the base every expander href
 	// is built on -- so a link can never point at another tab than the one
 	// the operator is on.
 	Path string
 
-	// Open is the feature-set id the URL asked to open, or uuid.Nil when no
-	// id was named. uuid.Nil is the zero state rather than a separate bool
-	// so "which section is open" has exactly one spelling.
-	Open uuid.UUID
+	// Open is the set of feature-set ids shown open. It is nil in the zero
+	// value, which is why withFirstOpen writes through a fresh map.
+	Open map[uuid.UUID]bool
 
 	// Closed is the URL's explicit capabilityExpansionNone: the operator
 	// collapsed whatever was open and wants it to STAY collapsed. It is
-	// separate from Open == uuid.Nil because that value also means "the
-	// URL said nothing", which is the default -- the first section open.
+	// separate from an empty Open because that value also means "the URL
+	// said nothing", which is the default.
 	Closed bool
 }
 
-// parseCapabilityExpansion reads the open section off the request.
+// parseCapabilityExpansion reads the open sections off the request.
 //
-// An absent, empty or unparseable value is the DEFAULT -- the first section
-// open -- rather than an error: a hand-edited or stale open value is a
-// reason to show the ordinary page, never a 400 and never a page whose
-// every section is collapsed. capabilityExpansionNone is the one value that
-// is read rather than discarded.
+// An absent, empty or unparseable value is the DEFAULT rather than an
+// error: a hand-edited or stale open value is a reason to show the ordinary
+// page, never a 400 and never a page whose every section is collapsed.
+// capabilityExpansionNone is the one value read as an instruction to keep
+// everything shut.
 func parseCapabilityExpansion(r *http.Request) capabilityExpansion {
+	e := capabilityExpansion{Path: r.URL.Path}
 	raw := r.URL.Query().Get(capabilityExpansionQueryParam)
 	if raw == capabilityExpansionNone {
-		return capabilityExpansion{Path: r.URL.Path, Closed: true}
+		e.Closed = true
+		return e
 	}
-	id, err := uuid.Parse(raw)
-	if err != nil {
-		id = uuid.Nil
+	e.Open = map[uuid.UUID]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		if id, err := uuid.Parse(strings.TrimSpace(part)); err == nil {
+			e.Open[id] = true
+		}
 	}
-	return capabilityExpansion{Path: r.URL.Path, Open: id}
+	// A value that parsed to nothing usable stays the DEFAULT, not "nothing
+	// open": "?open=not-a-uuid" is a typo, and answering it with a fully
+	// collapsed map would look like a broken page.
+	return e
 }
 
-// isExpanded reports whether the section at index i is the open one.
+// isExpanded reports whether this section is open.
 //
-// The first section is open by default (FR 18afc5a8). That default is
-// deliberately NOT "nothing is open": a capability map with every section
-// collapsed is an operator's first click, not a view of the product. A URL
-// that DID name a section is honoured even when the id matches no section
-// on this page -- an unrecognised id means a link shared from another
-// product, and silently substituting the first section would show them a
-// capability map they did not ask for.
-func (e capabilityExpansion) isExpanded(id uuid.UUID, index int) bool {
-	switch {
-	case e.Closed:
+// The first section is open when the URL said nothing (FR 18afc5a8). That
+// default is deliberately NOT "nothing is open": a capability map with every
+// section collapsed is an operator's first click, not a view of the
+// product. A URL that named sections is honoured exactly -- an id matching
+// no section here means a link shared from another product, and silently
+// substituting a section would show them a capability map they did not ask
+// for.
+func (e capabilityExpansion) isExpanded(id uuid.UUID) bool {
+	if e.Closed {
 		return false
-	case e.Open != uuid.Nil:
-		return e.Open == id
-	default:
-		return index == 0
 	}
+	return e.Open[id]
 }
 
-// expandHref is the tab's URL with this section open; collapseHref is the
-// same URL with nothing open. Both are spelled out on every section rather
-// than assumed, so the rendered state and the link an operator presses
-// cannot disagree.
+// withFirstOpen is this expansion with the page's first feature set open,
+// which is what the default state renders from. It is applied by the
+// builder, where the feature sets are known -- parseCapabilityExpansion
+// cannot resolve "the first" without them.
+func (e capabilityExpansion) withFirstOpen(first uuid.UUID) capabilityExpansion {
+	if e.Closed || len(e.Open) > 0 || first == uuid.Nil {
+		return e
+	}
+	// A fresh map, never the receiver's: withFirstOpen must not mutate an
+	// expansion some other builder call is still reading.
+	open := map[uuid.UUID]bool{first: true}
+	e.Open = open
+	return e
+}
+
+// expandHref is the tab's URL with this section open alongside whatever is
+// already open; collapseHref is the same URL with this section shut. Both
+// are spelled out on every section rather than assumed, so the rendered
+// state and the link an operator presses cannot disagree.
 func (e capabilityExpansion) expandHref(id uuid.UUID) string {
-	return e.Path + "?" + capabilityExpansionQueryParam + "=" + id.String()
+	return e.href(withID(e.Open, id, true))
 }
 
-func (e capabilityExpansion) collapseHref(uuid.UUID) string {
-	return e.Path + "?" + capabilityExpansionQueryParam + "=" + capabilityExpansionNone
+func (e capabilityExpansion) collapseHref(id uuid.UUID) string {
+	return e.href(withID(e.Open, id, false))
+}
+
+// withID copies open with id set to present, leaving the receiver
+// untouched: the href for one section must not disturb the state the other
+// sections' hrefs are built from.
+func withID(open map[uuid.UUID]bool, id uuid.UUID, present bool) map[uuid.UUID]bool {
+	out := make(map[uuid.UUID]bool, len(open)+1)
+	for k, v := range open {
+		out[k] = v
+	}
+	out[id] = present
+	return out
+}
+
+// href assembles the tab's own URL with the open set, in a STABLE order
+// (sorted by id) so the same set always yields the same address -- an
+// expander's URL that reordered itself between renders would push a
+// different history entry for the same state.
+//
+// An empty set spells out capabilityExpansionNone rather than dropping the
+// parameter, because the bare path is the DEFAULT (first section open); see
+// capabilityExpansionNone.
+func (e capabilityExpansion) href(open map[uuid.UUID]bool) string {
+	ids := make([]string, 0, len(open))
+	for id, present := range open {
+		if present {
+			ids = append(ids, id.String())
+		}
+	}
+	if len(ids) == 0 {
+		return e.Path + "?" + capabilityExpansionQueryParam + "=" + capabilityExpansionNone
+	}
+	sort.Strings(ids)
+	return e.Path + "?" + capabilityExpansionQueryParam + "=" + strings.Join(ids, ",")
 }
 
 // -- load-bearing decisions -----------------------------------------------
