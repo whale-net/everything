@@ -33,6 +33,21 @@ See `audience_score_system/mcp/server/observability.go` and
 supplies its own caller-identity attribute (a `Person` UUID vs. a
 `Persona` string) but shares this package's span/log/error handling.
 
+### Servers without a registry choke point: `ToolCallMiddleware`
+
+When tools are registered from many files (manmanv2, whagent_net), add the
+same instrumentation as a receiving middleware instead. Add it **last** so
+it runs outermost and also traces calls refused by auth middleware:
+
+```go
+srv.AddReceivingMiddleware(mcpobs.ToolCallMiddleware(
+    logging.Tracer("mydomain/mcp"), logging.Get("mydomain/mcp/tools"), callerAttr))
+```
+
+`callerAttr` reads the caller from the raw `mcp.Request` (e.g. its
+`TokenInfo`), since inner middleware has not resolved it yet; pass `nil` to
+omit it.
+
 ### Why each tool call is its own trace, not a child of the HTTP span
 
 `InstrumentToolCall` deliberately does **not** nest the tool span under

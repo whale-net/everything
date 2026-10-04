@@ -17,6 +17,7 @@ go_library(
         "//libs/go/grpcauth",
         "//libs/go/logging",
         "//libs/go/auth",
+        "//libs/go/mcpobs",
         "//whagent_net/mcpidentity",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
