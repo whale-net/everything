@@ -416,6 +416,14 @@ func (navStubDesignSessions) SummarizeByProduct(context.Context, uuid.UUID) (sto
 	return store.ProductDesignSessionsSummary{}, nil
 }
 
+// GetSummaryByID answers the way GetByID does -- ErrNotFound -- because the
+// session detail's 404 is the one thing this navigation stub shares with
+// the pages that embed it, and a stub that answered an empty summary would
+// render a blank session page instead of the shell's own 404.
+func (navStubDesignSessions) GetSummaryByID(context.Context, uuid.UUID) (store.DesignSessionSummary, error) {
+	return store.DesignSessionSummary{}, store.ErrNotFound
+}
+
 type navStubRevisionEvents struct{}
 
 func (navStubRevisionEvents) Append(context.Context, store.NewRevisionEvent) (store.RevisionEvent, error) {

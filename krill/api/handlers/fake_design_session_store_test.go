@@ -99,6 +99,21 @@ func (f *fakeDesignSessionStore) SummarizeByProduct(ctx context.Context, product
 	return f.summaries[productID], nil
 }
 
+// GetSummaryByID exists only to satisfy store.DesignSessionStore for these
+// handler tests. No P4 FR reads a single session's aggregate over the HTTP
+// or MCP wire, so no handler here calls it; it answers out of put()'s rows
+// the way the real read would rather than panicking on a method nothing
+// reaches.
+func (f *fakeDesignSessionStore) GetSummaryByID(ctx context.Context, id uuid.UUID) (store.DesignSessionSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ds, ok := f.sessions[id]
+	if !ok {
+		return store.DesignSessionSummary{}, fmt.Errorf("%w: design_session id %s", store.ErrNotFound, id)
+	}
+	return store.DesignSessionSummary{DesignSession: ds, Stage: store.StageOpened}, nil
+}
+
 // put seeds ds directly into the fake, bypassing Open -- used by
 // GetDesignSessionHandler/AppendRevisionEventHandler tests that need a
 // known design_session id to already exist.
