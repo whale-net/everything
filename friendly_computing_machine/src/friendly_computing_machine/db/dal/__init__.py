@@ -13,10 +13,12 @@ from .genai_dal import (
     update_genai_text_response,
 )
 from .music_poll_dal import (
+    MusicPollChannel,
     delete_music_poll,
     delete_music_poll_instance,
     delete_music_poll_response,
     get_music_poll_by_id,
+    get_music_poll_channels,
     get_music_poll_instance_by_id,
     get_music_poll_instances,
     get_music_poll_response_by_id,
@@ -113,8 +115,10 @@ __all__ = [
     "get_genai_text_by_id",
     "update_genai_text_response",
     # Music Poll functions
+    "MusicPollChannel",
     "insert_music_poll",
     "get_music_poll_by_id",
+    "get_music_poll_channels",
     "get_music_polls",
     "update_music_poll",
     "delete_music_poll",

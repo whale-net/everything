@@ -12,6 +12,8 @@ from friendly_computing_machine.src.friendly_computing_machine.models import (  
     base,
     genai,
     music_poll,
+    poll,
+    scheduled_poll,
     slack,
     task,
 )

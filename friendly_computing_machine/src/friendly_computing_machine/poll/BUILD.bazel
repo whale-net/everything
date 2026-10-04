@@ -1,0 +1,18 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = ["//friendly_computing_machine:__subpackages__"])
+
+# Bolt-free poll publishing: the /wpoll create -> post -> set-ts
+# path, for both the bolt handler and the Temporal music-poll
+# worker.
+py_library(
+    name = "poll",
+    srcs = glob(["**/*.py"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//friendly_computing_machine/src/friendly_computing_machine/bot",
+        "//friendly_computing_machine/src/friendly_computing_machine/db",
+        "@pypi//:opentelemetry-api",
+        "@pypi//:slack-sdk",
+    ],
+)

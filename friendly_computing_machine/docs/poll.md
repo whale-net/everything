@@ -39,6 +39,10 @@ Tables (schema `fcm`):
 | `musicpollinstance` | One posted week: `music_poll_id`, `slack_message_id` of the "any cat jammers?" message, `created_at`, and `next_instance_id` pointing at the *following* week. |
 | `musicpollresponse` | One row per URL found: `music_poll_instance_id`, `slack_user_id`, `slack_message_id`, `url`. |
 
+The bot reads this list through its `music_poll_infos` config (`bot/app.py`). The Temporal
+music-poll worker reads the same musicpoll → slackchannel join bolt-free, through
+`get_music_poll_channels` (`db/dal/music_poll_dal.py`).
+
 The pickup window for an instance is the half-open interval
 `[instance.created_at, successor.created_at)` over `slackmessage.ts`, in the instance's channel. Two
 consequences follow, and they are the whole diagnostic:
@@ -193,7 +197,7 @@ Bad input is answered with an ephemeral usage message; nothing is stored.
 Everything runs in the `bot` deployment over the existing bolt Socket Mode connection — no new service, no HTTP endpoint.
 
 1. A bare `/wpoll` opens the modal (`bot/poll/modal.py`); **+ Add another option** re-renders it with `views.update` (unchanged `block_id`s keep typed values). On submit, the form is validated and the poll is posted *before* the modal is acked, so a posting failure can be shown in the form.
-2. `/wpoll <text>` (`bot/handlers/poll.py`) parses the text (`bot/poll/parse.py`), records the command in `slackcommand`, inserts the poll and options, posts the Block Kit message (`bot/poll/render.py`), then stores the message `ts` on the poll.
+2. `/wpoll <text>` (`bot/handlers/poll.py`) parses the text (`bot/poll/parse.py`), records the command in `slackcommand`, then publishes through `poll/publish.py` — bolt-free, so the Temporal music-poll worker can post polls without the bolt app: insert the poll and options, post the Block Kit message (`bot/poll/render.py`), store the message `ts` on the poll.
 3. A vote button click arrives as a `block_actions` event on the socket. `cast_poll_vote` (`db/dal/poll_dal.py`) locks the poll row, applies the toggle/limit rules, and returns a fresh snapshot; the handler re-renders the message with `chat.update`.
 4. A per-poll in-process lock keeps vote → render → `chat.update` ordered so a stale render never overwrites a newer one (the bot runs as a single replica).
 
@@ -201,9 +205,11 @@ Everything runs in the `bot` deployment over the existing bolt Socket Mode conne
 
 | Table | Purpose |
 |---|---|
-| `poll` | Question, channel, creator, message `ts`, `anonymous`, `vote_limit` (NULL = unlimited), `created_at`, `closed_at` |
+| `poll` | Question, channel, creator, message `ts`, `anonymous`, `automated` (posted by the weekly music-poll schedule rather than a person via `/wpoll`), `vote_limit` (NULL = unlimited), `created_at`, `closed_at` |
 | `polloption` | Options in display order (`position`, unique per poll) |
 | `pollvote` | Every vote ever cast. Un-voting stamps `removed_at` instead of deleting, so full vote history is kept. Current votes: `removed_at IS NULL`; a partial unique index allows one active vote per person per option |
+| `scheduledpollrun` | One weekly music-poll run per channel: `run_identity` (the scheduled fire time, or the Temporal workflow run id for a manual run), `run_at`, `scheduled_fire_time`, `workflow_run_id`, `poll_id`, `slack_message_ts` (written after the Slack post succeeds). Unique on (`run_identity`, `slack_channel_slack_id`) so a retried or replayed run never records a second poll |
+| `scheduledpollrunoption` | One option a run posted: `scheduled_poll_run_id`, `poll_option_id` (so per-option vote counts stay queryable after close), `position`, `song_identity` (Spotify track ID / YouTube video ID / stripped URL), `song_link`, `submitter_slack_user_slack_id`, `submission_date` (UTC, when the submitter's message was originally posted) |
 
 Slack users and channels are stored by Slack ID, not as FKs to `slackuser`/`slackchannel`, because those are filled by a periodic sync and may not yet contain a new voter.
 
