@@ -330,6 +330,9 @@ Applied by hand per environment; nothing here is run by CI. Do dev first.
 4. In that env's Keycloak realm: create realm role
    `whagent-manmanv2-ops` (a realm role, not a client role), add it to a
    group, and add the intended operators to the group.
+   If a delegating client (e.g. fcm's Slack bot) starts sessions
+   `on_behalf_of` users, also grant the role to that client's **service
+   account** — the role is checked on the caller, not the asserted user.
 5. Verify: `SELECT agent_id, version, tool_set, required_role FROM agent_definition WHERE agent_id='manmanv2-ops';`
    shows the row, a user with the role can start a `manmanv2-ops`
    session, and a user without it is refused.

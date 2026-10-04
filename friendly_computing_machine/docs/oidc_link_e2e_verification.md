@@ -68,7 +68,7 @@ never be mistaken for a pass, so check them explicitly rather than assuming.
 | P5 | fcm registered in that realm as a **Confidential** client, **Standard flow** enabled | Keycloak → Clients → your client | `ENV.md` same section |
 | P6 | That client's **Valid redirect URI** is exactly `${FCM_WEB_PUBLIC_URL}/link/callback` — no trailing slash, no query | Keycloak → Clients → your client → Settings | `web/config.py` `callback_url` |
 | P7 | A human user exists in the realm with a known `sub` | Keycloak → Users | — |
-| P8 | A whagent-net `agent_id` exists that the test user is allowed to run | `whagent_net` → Agents | — |
+| P8 | A whagent-net `agent_id` exists whose `required_role` (if any) is granted to **fcm's client service account** — whagent-net checks the role on the calling client, not the on-behalf-of user | Keycloak → Clients → fcm client → Service accounts roles | `docs/whagent_integration.md` |
 | P9 | A Slack channel is linked to that agent | `SELECT 1 FROM fcm.slackchannelagentlink WHERE slack_channel_id = '<C…>' AND enabled;` | `docs/whagent_integration.md` |
 | P10 | Postgres, Temporal, and whagent-net `api` are all reachable from where fcm runs | `GET /health` on fcm web returns 200 (step 2) | — |
 | P11 | You have DB read access to **both** databases — fcm's (`POSTGRES_URL`) and whagent-net's (`PG_DATABASE_URL`) | `psql "$POSTGRES_URL" -c '\conninfo'` | — |
