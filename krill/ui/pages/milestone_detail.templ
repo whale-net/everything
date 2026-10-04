@@ -71,6 +71,16 @@ type MilestoneDetailPage struct {
 	// preselected rather than the operator reselecting it.
 	TasksPath string
 	BoardPath string
+
+	// Delivery is this container's delivered scope, split into the items
+	// that have a shipment record and the items that do not. It is the
+	// get_delivery_breakdown read of the container named above, so the card
+	// and that tool cannot describe the same container differently.
+	//
+	// Nil when the read failed: the field is set either way, because a
+	// failed read is a real answer about what this page could not show, and
+	// it renders as its own error rather than as an empty card.
+	Delivery *DeliveryBreakdown
 }
 
 // milestoneDetailCrumbs renders the breadcrumb trail.
@@ -123,17 +133,18 @@ templ milestoneDetailHeader(page MilestoneDetailPage) {
 // MilestoneDetail renders the Milestone detail page: the header, and the
 // grid the outcome, delivery and rail sections compose into.
 //
-// The grid is the frame those sections share, and both its cells are
-// declared but empty today: an empty <div> and an empty <aside> render
-// nothing, so the header sits full width until a section fills its cell,
-// rather than sitting beside a column of nothing. Below lg the grid
-// stacks, which is where the rail ends up once it exists.
+// The grid is the frame those sections share, and the content cell is where
+// they compose: each card lands in the same <div>, so the column's spacing
+// and the page's section order are decided once here rather than per card.
+// Below lg the grid stacks, which is where the rail ends up once it exists.
 templ MilestoneDetail(page MilestoneDetailPage) {
 	<section id={ MilestoneDetailAnchor } data-krill="milestone-detail"
 		data-krill-container-id={ page.ID } data-krill-container-kind={ page.Kind } class="space-y-4">
 		@milestoneDetailHeader(page)
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="milestone-detail-frame">
-			<div class="min-w-0 space-y-4" data-krill="milestone-detail-main"></div>
+			<div class="min-w-0 space-y-4" data-krill="milestone-detail-main">
+				@MilestoneDelivery(page.Delivery)
+			</div>
 			<aside data-krill="milestone-detail-rail"></aside>
 		</div>
 	</section>
