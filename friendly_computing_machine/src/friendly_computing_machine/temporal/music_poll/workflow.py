@@ -357,9 +357,11 @@ class WeeklyMusicPollWorkflow(AbstractScheduleWorkflow):
 
 
 async def _execute_activity(activity: Any, *args: Any) -> Any:
+    # temporalio's execute_activity takes at most one
+    # positional arg, so pass multi-arg activities via args=
     return await workflow.execute_activity(
         activity,
-        *args,
+        args=list(args),
         schedule_to_close_timeout=datetime.timedelta(minutes=5),
         start_to_close_timeout=datetime.timedelta(minutes=4),
     )

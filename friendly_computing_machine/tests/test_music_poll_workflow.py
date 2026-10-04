@@ -10,8 +10,13 @@ against a fake activity executor that records every call.
 
 import asyncio
 import datetime
+import inspect
 import logging
 from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import temporalio.workflow
 
 from friendly_computing_machine.src.friendly_computing_machine.db.dal.music_poll_selection import (
     SelectedOption,
@@ -35,6 +40,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.music_po
     RunIdentity,
     WeeklyMusicPollParams,
     WeeklyMusicPollWorkflow,
+    _execute_activity,
     is_stale_run,
     resolve_run_identity,
     run_for_channel,
@@ -603,3 +609,126 @@ def test_the_weekly_poll_workflow_and_its_activities_run_on_the_fcm_worker():
         select_music_poll_options_activity,
     ):
         assert activity in ACTIVITIES
+
+
+# ----- the temporalio arg-passing shape (the root defect) ----
+
+
+def test_the_pinned_temporalio_takes_at_most_one_positional_arg():
+    # temporalio 1.18.1's execute_activity takes the
+    # activity plus at most one positional arg, so a
+    # multi-arg activity call must be passed via args=
+    sig = inspect.signature(temporalio.workflow.execute_activity)
+    sig.bind(post_scheduled_poll_activity)
+    sig.bind(post_scheduled_poll_activity, "C_MUSIC")
+    with pytest.raises(TypeError):
+        sig.bind(post_scheduled_poll_activity, "C_MUSIC", 7, [])
+    sig.bind(
+        post_scheduled_poll_activity, args=["C_MUSIC", 7, []]
+    )
+
+
+def test_execute_activity_passes_multi_args_via_args_keyword():
+    execute = AsyncMock()
+    options = [_option("https://open.spotify.com/track/abc")]
+
+    with patch.object(temporalio.workflow, "execute_activity", execute):
+        asyncio.run(
+            _execute_activity(
+                post_scheduled_poll_activity, "C_MUSIC", 7, options
+            )
+        )
+
+    # the args reach execute_activity as the args= list,
+    # not splatted positionally
+    execute.assert_awaited_once_with(
+        post_scheduled_poll_activity,
+        args=["C_MUSIC", 7, options],
+        schedule_to_close_timeout=datetime.timedelta(minutes=5),
+        start_to_close_timeout=datetime.timedelta(minutes=4),
+    )
+
+
+class SignatureFaithfulExecutor:
+    """Stands in for temporalio's execute_activity.
+
+    Mirrors the pinned 1.18.1 signature exactly -- the
+    activity, at most one positional arg, then
+    keyword-only parameters -- so a positional splat of
+    a 2+-arg activity call raises TypeError here just
+    as it does in a real workflow task.
+    """
+
+    def __init__(self, replies: dict[str, Any] | None = None):
+        self.replies = replies or {}
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def __call__(
+        self,
+        activity: Any,
+        arg: Any = None,
+        *,
+        args: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        params = (
+            list(args)
+            if args
+            else [arg] if arg is not None else []
+        )
+        self.calls.append((activity.__name__, tuple(params)))
+        reply = self.replies.get(activity.__name__)
+        if callable(reply):
+            return reply(*params)
+        return reply
+
+
+def test_a_full_run_survives_the_pinned_temporalio_signature():
+    # the production failure this guards against: a
+    # non-dry run calls 2+-arg activities, which a
+    # positional splat passes in a form temporalio
+    # 1.18.1 rejects with TypeError at workflow-task
+    # time, leaving the run RUNNING forever
+    options = [_option("https://open.spotify.com/track/abc")]
+    executor = SignatureFaithfulExecutor(
+        {
+            "get_scheduled_poll_run_activity": None,
+            "select_music_poll_options_activity": options,
+            "record_scheduled_poll_run_activity": 7,
+            "post_scheduled_poll_activity": _posted_outcome(),
+        }
+    )
+
+    with patch.object(temporalio.workflow, "execute_activity", executor):
+        result = asyncio.run(
+            run_for_channel(
+                _execute_activity, "C_MUSIC", _scheduled_identity()
+            )
+        )
+
+    assert result.status == POSTED
+    assert result.poll_id == 42
+    # every activity ran through the real _execute_activity,
+    # with its args delivered intact, in call order
+    assert executor.calls == [
+        (
+            "get_scheduled_poll_run_activity",
+            (FIRE_TIME.isoformat(), "C_MUSIC"),
+        ),
+        ("select_music_poll_options_activity", ("C_MUSIC",)),
+        (
+            "record_scheduled_poll_run_activity",
+            (
+                FIRE_TIME.isoformat(),
+                "C_MUSIC",
+                START_TIME,
+                FIRE_TIME,
+                None,
+                options,
+            ),
+        ),
+        (
+            "post_scheduled_poll_activity",
+            ("C_MUSIC", 7, options),
+        ),
+    ]
