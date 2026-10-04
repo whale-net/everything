@@ -181,6 +181,24 @@ def get_user_teams_from_messages(slack_team_slack_id: str) -> set[tuple[str, str
     return {(row.slack_user_slack_id, row.slack_team_slack_id) for row in results}
 
 
+def get_slack_user_display_names(
+    slack_user_slack_ids: set[str], session: Optional[Session] = None
+) -> dict[str, str]:
+    """Display names of the given Slack users, keyed by Slack id.
+
+    The synced display name (the user's profile display name,
+    or real name when they have none). Ids with no synced row
+    are simply absent from the result.
+    """
+    with SessionManager(session) as session:
+        rows = session.exec(
+            select(SlackUser).where(
+                SlackUser.slack_id.in_(slack_user_slack_ids)
+            )
+        ).all()
+        return {user.slack_id: user.name for user in rows}
+
+
 def upsert_slack_users(slack_users: list[SlackUserCreate]) -> list[SlackUser]:
     """Insert or update multiple Slack users."""
     out_users = []

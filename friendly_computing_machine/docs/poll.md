@@ -116,6 +116,19 @@ stays open and the skip is logged at INFO. Each run's picks are recorded in
 `scheduledpollrun` / `scheduledpollrunoption` (see the tables above), which is
 what the no-repeat rule and the appearance counts read.
 
+**How the posted poll looks.** Each option is the song link followed by
+`shared by <display name>, <Mon YYYY>` — the submitter's synced display name
+and the month their Slack message was originally posted, in UTC. No submitter
+is @mentioned, so posting the poll notifies no one. The poll is single-vote
+and not anonymous, with /wpoll's normal vote buttons. It is recorded as
+`automated`, so it renders an "automated poll" footer instead of
+"Created by @<bot>" and shows no Close button — the only way a scheduled
+poll closes is the next run's auto-close, which happens before that run
+posts and refreshes the closed poll to its final result. A run that posts
+nothing in a channel (dry run, or too few pickable songs) leaves the
+previous poll open, and a poll a person created with /wpoll is never
+closed by a run.
+
 ## Diagnosing it: start here
 
 **The pickup is healthy.** The chain is running — the post job posts each week, the archive job

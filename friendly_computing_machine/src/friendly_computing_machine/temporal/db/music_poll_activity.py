@@ -40,6 +40,9 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal.poll_dal i
     PollSnapshot,
     close_poll,
 )
+from friendly_computing_machine.src.friendly_computing_machine.db.dal.slack_dal import (
+    get_slack_user_display_names,
+)
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
 )
@@ -265,10 +268,25 @@ async def post_scheduled_poll_activity(
         closed_previous_poll_id = _close_previous_scheduled_poll(
             session, client, slack_channel_slack_id
         )
+        display_names = get_slack_user_display_names(
+            {option.submitter_slack_user_slack_id for option in options},
+            session=session,
+        )
 
     spec = PollSpec(
         question=WEEKLY_POLL_QUESTION,
-        options=[option.song_link for option in options],
+        # each option credits its submitter and the month the
+        # song was shared, without @mentioning anyone
+        options=[
+            _option_text(
+                option,
+                display_names.get(
+                    option.submitter_slack_user_slack_id,
+                    option.submitter_slack_user_slack_id,
+                ),
+            )
+            for option in options
+        ],
         anonymous=False,
         # the weekly poll is single-vote and not anonymous
         vote_limit=1,
@@ -320,6 +338,20 @@ async def post_scheduled_poll_activity(
         slack_message_ts=post.slack_message_ts,
         closed_previous_poll_id=closed_previous_poll_id,
         error=None,
+    )
+
+
+def _option_text(option: SelectedOption, display_name: str) -> str:
+    """One posted option: the song link, credited to its submitter.
+
+    The month is the one the submitting message was originally
+    posted in, read as UTC. The submitter shows by display
+    name, never by @mention, so posting the poll notifies no
+    one (FR 9a182476).
+    """
+    return (
+        f"{option.song_link} shared by {display_name}, "
+        f"{option.submission_date.strftime('%b %Y')}"
     )
 
 
