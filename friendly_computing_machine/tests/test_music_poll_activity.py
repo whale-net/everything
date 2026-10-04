@@ -42,10 +42,12 @@ from friendly_computing_machine.src.friendly_computing_machine.models.scheduled_
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
+    SlackUser,
 )
 
 TABLES = [
     SlackChannel.__table__,
+    SlackUser.__table__,
     MusicPoll.__table__,
     Poll.__table__,
     PollOption.__table__,
@@ -96,6 +98,7 @@ def _empty_tables(engine):
             PollOption,
             Poll,
             MusicPoll,
+            SlackUser,
             SlackChannel,
         ):
             session.exec(delete(model))
@@ -192,19 +195,35 @@ def _run_row(
         return run
 
 
+def _slack_user(engine, slack_id: str, name: str) -> SlackUser:
+    with Session(engine) as session:
+        user = SlackUser(
+            slack_id=slack_id,
+            name=name,
+            slack_team_slack_id="T1",
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
 def _option_rows(engine, run: ScheduledPollRun) -> list[ScheduledPollRunOption]:
     with Session(engine) as session:
         rows = []
-        for position, link in enumerate(
-            ["https://open.spotify.com/track/abc", "https://youtu.be/xyz"]
+        for position, (link, submitter, submitted) in enumerate(
+            [
+                ("https://open.spotify.com/track/abc", "U1", datetime.datetime(2026, 8, 17)),
+                ("https://youtu.be/xyz", "U2", datetime.datetime(2026, 3, 15)),
+            ]
         ):
             row = ScheduledPollRunOption(
                 scheduled_poll_run_id=run.id,
                 position=position,
                 song_identity=link,
                 song_link=link,
-                submitter_slack_user_slack_id="U1",
-                submission_date=datetime.datetime(2026, 8, 17),
+                submitter_slack_user_slack_id=submitter,
+                submission_date=submitted,
             )
             session.add(row)
             rows.append(row)
@@ -224,7 +243,7 @@ def _recorded_options() -> list[SelectedOption]:
             song_identity="https://youtu.be/xyz",
             song_link="https://youtu.be/xyz",
             submitter_slack_user_slack_id="U2",
-            submission_date=datetime.datetime(2026, 8, 10),
+            submission_date=datetime.datetime(2026, 3, 15),
         ),
     ]
 
@@ -428,6 +447,83 @@ def test_posting_closes_the_previous_scheduled_poll_and_posts(
     assert outcome.slack_message_ts == "123.456"
     assert outcome.closed_previous_poll_id == previous_poll.id
     assert outcome.error is None
+
+
+# ----- the posted poll's rendering ---------------------------
+
+
+def test_posted_options_credit_the_submitter_and_month(engine, client):
+    _slack_user(engine, "U1", "Alex")
+    _slack_user(engine, "U2", "Blair")
+    run = _run_row(engine)
+    _option_rows(engine, run)
+
+    asyncio.run(
+        music_poll_activity.post_scheduled_poll_activity(
+            CHANNEL_SLACK_ID,
+            run.id,
+            _recorded_options(),
+        )
+    )
+
+    with Session(engine) as session:
+        texts = [
+            option.text
+            for option in session.exec(
+                select(PollOption).order_by(PollOption.position)
+            )
+        ]
+    # each option shows the song link, the submitter's
+    # display name, and the month the song was shared
+    assert texts == [
+        "https://open.spotify.com/track/abc shared by Alex, Aug 2026",
+        "https://youtu.be/xyz shared by Blair, Mar 2026",
+    ]
+    # no submitter is @mentioned, so posting notifies no one
+    blocks = client.chat_postMessage.call_args.kwargs["blocks"]
+    assert "<@" not in str(blocks)
+    # an automated poll: automated footer, no Close button,
+    # but /wpoll's normal vote buttons while open
+    assert not any(
+        b.get("type") == "actions" for b in blocks
+    )
+    assert any("accessory" in b for b in blocks)
+    footer = [
+        e["text"]
+        for b in blocks
+        if b.get("type") == "context"
+        for e in b["elements"]
+    ]
+    assert any("automated poll" in t for t in footer)
+    assert not any("Created by" in t for t in footer)
+
+
+def test_posted_options_fall_back_to_the_slack_id_without_a_synced_user(
+    engine, client
+):
+    # no slackuser row for either submitter
+    run = _run_row(engine)
+    _option_rows(engine, run)
+
+    asyncio.run(
+        music_poll_activity.post_scheduled_poll_activity(
+            CHANNEL_SLACK_ID,
+            run.id,
+            _recorded_options(),
+        )
+    )
+
+    with Session(engine) as session:
+        texts = [
+            option.text
+            for option in session.exec(
+                select(PollOption).order_by(PollOption.position)
+            )
+        ]
+    assert texts == [
+        "https://open.spotify.com/track/abc shared by U1, Aug 2026",
+        "https://youtu.be/xyz shared by U2, Mar 2026",
+    ]
 
 
 def test_posting_a_run_that_already_posted_neither_reposts_nor_reclose(

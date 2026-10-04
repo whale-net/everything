@@ -70,3 +70,42 @@ def test_closed_poll_has_no_buttons():
     assert not any("accessory" in b for b in blocks)
     assert not any(b["type"] == "actions" for b in blocks)
     assert any("*closed*" in t for t in _texts(blocks))
+
+
+# ----- the scheduled poll's rendering --------------------------
+
+
+def test_automated_poll_footer_and_no_close_button():
+    blocks = render_poll_blocks(_snapshot(automated=True))
+    texts = _texts(blocks)
+    # an automated poll credits the schedule, not a person
+    assert any("automated poll" in t for t in texts)
+    assert not any("Created by" in t for t in texts)
+    assert not any("created with /wpoll" in t for t in texts)
+    # still open: the normal vote buttons stay
+    assert any("accessory" in b for b in blocks)
+    # but there is no Close button, even while open
+    assert not any(b["type"] == "actions" for b in blocks)
+
+
+def test_automated_poll_footer_keeps_limit_and_count():
+    blocks = render_poll_blocks(
+        _snapshot(automated=True, vote_limit=1)
+    )
+    texts = _texts(blocks)
+    assert any("1 vote per person" in t for t in texts)
+    # the fixture's two voters still count in the footer
+    assert any("2 votes" in t for t in texts)
+
+
+def test_closed_automated_poll_shows_final_result():
+    blocks = render_poll_blocks(
+        _snapshot(
+            automated=True,
+            closed_at=datetime.datetime.now(datetime.UTC),
+        )
+    )
+    # closed: no vote buttons either, and the final result shows
+    assert not any("accessory" in b for b in blocks)
+    assert not any(b["type"] == "actions" for b in blocks)
+    assert any("*closed*" in t for t in _texts(blocks))
