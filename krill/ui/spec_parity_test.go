@@ -117,8 +117,17 @@ var wireClasses = map[string]map[string]wireFieldClass{
 		"name":        wireCarried,
 		"description": wireCarried,
 	},
-	// list_non_goals' wire (FR b4c1c77f). kind is grouped into the
-	// permanent/deferred sections rather than shown as a raw token.
+	// list_non_goals' wire (FR b4c1c77f). kind stays wireGrouped rather
+	// than becoming wireCarried: it selects which section the row renders
+	// under, and the per-row badge shows it as a capitalised label
+	// ("Permanent"), not as the literal lowercase wire value. What changed
+	// under the badge (FR fe0ebe94) is that kind now ALSO surfaces per
+	// row -- so the grouped classification is no longer a claim about a
+	// field the page only uses for bucketing, and
+	// TestNonGoalsCarryEveryWireField now asserts the badge per row
+	// alongside the sections. Reclassifying it wireCarried would instead
+	// assert that "permanent" appears as a raw token, which the label
+	// deliberately is not.
 	"NonGoalSummary": {
 		"id":   wireCarried,
 		"kind": wireGrouped,
@@ -456,6 +465,53 @@ func TestNonGoalsCarryEveryWireField(t *testing.T) {
 	if permAt < permHeading || (defHeading >= 0 && defAt < defHeading) {
 		t.Errorf("non-goals rendered under the wrong kind section (perm@%d/%d def@%d/%d)",
 			permAt, permHeading, defAt, defHeading)
+	}
+
+	// The kind is ALSO per row (FR fe0ebe94): each non-goal carries its
+	// own badge, so a row read on its own -- quoted in a review, scanned
+	// after its heading is out of view -- says which kind it is. The badge
+	// is asserted per row by id rather than by counting badges globally,
+	// because a page that put every badge in one section would pass a
+	// count.
+	requireNonGoalKindBadge(t, html, permID.String(), "permanent", "Permanent", "badge-secondary")
+	requireNonGoalKindBadge(t, html, defID.String(), "deferred", "Deferred", "badge-info")
+}
+
+// requireNonGoalKindBadge asserts that the non-goal row whose <li> carries
+// id renders EXACTLY ONE kind badge, and that the badge is the right one:
+// the wire kind in its data hook, the human label, and the colour variant
+// the shared mapper gives that kind.
+//
+// "Exactly one" is the load-bearing half. A row carrying both kinds' badges
+// -- or none -- would read as decided or undecided respectively, and a
+// whole-page count cannot tell those apart from a correct render.
+func requireNonGoalKindBadge(t *testing.T, html, id, wantKind, wantLabel, wantVariant string) {
+	t.Helper()
+
+	start := strings.Index(html, `<li id="`+id+`">`)
+	if start < 0 {
+		t.Errorf("no non-goal row with id %s rendered", id)
+		return
+	}
+	rest := html[start:]
+	if end := strings.Index(rest, "</li>"); end >= 0 {
+		rest = rest[:end]
+	}
+
+	badges := strings.Count(rest, `data-krill="non-goal-kind"`)
+	if badges != 1 {
+		t.Errorf("non-goal %s carries %d kind badges, want exactly 1; row: %s", id, badges, rest)
+		return
+	}
+	hook := `data-krill-non-goal-kind="` + wantKind + `"`
+	if !strings.Contains(rest, hook) {
+		t.Errorf("non-goal %s badge does not carry %s; row: %s", id, hook, rest)
+	}
+	if !strings.Contains(rest, ">"+wantLabel+"<") {
+		t.Errorf("non-goal %s badge is not labelled %q; row: %s", id, wantLabel, rest)
+	}
+	if !strings.Contains(rest, wantVariant) {
+		t.Errorf("non-goal %s badge does not carry the %s class %s; row: %s", id, wantKind, wantVariant, rest)
 	}
 }
 

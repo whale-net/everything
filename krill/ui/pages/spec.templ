@@ -24,8 +24,8 @@ package pages
 import (
 	"strconv"
 
-	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/whale-net/everything/krill/ui/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
 // Stable DOM ids each spec page's content region carries, so that page's
@@ -563,6 +563,11 @@ templ Personas(page PersonasPage) {
 
 // NonGoals lists a product's current Non-Goals, both the permanent and
 // deferred kinds -- list_non_goals' shape (FR b4c1c77f).
+//
+// Each row carries its kind as a badge of its own, not only under the
+// group heading: the heading says which kind a WHOLE section is, and a
+// row quoted or skimmed on its own would otherwise lose that (FR
+// fe0ebe94).
 templ NonGoals(page NonGoalsPage) {
 	<section id={ NonGoalsAnchor } data-krill="non-goals">
 		@pageHeader(NonGoalsAnchor, page.Path, page.Product.Name+" — non-goals", page.Product.Vision)
@@ -576,7 +581,10 @@ templ NonGoals(page NonGoalsPage) {
 						<ul class="mt-3 list-disc pl-5 space-y-4">
 							for _, n := range g.NonGoals {
 								<li id={ n.ID }>
-									<strong>{ n.Name }</strong>
+									<div class="flex flex-wrap items-center gap-2">
+										<strong>{ n.Name }</strong>
+										@nonGoalKindBadge(n.Kind)
+									</div>
 									@entityID(n.ID)
 									if n.Body != "" {
 										<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(n.Body))</div>
@@ -589,6 +597,22 @@ templ NonGoals(page NonGoalsPage) {
 			}
 		}
 	</section>
+}
+
+// nonGoalKindBadge is one non-goal's own permanent-or-deferred badge. The
+// colour and the wording both come from //krill/ui/components, so this
+// file spells no badge of its own (README: never hand-roll a badge) and a
+// kind shown here reads the same as one shown anywhere else.
+//
+// The label is capitalised rather than the raw wire value, so
+// data-krill-non-goal-kind carries the wire value a test can assert on
+// independently of how the label is worded.
+templ nonGoalKindBadge(kind string) {
+	{{ s := components.NonGoalKindStyle(kind) }}
+	@htmxui.Badge(components.NonGoalKindLabel(kind), s.Variant, s.Size, s.Soft, templ.Attributes{
+		"data-krill":             "non-goal-kind",
+		"data-krill-non-goal-kind": kind,
+	})
 }
 
 // SpecStatus is the spec area's error body: a heading, the detail, and a

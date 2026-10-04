@@ -120,3 +120,57 @@ func TestTaskStyle_ColourSemanticsFollowTheDesignSystem(t *testing.T) {
 	assert.Equal(t, htmxui.BadgeWarning, TaskStateStyle("lease-expired").Variant)
 	assert.Equal(t, htmxui.BadgeGhost, TaskStateStyle("ready").Variant)
 }
+
+// nonGoalKinds is krill's non-goal kind vocabulary, spelled out rather
+// than read from the store type -- the same reason milestoneStatuses is.
+var nonGoalKinds = []string{"permanent", "deferred"}
+
+func TestNonGoalKindStyle_EveryKindIsVisuallyDistinct(t *testing.T) {
+	// Distinctness is the point: the two kinds are told apart by the badge
+	// as well as by the section heading, so identical tuples would leave a
+	// row read on its own unable to say which kind it is.
+	seen := map[StatusStyle]string{}
+	for _, kind := range nonGoalKinds {
+		style := NonGoalKindStyle(kind)
+		if other, dup := seen[style]; dup {
+			t.Errorf("%q and %q render identically (%+v)", kind, other, style)
+		}
+		seen[style] = kind
+	}
+	for _, kind := range nonGoalKinds {
+		assert.NotEqual(t, neutralStyle, NonGoalKindStyle(kind),
+			"%q must not fall through to the unknown-kind fallback", kind)
+	}
+}
+
+func TestNonGoalKindStyle_UnknownKindUsesNeutralFallback(t *testing.T) {
+	assert.Equal(t, neutralStyle, NonGoalKindStyle("some-future-kind"))
+}
+
+func TestNonGoalKindStyle_SeparatesSettledFromStillOpenWithoutSeverity(t *testing.T) {
+	// Permanent is a closed boundary (secondary/slate); deferred is
+	// explicitly not foreclosed, so it stays live-looking (info/indigo).
+	assert.Equal(t, htmxui.BadgeSecondary, NonGoalKindStyle("permanent").Variant)
+	assert.Equal(t, htmxui.BadgeInfo, NonGoalKindStyle("deferred").Variant)
+
+	// Neither kind is a failure and neither is in flight, so neither may
+	// take a severity colour: the Spec page is read-only and its body
+	// carries no attention content, and a warning badge on a non-goal
+	// would put a settled design decision in the same register as a task
+	// that needs a human.
+	for _, kind := range nonGoalKinds {
+		variant := NonGoalKindStyle(kind).Variant
+		assert.NotContains(t, []htmxui.BadgeVariant{
+			htmxui.BadgeError, htmxui.BadgeWarning, htmxui.BadgeSuccess,
+		}, variant, "%q must not render as a severity colour", kind)
+	}
+}
+
+func TestNonGoalKindLabel_HumanWordingForEveryKindAndUnknownValues(t *testing.T) {
+	// The wire values are lowercase; the badge an operator reads is not.
+	assert.Equal(t, "Permanent", NonGoalKindLabel("permanent"))
+	assert.Equal(t, "Deferred", NonGoalKindLabel("deferred"))
+	// An unrecognised kind shows its own value rather than an empty badge,
+	// so a third kind added later is still readable rather than blank.
+	assert.Equal(t, "some-future-kind", NonGoalKindLabel("some-future-kind"))
+}
