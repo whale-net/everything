@@ -363,7 +363,6 @@ func (s designSessionStore) GetSummaryByID(ctx context.Context, id uuid.UUID) (D
 // session that does exist.
 var errMultipleDesignSessions = errors.New("design session id matched more than one row")
 
-
 // deriveStage is the single derivation Stage's doc comment specifies:
 // the latest signoff's approval is terminal and wins over any later
 // non-signoff event, otherwise the stage follows the latest revision
