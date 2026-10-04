@@ -560,6 +560,11 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	// milestones prefix, so a copied link resolves its product before the
 	// id is even looked at.
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}", app.readerRoute(app.handleProductMilestoneDetail))
+	// The status-history view the detail's rail links to (FR 9a6e7924),
+	// spelled from the rail's own milestoneStatusHistorySuffix rather than a
+	// second copy of the path -- a link is a claim about a URL, and the two
+	// sides of that claim have to be the same string.
+	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}"+milestoneStatusHistorySuffix, app.readerRoute(app.handleProductMilestoneStatusHistory))
 
 	// The sidebar's Product switcher (FR c4bd4bf8). A reader route: it
 	// reads the scope, records the pick as the last-viewed product, and

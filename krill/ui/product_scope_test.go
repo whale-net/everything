@@ -371,6 +371,7 @@ func TestEveryProductScopedRouteResolvesItsOwnProduct(t *testing.T) {
 		"/products/" + pid.String() + "/board",
 		"/products/" + pid.String() + "/milestones",
 		"/products/" + pid.String() + "/milestones/" + mid.String(),
+		"/products/" + pid.String() + "/milestones/" + mid.String() + "/status-history",
 	} {
 		t.Run(target, func(t *testing.T) {
 			rec := fetch(t, mux, target)
@@ -438,7 +439,16 @@ func TestCopiedMilestoneDetailLinkOpensOnTheProductItNames(t *testing.T) {
 // against it pass -- which is how a copied link resolving to the WRONG
 // product would go unnoticed.
 func productPageRegion(body string) string {
-	for _, marker := range []string{`data-krill="product-placeholder"`, `data-krill="milestone-detail"`} {
+	for _, marker := range []string{
+		`data-krill="product-placeholder"`,
+		`data-krill="milestone-detail"`,
+		// The status-history sub-page hangs under a milestone's detail URL.
+		// A URL whose region this cannot find slices to "", and every
+		// assertion made against that "" passes -- so each page the
+		// product-scoped routes reach has to be named here or its own tests
+		// assert nothing.
+		`data-krill="milestone-status-history"`,
+	} {
 		start := strings.Index(body, marker)
 		if start < 0 {
 			continue
