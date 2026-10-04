@@ -226,11 +226,17 @@ func (app *App) milestoneDetailMilepebbles(ctx context.Context, productID uuid.U
 		row := pages.MilestoneDetailMilepebble{
 			ID:   mp.ID.String(),
 			Name: mp.Name,
-			// The milepebble's OWN task list, scoped to the milepebble: an
-			// operator following a cut's name is asking for the work cut
-			// from THAT cut, and the parent's tasks answer a different
+			// The milepebble's OWN two work views, scoped to the
+			// milepebble: an operator following a cut is asking for the work
+			// cut from THAT cut, and the parent's answer a different
 			// question.
 			TasksPath: productTaskContainerHref(productID, tasksSuffix, taskContainer{
+				ID:     mp.ID,
+				Name:   mp.Name,
+				Kind:   string(store.MilestoneKindMilepebble),
+				Status: mp.Status,
+			}),
+			BoardPath: productTaskContainerHref(productID, boardSuffix, taskContainer{
 				ID:     mp.ID,
 				Name:   mp.Name,
 				Kind:   string(store.MilestoneKindMilepebble),

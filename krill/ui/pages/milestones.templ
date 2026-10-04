@@ -81,11 +81,14 @@ type MilepebbleRow struct {
 	// so its tasks link can be checked against it.
 	ID string
 
-	// Name links to this milepebble's own task list -- the tasks cut from
-	// the milepebble, not the milestone's whole cut. That is what an
-	// operator expands a milepebble to reach, so it is what its name is.
+	// Name links to this milepebble's own detail-free work: TasksPath and
+	// BoardPath are the two views of the tasks cut from the milepebble,
+	// not the milestone's whole cut, each scoped to the milepebble. What
+	// an operator expands a milepebble to reach is that milepebble's work,
+	// so both links name it.
 	Name      string
 	TasksPath string
+	BoardPath string
 
 	// Status renders through the shared statusBadge: a milepebble is its
 	// own container with its own status, and the parent's badge says
@@ -110,6 +113,14 @@ type MilestoneRow struct {
 	// Name links to the milestone's detail page.
 	Name       string
 	DetailPath string
+
+	// TasksPath and BoardPath are the two product-wide views of this
+	// milestone's work, each scoped to the milestone. They are separate
+	// from DetailPath rather than in place of it: the detail explains the
+	// cut, while these two are the two ways an operator actually works it,
+	// and FR 31cbd3eb asks every row to offer both.
+	TasksPath string
+	BoardPath string
 
 	// Status renders through the shared statusBadge, so this table shows
 	// the same colour for a status as the delivery page and the Board do.
@@ -242,6 +253,21 @@ type MilestonesPage struct {
 	ProgressError string
 }
 
+// containerWorkLinks is the pair of links every container row carries: the
+// Tasks table and the Board, both scoped to that container.
+//
+// It is ONE component taking both paths rather than an anchor each caller
+// writes, because the failure this guards against is a row that grew a Tasks
+// link and not a Board one -- the two are the same fact about the same
+// container, and a row is only useful if it offers both (FR 31cbd3eb). The
+// callers are the Milestones table's milestone and milepebble rows and the
+// Milestone detail's milepebble card, and each passes its own data-krill
+// prefix so a test can say which row's pair it found.
+templ containerWorkLinks(kind, tasksPath, boardPath string) {
+	<a href={ templ.URL(tasksPath) } class="link link-primary ml-2 text-sm" data-krill={ kind + "-tasks-link" }>Tasks</a>
+	<a href={ templ.URL(boardPath) } class="link link-primary ml-2 text-sm" data-krill={ kind + "-board-link" }>Board</a>
+}
+
 // milestoneProgress renders one container's progress cell: a bar and its
 // sentence, the sentence alone when the container holds no task, and the
 // failure sentence when the figures could not be read.
@@ -336,8 +362,8 @@ templ milestoneExpander(m MilestoneRow) {
 }
 
 // MilepebbleTable is one expanded milestone's milepebbles: each with its
-// name linking to its own task list, its own status badge, and its own
-// progress bar.
+// name, its Tasks and Board links scoped to the milepebble, its own status
+// badge, and its own progress bar.
 //
 // It is a nested table inside the row it belongs to rather than columns of
 // its own on the milestone table: a milepebble has no FR budget and no
@@ -357,7 +383,8 @@ templ MilepebbleTable(milepebbles []MilepebbleRow) {
 			for _, mp := range milepebbles {
 				<tr data-krill="milepebble-row" data-krill-milepebble-id={ mp.ID }>
 					<td>
-						<a href={ templ.URL(mp.TasksPath) } class="link" data-krill="milepebble-name">{ mp.Name }</a>
+						<span data-krill="milepebble-name">{ mp.Name }</span>
+						@containerWorkLinks("milepebble", mp.TasksPath, mp.BoardPath)
 					</td>
 					<td>@statusBadge(mp.Status)</td>
 					<td>@milestoneProgress(mp.ProgressCell)</td>
@@ -393,6 +420,7 @@ templ MilestoneTable(rows []MilestoneRow) {
 									@milestoneExpander(m)
 								}
 								<a href={ templ.URL(m.DetailPath) } class="link font-medium" data-krill="milestone-name">{ m.Name }</a>
+							@containerWorkLinks("milestone", m.TasksPath, m.BoardPath)
 							</div>
 						</td>
 						<td>@statusBadge(m.Status)</td>

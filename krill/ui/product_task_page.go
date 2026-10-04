@@ -368,13 +368,14 @@ func productTaskBadgesOf(row store.ProductTaskRow, now time.Time) []pages.TaskBa
 // disagree with the scope the read was built from.
 func productTaskRegionOf(r *http.Request, product store.Product, view string, scope resolvedProductTaskScope) pages.ProductTaskRegion {
 	region := pages.ProductTaskRegion{
-		Product:     productHeaderOf(product),
-		View:        view,
-		Path:        r.URL.Path,
-		RefreshPath: r.URL.RequestURI(),
-		ScopeLabel:  productTaskScopeLabelOf(scope),
-		OnlyStuck:   scope.Parsed.OnlyStuck,
-		Scope:       productTaskScopeControlOf(r, scope, view == productTasksView, view),
+		Product:        productHeaderOf(product),
+		View:           view,
+		Path:           r.URL.Path,
+		RefreshPath:    r.URL.RequestURI(),
+		MilestonesPath: productTaskMilestonesPath(product.ID, scope),
+		ScopeLabel:     productTaskScopeLabelOf(scope),
+		OnlyStuck:      scope.Parsed.OnlyStuck,
+		Scope:          productTaskScopeControlOf(r, scope, view == productTasksView, view),
 		// The empty state's sentence is built here, from the same scope, so
 		// it names the filters the read was actually built from rather than
 		// a second description of them that could drift.
@@ -384,6 +385,26 @@ func productTaskRegionOf(r *http.Request, product store.Product, view string, sc
 		region.Lane = string(*scope.Parsed.Lane)
 	}
 	return region
+}
+
+// productTaskMilestonesPath is the way back to the delivery roadmap from
+// either product-wide view, at the scope this request resolved to.
+//
+// A single-container scope has a milestone of its own to go back to, and
+// the product-wide one does not -- so the product's Milestones table is the
+// only answer there. The test is on the RESOLVED scope rather than the URL:
+// a mode the operator named without an id resolves to a container the page
+// then says it is scoped to, and a back link to the whole table beside a
+// "Scoped to <container>" sentence would land them somewhere else.
+//
+// Tasks and Board already toggle each other (productTaskViewToggle), so
+// neither view repeats that here; this is only the third corner of the
+// triangle (FR 31cbd3eb).
+func productTaskMilestonesPath(productID uuid.UUID, scope resolvedProductTaskScope) string {
+	if scope.Container.ID != uuid.Nil {
+		return milestoneDetailHref(productID, scope.Container.ID)
+	}
+	return productHref(productID, milestonesSuffix)
 }
 
 // productTaskEmptyDetailOf is the sentence the empty state shows under its

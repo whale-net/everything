@@ -366,6 +366,69 @@ func TestLegacyListAndBoardRedirectScopedToTheirContainer(t *testing.T) {
 	}
 }
 
+// TestLegacyDeliveryRedirectsToMilestones is FR 31cbd3eb's redirect clause:
+// the pre-redesign delivery browser answers 302, and the Location is the
+// product's own Milestones table.
+//
+// The QUERY is asserted as well as the path, because it is the part
+// serveLegacy's contract makes easy to drop: it hands the successor a bare
+// path and hands http.Redirect that string, so a successor returning only
+// the path loses every filter the operator arrived with. The Milestones
+// status select and the inline milepebble expansion both submit here, so a
+// bare path would make a filtered arrival read as an unfiltered one.
+//
+// The target is compared against productHref rather than a literal so the
+// assertion cannot drift from the spelling the mux serves -- but the path
+// and the query are asserted SEPARATELY, because a redirect that landed on
+// the right page with a lost filter would pass a whole-URL comparison
+// against a URL the test itself built with the query.
+func TestLegacyDeliveryRedirectsToMilestones(t *testing.T) {
+	f := newLegacyFixture(t)
+	legacy := "/spec/products/" + f.pid.String() + "/delivery?status=shipped&expand=" + f.mid.String()
+
+	rec := fetch(t, f.mux, legacy)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("GET %s = %d, want 302: the Milestones table replaces the delivery browser", legacy, rec.Code)
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("GET %s redirected to an unparseable Location: %v", legacy, err)
+	}
+	if want := productHref(f.pid, milestonesSuffix); loc.Path != want {
+		t.Errorf("GET %s redirected to %s, want the product's Milestones table %s", legacy, loc.Path, want)
+	}
+	// Both parameters the table's own controls submit, carried through: the
+	// status the operator filtered to, and the milestone they expanded.
+	q := loc.Query()
+	if got := q.Get("status"); got != "shipped" {
+		t.Errorf("GET %s redirected with status=%q, want the operator's own filter", legacy, got)
+	}
+	if got := q.Get("expand"); got != f.mid.String() {
+		t.Errorf("GET %s redirected with expand=%q, want the milestone the operator expanded (%s)",
+			legacy, got, f.mid)
+	}
+}
+
+// TestLegacyDeliveryWithoutQueryRedirectsBare is the other half of the rule
+// above: an arrival carrying nothing must not gain a "?" it did not have.
+//
+// An empty query appended to the target is a redirect to a URL no route
+// spells, and the shell's own productHref never produces one -- so this
+// pins that the successor only re-attaches a query that exists rather than
+// building the separator unconditionally.
+func TestLegacyDeliveryWithoutQueryRedirectsBare(t *testing.T) {
+	f := newLegacyFixture(t)
+	legacy := "/spec/products/" + f.pid.String() + "/delivery"
+
+	rec := fetch(t, f.mux, legacy)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("GET %s = %d, want 302", legacy, rec.Code)
+	}
+	if got, want := rec.Header().Get("Location"), productHref(f.pid, milestonesSuffix); got != want {
+		t.Errorf("GET %s redirected to %q, want exactly %q", legacy, got, want)
+	}
+}
+
 // TestLegacyMilepebbleURLDoesNot404 is why the redirect's mode is read off
 // the container's own kind rather than hardcoded to milestone.
 //

@@ -758,3 +758,30 @@ func TestCardRegionIsNotVacuous(t *testing.T) {
 // The anchor the cards' page carries, referenced so a rename of it is a
 // compile error here rather than a silently different selector.
 var _ = pages.MilestoneDetailAnchor
+
+// TestMilestoneDetailMilepebbleReachesBothWorkViews is FR 31cbd3eb's rule
+// on this card: each cut row offers the Tasks table AND the Board, both
+// scoped to that cut.
+//
+// Both are asserted rather than one, because the defect this exists to
+// catch is precisely the one a single-link check would miss -- the card
+// grew a Tasks link and no Board, and every pre-existing assertion still
+// passed. The scope ids are the cuts' own, so a card that pointed both
+// links at the parent would fail here too.
+func TestMilestoneDetailMilepebbleReachesBothWorkViews(t *testing.T) {
+	html := cardDetailOf(t, cardProgress, cardMilestoneID)
+
+	for _, id := range []uuid.UUID{cardPebbleOneID, cardPebbleTwoID} {
+		assert.Contains(t, html, `href="/products/`+cardProductID.String()+
+			`/tasks?container_id=`+id.String()+`&amp;scope=milepebble"`,
+			"cut %s reaches its own Tasks", id)
+		assert.Contains(t, html, `href="/products/`+cardProductID.String()+
+			`/board?container_id=`+id.String()+`&amp;scope=milepebble"`,
+			"cut %s reaches its own Board", id)
+	}
+	// The Board link must be the Board's page, not a second Tasks link --
+	// two anchors to the same href would satisfy a "does the row link to
+	// the Board" check by name alone.
+	assert.Contains(t, html, `data-krill="milestone-milepebble-board-link"`)
+	assert.Contains(t, html, `data-krill="milestone-milepebble-tasks-link"`)
+}

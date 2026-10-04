@@ -537,12 +537,12 @@ func TestMilestonesProgressErrorKeepsTheTable(t *testing.T) {
 
 	rows := milestoneRowsWithoutProgress(milestonesProductID, listingOf(a, b), expandedFor("", uuid.Nil))
 	html := mustRenderComponent(pages.Milestones(pages.MilestonesPage{
-		Product:      pages.ProductHeader{Name: "krill"},
-		Path:         milestonesPath(milestonesProductID),
-		Statuses:     milestoneStatusOptions(""),
-		Rows:         rows,
+		Product:       pages.ProductHeader{Name: "krill"},
+		Path:          milestonesPath(milestonesProductID),
+		Statuses:      milestoneStatusOptions(""),
+		Rows:          rows,
 		ProgressError: milestonesProgressError,
-		EmptyDetail:  milestonesEmptyDetail(""),
+		EmptyDetail:   milestonesEmptyDetail(""),
 	}))
 
 	assert.Contains(t, html, "M1")
@@ -553,6 +553,7 @@ func TestMilestonesProgressErrorKeepsTheTable(t *testing.T) {
 		"an unread milestone is not an empty one")
 	assert.Contains(t, html, milestonesProgressError)
 }
+
 // ---------------------------------------------------------------------------
 // 5. the inline milepebble expansion (FR a6a316e5)
 // ---------------------------------------------------------------------------
@@ -597,11 +598,11 @@ func withMilepebbleProgress(fixtures ...milestoneFixture) map[uuid.UUID]store.Co
 func TestCutMilestoneCarriesAnExpanderAndItsMilepebbles(t *testing.T) {
 	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
 		slice.MilepebbleListingEntry{
-			ID: uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			ID:   uuid.MustParse("22222222-2222-2222-2222-222222222201"),
 			Name: "P0 console reads", Status: store.MilestoneStatusShipped,
 		},
 		slice.MilepebbleListingEntry{
-			ID: uuid.MustParse("22222222-2222-2222-2222-222222222202"),
+			ID:   uuid.MustParse("22222222-2222-2222-2222-222222222202"),
 			Name: "P1 workspace shell", Status: store.MilestoneStatusInProgress,
 		},
 	)
@@ -685,8 +686,8 @@ func TestUncutMilestoneRendersNoExpander(t *testing.T) {
 func TestMilepebbleRowsStayHiddenUntilExpanded(t *testing.T) {
 	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
 		slice.MilepebbleListingEntry{
-			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222201"),
-			Name:   "P0 console reads", Status: store.MilestoneStatusShipped,
+			ID:   uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name: "P0 console reads", Status: store.MilestoneStatusShipped,
 		},
 	)
 
@@ -721,8 +722,8 @@ func TestMilepebbleRowsStayHiddenUntilExpanded(t *testing.T) {
 func TestExpandingSurvivesTheStatusFilter(t *testing.T) {
 	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusShipped, 5, 5,
 		slice.MilepebbleListingEntry{
-			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222201"),
-			Name:   "P0 console reads", Status: store.MilestoneStatusShipped,
+			ID:   uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name: "P0 console reads", Status: store.MilestoneStatusShipped,
 		},
 	)
 
@@ -763,16 +764,16 @@ func TestExpandingSurvivesTheStatusFilter(t *testing.T) {
 func TestExpanderSwapsInPlaceWithoutLeavingThePage(t *testing.T) {
 	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
 		slice.MilepebbleListingEntry{
-			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222201"),
-			Name:   "P0 console reads", Status: store.MilestoneStatusInProgress,
+			ID:   uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name: "P0 console reads", Status: store.MilestoneStatusInProgress,
 		},
 	)
 
 	html := mustRenderComponent(pages.MilestonesRows(pages.MilestonesPage{
-		Product:     pages.ProductHeader{Name: "krill"},
-		Path:        milestonesPath(milestonesProductID),
-		Statuses:    milestoneStatusOptions(store.MilestoneStatusInProgress),
-		Rows:        milestoneRowsOf(milestonesProductID, listingOf(cut),
+		Product:  pages.ProductHeader{Name: "krill"},
+		Path:     milestonesPath(milestonesProductID),
+		Statuses: milestoneStatusOptions(store.MilestoneStatusInProgress),
+		Rows: milestoneRowsOf(milestonesProductID, listingOf(cut),
 			withMilepebbleProgress(cut), expandedFor(store.MilestoneStatusInProgress, uuid.Nil)),
 		EmptyDetail: milestonesEmptyDetail(store.MilestoneStatusInProgress),
 	}))
@@ -809,8 +810,8 @@ func TestParseMilestoneExpansionNeverFails(t *testing.T) {
 func TestMilepebbleWithoutItsOwnProgressRowSaysSo(t *testing.T) {
 	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
 		slice.MilepebbleListingEntry{
-			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222201"),
-			Name:   "P0 console reads", Status: store.MilestoneStatusInProgress,
+			ID:   uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name: "P0 console reads", Status: store.MilestoneStatusInProgress,
 		},
 	)
 	// The milestone's own row is present; the milepebble's is not.
@@ -831,4 +832,116 @@ func TestMilepebbleWithoutItsOwnProgressRowSaysSo(t *testing.T) {
 	}))
 	assert.Contains(t, html, milestonesProgressError)
 	assert.NotContains(t, html, "0/0", "and never invents a figure")
+}
+
+// ---------------------------------------------------------------------------
+// 5. the scoped Tasks and Board links (FR 31cbd3eb)
+// ---------------------------------------------------------------------------
+
+// containerScopeQuery is the expected scope query for one container: the
+// product-wide page named in the path plus the mode and id the pair must
+// carry. Asserted against the RENDERED link (escaped) rather than the view
+// model's field, because a field can be set on the row and still not reach
+// the page.
+func containerScopeQuery(pid uuid.UUID, id uuid.UUID, kind store.MilestoneKind, name string, status store.MilestoneStatus, suffix string) string {
+	return gohtml.EscapeString(productTaskContainerHref(pid, suffix, taskContainer{
+		ID: id, Name: name, Kind: string(kind), Status: status,
+	}))
+}
+
+// TestMilestoneRowCarriesScopedTasksAndBoardLinks is FR 31cbd3eb on the
+// Milestones table: every milestone row reaches BOTH product-wide views of
+// its own work, each scoped to that milestone.
+//
+// Both are checked rather than one, because the failure this guards against
+// is a row that grew one and not the other -- and a single-link assertion
+// would pass against exactly that row. The hrefs are spelled out from the
+// id the fixture was built from rather than read back off the row, so a
+// builder that wired both links to the same scope cannot satisfy them.
+func TestMilestoneRowCarriesScopedTasksAndBoardLinks(t *testing.T) {
+	shipped := milestoneFixtureOf(t, "M4 Work axis", 2, store.MilestoneStatusShipped, 14, 14)
+
+	rows := rowsOf(t, listingOf(shipped), progressOf(shipped), "")
+	html := renderMilestonesTable(t, rows)
+
+	assert.Contains(t, html, `data-krill="milestone-tasks-link"`,
+		"the milestone row offers the Tasks view of its work")
+	assert.Contains(t, html, `href="`+
+		containerScopeQuery(milestonesProductID, shipped.entry.ID, store.MilestoneKindMilestone,
+			shipped.entry.Name, shipped.entry.Status, tasksSuffix)+`"`,
+		"the Tasks link is the product-wide Tasks page scoped to THIS milestone")
+	assert.Contains(t, html, `data-krill="milestone-board-link"`,
+		"the milestone row offers the Board view of its work too")
+	assert.Contains(t, html, `href="`+
+		containerScopeQuery(milestonesProductID, shipped.entry.ID, store.MilestoneKindMilestone,
+			shipped.entry.Name, shipped.entry.Status, boardSuffix)+`"`,
+		"the Board link is the product-wide Board scoped to THIS milestone")
+
+	// And the name still reaches the detail: the scoped links are additive,
+	// not a replacement for the page that explains the cut.
+	assert.Contains(t, html, `href="`+milestoneDetailHref(milestonesProductID, shipped.entry.ID)+`"`)
+}
+
+// TestMilepebbleRowsCarryScopedTasksAndBoardLinks is the same rule for the
+// inline expansion: each milepebble reaches both views of ITS OWN cut, not
+// its parent's -- a link that resolved to the milestone would render, and
+// would show an operator the wrong container's work.
+func TestMilepebbleRowsCarryScopedTasksAndBoardLinks(t *testing.T) {
+	cut := cutFixture(t, "M13 Console", 3, store.MilestoneStatusInProgress, 2, 5,
+		slice.MilepebbleListingEntry{
+			ID:   uuid.MustParse("22222222-2222-2222-2222-222222222201"),
+			Name: "P0 console reads", Status: store.MilestoneStatusShipped,
+		},
+		slice.MilepebbleListingEntry{
+			ID:   uuid.MustParse("22222222-2222-2222-2222-222222222202"),
+			Name: "P1 workspace shell", Status: store.MilestoneStatusInProgress,
+		},
+	)
+
+	rows := milestoneRowsOf(milestonesProductID, listingOf(cut),
+		withMilepebbleProgress(cut), expandedFor("", cut.entry.ID))
+	html := mustRenderComponent(pages.Milestones(pages.MilestonesPage{
+		Product:     pages.ProductHeader{Name: "krill"},
+		Path:        milestonesPath(milestonesProductID),
+		Statuses:    milestoneStatusOptions(""),
+		Rows:        rows,
+		EmptyDetail: milestonesEmptyDetail(""),
+	}))
+
+	for _, mp := range cut.entry.Milepebbles {
+		assert.Contains(t, html, `href="`+
+			containerScopeQuery(milestonesProductID, mp.ID, store.MilestoneKindMilepebble,
+				mp.Name, mp.Status, tasksSuffix)+`"`,
+			"milepebble %s reaches its own Tasks", mp.Name)
+		assert.Contains(t, html, `href="`+
+			containerScopeQuery(milestonesProductID, mp.ID, store.MilestoneKindMilepebble,
+				mp.Name, mp.Status, boardSuffix)+`"`,
+			"milepebble %s reaches its own Board", mp.Name)
+	}
+
+	// Scoped to the nested table, because the PARENT row legitimately links
+	// to the same hrefs with its own id -- asserting on the whole region
+	// would fail against markup that is correct in both places.
+	nested := milepebbleTableRegion(t, html)
+	assert.NotContains(t, nested, `href="`+
+		containerScopeQuery(milestonesProductID, cut.entry.ID, store.MilestoneKindMilestone,
+			cut.entry.Name, cut.entry.Status, tasksSuffix)+`"`,
+		"a milepebble row never links to the parent milestone's tasks")
+	assert.NotContains(t, nested, `href="`+
+		containerScopeQuery(milestonesProductID, cut.entry.ID, store.MilestoneKindMilestone,
+			cut.entry.Name, cut.entry.Status, boardSuffix)+`"`,
+		"a milepebble row never links to the parent milestone's board")
+}
+
+// milepebbleTableRegion slices the inline expansion's nested table out of
+// the page, so an assertion about what a milepebble row links to is not
+// satisfied -- or refuted -- by the milestone row above it.
+func milepebbleTableRegion(t *testing.T, html string) string {
+	t.Helper()
+	const open = `data-krill="milepebble-table"`
+	start := strings.Index(html, open)
+	if start < 0 {
+		t.Fatal("rendered no milepebble table to scope the assertion to")
+	}
+	return html[start:]
 }

@@ -187,6 +187,11 @@ type ProductBoardPage struct {
 	// "Showing X of Y" line's way out when the board cannot fit them all.
 	TasksPath string
 
+	// MilestonesPath is the way back to the delivery roadmap at THIS scope,
+	// read off the same resolved scope the Tasks view renders rather than
+	// described twice (FR 31cbd3eb).
+	MilestonesPath string
+
 	// Shown is how many tasks the board rendered and Total is the count
 	// read for the same filters. Equal, unless the read paged.
 	Shown int
@@ -346,6 +351,9 @@ templ ProductBoard(d ProductBoardPage) {
 			</p>
 			<div class="flex-1"></div>
 			@boardFreshness(d.UpdatedAt)
+			if d.MilestonesPath != "" {
+				<a href={ templ.URL(d.MilestonesPath) } class="link link-primary text-sm" data-krill="product-board-milestones-link">Milestones</a>
+			}
 			<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
 				hx-get={ templ.URL(d.Path) }
 				hx-target={ "#" + ProductTasksAnchor }
