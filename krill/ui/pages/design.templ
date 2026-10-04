@@ -121,10 +121,33 @@ type OpenQuestionRow struct {
 //
 // AnswersPath is the follow-up form's own POST target, supplied by the
 // caller so the path shape stays owned by package main.
+//
+// OpeningRequest is the opening submission's FIRST LINE -- the same string
+// the sessions list links by, so the two pages agree on what this session
+// is called -- while OpeningSubmission is the full prose, rendered as
+// markdown in the main column because this page is the only place it is
+// readable in full.
+//
+// Stage is the store's own derived stage, spelled as a string, exactly as
+// DesignSessionRow.Stage is: the badge beside the h1 resolves through the
+// same components mapper the list's Stage cell uses, so the two cannot
+// render one session's stage two different ways.
+//
+// OpenedBy is the operator's subject -- what the server read, never what a
+// reader typed (LB4) -- and OpenedByTitle the full (subject, issuer) pair
+// for the title attribute. Both are empty when the krill_session row could
+// not be read, which is rendered as an absent "Opened by" line rather than
+// a blank or invented one.
 type DesignSessionDetailPage struct {
 	ID                     string
 	ProductID              string
+	ProductName            string
+	ProductOverviewPath    string
+	OpeningRequest         string
 	OpeningSubmission      string
+	Stage                  string
+	OpenedBy               string
+	OpenedByTitle          string
 	OpenedByKrillSessionID string
 	CreatedAt              string
 	ProductSessionsPath    string
@@ -281,23 +304,109 @@ templ OpenSessionForm(page DesignSessionListPage) {
 	</form>
 }
 
-// DesignSessionDetail is one session's full ordered revision-event log and
-// its currently-open questions.
+// designSessionDetailRegions are the stable ids the two columns carry.
+// Tests slice on these rather than on a heading's markup, so restyling a
+// card never breaks a section-scoped assertion (htmxui ARCHITECTURE §14).
+const (
+	designSessionDetailAnchor     = "design-session-detail"
+	designSessionEventsAnchor      = "revision-events"
+	designSessionQuestionsAnchor   = "open-questions"
+	designSessionPropertiesAnchor  = "session-properties"
+)
+
+// DesignSessionCrumb is one breadcrumb entry on the session detail. Href is
+// empty for the session's own title -- the page the reader is already on,
+// and so the one crumb that is not a link.
+type DesignSessionCrumb struct {
+	Label string
+	Href  string
+}
+
+// DesignSessionDetail is one session: its opening statement, its full
+// ordered revision-event log, and its currently-open questions.
+//
+// The shape is the wireframe's two columns -- a main column that reads
+// (opening statement, then the log) and a rail that keeps the questions and
+// the properties beside it -- and the regions inside them carry the stable
+// ids the tests slice on. What goes in each region is deliberately this
+// page's existing markup: the log and the question table move wholesale
+// into their new homes rather than being rewritten, so this page's
+// structure can merge without also renegotiating its contents.
+//
+// Nothing here asks for an identity. The properties card shows who the
+// server read, and there is no input anywhere on the page for an operator
+// to say they are someone else (LB4).
 templ DesignSessionDetail(page DesignSessionDetailPage) {
-	<h2>Design session</h2>
-	<dl class="grid grid-cols-1 gap-x-6 sm:grid-cols-3">
-		<dt class="font-medium">ID</dt>
-		<dd class="sm:col-span-2"><code>{ page.ID }</code></dd>
-		<dt class="font-medium">Product</dt>
-		<dd class="sm:col-span-2"><code>{ page.ProductID }</code></dd>
-		<dt class="font-medium">Opening submission</dt>
-		<dd class="sm:col-span-2 krill-md">@templ.Raw(renderMarkdown(page.OpeningSubmission))</dd>
-		<dt class="font-medium">Opened by krill session</dt>
-		<dd class="sm:col-span-2"><code>{ page.OpenedByKrillSessionID }</code></dd>
-		<dt class="font-medium">Created</dt>
-		<dd class="sm:col-span-2">{ page.CreatedAt }</dd>
-	</dl>
-	<section id="revision-events">
+	<section id={ designSessionDetailAnchor } class="space-y-4">
+		@designSessionDetailCrumbs(page)
+		<div class="flex flex-wrap items-center gap-3">
+			<h1 class="text-2xl font-semibold" data-krill="design-session-title">{ page.OpeningRequest }</h1>
+			@designSessionStageBadge(page.Stage)
+		</div>
+		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+			<div class="min-w-0 space-y-4">
+				<section id="session-opening" class="krill-md">
+					@templ.Raw(renderMarkdown(page.OpeningSubmission))
+				</section>
+				@designSessionEventsRegion(page)
+			</div>
+			<aside class="space-y-4">
+				@designSessionQuestionsRegion(page)
+				@designSessionPropertiesCard(page)
+			</aside>
+		</div>
+		<p id="session-nav">
+			<a href={ templ.URL(page.ProductSessionsPath) }>Back to this product's sessions</a>
+		</p>
+		<h3>Submit follow-up</h3>
+		<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
+		@FollowUpForm(page)
+	</section>
+}
+
+// designSessionDetailCrumbs is where the operator has been: the product,
+// its Design sessions list, and then this session -- named by its own
+// opening request, the same string the list links by, so the trail reads
+// as the list's own row expanded.
+templ designSessionDetailCrumbs(page DesignSessionDetailPage) {
+	<nav class="breadcrumbs text-sm" aria-label="Breadcrumb" data-krill="design-session-breadcrumb">
+		<ul>
+			for _, c := range designSessionCrumbs(page) {
+				<li data-krill="breadcrumb-crumb">
+					if c.Href == "" {
+						<span>{ c.Label }</span>
+					} else {
+						<a href={ templ.URL(c.Href) }>{ c.Label }</a>
+					}
+				</li>
+			}
+		</ul>
+	</nav>
+}
+
+// designSessionCrumbs assembles the trail. The product crumb and the list
+// crumb are links; the session's own title is not, because it is where the
+// reader already is.
+//
+// A product whose name could not be read contributes no crumb rather than
+// an empty one: a blank link in a breadcrumb looks like a rendering fault
+// and navigates nowhere useful, while its absence leaves the list crumb,
+// which is the one that navigates.
+func designSessionCrumbs(page DesignSessionDetailPage) []DesignSessionCrumb {
+	var crumbs []DesignSessionCrumb
+	if page.ProductName != "" {
+		crumbs = append(crumbs, DesignSessionCrumb{Label: page.ProductName, Href: page.ProductOverviewPath})
+	}
+	return append(crumbs,
+		DesignSessionCrumb{Label: "Design sessions", Href: page.ProductSessionsPath},
+		DesignSessionCrumb{Label: page.OpeningRequest},
+	)
+}
+
+// designSessionEventsRegion is the session's ordered log, in the main
+// column.
+templ designSessionEventsRegion(page DesignSessionDetailPage) {
+	<section id={ designSessionEventsAnchor }>
 		<h3>Revision events</h3>
 		if len(page.Events) > 0 {
 			<ol class="space-y-3">
@@ -309,7 +418,12 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 			<p>No revision events yet.</p>
 		}
 	</section>
-	<section id="open-questions">
+}
+
+// designSessionQuestionsRegion is the rail's open-questions card, holding
+// the question table this page has always shown.
+templ designSessionQuestionsRegion(page DesignSessionDetailPage) {
+	<section id={ designSessionQuestionsAnchor }>
 		<h3>Open questions</h3>
 		if len(page.OpenQuestions) > 0 {
 			<table class="table table-sm">
@@ -334,12 +448,62 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 			<p>No open questions.</p>
 		}
 	</section>
-	<p id="session-nav">
-		<a href={ templ.URL(page.ProductSessionsPath) }>Back to this product's sessions</a>
-	</p>
-	<h3>Submit follow-up</h3>
-	<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
-	@FollowUpForm(page)
+}
+
+// designSessionPropertiesCard is the rail's properties card: who opened the
+// session, and the krill session it was opened through.
+//
+// The id is the copy chip the whole app shares -- same data-krill hook, same
+// data attribute, same head script -- so the clipboard behaviour is the one
+// already in use on the task detail, the milestone detail and the spec
+// blade. The chip shows the first eight characters with the whole value on
+// hover and in the clipboard, which is what a UUID read at a glance needs.
+//
+// A session whose krill_session row could not be read shows the id chip and
+// NO "Opened by" line. The card does not offer an input to supply one: the
+// page's subject is a recorded conversation, and letting an operator type
+// an identity into it would put a name on a session nobody typed it for
+// (LB4).
+templ designSessionPropertiesCard(page DesignSessionDetailPage) {
+	<section id={ designSessionPropertiesAnchor }>
+		<h3>Properties</h3>
+		<dl class="grid grid-cols-1 gap-x-6 gap-y-2">
+			if page.OpenedBy != "" {
+				<div>
+					<dt class="text-base-content/70">Opened by</dt>
+					<dd data-krill="design-session-opened-by" title={ page.OpenedByTitle }>{ page.OpenedBy }</dd>
+				</div>
+			}
+			<div>
+				<dt class="text-base-content/70">Krill session</dt>
+				<dd data-krill="design-session-id">
+					// The app's own id chip: disabled until the head script
+					// binds it, so a control that cannot work never looks
+					// live. It sits in a <dd> because that is the scope the
+					// shared script looks in.
+					<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
+						aria-label="Copy design session id" data-krill="copy-task-id"
+						data-task-id={ page.OpenedByKrillSessionID }
+						disabled title="Copying the id needs JavaScript">
+						{ sessionChipText(page.OpenedByKrillSessionID) }
+					</button>
+					<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
+				</dd>
+			</div>
+		</dl>
+	</section>
+}
+
+// sessionChipText is what the chip shows: the first eight characters of a
+// UUID, or the whole value when it is shorter (which only a malformed id
+// ever is). Truncated because a full 36-character id is unreadable at chip
+// size; the whole value stays in data-task-id, in the title the script sets,
+// and in what the clipboard receives.
+func sessionChipText(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // revisionEvent is one round of the session's ordered log. The #seq type

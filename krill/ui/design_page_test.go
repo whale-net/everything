@@ -47,7 +47,12 @@ type fakeDesignSessions struct {
 	// way the real SQL does -- which is store's own test's job, not this
 	// view's.
 	summaries map[uuid.UUID]store.ProductDesignSessionsSummary
-	err       error
+	// summaryErr, when set, is what GetSummaryByID returns. Separate from
+	// err because the detail page's three reads fail independently
+	// (TestDesignRead_ErrorPaths_SeparateStores), and one shared err
+	// could not say which read broke.
+	summaryErr error
+	err        error
 }
 
 func (f fakeDesignSessions) Open(context.Context, uuid.UUID, uuid.UUID, string, store.SessionID) (store.DesignSession, error) {
@@ -84,6 +89,38 @@ func (f fakeDesignSessions) SummarizeByProduct(_ context.Context, productID uuid
 		return store.ProductDesignSessionsSummary{ProductID: productID, Sessions: []store.DesignSessionSummary{}}, nil
 	}
 	return summary, nil
+}
+
+// GetSummaryByID is what the detail page reads for its stage and opening
+// identity. It answers out of the SAME summaries map SummarizeByProduct
+// does, looked up by the session's own row, so a fake cannot hand the list
+// one stage and the detail another -- which is exactly the disagreement
+// the real store's one-derivation rule exists to prevent, and a fake that
+// kept two sources could hide.
+//
+// A session present in byID but absent from any seeded summary still reads
+// back: the stage is StageOpened, the same answer the real SQL gives a
+// session with no revision events, so a detail test that is not about the
+// stage does not have to seed one.
+func (f fakeDesignSessions) GetSummaryByID(_ context.Context, id uuid.UUID) (store.DesignSessionSummary, error) {
+	if f.summaryErr != nil {
+		return store.DesignSessionSummary{}, f.summaryErr
+	}
+	if f.err != nil {
+		return store.DesignSessionSummary{}, f.err
+	}
+	for _, product := range f.summaries {
+		for _, row := range product.Sessions {
+			if row.ID == id {
+				return row, nil
+			}
+		}
+	}
+	ds, ok := f.byID[id]
+	if !ok {
+		return store.DesignSessionSummary{}, fmt.Errorf("%w: design_session id %s", store.ErrNotFound, id)
+	}
+	return store.DesignSessionSummary{DesignSession: ds, Stage: store.StageOpened}, nil
 }
 
 // designSummaries is the aggregate a sessions-list test states directly:

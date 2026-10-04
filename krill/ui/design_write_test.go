@@ -98,6 +98,18 @@ func (f writeSurfaceSessions) SummarizeByProduct(_ context.Context, productID uu
 	return store.ProductDesignSessionsSummary{ProductID: productID, Sessions: sessions}, nil
 }
 
+// GetSummaryByID answers out of byID the way the rejected-follow-up
+// re-render reads the session it just wrote to. Like SummarizeByProduct it
+// is a READ, and the re-render genuinely needs one: it rebuilds the whole
+// detail page -- header, properties, rail -- to show the refusal inline.
+func (f writeSurfaceSessions) GetSummaryByID(_ context.Context, id uuid.UUID) (store.DesignSessionSummary, error) {
+	ds, ok := f.byID[id]
+	if !ok {
+		return store.DesignSessionSummary{}, fmt.Errorf("%w: design_session id %s", store.ErrNotFound, id)
+	}
+	return store.DesignSessionSummary{DesignSession: ds, Stage: store.StageOpened}, nil
+}
+
 type writeSurfaceEvents struct {
 	bySession     map[uuid.UUID][]store.RevisionEvent
 	openQuestions map[uuid.UUID][]store.OpenQuestion

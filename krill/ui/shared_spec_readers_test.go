@@ -197,6 +197,19 @@ func (d emptyDesignSessions) GetByID(_ context.Context, id uuid.UUID) (store.Des
 	return d.session, nil
 }
 
+// GetSummaryByID answers out of the same seeded row GetByID does, with the
+// stage the real read would give a session nothing has happened to yet.
+// It is written out rather than left to the embedded interface: embedding
+// supplies the method for free at compile time and hands back a nil
+// interface value at run time, so a caller would get a panic instead of the
+// 404 the ErrNotFound branch promises.
+func (d emptyDesignSessions) GetSummaryByID(_ context.Context, id uuid.UUID) (store.DesignSessionSummary, error) {
+	if d.session.ID == uuid.Nil || id != d.session.ID {
+		return store.DesignSessionSummary{}, store.ErrNotFound
+	}
+	return store.DesignSessionSummary{DesignSession: d.session, Stage: store.StageOpened}, nil
+}
+
 // NewDesignSessions seeds the one session the legacy-URL fixture names.
 func NewDesignSessions(id, productID uuid.UUID) emptyDesignSessions {
 	return emptyDesignSessions{session: store.DesignSession{

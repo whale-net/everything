@@ -119,11 +119,27 @@ func firstLine(s string) string {
 	return strings.TrimSpace(line)
 }
 
-// buildDesignSessionDetail assembles one session's read view from the same
-// three store reads get_design_session (GetByID + ListBySession) and
-// list_open_questions (GetByID + ListOpenQuestions) perform.
-func (app *App) buildDesignSessionDetail(ctx context.Context, id uuid.UUID) (pages.DesignSessionDetailPage, error) {
-	ds, err := app.designSessions.GetByID(ctx, id)
+// buildDesignSessionDetail assembles one session's read view.
+//
+// Three reads, each named for what it is the browser's twin of:
+//
+//   - GetSummaryByID is the aggregate the sessions LIST already reads this
+//     same session out of, narrowed to one row. It supplies the derived
+//     stage and the opening identity, so the badge beside this page's h1
+//     is the same badge the row linking here showed. Reading the stage any
+//     other way -- a ListLatestSignoffBySessionIDs call, or a second
+//     derivation here -- is how a list and a detail come to disagree about
+//     the same session's stage.
+//   - ListBySession and ListOpenQuestions are the exact accessors
+//     get_design_session and list_open_questions call, so the log and the
+//     question set an operator reads are the ones an MCP client reads.
+//
+// The product's name and link come from the request the route already
+// resolved (productNameFor), not from a read of the product here: the pid
+// is in the path, so a second product lookup would be the same row asked
+// for twice.
+func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid.UUID) (pages.DesignSessionDetailPage, error) {
+	summary, err := app.designSessions.GetSummaryByID(ctx, id)
 	if err != nil {
 		return pages.DesignSessionDetailPage{}, err
 	}
@@ -135,17 +151,41 @@ func (app *App) buildDesignSessionDetail(ctx context.Context, id uuid.UUID) (pag
 	if err != nil {
 		return pages.DesignSessionDetailPage{}, err
 	}
+	openedBy, openedByTitle := openingOperatorLabel(summary.OpenedBy)
 	return pages.DesignSessionDetailPage{
-		ID:                     ds.ID.String(),
-		ProductID:              ds.ProductID.String(),
-		OpeningSubmission:      ds.OpeningSubmission,
-		OpenedByKrillSessionID: ds.OpenedByKrillSessionID.String(),
-		CreatedAt:              formatTime(ds.CreatedAt),
-		ProductSessionsPath:    designProductSessionsPath(ds.ProductID),
+		ID:                     summary.ID.String(),
+		ProductID:              summary.ProductID.String(),
+		ProductName:            app.productNameFor(ctx, productID),
+		ProductOverviewPath:    productHref(productID, overviewSuffix),
+		OpeningRequest:         firstLine(summary.OpeningSubmission),
+		OpeningSubmission:      summary.OpeningSubmission,
+		Stage:                  string(summary.Stage),
+		OpenedBy:               openedBy,
+		OpenedByTitle:          openedByTitle,
+		OpenedByKrillSessionID: summary.OpenedByKrillSessionID.String(),
+		CreatedAt:              formatTime(summary.CreatedAt),
+		ProductSessionsPath:    designProductSessionsPath(summary.ProductID),
 		Events:                 revisionEventRows(events),
 		OpenQuestions:          openQuestionRows(questions),
-		AnswersPath:            designAnswersPath(ds.ProductID, ds.ID),
+		AnswersPath:            designAnswersPath(summary.ProductID, summary.ID),
 	}, nil
+}
+
+// openingOperatorLabel renders the identity that opened a session for the
+// properties card: the bare subject an operator recognises, with the full
+// (issuer, subject) pair in the element's title for the case where the sub
+// alone is ambiguous across issuers.
+//
+// An unreadable krill_session row is the zero Subject, and it renders as
+// two empty strings -- not as a placeholder identity. The card then shows
+// the session id chip with no "Opened by" line at all, which is the honest
+// rendering: the page records that a session was opened and by which krill
+// session, and says nothing at all about a person it could not read.
+func openingOperatorLabel(s store.Subject) (label, title string) {
+	if s.Sub == "" {
+		return "", ""
+	}
+	return s.Sub, s.Sub + "@" + s.Iss
 }
 
 func revisionEventRows(events []store.RevisionEvent) []pages.RevisionEventRow {
@@ -351,7 +391,7 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid design session id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	detail, err := app.buildDesignSessionDetail(r.Context(), id)
+	detail, err := app.buildDesignSessionDetail(r.Context(), productID, id)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && detail.ProductID != productID.String()) {
 		if err == nil {
 			logger.Info("design session not under the product the URL names",
