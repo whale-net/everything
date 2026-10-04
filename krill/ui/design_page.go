@@ -1,11 +1,15 @@
 // The design-session read surface: a product's session list, one session's
-// full ordered revision-event log, and its currently-open questions. Every
-// read here goes through the exact store accessors the MCP tools'
-// get_design_session and list_open_questions call
-// (store.DesignSessionStore.GetByID/ListByProduct and
-// store.RevisionEventStore.ListBySession/ListOpenQuestions), so a browser
-// and an MCP client see one session, one ordering, and one last-event-wins
-// open-question derivation -- never a parallel query.
+// full ordered revision-event log, and its currently-open questions.
+//
+// The list reads DesignSessionStore.SummarizeByProduct -- the one
+// product-wide aggregate -- rather than the accessors the MCP tools call
+// one at a time. That is the same read overview_tiles.go already makes, so
+// the Overview's blocking-question tile and this table cannot disagree
+// about a session's stage or its open blocking count, and neither costs a
+// query per session. The detail reads the exact accessors get_design_session
+// and list_open_questions call (GetByID, ListBySession, ListOpenQuestions),
+// so a browser and an MCP client still see one session, one ordering, and
+// one last-event-wins open-question derivation.
 //
 // Unlike a write, a read carries no attribution, so it needs no krill
 // session. These pages are behind readerRoute (sign-in plus a reader or
