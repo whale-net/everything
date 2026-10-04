@@ -33,6 +33,68 @@ type MilestoneStatusOption struct {
 	Selected bool
 }
 
+// ProgressCell is the "N of M done" figures one container's progress cell
+// renders.
+//
+// It is its own type, embedded by every row that shows a bar, so a
+// milestone row and its milepebbles render the same figures through the
+// same three methods. A milepebble with its own copy of the arithmetic
+// would eventually disagree with its parent -- and with the read, which
+// owns how a cancelled task counts (store.CancelledTaskCounting).
+type ProgressCell struct {
+	// ProgressError is set when these figures could not be read. It
+	// renders in place of the bar, because a progress column showing
+	// nothing would read as "no tasks" rather than "not checked".
+	ProgressError string
+
+	Done  int
+	Total int
+}
+
+// HasTasks reports whether this cell's container holds any task at all. A
+// container that does not says so rather than rendering "0 of 0", which
+// reads as a stalled milestone rather than a new one.
+func (p ProgressCell) HasTasks() bool { return p.Total > 0 }
+
+// IsComplete reports whether every task this container holds is Done --
+// the state a shipped container's bar shows at full. It is what colours
+// the bar: a full bar is finished work, and a partial one is work in
+// flight, whatever else the status badge beside it says.
+func (p ProgressCell) IsComplete() bool { return p.HasTasks() && p.Done == p.Total }
+
+// ProgressLabel is the bar's "N/M tasks done" sentence, built in Go so the
+// markup is one string rather than text interleaved with numbers: templ
+// separates adjacent text and expressions with HTML comments, which would
+// split the sentence into pieces no reader -- and no assertion -- sees as
+// one.
+func (p ProgressCell) ProgressLabel() string {
+	if !p.HasTasks() {
+		return "No tasks yet"
+	}
+	return itoa(p.Done) + "/" + itoa(p.Total) + " tasks done"
+}
+
+// MilepebbleRow is one milepebble's row, shown beneath its milestone when
+// the operator expands that milestone.
+type MilepebbleRow struct {
+	// ID is the milepebble's own id, carried so the row is addressable and
+	// so its tasks link can be checked against it.
+	ID string
+
+	// Name links to this milepebble's own task list -- the tasks cut from
+	// the milepebble, not the milestone's whole cut. That is what an
+	// operator expands a milepebble to reach, so it is what its name is.
+	Name      string
+	TasksPath string
+
+	// Status renders through the shared statusBadge: a milepebble is its
+	// own container with its own status, and the parent's badge says
+	// nothing about it.
+	Status string
+
+	ProgressCell
+}
+
 // MilestoneRow is one milestone's row.
 //
 // The progress figures are Done and Total as the progress read returned
@@ -53,13 +115,7 @@ type MilestoneRow struct {
 	// the same colour for a status as the delivery page and the Board do.
 	Status string
 
-	// ProgressError is set when this row's progress figures could not be
-	// read. It renders in place of the bar, because a progress column
-	// showing nothing would read as "no tasks" rather than "not checked".
-	ProgressError string
-
-	Done  int
-	Total int
+	ProgressCell
 
 	// FRBudget is the stored budget as the operator reads it, empty when
 	// the milestone declares none.
@@ -68,33 +124,86 @@ type MilestoneRow struct {
 	// Outcome is the milestone's own outcome sentence, markdown-rendered
 	// the same way the delivery page renders it.
 	Outcome string
+
+	// Milepebbles are the containers cut from this milestone, in the
+	// listing's own order. Non-empty is what makes the row expandable: a
+	// milestone with none cut renders no expander, because there is
+	// nothing behind it to reveal.
+	Milepebbles []MilepebbleRow
+
+	// Expanded is true when this request's expand parameter named this
+	// milestone. The milepebbles render beneath the row only then, and the
+	// expander's aria-expanded agrees with what is on screen.
+	Expanded bool
+
+	// ExpandHref and CollapseHref are this row's expander's two targets:
+	// the page's own URL with this milestone added to the expanded set, and
+	// with it removed. Both carry the status filter through, so expanding
+	// cannot drop the filter the operator chose.
+	ExpandHref   string
+	CollapseHref string
 }
 
-// HasTasks reports whether this row holds any task at all. A milestone
-// that does not says so rather than rendering "0 of 0", which reads as a
-// stalled milestone rather than a new one.
-func (r MilestoneRow) HasTasks() bool { return r.Total > 0 }
+// HasMilepebbles reports whether this row can be expanded at all. An
+// uncut milestone renders no expander rather than one that reveals an
+// empty block.
+func (r MilestoneRow) HasMilepebbles() bool { return len(r.Milepebbles) > 0 }
 
-// IsComplete reports whether every task this milestone holds is Done --
-// the state a shipped milestone's bar shows at full. It is what colours
-// the bar: a full bar is finished work, and a partial one is work in
-// flight, whatever else the status badge beside it says.
-func (r MilestoneRow) IsComplete() bool { return r.HasTasks() && r.Done == r.Total }
-
-// ProgressLabel is the bar's "N/M tasks done" sentence, built in Go so the
-// markup is one string rather than text interleaved with numbers: templ
-// separates adjacent text and expressions with HTML comments, which would
-// split the sentence into pieces no reader -- and no assertion -- sees as
-// one.
-func (r MilestoneRow) ProgressLabel() string {
-	if !r.HasTasks() {
-		return "No tasks yet"
+// ExpanderHref is where the row's expander points right now: the collapse
+// URL when the row is expanded, the expand URL when it is not. One
+// accessor so the control cannot show one state and link to the other.
+func (r MilestoneRow) ExpanderHref() string {
+	if r.Expanded {
+		return r.CollapseHref
 	}
-	return itoa(r.Done) + "/" + itoa(r.Total) + " tasks done"
+	return r.ExpandHref
+}
+
+// ExpanderLabel is the expander's accessible name, saying what pressing
+// it will do rather than which direction the chevron happens to point.
+func (r MilestoneRow) ExpanderLabel() string {
+	verb := "Show"
+	if r.Expanded {
+		verb = "Hide"
+	}
+	return verb + " the " + itoa(len(r.Milepebbles)) + " milepebbles cut from " + r.Name
+}
+
+// ExpanderClass is the expander's daisyUI button classes, rotating the
+// chevron when the row is expanded.
+//
+// It is computed here rather than at each call site so the button never
+// renders as a bare square with no affordance, and the rotation is a
+// function of the same Expanded flag the aria-expanded and the rows below
+// read -- three things that cannot disagree about whether this row is open.
+func (r MilestoneRow) ExpanderClass() string {
+	class := "btn btn-ghost btn-sm btn-square"
+	if r.Expanded {
+		class += " rotate-90"
+	}
+	return class
+}
+
+// ExpanderAriaExpanded is the expander's aria-expanded value. It is a
+// method rather than a raw bool because aria-expanded takes the strings
+// "true"/"false", and templ renders a bare bool through its own escaping
+// rules, which is not a contract this control should depend on.
+func (r MilestoneRow) ExpanderAriaExpanded() string {
+	if r.Expanded {
+		return "true"
+	}
+	return "false"
 }
 
 // MilestonesPage is the whole region: the page header, the status filter
 // and the table.
+//
+// The row state the page carries -- the filter and the expanded milestone --
+// is already in the URL by the time it reaches here, so this view model has
+// no notion of a click: every row carries the two hrefs its expander
+// alternates between, and the template renders whichever one matches the
+// row's own Expanded flag. A control whose link and whose appearance could
+// disagree is a control that lies to half its users.
 //
 // The two error fields are separate answers, never both set at once. An
 // empty table is a real answer -- this product has no milestone in that
@@ -129,29 +238,33 @@ type MilestonesPage struct {
 	ProgressError string
 }
 
-// milestoneProgress renders one row's progress cell: a bar and its
-// sentence, the sentence alone when the milestone holds no task, and the
+// milestoneProgress renders one container's progress cell: a bar and its
+// sentence, the sentence alone when the container holds no task, and the
 // failure sentence when the figures could not be read.
+//
+// It takes the ProgressCell rather than the row, so a milestone and a
+// milepebble render the same figures through the same branch -- there is
+// no second copy of this markup that could drift from the first.
 //
 // The three are distinct answers and never share a branch -- "no tasks",
 // "some tasks", and "we did not check" are three different facts, and
 // rendering the second as either of the others is how an operator comes
 // to trust a number that was never read.
-templ milestoneProgress(row MilestoneRow) {
-	if row.ProgressError != "" {
-		<span class="text-sm text-base-content/70" data-krill="milestone-progress-error">{ row.ProgressError }</span>
-	} else if !row.HasTasks() {
-		<span class="text-sm text-base-content/70" data-krill="milestone-no-tasks">{ row.ProgressLabel() }</span>
+templ milestoneProgress(cell ProgressCell) {
+	if cell.ProgressError != "" {
+		<span class="text-sm text-base-content/70" data-krill="milestone-progress-error">{ cell.ProgressError }</span>
+	} else if !cell.HasTasks() {
+		<span class="text-sm text-base-content/70" data-krill="milestone-no-tasks">{ cell.ProgressLabel() }</span>
 	} else {
 		<div class="flex items-center gap-2">
-			if row.IsComplete() {
+			if cell.IsComplete() {
 				<progress class="progress progress-success w-32" data-krill="milestone-progress"
-					value={ itoa(row.Done) } max={ itoa(row.Total) }></progress>
+					value={ itoa(cell.Done) } max={ itoa(cell.Total) }></progress>
 			} else {
 				<progress class="progress progress-warning w-32" data-krill="milestone-progress"
-					value={ itoa(row.Done) } max={ itoa(row.Total) }></progress>
+					value={ itoa(cell.Done) } max={ itoa(cell.Total) }></progress>
 			}
-			<span class="text-sm text-base-content/70" data-krill="milestone-progress-label">{ row.ProgressLabel() }</span>
+			<span class="text-sm text-base-content/70" data-krill="milestone-progress-label">{ cell.ProgressLabel() }</span>
 		</div>
 	}
 }
@@ -188,6 +301,68 @@ templ MilestoneStatusForm(page MilestonesPage) {
 	</form>
 }
 
+// milestoneExpander is the per-row toggle that reveals a milestone's
+// milepebbles. A milestone with none cut renders nothing here at all.
+//
+// It is a real link to this page's own URL with the row's expansion added
+// or removed, carrying the status filter through, so the no-JavaScript path
+// is an ordinary GET that lands on the same table with the same filter and
+// this row expanded. htmx layers an in-place swap on top of that same URL,
+// so the working case swaps the region rather than reloading the page
+// around it -- which is what keeps the filter and the scroll position.
+//
+// The chevron rotates through a conditional class rather than carrying two
+// icons, so the expanded and collapsed states cannot drift apart.
+templ milestoneExpander(m MilestoneRow) {
+	<a href={ templ.URL(m.ExpanderHref()) }
+		class={ m.ExpanderClass() }
+		aria-expanded={ m.ExpanderAriaExpanded() }
+		aria-label={ m.ExpanderLabel() }
+		title={ m.ExpanderLabel() }
+		data-krill="milestone-expand"
+		data-krill-milestone-id={ m.ID }
+		hx-get={ templ.URL(m.ExpanderHref()) }
+		hx-target={ "#" + MilestonesAnchor }
+		hx-swap="outerHTML"
+		hx-push-url="true">
+		<svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+			<path d="m9 18 6-6-6-6"></path>
+		</svg>
+	</a>
+}
+
+// MilepebbleTable is one expanded milestone's milepebbles: each with its
+// name linking to its own task list, its own status badge, and its own
+// progress bar.
+//
+// It is a nested table inside the row it belongs to rather than columns of
+// its own on the milestone table: a milepebble has no FR budget and no
+// outcome of its own here (the shipped/unshipped breakdown and the outcome
+// live on the milestone detail page, FR 1d16afe2), so padding the parent
+// table with empty cells would invent columns the FR does not ask for.
+templ MilepebbleTable(milepebbles []MilepebbleRow) {
+	<table class="table table-sm" data-krill="milepebble-table">
+		<thead>
+			<tr>
+				<th>Milepebble</th>
+				<th>Status</th>
+				<th>Progress</th>
+			</tr>
+		</thead>
+		<tbody>
+			for _, mp := range milepebbles {
+				<tr data-krill="milepebble-row" data-krill-milepebble-id={ mp.ID }>
+					<td>
+						<a href={ templ.URL(mp.TasksPath) } class="link" data-krill="milepebble-name">{ mp.Name }</a>
+					</td>
+					<td>@statusBadge(mp.Status)</td>
+					<td>@milestoneProgress(mp.ProgressCell)</td>
+				</tr>
+			}
+		</tbody>
+	</table>
+}
+
 // MilestoneTable is the table itself, in the order buildMilestonesPage put
 // the rows in.
 //
@@ -209,10 +384,15 @@ templ MilestoneTable(rows []MilestoneRow) {
 				for _, m := range rows {
 					<tr class="hover" data-krill="milestone-row" data-krill-milestone-id={ m.ID }>
 						<td>
-							<a href={ templ.URL(m.DetailPath) } class="link font-medium" data-krill="milestone-name">{ m.Name }</a>
+							<div class="flex items-center gap-1">
+								if m.HasMilepebbles() {
+									@milestoneExpander(m)
+								}
+								<a href={ templ.URL(m.DetailPath) } class="link font-medium" data-krill="milestone-name">{ m.Name }</a>
+							</div>
 						</td>
 						<td>@statusBadge(m.Status)</td>
-						<td>@milestoneProgress(m)</td>
+						<td>@milestoneProgress(m.ProgressCell)</td>
 						<td class="text-right" data-krill="milestone-fr-budget">{ m.FRBudget }</td>
 						<td class="max-w-md" data-krill="milestone-outcome">
 							if m.Outcome != "" {
@@ -220,6 +400,13 @@ templ MilestoneTable(rows []MilestoneRow) {
 							}
 						</td>
 					</tr>
+					if m.Expanded {
+						<tr data-krill="milepebble-expansion" data-krill-for-milestone-id={ m.ID }>
+							<td colspan="5" class="bg-base-200/60">
+								@MilepebbleTable(m.Milepebbles)
+							</td>
+						</tr>
+					}
 				}
 			</tbody>
 		</table>
