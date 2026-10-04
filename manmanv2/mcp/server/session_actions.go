@@ -91,7 +91,7 @@ type executeActionOut struct {
 func AddSessionActionTools(srv *mcp.Server, api SessionActionsAPI, allow ActionAllowlist) {
 	a := &sessionActions{api: api, allow: allow}
 	mcp.AddTool(srv, &mcp.Tool{Name: GetSessionActionsTool.Name, Description: "List the console Actions available on a session, each with its name and parameters."}, a.list)
-	mcp.AddTool(srv, &mcp.Tool{Name: ExecuteActionTool.Name, Description: "Run a named console Action on a running session. Requires idempotency_key. Gamers may only run allowlisted Actions."}, a.execute)
+	mcp.AddTool(srv, &mcp.Tool{Name: ExecuteActionTool.Name, Description: "Run a named console Action on a running session."}, a.execute)
 }
 
 type sessionActions struct {

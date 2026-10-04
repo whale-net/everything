@@ -55,7 +55,7 @@ func (s SQLStartAllowlist) Allowed(ctx context.Context, deploymentID int64) (boo
 }
 
 type deploymentIn struct {
-	DeploymentID   int64  `json:"deployment_id" jsonschema:"the deployment (server game config) id"`
+	DeploymentID   int64  `json:"deployment_id" jsonschema:"deployment id"`
 	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"optional key making retries of this call safe"`
 }
 
@@ -94,9 +94,9 @@ type lifecycle struct {
 func AddLifecycleTools(srv *mcp.Server, api LifecycleAPI, allowlist StartAllowlist, gate *Gate) {
 	l := &lifecycle{api: api, allp: allowlist}
 	mcp.AddTool(srv, &mcp.Tool{Name: StartDeploymentTool.Name,
-		Description: "Start a session for a deployment. If one is already running it is returned and no second is started. Gamers may only start allowlisted deployments."}, l.start)
+		Description: "Start a session for a deployment. If one is already running it is returned and no second is started."}, l.start)
 	schema := map[string]any{"type": "object", "properties": map[string]any{
-		"deployment_id":      map[string]any{"type": "integer", "description": "the deployment (server game config) id"},
+		"deployment_id":      map[string]any{"type": "integer", "description": "deployment id"},
 		"confirmation_token": map[string]any{"type": "string", "description": "token from the preview call; omit on the first call"},
 		"idempotency_key":    map[string]any{"type": "string", "description": "optional key making retries safe"},
 	}, "required": []string{"deployment_id"}}
