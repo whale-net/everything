@@ -129,6 +129,59 @@ nothing in a channel (dry run, or too few pickable songs) leaves the
 previous poll open, and a poll a person created with /wpoll is never
 closed by a run.
 
+## Running the weekly poll by hand
+
+The schedule is not the only way to run it. `WeeklyMusicPollWorkflow`
+is a normal Temporal workflow, so an operator can start it from the
+Temporal UI (or the CLI) and it behaves exactly like a scheduled run:
+same pick, same auto-close of the channel's previous scheduled poll,
+same post, same `scheduledpollrun` history.
+
+- **Workflow type:** `WeeklyMusicPollWorkflow`
+- **Task queue:** `fcm-<env>-main` (the FCM Temporal worker's queue)
+- **Input:** optional JSON object
+
+```json
+{}
+```
+
+A run with no input keys (or `{}`) fans out over every configured
+music-poll channel. Two keys narrow it:
+
+- `channel` — a Slack channel id; the run covers only that one
+  music-poll channel:
+
+```json
+{"channel": "C0123456789"}
+```
+
+- `dry_run` — pick and report without touching anything:
+
+```json
+{"dry_run": true}
+```
+
+A dry run posts nothing, closes nothing and records no history row —
+so it also has no effect on the 8-poll no-repeat rule — and the
+workflow result lists, per channel, the options it would have picked
+(each with song link, submitter and submission date), or the skip
+reason (`skipped-few-pickable` when fewer than three songs were
+pickable). A non-dry manual run is a real run: it counts toward the
+8-poll history even in the same week as a scheduled run, because its
+run identity is its workflow execution id, not the scheduled fire
+time — so retrying or replaying the same execution never posts a
+second poll in a channel it already posted in.
+
+**Verifying a run's outcome.** Open the workflow execution in the
+Temporal UI and read its result: one entry per channel with a status
+of `posted` (the new poll's ids in `poll_id`), `dry-run` (the
+would-be options), `skipped-few-pickable`, `already-posted` (a
+replayed run), or `post-failed` (with the Slack error). The
+`scheduledpollrun` table holds the same history — one row per
+(run identity, channel) with the run's options and the posted poll's
+ids — and the closed previous poll shows in that channel's poll list
+with its final result.
+
 ## Diagnosing it: start here
 
 **The pickup is healthy.** The chain is running — the post job posts each week, the archive job

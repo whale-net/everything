@@ -27,6 +27,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.db.music
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.music_poll.workflow import (
     ALREADY_POSTED,
+    DRY_RUN,
     POSTED,
     POST_FAILED,
     SKIPPED_FEW_PICKABLE,
@@ -87,6 +88,17 @@ def _scheduled_identity(**overrides: Any) -> RunIdentity:
         "run_at": START_TIME,
         "scheduled_fire_time": FIRE_TIME,
         "workflow_run_id": None,
+    }
+    kwargs.update(overrides)
+    return RunIdentity(**kwargs)
+
+
+def _manual_identity(**overrides: Any) -> RunIdentity:
+    kwargs: dict[str, Any] = {
+        "run_identity": RUN_ID,
+        "run_at": START_TIME,
+        "scheduled_fire_time": None,
+        "workflow_run_id": RUN_ID,
     }
     kwargs.update(overrides)
     return RunIdentity(**kwargs)
@@ -361,6 +373,218 @@ def test_a_failed_post_is_reported_for_the_channel():
 
     assert result.status == POST_FAILED
     assert result.error is not None
+
+
+# ----- manual runs from the Temporal UI (FR f7626736) ------------
+
+
+def test_a_manual_run_with_no_params_fans_out_like_a_scheduled_run():
+    activities = FakeActivities(
+        {
+            "get_music_poll_channels_activity": ["C_MUSIC", "C_JAMS"],
+            "get_scheduled_poll_run_activity": None,
+            "select_music_poll_options_activity": [
+                _option("https://open.spotify.com/track/abc")
+            ],
+            "record_scheduled_poll_run_activity": 7,
+            "post_scheduled_poll_activity": _posted_outcome(),
+        }
+    )
+
+    results = asyncio.run(
+        run_for_channels(
+            activities, _manual_identity(), WeeklyMusicPollParams()
+        )
+    )
+
+    # no channel and no dry-run flag: every configured
+    # channel, selected, recorded and posted like a
+    # scheduled run
+    assert [r.slack_channel_slack_id for r in results] == [
+        "C_MUSIC",
+        "C_JAMS",
+    ]
+    assert all(r.status == POSTED for r in results)
+    assert activities.names().count("select_music_poll_options_activity") == 2
+    assert activities.names().count("record_scheduled_poll_run_activity") == 2
+    assert activities.names().count("post_scheduled_poll_activity") == 2
+
+
+def test_a_channel_limited_run_touches_only_that_channel():
+    activities = FakeActivities(
+        {
+            "get_music_poll_channels_activity": ["C_MUSIC", "C_JAMS"],
+            "get_scheduled_poll_run_activity": None,
+            "select_music_poll_options_activity": [
+                _option("https://open.spotify.com/track/abc")
+            ],
+            "record_scheduled_poll_run_activity": 7,
+            "post_scheduled_poll_activity": _posted_outcome(),
+        }
+    )
+
+    results = asyncio.run(
+        run_for_channels(
+            activities,
+            _manual_identity(),
+            WeeklyMusicPollParams(channel="C_JAMS"),
+        )
+    )
+
+    # only the limited channel ran -- the channel list
+    # was never fetched, and no activity touched
+    # C_MUSIC
+    assert [r.slack_channel_slack_id for r in results] == ["C_JAMS"]
+    assert results[0].status == POSTED
+    assert activities.names() == [
+        "get_scheduled_poll_run_activity",
+        "select_music_poll_options_activity",
+        "record_scheduled_poll_run_activity",
+        "post_scheduled_poll_activity",
+    ]
+    for _name, args in activities.calls:
+        assert "C_MUSIC" not in args
+
+
+def test_a_dry_run_returns_the_options_it_would_have_picked():
+    options = [
+        _option("https://open.spotify.com/track/abc"),
+        _option("https://youtu.be/xyz", "U2"),
+    ]
+    activities = FakeActivities(
+        {
+            "get_music_poll_channels_activity": ["C_MUSIC", "C_JAMS"],
+            "select_music_poll_options_activity": options,
+        }
+    )
+
+    results = asyncio.run(
+        run_for_channels(
+            activities,
+            _manual_identity(),
+            WeeklyMusicPollParams(dry_run=True),
+        )
+    )
+
+    # the would-be options for every channel are the
+    # workflow result
+    assert [r.slack_channel_slack_id for r in results] == [
+        "C_MUSIC",
+        "C_JAMS",
+    ]
+    assert all(r.status == DRY_RUN for r in results)
+    assert all(r.options == options for r in results)
+    # a dry run only reads: the channel list and each
+    # channel's picks -- no run rows, no posts, no
+    # closes, so nothing toward the 8-poll history
+    assert activities.names() == [
+        "get_music_poll_channels_activity",
+        "select_music_poll_options_activity",
+        "select_music_poll_options_activity",
+    ]
+
+
+def test_a_dry_run_limited_to_one_channel_reports_only_that_channel():
+    activities = FakeActivities(
+        {
+            "get_music_poll_channels_activity": ["C_MUSIC", "C_JAMS"],
+            "select_music_poll_options_activity": [
+                _option("https://open.spotify.com/track/abc")
+            ],
+        }
+    )
+
+    results = asyncio.run(
+        run_for_channels(
+            activities,
+            _manual_identity(),
+            WeeklyMusicPollParams(channel="C_MUSIC", dry_run=True),
+        )
+    )
+
+    assert [r.slack_channel_slack_id for r in results] == ["C_MUSIC"]
+    assert results[0].status == DRY_RUN
+    assert activities.names() == ["select_music_poll_options_activity"]
+
+
+def test_a_dry_run_reports_a_channel_with_few_pickable_songs():
+    activities = FakeActivities(
+        {
+            "get_music_poll_channels_activity": ["C_JAMS"],
+            "select_music_poll_options_activity": None,
+        }
+    )
+
+    results = asyncio.run(
+        run_for_channels(
+            activities,
+            _manual_identity(),
+            WeeklyMusicPollParams(dry_run=True),
+        )
+    )
+
+    # the dry run would have skipped the week and left
+    # the previous poll open
+    assert results[0].status == SKIPPED_FEW_PICKABLE
+    assert results[0].options == []
+
+
+def test_a_manual_run_is_a_distinct_real_run_in_the_same_week():
+    # a scheduled run and a manual run in the same week,
+    # each under its own identity
+    activities = FakeActivities(
+        {
+            "get_scheduled_poll_run_activity": None,
+            "select_music_poll_options_activity": [
+                _option("https://open.spotify.com/track/abc")
+            ],
+            "record_scheduled_poll_run_activity": 7,
+            "post_scheduled_poll_activity": _posted_outcome(),
+        }
+    )
+
+    scheduled = asyncio.run(
+        run_for_channel(activities, "C_MUSIC", _scheduled_identity())
+    )
+    manual = asyncio.run(
+        run_for_channel(activities, "C_MUSIC", _manual_identity())
+    )
+
+    # neither run is treated as the other's replay: both
+    # are real runs that close, post and record toward
+    # the 8-poll history, under distinct identities
+    assert scheduled.status == POSTED
+    assert manual.status == POSTED
+    recorded_identities = [
+        args[0]
+        for name, args in activities.calls
+        if name == "record_scheduled_poll_run_activity"
+    ]
+    assert recorded_identities == [FIRE_TIME.isoformat(), RUN_ID]
+
+
+def test_a_replayed_manual_execution_does_not_post_twice():
+    activities = FakeActivities(
+        {
+            "get_scheduled_poll_run_activity": _run_row(
+                run_identity=RUN_ID,
+                workflow_run_id=RUN_ID,
+                poll_id=42,
+                slack_message_ts="123.456",
+            ),
+        }
+    )
+
+    result = asyncio.run(
+        run_for_channel(activities, "C_MUSIC", _manual_identity())
+    )
+
+    # the same execution id, retried or replayed: the
+    # run already posted poll 42, so it neither selects,
+    # records, posts again nor closes its own poll
+    assert result.status == ALREADY_POSTED
+    assert result.poll_id == 42
+    assert activities.names() == ["get_scheduled_poll_run_activity"]
 
 
 # ----- the worker registration ---------------------------------
