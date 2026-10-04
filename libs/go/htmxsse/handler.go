@@ -26,6 +26,25 @@ type Fragment func(*http.Request, string) ([]byte, error)
 // list contains the topic.
 const TopicAttr = "data-sse-topic"
 
+// RegionAttr narrows a WithRegion handler's swaps to elements carrying
+// both the topic and this region, so two streams on one page can share
+// topics without swapping into each other's regions.
+const RegionAttr = "data-sse-region"
+
+// Option configures a Handler.
+type Option func(*handlerOptions)
+
+type handlerOptions struct {
+	region string
+}
+
+// WithRegion addresses every swap to [TopicAttr~=topic][RegionAttr=region]
+// instead of every element carrying the topic.
+func WithRegion(region string) Option {
+	validateTopic(region)
+	return func(o *handlerOptions) { o.region = region }
+}
+
 // validateTopic rejects topics that cannot be embedded verbatim in the
 // hx-target selector emitSwap writes.
 func validateTopic(topic string) {
@@ -44,7 +63,11 @@ func validateTopic(topic string) {
 // - Runs a heartbeat for each topic on a configurable interval (NFR11)
 // - Closes the stream after a configurable maximum lifetime (NFR12)
 // - Cleans up all subscriptions on stream exit (FR1)
-func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
+func Handler(hub *Hub, topics []string, fragment Fragment, opts ...Option) http.HandlerFunc {
+	var o handlerOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if len(topics) == 0 {
 		panic("Handler requires at least one topic")
 	}
@@ -173,7 +196,7 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 				emitKeepalive(w, flusher, topic)
 			} else {
 				// New or stale state, emit swap with id containing full baseline set
-				emitSwap(w, flusher, topic, frag, encodeBaseline(sortedTopics, currentBaseline))
+				emitSwap(w, flusher, swapSelector(topic, o.region), frag, encodeBaseline(sortedTopics, currentBaseline))
 			}
 		}
 
@@ -218,7 +241,7 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 					} else {
 						// Changed - emit swap with id containing full baseline set
 						currentBaseline[topic] = frag
-						emitSwap(w, flusher, topic, frag, encodeBaseline(sortedTopics, currentBaseline))
+						emitSwap(w, flusher, swapSelector(topic, o.region), frag, encodeBaseline(sortedTopics, currentBaseline))
 					}
 				}
 
@@ -234,22 +257,31 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 
 				currentBaseline[topic] = frag
 				// Always emit swap for received events
-				emitSwap(w, flusher, topic, frag, encodeBaseline(sortedTopics, currentBaseline))
+				emitSwap(w, flusher, swapSelector(topic, o.region), frag, encodeBaseline(sortedTopics, currentBaseline))
 
 			}
 		}
 	}
 }
 
+// swapSelector is the hx-target selector a topic's swap is addressed to.
+func swapSelector(topic, region string) string {
+	sel := fmt.Sprintf("[%s~='%s']", TopicAttr, topic)
+	if region != "" {
+		sel += fmt.Sprintf("[%s='%s']", RegionAttr, region)
+	}
+	return sel
+}
+
 // emitSwap writes a full-state swap to the response: an unnamed message
 // (htmx 4's hx-sse extension swaps unnamed messages and only dispatches
 // named ones as DOM events) whose payload is an <hx-partial> addressed to
-// every element carrying the topic in TopicAttr. The message id carries the
+// target (see swapSelector). The message id carries the
 // baseline set. All writes use the Flusher to ensure atomicity and
 // immediate delivery.
-func emitSwap(w http.ResponseWriter, flusher http.Flusher, topic string, fragment []byte, baselineID string) {
+func emitSwap(w http.ResponseWriter, flusher http.Flusher, target string, fragment []byte, baselineID string) {
 	var payload bytes.Buffer
-	fmt.Fprintf(&payload, `<hx-partial hx-target="[%s~='%s']" hx-swap="innerHTML">`, TopicAttr, topic)
+	fmt.Fprintf(&payload, `<hx-partial hx-target="%s" hx-swap="innerHTML">`, target)
 	payload.Write(bytes.TrimSpace(fragment))
 	payload.WriteString("</hx-partial>")
 

@@ -187,6 +187,33 @@ func TestSwapFrameShape(t *testing.T) {
 	require.NotContains(t, w.Body.String(), "event: topic-a\n")
 }
 
+// TestWithRegionScopesSwapTarget covers two streams sharing a topic on one
+// page: each swap must name its own region so it cannot land in the other's.
+func TestWithRegionScopesSwapTarget(t *testing.T) {
+	h := NewHub(func(ctx context.Context) (Transport, error) { return &fakeTransport{}, nil }, DefaultConfig())
+	defer h.Close()
+
+	handler := Handler(h, []string{"topic-a"}, func(r *http.Request, topic string) ([]byte, error) {
+		return []byte("<p>x</p>"), nil
+	}, WithRegion("usage"))
+
+	req := httptest.NewRequest("GET", "/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler(w, req)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	require.Contains(t, w.Body.String(), `<hx-partial hx-target="[`+TopicAttr+`~='topic-a'][`+RegionAttr+`='usage']" hx-swap="innerHTML">`)
+	require.Panics(t, func() { WithRegion("a b") })
+}
+
 // TestHandlerPanicsOnInvalidTopic covers topics that cannot be embedded in
 // the hx-target selector.
 func TestHandlerPanicsOnInvalidTopic(t *testing.T) {

@@ -89,7 +89,7 @@ func (app *App) handleSessionUsageEvents(w http.ResponseWriter, r *http.Request)
 	})
 
 	logger.Info("session usage live stream opened", "session_id", sessionID, "topics", len(topics))
-	htmxsse.Handler(app.sseHub, topics, fragment)(w, r)
+	htmxsse.Handler(app.sseHub, topics, fragment, htmxsse.WithRegion(components.UsageSSERegion))(w, r)
 	logger.Info("session usage live stream closed", "session_id", sessionID)
 }
 

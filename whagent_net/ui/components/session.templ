@@ -153,6 +153,13 @@ templ startedByLine(sess SessionView) {
 	</p>
 }
 
+// TranscriptSSERegion/UsageSSERegion scope each session-detail SSE
+// stream's swaps to its own region (htmxsse.WithRegion).
+const (
+	TranscriptSSERegion = "transcript"
+	UsageSSERegion      = "usage"
+)
+
 // sessionTopicsAttr joins topics into the space-separated data-sse-topic
 // value htmxsse.Handler's swaps are addressed to.
 func sessionTopicsAttr(topics []string) string {
@@ -170,11 +177,10 @@ func sessionTopicsAttr(topics []string) string {
 // reflecting this initial render.
 //
 // The usage panel (FR4, issue #2248) is its own SSE-connected region,
-// separate from #transcript's, deliberately: htmxsse.Handler addresses each
-// topic's fragment to every data-sse-topic element carrying that topic, so
-// two differently-rendered regions cannot share one topic's delivery -- a
-// second, narrower-topic SSE connection is the simpler, more explicit
-// alternative (see ../handlers_session_usage_live.go's doc comment).
+// separate from #transcript's -- a second, narrower-topic SSE connection
+// (see ../handlers_session_usage_live.go's doc comment). The two share
+// topics, so each region carries data-sse-region and each stream is
+// scoped with htmxsse.WithRegion; otherwise every swap lands in both.
 templ SessionDetail(data SessionDetailData) {
 	@Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-2">Session { data.Session.SessionID }</h1>
@@ -184,6 +190,7 @@ templ SessionDetail(data SessionDetailData) {
 			class="mb-4"
 			hx-sse:connect={ fmt.Sprintf("/sessions/%s/usage-events", data.Session.SessionID) }
 			data-sse-topic={ sessionTopicsAttr(data.UsageTopics) }
+			data-sse-region={ UsageSSERegion }
 		>
 			@SessionUsage(data.Session, data.Usage)
 		</div>
@@ -191,6 +198,7 @@ templ SessionDetail(data SessionDetailData) {
 			id="transcript"
 			hx-sse:connect={ fmt.Sprintf("/sessions/%s/events", data.Session.SessionID) }
 			data-sse-topic={ sessionTopicsAttr(data.Topics) }
+			data-sse-region={ TranscriptSSERegion }
 		>
 			@SessionLive(data.Session, data.Events)
 		</div>
@@ -479,7 +487,7 @@ const chatWindowID = "chat-window"
 templ TranscriptList(evs []TranscriptEventView) {
 	<div id={ chatWindowID } class="flex flex-col gap-3 max-h-[65vh] overflow-y-auto rounded-box border border-base-300 bg-base-100 p-4">
 		for _, ev := range evs {
-			if eventTypePrefix(ev.Type) != "status_change" {
+			if eventTypePrefix(ev.Type) != "status_change" && !isEmptyLoopMessage(ev) {
 				@EventRow(ev)
 			}
 		}
@@ -498,12 +506,13 @@ templ TranscriptList(evs []TranscriptEventView) {
 // EventTypeToolCall/EventTypeToolResult/EventTypeStatusChange doc
 // comments: the committed type is "tool_call:<call_index>"/
 // "tool_result:<call_index>"/"status_change:<status>", never the bare
-// constant, so a consumer must match by prefix, not equality).
+// constant, so a consumer must match by prefix, not equality). A tool-loop
+// iteration's "assistant_message:<iteration>" counts as assistant_message.
 func eventTypePrefix(eventType string) string {
 	switch {
 	case eventType == "user_message":
 		return "user_message"
-	case eventType == "assistant_message":
+	case eventType == "assistant_message", strings.HasPrefix(eventType, "assistant_message:"):
 		return "assistant_message"
 	case eventType == "capped":
 		return "capped"
@@ -518,6 +527,17 @@ func eventTypePrefix(eventType string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// isEmptyLoopMessage reports whether ev is a tool-loop iteration's
+// "assistant_message:<iteration>" event with no text -- it only carried
+// tool calls, which their own tool_call rows already show.
+func isEmptyLoopMessage(ev TranscriptEventView) bool {
+	if !strings.HasPrefix(ev.Type, "assistant_message:") {
+		return false
+	}
+	payload, err := decodeMessagePayload(ev.Payload)
+	return err == nil && strings.TrimSpace(payload.Content) == ""
 }
 
 // messageEventPayload mirrors worker/context.go's unexported
