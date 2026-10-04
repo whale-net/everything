@@ -24,6 +24,12 @@ const DeliveryAnchor = "krill-spec-delivery"
 type DeliveryEntity struct {
 	Label string // "Cn — Name" for a Feature, "FR — Name" for a Requirement
 	ID    string
+
+	// Kind is what the entity IS -- "Feature" or "Requirement" -- separated
+	// from Label because Label's prefix is the display number ("C4", "FR",
+	// "NFR"), not the kind. A table with a Kind column needs the two apart;
+	// the roadmap, which renders one flat list, needs only Label.
+	Kind string
 }
 
 // DeliveryBreakdown is one container's per-item shipped vs

@@ -13,6 +13,7 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcauth/grantflow"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -23,9 +24,23 @@ const (
 	EnvWhagentIssuer  = "MCP_WHAGENT_ISSUER"
 )
 
-// ErrWhagentUnresolved is the exact tool-call error text when a verified
-// whagent identity cannot be resolved to a user.
+// ErrWhagentUnresolved is the prefix of every tool-call error when a verified
+// whagent identity cannot be resolved to a manmanv2 user.
 const ErrWhagentUnresolved = "unauthenticated: whagent identity could not be resolved"
+
+const linkHint = `open the whagent-net /grants page and choose "Link manmanv2 identity"`
+
+// Tool-call errors telling the user how to fix an unresolved identity.
+const (
+	ErrWhagentNotLinked = ErrWhagentUnresolved + ": your whagent-net account is not linked to manmanv2; " + linkHint
+	ErrWhagentNoAccess  = ErrWhagentUnresolved + ": manmanv2 has no usable access for your linked account; " + linkHint + " again"
+)
+
+// IdentityResolver maps a verified whagent identity (the operator's Keycloak
+// issuer and subject) to the manmanv2 Keycloak subject linked to it.
+type IdentityResolver interface {
+	Resolve(ctx context.Context, iss, sub string) (userSub string, found bool, err error)
+}
 
 const whagentClaimExtraKey = "manmanv2.mcp.whagent_claim"
 
@@ -134,12 +149,14 @@ func WhagentHTTPAuth(existing CallerVerifier, cfg WhagentAuthConfig, resourceMet
 }
 
 // WhagentMiddleware resolves a whagent claim to the user's Caller at the MCP
-// protocol layer; mount it outermost. Requests without a whagent claim pass
-// through unchanged. Resolution failure is a tool-call error for tools/call
+// protocol layer; mount it outermost. The claim's (SubjectIssuer, Subject) is
+// mapped to a manmanv2 user through resolver (the link the user created from
+// whagent-net's /grants page), then ex yields that user's own access token.
+// Requests without a whagent claim pass through unchanged. Resolution failure is a tool-call error for tools/call
 // and a protocol error carrying the same text for tools/list; other methods pass through.
 //
 // An optional auditor records the unresolved-user rejection of a tools/call.
-func WhagentMiddleware(ex grantflow.Exchanger, audit ...Auditor) mcp.Middleware {
+func WhagentMiddleware(ex grantflow.Exchanger, resolver IdentityResolver, audit ...Auditor) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			// Only tool methods need a user; initialize/ping must still open the connection.
@@ -154,7 +171,23 @@ func WhagentMiddleware(ex grantflow.Exchanger, audit ...Auditor) mcp.Middleware 
 			if !ok {
 				return next(ctx, method, req)
 			}
-			access, claims, err := ex.Exchange(ctx, claim.Subject)
+			userMsg := ErrWhagentUnresolved
+			var (
+				access string
+				claims *grpcauth.Claims
+			)
+			userSub, linked, err := resolver.Resolve(ctx, claim.SubjectIssuer, claim.Subject)
+			switch {
+			case err != nil:
+			case !linked:
+				userMsg = ErrWhagentNotLinked
+				err = errors.New("whagent identity is not linked")
+			default:
+				access, claims, err = ex.Exchange(ctx, userSub)
+				if err != nil || claims == nil {
+					userMsg = ErrWhagentNoAccess
+				}
+			}
 			if err != nil || claims == nil {
 				slog.Warn("whagent identity could not be resolved", "subject", claim.Subject, "whagent_session_id", claim.WhagentSessionID, "error", err)
 				if method == "tools/call" {
@@ -162,7 +195,7 @@ func WhagentMiddleware(ex grantflow.Exchanger, audit ...Auditor) mcp.Middleware 
 						rec := AuditRecord{
 							Subject:       claim.Subject,
 							Outcome:       OutcomeRefused,
-							Reason:        ErrWhagentUnresolved,
+							Reason:        userMsg,
 							SubjectIssuer: claim.SubjectIssuer,
 							Agent:         &Agent{Subject: claim.Actor.Subject, AgentID: claim.Actor.AgentID, SessionID: claim.WhagentSessionID},
 						}
@@ -171,9 +204,9 @@ func WhagentMiddleware(ex grantflow.Exchanger, audit ...Auditor) mcp.Middleware 
 						}
 						audit[0].Record(ctx, rec)
 					}
-					return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: ErrWhagentUnresolved}}}, nil
+					return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: userMsg}}}, nil
 				}
-				return nil, errors.New(ErrWhagentUnresolved)
+				return nil, errors.New(userMsg)
 			}
 			c := callerFromClaims(claims, access)
 			c.Agent = &Agent{Subject: claim.Actor.Subject, AgentID: claim.Actor.AgentID, SessionID: claim.WhagentSessionID}

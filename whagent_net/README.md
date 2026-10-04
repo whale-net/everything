@@ -263,14 +263,17 @@ system-role instruction, `NULL` by default. When set, `worker/activities.go`'s
 model call this agent definition makes.
 
 The `manmanv2-ops` definition (read + deployment-lifecycle tools only,
-requires realm role `whagent-manmanv2-ops`), as version 1:
+requires realm role `whagent-manmanv2-ops`), as version 1. Its `scope` is
+`NULL` on purpose: identity comes from the "Link manmanv2 identity" link
+(below), not a whagent-net delegated grant, so no "Grant manmanv2" button
+should exist on `/grants`:
 
 ```sql
 INSERT INTO agent_definition
   (agent_id, scope, version, model, tool_set, max_turns, max_cost_usd, required_role, tool_loading_mode)
 VALUES (
   'manmanv2-ops',
-  'manmanv2',
+  NULL,
   1,
   'anthropic/claude-sonnet-4.5',
   '[{"server_url": "http://manmanv2-mcp.manmanv2-local-dev.svc.cluster.local:8081/", "allowed_tools": ["whoami","list_servers","get_server","list_deployments","get_deployment","get_connect_address","list_pending_restarts","get_session_actions","list_action_definitions","get_action_definition","start_deployment","stop_deployment","restart_deployment","execute_action"]}]',
@@ -314,6 +317,12 @@ Applied by hand per environment; nothing here is run by CI. Do dev first.
    `tool_set` `server_url` (`worker/tools/keys.go`), so it must match
    exactly. The manmanv2 MCP also needs `MCP_WHAGENT_JWKS_URL` /
    `MCP_WHAGENT_ISSUER` set (see `manmanv2/ENV.md`).
+   Also set `WHAGENT_UI_MANMANV2_LINK_URL` on whagent-net `ui` (manmanv2
+   UI's public URL) and `WHAGENT_UI_JWKS_URL` / `WHAGENT_UI_ISSUER` on the
+   manmanv2 UI (this env's whagent-net `ui` JWKS URL and
+   `WHAGENT_UI_PUBLIC_URL`); manmanv2 migration 049 must be applied.
+   If a `manmanv2-ops` row already exists with `scope = 'manmanv2'`, insert
+   the next version with `scope` NULL (never UPDATE).
 2. In the whagent-net Postgres, find the next version:
    `SELECT COALESCE(MAX(version),0)+1 FROM agent_definition WHERE agent_id='manmanv2-ops';`
 3. Run the `manmanv2-ops` INSERT above with that version and `<MCP_URL>`
@@ -324,7 +333,12 @@ Applied by hand per environment; nothing here is run by CI. Do dev first.
 5. Verify: `SELECT agent_id, version, tool_set, required_role FROM agent_definition WHERE agent_id='manmanv2-ops';`
    shows the row, a user with the role can start a `manmanv2-ops`
    session, and a user without it is refused.
-6. Record env, version and `server_url` in the krill task summary.
+6. Each operator signs in to whagent-net, opens `/grants`, clicks **Link
+   manmanv2 identity**, completes the manmanv2 login (and the one-time
+   Keycloak consent if asked), then starts a `manmanv2-ops` session. Until
+   linked, tool calls fail with `unauthenticated: whagent identity could not
+   be resolved: ... Link manmanv2 identity`.
+7. Record env, version and `server_url` in the krill task summary.
 
 ## Keycloak role
 
