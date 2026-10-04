@@ -35,6 +35,9 @@ type Consent struct {
 	// SignInURL receives users whose UI session is missing at the callback.
 	SignInURL string
 	Logger    *slog.Logger
+	// ResumePrefixes lists extra same-origin path prefixes a consent started
+	// with Begin may resume to after the callback; "/authorize" is always allowed.
+	ResumePrefixes []string
 
 	store *sessions.CookieStore
 }
@@ -70,28 +73,38 @@ func (c *Consent) GateAuthorize(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		sub, ok := c.Subject(r)
-		if !ok {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if st, err := c.Store.Status(r.Context(), sub, c.Grant); err == nil && st == grpcauth.GrantStatusActive {
-			next.ServeHTTP(w, r)
-			return
-		}
-		authURL, p, err := c.Source.BeginAuthorization(r.Context(), sub, c.Grant)
-		if err != nil {
-			c.log().Error("begin grant authorization failed", "error", err)
+		if started, err := c.Begin(w, r, r.URL.RequestURI()); err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
-		}
-		if err := c.save(w, r, pending{PendingAuthorization: p, ReturnTo: r.URL.RequestURI()}); err != nil {
-			c.log().Error("save pending grant authorization failed", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		} else if started {
 			return
 		}
-		http.Redirect(w, r, authURL, http.StatusFound)
+		next.ServeHTTP(w, r)
 	})
+}
+
+// Begin redirects a signed-in user without an active grant to Keycloak
+// consent and reports true; the callback then resumes to returnTo. With an
+// active grant (or no signed-in user) it writes nothing and reports false.
+func (c *Consent) Begin(w http.ResponseWriter, r *http.Request, returnTo string) (bool, error) {
+	sub, ok := c.Subject(r)
+	if !ok {
+		return false, nil
+	}
+	if st, err := c.Store.Status(r.Context(), sub, c.Grant); err == nil && st == grpcauth.GrantStatusActive {
+		return false, nil
+	}
+	authURL, p, err := c.Source.BeginAuthorization(r.Context(), sub, c.Grant)
+	if err != nil {
+		c.log().Error("begin grant authorization failed", "error", err)
+		return false, err
+	}
+	if err := c.save(w, r, pending{PendingAuthorization: p, ReturnTo: returnTo}); err != nil {
+		c.log().Error("save pending grant authorization failed", "error", err)
+		return false, err
+	}
+	http.Redirect(w, r, authURL, http.StatusFound)
+	return true, nil
 }
 
 // HandleCallback completes consent and resumes the interrupted /authorize.
@@ -120,11 +133,23 @@ func (c *Consent) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Consent could not be completed. Please try again.", http.StatusBadRequest)
 		return
 	}
-	if !strings.HasPrefix(p.ReturnTo, "/authorize") {
+	if !c.canResume(p.ReturnTo) {
 		http.Error(w, "Consent complete. Return to your MCP client and retry.", http.StatusOK)
 		return
 	}
 	http.Redirect(w, r, p.ReturnTo, http.StatusFound)
+}
+
+func (c *Consent) canResume(returnTo string) bool {
+	if strings.HasPrefix(returnTo, "//") || !strings.HasPrefix(returnTo, "/") {
+		return false
+	}
+	for _, prefix := range append([]string{"/authorize"}, c.ResumePrefixes...) {
+		if strings.HasPrefix(returnTo, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Consent) log() *slog.Logger {

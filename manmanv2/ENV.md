@@ -131,7 +131,7 @@ The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 
 | `MCP_PUBLIC_URL` | no (set in deployed envs) | Externally reachable MCP URL. Serves RFC 9728 metadata at `/.well-known/oauth-protected-resource` (unauthenticated, `authorization_servers` = `OIDC_ISSUER`) and is advertised in 401 challenges. Unset: no metadata, clients fall back to a manual bearer token |
 | `UI_PUBLIC_URL` | with `GRANT_*` | The manmanv2 UI's public URL: it hosts the OAuth authorization server (`/register`, `/authorize`, `/token`) and is advertised as the authorization server in the metadata |
 | `GRANT_CLIENT_ID` / `GRANT_CLIENT_SECRET` / `GRANT_REDIRECT_URI` / `GRANT_ENCRYPTION_KEY` | no (set in deployed envs) | Delegated-grant config shared with the UI (see below). Set: clients authenticate with opaque credentials issued by the UI and the MCP acts as the user via their stored grant. Unset: Keycloak tokens are accepted directly and clients need `--client-id` |
-| `MCP_WHAGENT_JWKS_URL` / `MCP_WHAGENT_ISSUER` | no | Enable whagent-net persona credentials: JWTs whose `iss` equals `MCP_WHAGENT_ISSUER` are verified against this JWKS (audience = `MCP_PUBLIC_URL`, `sub_iss` must equal `OIDC_ISSUER`) and the call is served as the named user via their stored grant. Both must be set together, and require `GRANT_*` and `MCP_PUBLIC_URL` or the binary refuses to start. An unresolvable user returns the tool error `unauthenticated: whagent identity could not be resolved`. Unset: no change |
+| `MCP_WHAGENT_JWKS_URL` / `MCP_WHAGENT_ISSUER` | no | Enable whagent-net persona credentials: JWTs whose `iss` equals `MCP_WHAGENT_ISSUER` are verified against this JWKS (audience = `MCP_PUBLIC_URL`, `sub_iss` must equal `OIDC_ISSUER`) and the claim's (`sub_iss`, `sub`) is mapped to a manmanv2 user through the `whagent_identity_link` table (created by the UI's link flow, below); the call is then served as that user via their stored grant. Both must be set together, and still require `GRANT_*` (the stored grant yields the user's token for the control API) and `MCP_PUBLIC_URL` or the binary refuses to start. An unlinked identity returns the tool error `unauthenticated: whagent identity could not be resolved: ...` telling the user to run "Link manmanv2 identity" on whagent-net's `/grants` page; a linked user with no usable grant gets the same prefix with a re-link hint. Unset: no change |
 | `MCP_RESOURCE_METADATA_URL` | no | Overrides the metadata URL advertised in 401 challenges (default derived from `MCP_PUBLIC_URL`) |
 | `CONTROL_API_URL` | yes | Control API gRPC address; caller token is forwarded on every call |
 
@@ -147,6 +147,15 @@ Tilt: opt-in via `ENABLE_MANMANV2_MCP=true` with `MCP_OIDC_ISSUER` and `MCP_OIDC
 | `GRANT_CLIENT_ID` / `GRANT_CLIENT_SECRET` / `GRANT_REDIRECT_URI` / `GRANT_ENCRYPTION_KEY` | Identical to the UI's values (same secret refs) |
 | `MCP_WHAGENT_JWKS_URL` | `http://whagent-net-api.<ns>.svc:8090/.well-known/jwks.json` (api's `additionalPorts` JWKS port, `WHAGENT_JWKS_ADDR`) |
 | `MCP_WHAGENT_ISSUER` | The env's whagent-net api `iss` value (must match what `WHAGENT_ISSUER`-style config on whagent-net-api mints) |
+
+**Linking a whagent-net identity (UI).** The manmanv2 UI serves `GET /link/whagent`, `POST /link/whagent/confirm` and `GET /link/whagent/complete`; whagent-net's `/grants` page starts the flow ("Link manmanv2 identity"). Requires the MCP OAuth settings above (`MCP_PUBLIC_URL`, `UI_PUBLIC_URL`, `GRANT_*`, `AUTH_MODE=oidc`, `PG_DATABASE_URL`), plus per env on `apps.manmanv2-ui.env`:
+
+| Key | Value |
+|---|---|
+| `WHAGENT_UI_JWKS_URL` | whagent-net ui's JWKS: `<WHAGENT_UI_PUBLIC_URL>/.well-known/jwks.json` (or its in-cluster equivalent). Distinct from the MCP's `MCP_WHAGENT_JWKS_URL` (that verifies api-minted agent credentials) |
+| `WHAGENT_UI_ISSUER` | whagent-net ui's `WHAGENT_UI_PUBLIC_URL`, exactly; assertions with another `iss`, or a `return_url` on another origin, are rejected |
+
+Both set together, or neither (link routes not served). On confirm the UI writes `whagent_identity_link` (migration 049: `(iss, sub) -> user_sub`, one link per whagent identity; a different user for an existing pair is refused), records the assertion's `jti` in `whagent_link_assertion` (single use), and, if the user has no stored `mcp` grant yet, sends them through the one-time Keycloak consent before returning to whagent-net. The MCP needs no new variables.
 
 Operator check after release: `helm template` renders all keys; the pod starts with no "requires grant mode" error and logs the whagent verifier as configured; an opaque-credential client (`claude mcp add mm2 <url> --transport http`) still connects. Apply dev first, then prod via the release action.
 

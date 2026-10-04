@@ -1,0 +1,39 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/whagent_net/ui/components"
+)
+
+// LinkManmanv2ResultData parameterises LinkManmanv2Result. Heading/Message/
+// Success are resolved by ../handlers_link.go's linkManmanv2ResultMessage
+// from the "outcome" query parameter the manmanv2 UI's redirect carries.
+type LinkManmanv2ResultData struct {
+	Layout  components.LayoutData
+	Heading string
+	Message string
+	Success bool
+}
+
+// LinkManmanv2Result is the page the manmanv2 UI redirects the Operator's
+// browser back to once the link assertion has been handled.
+templ LinkManmanv2Result(data LinkManmanv2ResultData) {
+	@components.Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">Link manmanv2 identity</h1>
+		if data.Success {
+			<div role="status" class="alert alert-success">
+				<div>
+					<h2 class="font-bold">{ data.Heading }</h2>
+					<p>{ data.Message }</p>
+				</div>
+			</div>
+		} else {
+			<div role="alert" class="alert alert-error">
+				<div>
+					<h2 class="font-bold">{ data.Heading }</h2>
+					<p>{ data.Message }</p>
+				</div>
+			</div>
+		}
+		<a class="btn btn-sm btn-primary mt-4" href="/grants">Back to grants</a>
+	}
+}
