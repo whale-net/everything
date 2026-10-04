@@ -1139,6 +1139,11 @@ func (f *fakeCredentials) Verify(context.Context, string) (string, auth.Credenti
 	return "", auth.Credential{}, nil
 }
 
+func (f *fakeCredentials) MintNamed(_ context.Context, _, name string) (string, auth.Credential, error) {
+	f.minted++
+	return "raw-token", auth.Credential{ID: uuid.New(), Name: name}, nil
+}
+
 func (f *fakeCredentials) Revoke(context.Context, uuid.UUID, string) error { return nil }
 
 func (f *fakeCredentials) List(context.Context, string) ([]auth.Credential, error) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,13 +59,27 @@ func (m mcpResolver) ResolveCallerPersona(r *http.Request) (string, bool) {
 // Postgres-backed ClientRegistry/AuthCodeStore, not auth's in-memory
 // defaults -- `/authorize`, `/token`, and `/register` can land on
 // different `ui` replicas.
-func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolver) (*auth.Provider, auth.CredentialStore, error) {
-	return auth.NewPostgresProvider(ctx, auth.PostgresProviderConfig{
+//
+// NameColumn is set because the credentials page lists a Name per
+// credential (migration 039 adds the column); the returned store is
+// narrowed to auth.NamedCredentialStore, since Mint -- what
+// /authorize's authorization-code path and the self-serve JSON API use --
+// leaves the name NULL exactly as before.
+func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolver) (*auth.Provider, auth.NamedCredentialStore, error) {
+	provider, credentials, err := auth.NewPostgresProvider(ctx, auth.PostgresProviderConfig{
 		Pool:         pool,
 		Issuer:       cfg.UIPublicURL,
 		Resource:     cfg.MCPPublicURL,
 		ResourceName: "krill MCP",
 		Resolver:     resolver,
-		Credentials:  auth.StoreConfig{PersonaColumn: "persona"},
+		Credentials:  auth.StoreConfig{PersonaColumn: "persona", NameColumn: "name"},
 	})
+	if err != nil {
+		return nil, nil, err
+	}
+	named, ok := credentials.(auth.NamedCredentialStore)
+	if !ok {
+		return nil, nil, errors.New("krill/ui: MCP credential store does not implement auth.NamedCredentialStore — apply migration 039 (mcp_credential.name) and set StoreConfig.NameColumn")
+	}
+	return provider, named, nil
 }

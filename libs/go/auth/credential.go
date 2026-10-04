@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -30,6 +32,11 @@ type Credential struct {
 	// Persona is the persona resolved at Mint time. Empty unless the store
 	// was configured with StoreConfig.PersonaColumn (opt-in).
 	Persona string
+
+	// Name is the operator-chosen label on the credential. Empty unless the
+	// store was configured with StoreConfig.NameColumn (opt-in) — a store
+	// without one neither reads nor writes a name.
+	Name string
 }
 
 // PersonaResolver resolves an identity to the persona persisted on a newly
@@ -88,6 +95,17 @@ const (
 // its message never vary, and never include the presented token or its
 // hash.
 var ErrInvalidCredential = errors.New("auth: invalid or revoked credential")
+
+// ErrCredentialNameRequired is returned by MintNamed for an empty or
+// whitespace-only name — a refusal the caller must be able to state in its
+// own words.
+var ErrCredentialNameRequired = errors.New("auth: credential name is required")
+
+// ErrCredentialNameTaken is returned by MintNamed when another of identity's
+// credentials already holds the name and is still live. It is translated
+// from the partial unique index's violation, so callers never see a driver
+// message or an SQLSTATE.
+var ErrCredentialNameTaken = errors.New("auth: credential name is already in use")
 
 // identifierPattern is the strict allow-list StoreConfig.TableName,
 // StoreConfig.IdentityColumn, and StoreConfig.IdentityCast must match.
@@ -156,6 +174,38 @@ type StoreConfig struct {
 	// PersonaResolver supplies the persona written at Mint when
 	// PersonaColumn is set. With a nil resolver the column is written NULL.
 	PersonaResolver PersonaResolver
+
+	// NameColumn, when set, names a nullable TEXT column the store reads
+	// and writes a credential's operator-chosen name through (only via
+	// MintNamed). Unset (the default) leaves every generated SQL string
+	// byte-for-byte unchanged, so a consuming domain whose table has no
+	// name column is unaffected and needs no migration.
+	NameColumn string
+}
+
+// NamedCredentialStore is a CredentialStore whose backing table also carries
+// an operator-chosen credential name (StoreConfig.NameColumn).
+//
+// It is a separate interface rather than a widened CredentialStore on
+// purpose: the roughly two dozen in-memory and Postgres fakes across krill,
+// whagent_net, audience_score_system and this package that stand in for a
+// store implement CredentialStore today, and a mint-with-a-name requirement
+// does not apply to any of them.
+type NamedCredentialStore interface {
+	CredentialStore
+
+	// MintNamed issues a new credential for identity carrying name, under
+	// the same token/hash contract as Mint.
+	//
+	// An empty or whitespace-only name is refused with
+	// ErrCredentialNameRequired, and a name already live on another of
+	// identity's credentials with ErrCredentialNameTaken — so a caller can
+	// tell the two refusals apart and never sees a raw driver message.
+	// Revoking frees the name for reuse.
+	//
+	// Calling MintNamed on a store configured without NameColumn is a
+	// misconfiguration and returns an error naming NameColumn.
+	MintNamed(ctx context.Context, identity, name string) (rawToken string, cred Credential, err error)
 }
 
 // NewCredentialStore constructs a CredentialStore backed by cfg.Pool and
@@ -198,6 +248,11 @@ func NewCredentialStore(ctx context.Context, cfg StoreConfig) (CredentialStore, 
 			return nil, err
 		}
 	}
+	if cfg.NameColumn != "" {
+		if err := validateIdentifier(cfg.NameColumn, "NameColumn"); err != nil {
+			return nil, err
+		}
+	}
 
 	s := &pgxCredentialStore{cfg: cfg}
 
@@ -217,6 +272,7 @@ type pgxCredentialStore struct {
 }
 
 var _ CredentialStore = (*pgxCredentialStore)(nil)
+var _ NamedCredentialStore = (*pgxCredentialStore)(nil)
 
 // probeTable runs a minimal query against the configured table to confirm
 // it exists and is accessible. It uses the unqualified table name so it
@@ -228,10 +284,15 @@ func (s *pgxCredentialStore) probeTable(ctx context.Context) error {
 }
 
 // columns is the RETURNING/SELECT column list, in Credential scan order.
+// The opt-in columns are appended in the same fixed order scanCredential
+// reads them.
 func (s *pgxCredentialStore) columns() string {
 	cols := fmt.Sprintf("id, %s, token_hash, created_at, last_used_at, revoked_at", s.cfg.IdentityColumn)
 	if s.cfg.PersonaColumn != "" {
 		cols += ", " + s.cfg.PersonaColumn
+	}
+	if s.cfg.NameColumn != "" {
+		cols += ", " + s.cfg.NameColumn
 	}
 	return cols
 }
@@ -253,33 +314,54 @@ func (s *pgxCredentialStore) identityPlaceholder(paramNum int) string {
 
 func (s *pgxCredentialStore) scanCredential(row pgx.Row) (Credential, error) {
 	var c Credential
-	if s.cfg.PersonaColumn == "" {
-		err := row.Scan(&c.ID, &c.Identity, &c.TokenHash, &c.CreatedAt, &c.LastUsedAt, &c.RevokedAt)
-		return c, err
+	var persona, name *string
+	dest := []any{&c.ID, &c.Identity, &c.TokenHash, &c.CreatedAt, &c.LastUsedAt, &c.RevokedAt}
+	if s.cfg.PersonaColumn != "" {
+		dest = append(dest, &persona)
 	}
-	var persona *string
-	err := row.Scan(&c.ID, &c.Identity, &c.TokenHash, &c.CreatedAt, &c.LastUsedAt, &c.RevokedAt, &persona)
+	if s.cfg.NameColumn != "" {
+		dest = append(dest, &name)
+	}
+	err := row.Scan(dest...)
 	if persona != nil {
 		c.Persona = *persona
+	}
+	if name != nil {
+		c.Name = *name
 	}
 	return c, err
 }
 
-// mintQuery renders the INSERT for Mint; the persona column and its $3
-// parameter appear only when PersonaColumn is set.
+// mintQuery renders the INSERT for Mint; the persona and name columns and
+// their parameters appear only when the corresponding StoreConfig field is
+// set. Mint never supplies a name, so on a NameColumn-configured store the
+// name is written NULL.
 func (s *pgxCredentialStore) mintQuery() string {
-	if s.cfg.PersonaColumn == "" {
-		return fmt.Sprintf(`
-		INSERT INTO %s (%s, token_hash)
-		VALUES ($1%s, $2)
-		RETURNING %s
-	`, s.cfg.TableName, s.cfg.IdentityColumn, s.identityCastSuffix(), s.columns())
+	return s.insertQuery(false)
+}
+
+// insertQuery renders the INSERT with the persona parameter included when
+// PersonaColumn is set and, when withName is true, the name parameter
+// included when NameColumn is set. Parameters follow the same order as
+// columns: identity, token_hash, persona, name.
+func (s *pgxCredentialStore) insertQuery(withName bool) string {
+	cols := fmt.Sprintf("%s, token_hash", s.cfg.IdentityColumn)
+	values := fmt.Sprintf("$1%s, $2", s.identityCastSuffix())
+	next := 3
+	if s.cfg.PersonaColumn != "" {
+		cols += ", " + s.cfg.PersonaColumn
+		values += fmt.Sprintf(", $%d", next)
+		next++
+	}
+	if withName && s.cfg.NameColumn != "" {
+		cols += ", " + s.cfg.NameColumn
+		values += fmt.Sprintf(", $%d", next)
 	}
 	return fmt.Sprintf(`
-		INSERT INTO %s (%s, token_hash, %s)
-		VALUES ($1%s, $2, $3)
+		INSERT INTO %s (%s)
+		VALUES (%s)
 		RETURNING %s
-	`, s.cfg.TableName, s.cfg.IdentityColumn, s.cfg.PersonaColumn, s.identityCastSuffix(), s.columns())
+	`, s.cfg.TableName, cols, values, s.columns())
 }
 
 // generateToken returns a high-entropy (crypto/rand), hex-encoded bearer
@@ -302,6 +384,46 @@ func hashToken(rawToken string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// MintNamed issues a credential for identity carrying an operator-chosen
+// name, under Mint's token and hash-at-rest contract.
+//
+// A name is only ever written through this path: a store configured with
+// NameColumn still mints NULL-named rows from Mint, which is what keeps the
+// self-serve JSON API and the authorization-code path unchanged.
+func (s *pgxCredentialStore) MintNamed(ctx context.Context, identity, name string) (string, Credential, error) {
+	if s.cfg.NameColumn == "" {
+		return "", Credential{}, errors.New("auth: MintNamed requires StoreConfig.NameColumn — this store is configured without a credential name column")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", Credential{}, ErrCredentialNameRequired
+	}
+
+	rawToken, err := generateToken()
+	if err != nil {
+		return "", Credential{}, fmt.Errorf("auth: generate credential token: %w", err)
+	}
+
+	args := []any{identity, hashToken(rawToken)}
+	persona, err := s.resolvePersonaArg(ctx, identity)
+	if err != nil {
+		return "", Credential{}, err
+	}
+	if persona != nil {
+		args = append(args, persona)
+	}
+	args = append(args, name)
+
+	cred, err := s.scanCredential(s.cfg.Pool.QueryRow(ctx, s.insertQuery(true), args...))
+	if err != nil {
+		if s.isCredentialNameTaken(err) {
+			return "", Credential{}, ErrCredentialNameTaken
+		}
+		return "", Credential{}, fmt.Errorf("auth: insert credential: %w", err)
+	}
+	return rawToken, cred, nil
+}
+
 // Mint generates a fresh high-entropy token, persists only its SHA-256
 // hash, and returns the raw token (the caller must show it to the operator
 // exactly once — it is never recoverable again) plus the persisted row.
@@ -312,19 +434,11 @@ func (s *pgxCredentialStore) Mint(ctx context.Context, identity string) (string,
 	}
 
 	args := []any{identity, hashToken(rawToken)}
-	if s.cfg.PersonaColumn != "" {
-		var persona *string
-		if p := personaFromContext(ctx); p != "" {
-			persona = &p
-		} else if s.cfg.PersonaResolver != nil {
-			p, err := s.cfg.PersonaResolver.ResolvePersona(ctx, identity)
-			if err != nil {
-				return "", Credential{}, fmt.Errorf("auth: resolve persona: %w", err)
-			}
-			if p != "" {
-				persona = &p
-			}
-		}
+	persona, err := s.resolvePersonaArg(ctx, identity)
+	if err != nil {
+		return "", Credential{}, err
+	}
+	if persona != nil {
 		args = append(args, persona)
 	}
 
@@ -333,6 +447,49 @@ func (s *pgxCredentialStore) Mint(ctx context.Context, identity string) (string,
 		return "", Credential{}, fmt.Errorf("auth: insert credential: %w", err)
 	}
 	return rawToken, cred, nil
+}
+
+// resolvePersonaArg returns the persona value to bind at Mint time, or nil
+// to write NULL. Only consulted when PersonaColumn is set.
+func (s *pgxCredentialStore) resolvePersonaArg(ctx context.Context, identity string) (*string, error) {
+	if s.cfg.PersonaColumn == "" {
+		return nil, nil
+	}
+	if p := personaFromContext(ctx); p != "" {
+		return &p, nil
+	}
+	if s.cfg.PersonaResolver == nil {
+		return nil, nil
+	}
+	p, err := s.cfg.PersonaResolver.ResolvePersona(ctx, identity)
+	if err != nil {
+		return nil, fmt.Errorf("auth: resolve persona: %w", err)
+	}
+	if p == "" {
+		return nil, nil
+	}
+	return &p, nil
+}
+
+// isCredentialNameTaken reports whether err is the unique index on
+// (identity, name) refusing a second live credential. The driver message
+// itself never reaches a caller — only the named refusal does.
+//
+// Postgres names a unique-index violation after the index, so this matches
+// the configured NameColumn appearing in that name. token_hash is excluded
+// explicitly rather than relied on not matching: it is the table's other
+// unique constraint, and a substring collision there would report a
+// cryptographic near-impossible as an operator's name conflict.
+func (s *pgxCredentialStore) isCredentialNameTaken(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return false
+	}
+	constraint := strings.ToLower(pgErr.ConstraintName)
+	if strings.Contains(constraint, "token_hash") {
+		return false
+	}
+	return s.cfg.NameColumn != "" && strings.Contains(constraint, s.cfg.NameColumn)
 }
 
 // Verify hashes rawToken and resolves it to a live credential, stamping
