@@ -83,6 +83,19 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Bolt-free /wpoll publish path (SQLite-backed). Its own target, as
+# test_wai is, so the process never imports slack_bolt -- which is
+# what makes the bolt-free import assertion meaningful.
+py_test(
+    name = "test_poll_publish",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "poll/test_poll_publish.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Music poll pickup chain, bot config, and window/eligibility query (SQLite-backed)
 py_test(
     name = "test_music_poll",
@@ -91,6 +104,7 @@ py_test(
         "conftest.py",
         "poll/test_music_poll_bot_config.py",
         "poll/test_music_poll_pickup.py",
+        "poll/test_scheduled_poll_dal.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
@@ -154,6 +168,21 @@ py_test(
     srcs = [
         "conftest.py",
         "db/test_v1_removal.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Scheduled-poll history migration: the head revision's upgrade and
+# downgrade round-trip against the pre-revision schema. Reads the
+# migration file off disk, so the versioned migrations are runtime
+# data here, not just a py_library srcs.
+py_test(
+    name = "test_scheduled_poll_migration",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_scheduled_poll_migration.py",
     ],
     data = ["//friendly_computing_machine/src/migrations:migration_versions"],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
