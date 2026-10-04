@@ -206,3 +206,17 @@ def test_token_bound_to_mentioning_identity(handler_env):
     _fire(handler_env, event)
 
     handler_env["mint"].assert_called_once_with(other, UNLINKED_USER)
+
+
+def test_mention_without_user_never_starts_session(handler_env):
+    """No Slack user on the event: nothing to act for, so no session as fcm."""
+    event = _event(UNLINKED_USER)
+    del event["user"]
+
+    _fire(handler_env, event)
+
+    handler_env["get_identity"].assert_not_called()
+    handler_env["mint"].assert_not_called()
+    handler_env["client"].chat_postEphemeral.assert_not_called()
+    handler_env["start_workflow"].assert_not_called()
+    whagent.get_thread_session.assert_not_called()
