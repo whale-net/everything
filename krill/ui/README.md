@@ -315,6 +315,40 @@ for a **navigation to a different page** (cancel-confirm, open-session
 success). It is *not* a way to avoid re-rendering a fragment you could
 have re-rendered in place.
 
+## Blades: a panel that is also an address
+
+A **blade** opens *over* the page rather than replacing a region of it.
+Two exist today: the Capabilities table's feature quick-look
+(`pages/spec_blade.templ`, `krill-spec-blade`) and Design sessions' "New
+design session" (`pages/design.templ`, `design-session-new-blade`).
+
+Four rules, and each one is a bug the moment it is broken:
+
+1. **The blade URL is both the htmx target and an address.** The thing
+   that opens the blade is an `<a>` whose `href` is the blade's own URL,
+   with an `hx-get` of that same URL alongside it. So a no-JS click, a
+   reload, a copied link and `hx-push-url` all reach one thing. A
+   `<button>` breaks the no-JS half outright — it has no destination to
+   fall back on.
+2. **The fragment's ROOT is the swap target.** The served blade carries
+   the region id the opener named as its `hx-target`; without it on the
+   root, htmx's `outerHTML` deletes the element it was asked to replace.
+   The same id is rendered *empty* when no blade is open, because the
+   opener's `hx-target` has to resolve either way.
+3. **One route, two modes**, per the section above: htmx gets the bare
+   region, a browser gets the whole page with the blade open. The page
+   under a blade is never re-rendered from the fragment branch — the
+   rows the operator was reading are what they chose.
+4. **Blades go one level deep.** Nothing inside a blade is a link or an
+   `hx-get` except the control that closes it. A blade that could open
+   another blade would make "back" a question with more than one answer.
+
+A blade that owns a write carries the **doubled form** below: `method` +
+`action` is the no-JS path (303 to wherever the write navigates), and
+`hx-post` + `hx-target` + `hx-swap` is the htmx path. The `hx-target` is
+the **blade region**, not the form — a refusal re-renders the whole
+blade, and the form is not the only thing in it.
+
 ## The 200-re-render error rule
 
 **Every outcome — success, refusal, or a state you could not read —

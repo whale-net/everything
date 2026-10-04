@@ -312,6 +312,7 @@ go_test(
         "design_page_test.go",
         "design_sessions_list_test.go",
         "design_session_detail_shell_test.go",
+        "design_session_new_blade_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
@@ -322,5 +323,11 @@ go_test(
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        # The blade's one structural claim -- that the served fragment's
+        # ROOT is the swap target -- is decided by a real HTML parser, not
+        # by a tag scanner: it is exactly the thing a hand-rolled scanner
+        # gets wrong.
+        "@org_golang_x_net//html",
+        "@org_golang_x_net//html/atom",
     ],
 )

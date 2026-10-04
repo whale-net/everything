@@ -533,6 +533,15 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	// in the same Go 1.22 mux.
 	mux.HandleFunc("GET /design/products/{productID}/design-sessions/{id}", app.readerRoute(app.handleDesignSessionDetail))
 
+	// The new-session blade (FR 44d7f1e2): a GET that answers in both modes
+	// off one route -- the bare blade region for an htmx caller, the whole
+	// Design sessions page with the blade open for a browser -- so the blade
+	// URL is both the htmx target and an address that can be opened, shared
+	// and reloaded. It is a literal segment, which is what lets it sit at
+	// the same position as the {id} wildcard above without claiming a
+	// session: "new" is never a session id.
+	mux.HandleFunc("GET /design/products/{productID}/design-sessions/new", app.readerRoute(app.handleDesignSessionNew))
+
 	// The design-session write surface (design_write.go), hung off the read
 	// views: the list page's "open a session" form and a session detail
 	// page's "submit follow-up" form. Both are operatorRoute (RequireAuth

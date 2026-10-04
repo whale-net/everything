@@ -212,6 +212,8 @@ func designReadMux(app *App) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /design/products/{productID}/design-sessions", app.handleDesignSessionList)
 	mux.HandleFunc("GET /design/products/{productID}/design-sessions/{id}", app.handleDesignSessionDetail)
+	// The new-session blade, a literal segment beside that {id} wildcard.
+	mux.HandleFunc("GET /design/products/{productID}/design-sessions/new", app.handleDesignSessionNew)
 	// The un-prefixed design root, which resolves a product and serves
 	// that product's list: one page at two URLs.
 	mux.HandleFunc("GET "+designPath, app.handleDesign)
