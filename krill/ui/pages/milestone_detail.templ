@@ -1,0 +1,140 @@
+package pages
+
+// The Milestone detail page (FR ef0a0ded): one container -- a milestone, or
+// a milepebble cut from one -- named by its own status and linked to the
+// work it holds.
+//
+// The header is the whole page today. The cards under it (the outcome and
+// its milepebbles, the shipped/unshipped delivery tables) and the
+// properties rail are separate tasks that build ON this page rather than
+// beside it, so the region is a frame they compose into: it owns the
+// anchor, the breadcrumb, the h1 and the two work links, and each later
+// task adds its own section inside the same grid.
+//
+// Both kinds of container answer at the same URL, because a milepebble is
+// its own milestone_ref row and an operator reaches one the way they reach
+// its parent: by name, from the table or the breadcrumb.
+
+// MilestoneDetailAnchor is the DOM id this page's region carries, so the
+// later sections and the tests that assert on them all name one element.
+const MilestoneDetailAnchor = "krill-milestone-detail"
+
+// MilestoneCrumb is one breadcrumb entry. Href is empty for the page the
+// operator is already on, which is the one crumb that is not a link.
+//
+// It carries the same two fields as TaskCrumb and is deliberately its own
+// type rather than a rename of that one: the task detail's walk is
+// product -> milestone -> milepebble -> task and this one stops one or two
+// levels short, and each page owns the walk it renders.
+type MilestoneCrumb struct {
+	Label string
+	Href  string
+}
+
+// MilestoneDetailPage is the detail's view model.
+//
+// The header's facts are the container's own: the name, the status it is
+// in, and the two views of the work it holds. Every one is read off the
+// same resolved container, so the badge cannot show a status the links
+// beside it contradict.
+type MilestoneDetailPage struct {
+	// Product is the banner: the product this container belongs to.
+	Product ProductHeader
+
+	// Path is this page's own URL, so a refresh and a shared link are the
+	// same page.
+	Path string
+
+	// ID is the container's own id, carried so the region is addressable
+	// and so a test can check a rendered link against the id it was built
+	// from.
+	ID string
+
+	// Kind is "milestone" or "milepebble". It rides on the region as a
+	// data attribute rather than being rendered, because the header reads
+	// the same either way -- what differs is what hangs below it.
+	Kind string
+
+	// Crumbs walks product -> Milestones -> the container's name, with
+	// the name carrying no href because the operator is already here.
+	Crumbs []MilestoneCrumb
+
+	// Title is the container's name. Status renders through the same
+	// statusBadge the Milestones table and the delivery page use, so one
+	// status is one colour on every page.
+	Title  string
+	Status string
+
+	// TasksPath and BoardPath are the product-wide Tasks and Board scoped
+	// to THIS container -- the mode and the id in the query, the product
+	// in the path -- so both views arrive with the scope control already
+	// preselected rather than the operator reselecting it.
+	TasksPath string
+	BoardPath string
+}
+
+// milestoneDetailCrumbs renders the breadcrumb trail.
+//
+// It uses daisyUI's breadcrumbs and one <li> per level, the same shape as
+// the task detail's trail, rather than inventing a second breadcrumb for
+// the second detail page.
+templ milestoneDetailCrumbs(crumbs []MilestoneCrumb) {
+	if len(crumbs) > 0 {
+		<nav class="breadcrumbs text-sm" aria-label="Breadcrumb" data-krill="milestone-breadcrumb">
+			<ul>
+				for _, c := range crumbs {
+					<li data-krill="breadcrumb-crumb">
+						if c.Href == "" {
+							<span>{ c.Label }</span>
+						} else {
+							<a href={ templ.URL(c.Href) }>{ c.Label }</a>
+						}
+					</li>
+				}
+			</ul>
+		</nav>
+	}
+}
+
+// milestoneDetailHeader is the page header: the breadcrumb, the name with
+// its status badge, and the two links to the work this container holds.
+//
+// "Open tasks" is the page's one primary action -- an operator who opened a
+// milestone is asking what work it holds, and that is the answer. "Board"
+// is the same scope read the other way, so it sits beside it as a ghost
+// button rather than as a second primary: they are two views of one
+// question, not two different jobs.
+templ milestoneDetailHeader(page MilestoneDetailPage) {
+	@milestoneDetailCrumbs(page.Crumbs)
+	<div class="flex flex-wrap items-center gap-3" data-krill="milestone-detail-header">
+		<h1 class="text-2xl font-bold" data-krill="page-title">{ page.Title }</h1>
+		@statusBadge(page.Status)
+		<div class="flex-1"></div>
+		<div class="flex flex-wrap items-center gap-2" data-krill="milestone-detail-actions">
+			<a href={ templ.URL(page.TasksPath) } class="btn btn-primary btn-sm" data-krill="milestone-open-tasks">Open tasks</a>
+			<a href={ templ.URL(page.BoardPath) } class="btn btn-ghost btn-sm" data-krill="milestone-board-link">Board</a>
+		</div>
+	</div>
+	<p class="mt-1 text-sm text-base-content/70" data-krill="milestone-detail-subtitle">
+		{ page.Product.Name } — one container of this product's delivery.
+	</p>
+}
+
+// MilestoneDetail renders the Milestone detail page: the header, and the
+// grid the outcome, delivery and rail sections compose into.
+//
+// The grid is the frame those sections share, and both its cells are
+// declared but empty today: an empty <div> and an empty <aside> render
+// nothing, so the header sits full width until a section fills its cell,
+// rather than sitting beside a column of nothing. Below lg the grid
+// stacks, which is where the rail ends up once it exists.
+templ MilestoneDetail(page MilestoneDetailPage) {
+	<section id={ MilestoneDetailAnchor } data-krill="milestone-detail"
+		data-krill-container-id={ page.ID } data-krill-container-kind={ page.Kind } class="space-y-4">
+		@milestoneDetailHeader(page)
+		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="milestone-detail-frame">
+			<div class="min-w-0 space-y-4" data-krill="milestone-detail-main"></div>
+			<aside data-krill="milestone-detail-rail"></aside>
+		</div>
+	</section>
+}
