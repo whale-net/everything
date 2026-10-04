@@ -86,7 +86,9 @@ var wireClasses = map[string]map[string]wireFieldClass{
 		"position":    wireStructural,
 	},
 	// get_product_slice's feature entity (FR 638a7e5f) -- Cn is the
-	// DisplayNumber a reader cites.
+	// DisplayNumber a reader cites. display_number is carried as the "Cn"
+	// citation prefix in the feature cell of the Capabilities table (FR
+	// 18afc5a8).
 	"FeatureEntity": {
 		"id":             wireCarried,
 		"revision_id":    wireStructural,
@@ -96,7 +98,10 @@ var wireClasses = map[string]map[string]wireFieldClass{
 		"position":       wireStructural,
 		"display_number": wireCarried,
 	},
-	// get_product_slice's requirement entity (FR 638a7e5f).
+	// get_product_slice's requirement entity (FR 638a7e5f). kind, name,
+	// body and id are all carried -- they render in the requirement list
+	// nested under each feature row, the same slice rows the Requirements
+	// column counts, so the count and the list are one read.
 	"RequirementEntity": {
 		"id":          wireCarried,
 		"revision_id": wireStructural,
@@ -356,7 +361,7 @@ func TestCapabilityMapCarriesEveryWireField(t *testing.T) {
 		},
 	}
 
-	html := mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID)))
+	html := mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID, capabilityExpansion{Path: productPath(productID)})))
 
 	requireCarried(t, "FeatureSetEntity", fs, html)
 	requireCarried(t, "FeatureEntity", feat, html)
@@ -470,7 +475,7 @@ func TestCarriedWireFieldPresenceIsNonVacuous(t *testing.T) {
 	fr := slice.RequirementEntity{EntityRef: slice.EntityRef{ID: frID}, FeatureID: featID, Kind: "FR", Name: "granularity", Body: ptr("returns every child")}
 	doc := slice.Document{Product: &slice.ProductEntity{Name: "krill"}, FeatureSets: []slice.FeatureSetEntity{fs}, Features: []slice.FeatureEntity{feat}, Requirements: []slice.RequirementEntity{fr}}
 
-	html := mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID)))
+	html := mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID, capabilityExpansion{Path: productPath(productID)})))
 
 	// Rename a field's value in the wire but keep the rendered HTML from the
 	// original: requireCarried must now report the mismatch. We assert this

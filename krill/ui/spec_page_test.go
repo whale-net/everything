@@ -185,7 +185,7 @@ func TestCapabilityMapFieldParity(t *testing.T) {
 		},
 	}
 
-	body := mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID)))
+	body := mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID, capabilityExpansion{Path: productPath(productID)})))
 	got := body
 	for _, want := range []string{
 		"krill", "the substrate", // product name + vision
@@ -308,7 +308,7 @@ func TestSpecTabStripCrossLinks(t *testing.T) {
 	doc := slice.Document{Product: &slice.ProductEntity{Name: "krill"}}
 
 	panels := map[string]templ.Component{
-		pages.SpecTabCapabilities: pages.CapabilityMap(capabilityPageOf(doc, productID)),
+		pages.SpecTabCapabilities: pages.CapabilityMap(capabilityPageOf(doc, productID, capabilityExpansion{Path: productPath(productID)})),
 		pages.SpecTabDecisions:    pages.Decisions(decisionsPageOf(doc, productID)),
 		pages.SpecTabPersonas:     pages.Personas(personasPageOf(product, nil, productID)),
 		pages.SpecTabNonGoals:     pages.NonGoals(nonGoalsPageOf(product, nil, productID)),
@@ -436,7 +436,7 @@ func TestSpecPagesCarryAManualRefresh(t *testing.T) {
 	doc := slice.Document{Product: &slice.ProductEntity{Name: "krill"}}
 
 	bodies := map[string]string{
-		productPath(productID):   mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID))),
+		productPath(productID):   mustRenderComponent(pages.CapabilityMap(capabilityPageOf(doc, productID, capabilityExpansion{Path: productPath(productID)}))),
 		decisionsPath(productID): mustRenderComponent(pages.Decisions(decisionsPageOf(doc, productID))),
 		personasPath(productID):  mustRenderComponent(pages.Personas(personasPageOf(product, nil, productID))),
 		nonGoalsPath(productID):  mustRenderComponent(pages.NonGoals(nonGoalsPageOf(product, nil, productID))),

@@ -61,20 +61,75 @@ type ProductsPage struct {
 }
 
 // CapabilityFeatureSet is one FeatureSet and the Features nested under it.
+//
+// A feature set is a COLLAPSIBLE section: FeatureCount heads it, and the
+// expansion lives in Expanded plus the two hrefs its toggle points at,
+// rather than in a <details open> the browser alone owns -- so a reload, a
+// shared link and the later quick-look round-trip all restore it (FR
+// 18afc5a8).
 type CapabilityFeatureSet struct {
 	ID          string // EntityRef.ID -- the surrogate id, as get_product_slice returns it
 	Name        string
 	Description string
 	Features    []CapabilityFeature
+
+	// FeatureCount is len(Features), shown as the heading's badge. It is a
+	// field rather than a count the template recomputes, so the badge and
+	// the table beneath it cannot disagree.
+	FeatureCount int
+
+	// Expanded is whether THIS request shows the section's table. Only one
+	// section is open at a time, and which one is the URL's answer.
+	Expanded bool
+
+	// ExpandHref / CollapseHref are the toggle's two targets: the page's
+	// own tab path with this section open, and with it closed.
+	ExpandHref   string
+	CollapseHref string
+}
+
+// ToggleHref is where the section's expander points right now -- the
+// collapse URL while it is open, the expand URL while it is closed -- so
+// the link and the rendered state cannot drift apart.
+func (fs CapabilityFeatureSet) ToggleHref() string {
+	if fs.Expanded {
+		return fs.CollapseHref
+	}
+	return fs.ExpandHref
+}
+
+// ToggleLabel is the expander's accessible name, saying what pressing it
+// does rather than which icon it shows.
+func (fs CapabilityFeatureSet) ToggleLabel() string {
+	if fs.Expanded {
+		return "Collapse " + fs.Name
+	}
+	return "Expand " + fs.Name
+}
+
+// ToggleAriaExpanded is the toggle's aria-expanded value. It is a method
+// rather than a raw bool because aria-expanded takes the strings "true" and
+// "false", and emitting "false" is not emitting nothing.
+func (fs CapabilityFeatureSet) ToggleAriaExpanded() string {
+	if fs.Expanded {
+		return "true"
+	}
+	return "false"
 }
 
 // CapabilityFeature is one Feature and the Requirements nested under it.
 type CapabilityFeature struct {
-	ID           string // EntityRef.ID
-	Number       int    // Cn -- the stored DisplayNumber, the number a reader cites
-	Name         string
-	Description  string
-	Requirements []CapabilityRequirement
+	ID          string // EntityRef.ID
+	Number      int    // Cn -- the stored DisplayNumber, the number a reader cites
+	Name        string
+	Description string
+
+	// RequirementCount is the count the table's Requirements column shows.
+	// It is len(Requirements) -- the same slice rows the nested list below
+	// renders -- so the number an operator reads is never a second read's
+	// disagreeing answer about the same feature.
+	RequirementCount int
+	Requirements     []CapabilityRequirement
 }
 
 // CapabilityRequirement is one FR or NFR under a Feature.
@@ -216,48 +271,138 @@ templ Products(page ProductsPage) {
 // CapabilityMap renders a product's FeatureSets, Features, and
 // Requirements (current revisions only) as a navigable capability map --
 // get_product_slice's shape, nested by parent. FR 638a7e5f.
+//
+// Each feature set is a collapsible section, the first open by default
+// (FR 18afc5a8).
 templ CapabilityMap(page CapabilityPage) {
 	<section id={ CapabilityMapAnchor } data-krill="capability-map">
 		@pageHeader(CapabilityMapAnchor, page.Path, page.Product.Name+" — capability map", page.Product.Vision)
 		if len(page.FeatureSets) == 0 {
 			@htmxui.EmptyState("No feature sets yet.", "The FeatureSets, Features, and Requirements recorded for this product.", "", "", templ.Attributes{})
 		} else {
-			for _, fs := range page.FeatureSets {
-				<div class="mt-6">
-					<h3 id={ fs.ID } class="text-lg font-semibold">{ fs.Name }</h3>
-					if fs.Description != "" {
-						<p class="mt-1 text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(fs.Description))</p>
-					}
-					if len(fs.Features) > 0 {
-						<ul class="mt-3 list-disc pl-5 space-y-4">
-							for _, f := range fs.Features {
-								<li>
-									<strong>C{ strconv.Itoa(f.Number) } — { f.Name }</strong>
-									@entityID(f.ID)
-									if f.Description != "" {
-										<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(f.Description))</div>
-									}
-									if len(f.Requirements) > 0 {
-										<ul class="mt-2 list-disc pl-5 space-y-2">
-											for _, rq := range f.Requirements {
-												<li>
-													<strong>{ rq.Kind }</strong>: { rq.Name }
-													@entityID(rq.ID)
-													if rq.Body != "" {
-														<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(rq.Body))</div>
-													}
-												</li>
-											}
-										</ul>
-									}
-								</li>
-							}
-						</ul>
-					}
-				</div>
-			}
+			<div class="mt-4 space-y-3">
+				for _, fs := range page.FeatureSets {
+					@capabilityFeatureSet(fs)
+				}
+			</div>
 		}
 	</section>
+}
+
+// capabilityFeatureSet is one feature set's collapsible section: the
+// heading carries the name, the feature count as a badge and the
+// description; the content is the Feature/Requirements table.
+//
+// It is a daisyUI collapse driven by collapse-open rather than a <details>,
+// because its open state is the URL's answer rather than something the
+// browser remembers -- a <details> would open and close in the DOM while
+// the address bar went on claiming a different section, and a reload, a
+// shared link and the later quick-look round-trip would all land back on
+// the default. The expander is a real link to that URL, so the
+// no-JavaScript path is an ordinary GET that renders the same expansion.
+templ capabilityFeatureSet(fs CapabilityFeatureSet) {
+	<div id={ fs.ID } class={ capabilityFeatureSetClasses(fs.Expanded) } data-krill="feature-set" data-krill-feature-set-id={ fs.ID } data-krill-feature-set-open={ fs.ToggleAriaExpanded() }>
+		<div class="collapse-title flex flex-wrap items-center gap-2 pr-8">
+			<span class="text-lg font-semibold" data-krill="feature-set-name">{ fs.Name }</span>
+			<span class="badge badge-ghost badge-sm" data-krill="feature-set-count">{ strconv.Itoa(fs.FeatureCount) } features</span>
+			@capabilityFeatureSetExpander(fs)
+		</div>
+		<div class="collapse-content">
+			if fs.Description != "" {
+				<div class="text-sm text-base-content/70 krill-md" data-krill="feature-set-description">@templ.Raw(renderMarkdown(fs.Description))</div>
+			}
+			@capabilityFeatureTable(fs)
+		</div>
+	</div>
+}
+
+// capabilityFeatureSetClasses is one section's daisyUI class, so the
+// rendered markup and the expander's aria-expanded cannot disagree about
+// whether the section is open -- both read the same Expanded flag.
+func capabilityFeatureSetClasses(open bool) string {
+	classes := "collapse collapse-arrow bg-base-100 border border-base-300"
+	if open {
+		classes += " collapse-open"
+	}
+	return classes
+}
+
+// capabilityFeatureSetExpander is the per-section toggle. It points at the
+// collapse URL while the section is open and the expand URL while it is
+// closed, and swaps the capability panel's own region so the tab strip
+// around it survives the swap.
+templ capabilityFeatureSetExpander(fs CapabilityFeatureSet) {
+	<a href={ templ.URL(fs.ToggleHref()) }
+		class="btn btn-ghost btn-xs"
+		aria-expanded={ fs.ToggleAriaExpanded() }
+		aria-label={ fs.ToggleLabel() }
+		title={ fs.ToggleLabel() }
+		data-krill="feature-set-expand"
+		data-krill-feature-set-id={ fs.ID }
+		hx-get={ templ.URL(fs.ToggleHref()) }
+		hx-target={ "#" + CapabilityMapAnchor }
+		hx-swap="outerHTML"
+		hx-push-url="true">
+		if fs.Expanded {
+			Collapse
+		} else {
+			Expand
+		}
+	</a>
+}
+
+// capabilityFeatureTable is one open section's features: the number and
+// name an operator cites, the feature's own description beneath it, and the
+// count of its requirements.
+//
+// The count is the same slice rows the nested requirement list renders, so
+// the number and the list are one read (README's tab-count rule).
+templ capabilityFeatureTable(fs CapabilityFeatureSet) {
+	if len(fs.Features) == 0 {
+		<p class="text-sm text-base-content/70" data-krill="feature-set-empty">No features in this feature set yet.</p>
+	} else {
+		<div class="overflow-x-auto rounded-lg border border-base-300">
+			<table class="table table-zebra" data-krill="feature-table">
+				<thead>
+					<tr>
+						<th>Feature</th>
+						<th class="text-right">Requirements</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, f := range fs.Features {
+						<tr data-krill="feature-row" data-krill-feature-id={ f.ID }>
+							<td>
+								<span class="font-medium" data-krill="feature-name">C{ strconv.Itoa(f.Number) } — { f.Name }</span>
+								@entityID(f.ID)
+								if f.Description != "" {
+									<div class="text-sm text-base-content/70 krill-md" data-krill="feature-description">@templ.Raw(renderMarkdown(f.Description))</div>
+								}
+							</td>
+							<td class="text-right" data-krill="feature-requirement-count">{ strconv.Itoa(f.RequirementCount) }</td>
+						</tr>
+						if len(f.Requirements) > 0 {
+							<tr data-krill="feature-requirements">
+								<td colspan="2" class="bg-base-200/60">
+									<ul class="list-disc pl-5 space-y-2">
+										for _, rq := range f.Requirements {
+											<li>
+												<strong>{ rq.Kind }</strong>: { rq.Name }
+												@entityID(rq.ID)
+												if rq.Body != "" {
+													<div class="text-sm text-base-content/70 krill-md">@templ.Raw(renderMarkdown(rq.Body))</div>
+												}
+											</li>
+										}
+									</ul>
+								</td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+		</div>
+	}
 }
 
 // Decisions lists a product's current LoadBearingDecisions with their
