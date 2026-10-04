@@ -14,7 +14,6 @@ from dataclasses import asdict, replace
 
 from opentelemetry import trace
 from slack_bolt import Ack, Respond
-from slack_sdk.errors import SlackApiError
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import app
 from friendly_computing_machine.src.friendly_computing_machine.bot.poll.modal import (
@@ -30,7 +29,6 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.poll.parse im
     MAX_OPTIONS,
     USAGE,
     PollParseError,
-    PollSpec,
     parse_poll_command,
 )
 from friendly_computing_machine.src.friendly_computing_machine.bot.poll.render import (
@@ -51,12 +49,13 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal.poll_dal i
     VoteOutcome,
     cast_poll_vote,
     close_poll,
-    create_poll,
     get_poll_snapshot,
-    set_poll_message,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackCommandCreate,
+)
+from friendly_computing_machine.src.friendly_computing_machine.poll.publish import (
+    publish_poll,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,40 +92,6 @@ def _record_command(user_id: str, channel_id: str, text: str) -> None:
     )
 
 
-def _publish_poll(
-    client: SlackWebClientFCM, spec: PollSpec, channel_id: str, user_id: str
-) -> str | None:
-    """Store and post a poll; returns a user-facing error if it could not be posted."""
-    snapshot = create_poll(
-        question=spec.question,
-        options=spec.options,
-        slack_channel_slack_id=channel_id,
-        creator_slack_user_slack_id=user_id,
-        anonymous=spec.anonymous,
-        vote_limit=spec.vote_limit,
-    )
-    trace.get_current_span().set_attribute("db.poll.id", snapshot.poll.id)
-    try:
-        response = client.chat_postMessage(
-            channel=channel_id,
-            text=render_poll_text(snapshot),
-            blocks=render_poll_blocks(snapshot),
-        )
-    except SlackApiError as e:
-        # most commonly the bot has not been invited to the channel
-        logger.warning(
-            "could not post poll %s to %s: %s",
-            snapshot.poll.id,
-            channel_id,
-            e.response.get("error"),
-        )
-        return "I couldn't post the poll here. Invite me to this channel and try again."
-
-    set_poll_message(snapshot.poll.id, response["channel"], response["ts"])
-    logger.info("poll %s created by %s in %s", snapshot.poll.id, user_id, channel_id)
-    return None
-
-
 @app.command(POLL_COMMAND)
 def handle_poll_command(ack: Ack, respond: Respond, command, client: SlackWebClientFCM):
     with tracer.start_as_current_span("handle_poll_command") as span:
@@ -153,7 +118,7 @@ def handle_poll_command(ack: Ack, respond: Respond, command, client: SlackWebCli
         ack()
 
         _record_command(user_id, channel_id, text)
-        error = _publish_poll(client, spec, channel_id, user_id)
+        error = publish_poll(client, spec, channel_id, user_id)
         if error:
             respond(text=error, response_type="ephemeral")
 
@@ -187,7 +152,7 @@ def handle_poll_modal_submit(ack: Ack, body, view, client: SlackWebClientFCM):
 
         _record_command(user_id, channel_id, json.dumps(asdict(spec)))
         # post before acking so a failure can be shown in the still-open modal
-        error = _publish_poll(client, spec, channel_id, user_id)
+        error = publish_poll(client, spec, channel_id, user_id)
         if error:
             ack(response_action="errors", errors={QUESTION_BLOCK: error})
             return

@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 from sqlmodel import Session, select
@@ -17,6 +18,9 @@ from friendly_computing_machine.src.friendly_computing_machine.models.music_poll
     MusicPollInstanceCreate,
     MusicPollResponse,
     MusicPollResponseCreate,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
+    SlackChannel,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +53,32 @@ def get_music_polls(
     with SessionManager(session) as session:
         stmt = select(MusicPoll).offset(skip).limit(limit)
         return list(session.exec(stmt).all())
+
+
+@dataclass
+class MusicPollChannel:
+    """One row of the musicpoll -> slackchannel join."""
+
+    music_poll: MusicPoll
+    slack_channel: SlackChannel
+
+
+def get_music_poll_channels(
+    session: Optional[Session] = None,
+) -> list[MusicPollChannel]:
+    """Get every music poll joined to its Slack channel.
+
+    Bolt-free, so the Temporal music-poll worker reads the channel
+    list through this join rather than the bot config's poll infos.
+    """
+    with SessionManager(session) as session:
+        stmt = select(MusicPoll, SlackChannel).join(
+            SlackChannel, MusicPoll.slack_channel_id == SlackChannel.id
+        )
+        return [
+            MusicPollChannel(music_poll=music_poll, slack_channel=slack_channel)
+            for music_poll, slack_channel in session.exec(stmt).all()
+        ]
 
 
 def update_music_poll(

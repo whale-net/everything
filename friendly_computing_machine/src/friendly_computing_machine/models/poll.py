@@ -19,6 +19,9 @@ class PollBase(Base):
     # set once the poll message has been posted
     slack_message_ts: str | None = Field(default=None, nullable=True)
     anonymous: bool = Field(default=False)
+    # posted by the weekly music-poll schedule rather than a
+    # person via /wpoll; the rendering task consumes this
+    automated: bool = Field(default=False)
     # max active votes per person; NULL = unlimited
     vote_limit: int | None = Field(default=None, nullable=True)
 
