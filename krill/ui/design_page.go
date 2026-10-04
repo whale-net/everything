@@ -152,21 +152,34 @@ func firstLine(s string) string {
 // resolved (productNameFor), not from a read of the product here: the pid
 // is in the path, so a second product lookup would be the same row asked
 // for twice.
-func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid.UUID) (pages.DesignSessionDetailPage, error) {
+//
+// only the SESSION read is fatal. ListBySession and ListOpenQuestions are
+// read independently and independently tolerated (FR e5ad1a5b, NFR
+// ca90dc03): a log that cannot be read costs the operator the timeline and
+// nothing else, so the page renders with an alert where the timeline was
+// and the rail still answers. An unknown or foreign session -- which is
+// what GetSummaryByID returns ErrNotFound for -- stays the 404 path, because
+// that is a missing page rather than a degraded one.
+//
+// now is passed rather than read from the clock so every event's relative
+// age is measured against one instant: a timeline whose entries disagree
+// about "now" by the time the page took to render reads as a history
+// recorded in more than one timeline.
+func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid.UUID, now time.Time) (pages.DesignSessionDetailPage, error) {
 	summary, err := app.designSessions.GetSummaryByID(ctx, id)
 	if err != nil {
 		return pages.DesignSessionDetailPage{}, err
 	}
-	events, err := app.revisionEvents.ListBySession(ctx, id)
-	if err != nil {
-		return pages.DesignSessionDetailPage{}, err
+	events, logErr := app.revisionEvents.ListBySession(ctx, id)
+	questions, questionsErr := app.revisionEvents.ListOpenQuestions(ctx, id)
+	if logErr != nil {
+		logger.Error("design session timeline read failed", "design_session_id", id, "error", logErr)
 	}
-	questions, err := app.revisionEvents.ListOpenQuestions(ctx, id)
-	if err != nil {
-		return pages.DesignSessionDetailPage{}, err
+	if questionsErr != nil {
+		logger.Error("design session open questions read failed", "design_session_id", id, "error", questionsErr)
 	}
 	openedBy, openedByTitle := openingOperatorLabel(summary.OpenedBy)
-	return pages.DesignSessionDetailPage{
+	page := pages.DesignSessionDetailPage{
 		ID:                     summary.ID.String(),
 		ProductID:              summary.ProductID.String(),
 		ProductName:            app.productNameFor(ctx, productID),
@@ -179,10 +192,19 @@ func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid
 		OpenedByKrillSessionID: summary.OpenedByKrillSessionID.String(),
 		CreatedAt:              formatTime(summary.CreatedAt),
 		ProductSessionsPath:    designProductSessionsPath(summary.ProductID),
-		Events:                 revisionEventRows(events),
-		OpenQuestions:          openQuestionRows(questions),
 		AnswersPath:            designAnswersPath(summary.ProductID, summary.ID),
-	}, nil
+	}
+	if logErr == nil {
+		page.Events = revisionEventRows(events, now)
+	} else {
+		page.LogError = "This session's timeline could not be loaded."
+	}
+	if questionsErr == nil {
+		page.OpenQuestions = openQuestionRows(questions)
+	} else {
+		page.QuestionsError = "This session's open questions could not be loaded."
+	}
+	return page, nil
 }
 
 // openingOperatorLabel renders the identity that opened a session for the
@@ -202,7 +224,7 @@ func openingOperatorLabel(s store.Subject) (label, title string) {
 	return s.Sub, s.Sub + "@" + s.Iss
 }
 
-func revisionEventRows(events []store.RevisionEvent) []pages.RevisionEventRow {
+func revisionEventRows(events []store.RevisionEvent, now time.Time) []pages.RevisionEventRow {
 	rows := make([]pages.RevisionEventRow, 0, len(events))
 	for _, ev := range events {
 		deltas := make([]pages.EntityDeltaRow, 0, len(ev.EntityDeltas))
@@ -221,15 +243,20 @@ func revisionEventRows(events []store.RevisionEvent) []pages.RevisionEventRow {
 				Blocking:   blockingTag(q.Blocking),
 			})
 		}
+		acting := subjectLabel(ev.Acting)
+		onBehalfOf := subjectLabel(ev.OnBehalfOf)
 		rows = append(rows, pages.RevisionEventRow{
 			ID:                ev.ID.String(),
 			SeqNo:             ev.SeqNo,
 			EventType:         string(ev.EventType),
-			Acting:            subjectLabel(ev.Acting),
-			OnBehalfOf:        subjectLabel(ev.OnBehalfOf),
+			Acting:            acting,
+			OnBehalfOf:        onBehalfOf,
+			OnBehalfOfDiffers: onBehalfOf != acting,
 			VerifiedAgainst:   derefString(ev.VerifiedAgainst),
 			SignoffStatus:     derefSignoff(ev.SignoffStatus),
 			CreatedAt:         formatTime(ev.CreatedAt),
+			AtRelative:        relativeTime(ev.CreatedAt, now),
+			AtExact:           ev.CreatedAt.UTC().Format(time.RFC3339),
 			EntityDeltas:      deltas,
 			OpenedQuestions:   opened,
 			ResolvedQuestions: ev.OpenQuestionsDelta.Resolved,
@@ -478,7 +505,7 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid design session id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	detail, err := app.buildDesignSessionDetail(r.Context(), productID, id)
+	detail, err := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
 	if errors.Is(err, store.ErrNotFound) || (err == nil && detail.ProductID != productID.String()) {
 		if err == nil {
 			logger.Info("design session not under the product the URL names",

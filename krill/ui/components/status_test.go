@@ -259,6 +259,122 @@ func TestDesignSessionStageLabel_UnknownAndEmptyNeverBlank(t *testing.T) {
 	assert.Equal(t, "unknown", DesignSessionStageLabel(""))
 }
 
+// designSessionEventTypes is store.EventType's full vocabulary -- the five
+// rounds a revision_event may be -- spelled out here rather than imported,
+// for the same reason designSessionStages is: this package carries no
+// //krill/store dependency by design, and a test that read the list off the
+// store type would silently agree with any future edit to it.
+var designSessionEventTypes = []string{
+	"draft",
+	"reconciliation",
+	"answer",
+	"signoff",
+	"ruling",
+}
+
+// TestDesignSessionEventTypeStyle_EveryRoundIsVisuallyDistinct: the five
+// rounds are told apart by the badge alone, so a reader scanning a timeline
+// cannot mistake an answer round for a ruling one.
+func TestDesignSessionEventTypeStyle_EveryRoundIsVisuallyDistinct(t *testing.T) {
+	seen := map[StatusStyle]string{}
+	for _, eventType := range designSessionEventTypes {
+		style := DesignSessionEventTypeStyle(eventType)
+		if other, clash := seen[style]; clash {
+			t.Errorf("rounds %q and %q both render as %+v: the timeline cannot tell them apart", other, eventType, style)
+		}
+		seen[style] = eventType
+	}
+	for _, eventType := range designSessionEventTypes {
+		assert.NotEqual(t, neutralStyle, DesignSessionEventTypeStyle(eventType),
+			"%q must not fall through to the unknown-round fallback", eventType)
+	}
+}
+
+// TestDesignSessionEventTypeStyle_UnknownRoundUsesNeutralFallback pins the
+// sixth round's behaviour: a value this build does not know renders as the
+// neutral badge rather than failing to compile or rendering blank.
+func TestDesignSessionEventTypeStyle_UnknownRoundUsesNeutralFallback(t *testing.T) {
+	assert.Equal(t, neutralStyle, DesignSessionEventTypeStyle("a round this build does not know"))
+}
+
+// TestDesignSessionEventTypeStyle_SizeIsUniform: every round badge is one
+// size, so a timeline cannot be read at two different scales depending on
+// which round an entry is.
+func TestDesignSessionEventTypeStyle_SizeIsUniform(t *testing.T) {
+	for _, eventType := range designSessionEventTypes {
+		assert.Equal(t, htmxui.BadgeSizeSM, DesignSessionEventTypeStyle(eventType).Size, "%q", eventType)
+	}
+}
+
+// TestDesignSessionEventTypeLabel_NeverBlank: the rounds are already words
+// an operator reads, so the label is the wire value itself -- but a badge
+// with no words is a round nobody can read, so nothing may be blank.
+func TestDesignSessionEventTypeLabel_NeverBlank(t *testing.T) {
+	for _, eventType := range designSessionEventTypes {
+		assert.Equal(t, eventType, DesignSessionEventTypeLabel(eventType))
+	}
+	assert.Equal(t, "a round this build does not know",
+		DesignSessionEventTypeLabel("a round this build does not know"),
+		"an unrecognised round shows its own value rather than an empty badge")
+	assert.Equal(t, "unknown", DesignSessionEventTypeLabel(""))
+}
+
+// questionBlockingTags is the question-blocking vocabulary: the two wire
+// strings a question row's blocking flag takes, spelled out for the same
+// reason as every other vocabulary in this file.
+var questionBlockingTags = []string{"blocking", "non-blocking"}
+
+func TestQuestionBlockingStyle_EveryTagIsVisuallyDistinct(t *testing.T) {
+	seen := map[StatusStyle]string{}
+	for _, tag := range questionBlockingTags {
+		style := QuestionBlockingStyle(tag)
+		if other, clash := seen[style]; clash {
+			t.Errorf("question tags %q and %q both render as %+v", other, tag, style)
+		}
+		seen[style] = tag
+	}
+	for _, tag := range questionBlockingTags {
+		assert.NotEqual(t, neutralStyle, QuestionBlockingStyle(tag),
+			"%q must not fall through to the unknown-tag fallback", tag)
+	}
+}
+
+func TestQuestionBlockingStyle_UnknownTagUsesNeutralFallback(t *testing.T) {
+	assert.Equal(t, neutralStyle, QuestionBlockingStyle("maybe"))
+}
+
+// TestQuestionBlockingStyle_SharesTheSessionsRegister: the rail's blocking
+// badge and the sessions table's "N blocking" cell are the same fact read at
+// two scales -- what a session is waiting on -- so they wear one register.
+// Asserting it here is what keeps a future restyle of one from quietly
+// splitting the question's severity across two colours.
+func TestQuestionBlockingStyle_SharesTheSessionsRegister(t *testing.T) {
+	assert.Equal(t, DesignSessionBlockingCountStyle().Variant, QuestionBlockingStyle("blocking").Variant,
+		"a blocking question and a session's blocking count are one register")
+	assert.Equal(t, htmxui.BadgeError, QuestionBlockingStyle("blocking").Variant)
+
+	// Non-blocking is the absence treatment, not a second severity: a
+	// question nobody is held up by must never wear a tone that reads as
+	// "needs attention".
+	assert.Equal(t, htmxui.BadgeGhost, QuestionBlockingStyle("non-blocking").Variant)
+	for _, tag := range questionBlockingTags {
+		variant := QuestionBlockingStyle(tag).Variant
+		if tag == "non-blocking" {
+			continue
+		}
+		assert.NotContains(t, []htmxui.BadgeVariant{htmxui.BadgeSuccess}, variant,
+			"%q must not render as a success tone", tag)
+	}
+}
+
+func TestQuestionBlockingLabel_NeverBlank(t *testing.T) {
+	for _, tag := range questionBlockingTags {
+		assert.Equal(t, tag, QuestionBlockingLabel(tag))
+	}
+	assert.Equal(t, "maybe", QuestionBlockingLabel("maybe"))
+	assert.Equal(t, "unknown", QuestionBlockingLabel(""))
+}
+
 // TestDesignSessionBlockingCountStyle_IsTheErrorVariant: the "N blocking"
 // cell names a session an operator is being held up by, so it takes the
 // error tone rather than the neutral one a plain count badge wears.

@@ -131,6 +131,87 @@ func DesignSessionStageLabel(stage string) string {
 	}
 }
 
+// DesignSessionEventTypeStyle maps a revision_event's round kind
+// (store's EventType, spelled out as strings so this package keeps no
+// //krill/store dependency) onto a daisyUI badge.
+//
+// It is the only place the five-round vocabulary acquires a colour, so the
+// session detail's timeline and any future surface showing the same rounds
+// read one history the one way (FR dcecb049: one mapper per vocabulary).
+//
+// The rounds read as kinds rather than as severities -- a draft is not a
+// warning and a ruling is not a success -- so the only severity tone in the
+// set is the one that is: reconciliation, the round where an architect has
+// found work to do, wears warning-soft. Distinctness is over the whole
+// (variant, soft) tuple, and the default arm keeps a sixth round from
+// rendering as a blank badge.
+func DesignSessionEventTypeStyle(eventType string) StatusStyle {
+	switch eventType {
+	case "draft":
+		return StatusStyle{htmxui.BadgeGhost, htmxui.BadgeSizeSM, false}
+	case "reconciliation":
+		return StatusStyle{htmxui.BadgeWarning, htmxui.BadgeSizeSM, true}
+	case "answer":
+		return StatusStyle{htmxui.BadgeInfo, htmxui.BadgeSizeSM, false}
+	case "signoff":
+		return StatusStyle{htmxui.BadgeSuccess, htmxui.BadgeSizeSM, false}
+	case "ruling":
+		return StatusStyle{htmxui.BadgePrimary, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
+
+// DesignSessionEventTypeLabel is the human wording on a round badge. Unlike
+// the stage vocabulary these wire values are already words an operator reads
+// ("draft", "reconciliation", "answer", "signoff", "ruling"), so the mapper
+// earns its place as the single owner of the wording rather than as a
+// translation: a newly-added round shows its own value, and an absent one
+// reads as "unknown" rather than as a blank badge.
+func DesignSessionEventTypeLabel(eventType string) string {
+	switch eventType {
+	case "":
+		return "unknown"
+	default:
+		return eventType
+	}
+}
+
+// QuestionBlockingStyle maps a question's blocking tag -- "blocking" or
+// "non-blocking", the wire form store's bool takes in a question row -- onto
+// a daisyUI badge.
+//
+// It exists as its own mapper because "blocking" is a question's severity,
+// not a session's: the sessions table's "N blocking" cell wears the same
+// ERROR register (DesignSessionBlockingCountStyle) because both answer the
+// one question an operator scans a design session for -- what is it waiting
+// on. Non-blocking is ghost, the absence treatment rather than a second
+// severity, so a question nobody is held up by never wears a colour that
+// says otherwise.
+func QuestionBlockingStyle(blocking string) StatusStyle {
+	switch blocking {
+	case "blocking":
+		return StatusStyle{htmxui.BadgeError, htmxui.BadgeSizeSM, true}
+	case "non-blocking":
+		return StatusStyle{htmxui.BadgeGhost, htmxui.BadgeSizeSM, false}
+	default:
+		return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+	}
+}
+
+// QuestionBlockingLabel is the human wording on a question's blocking badge.
+// The wire values are already the words the rail reads, so -- as with
+// DesignSessionEventTypeLabel -- this is the single owner of the wording
+// rather than a translation.
+func QuestionBlockingLabel(blocking string) string {
+	switch blocking {
+	case "":
+		return "unknown"
+	default:
+		return blocking
+	}
+}
+
 // DesignSessionBlockingCountStyle is the badge for a session's open
 // BLOCKING question count -- the "N blocking" cell that names a session
 // needing an answer before it can move.

@@ -124,15 +124,45 @@ type OpenQuestionDeltaRow struct {
 }
 
 // RevisionEventRow is one round of a session's ordered log.
+//
+// AtRelative and AtExact are the instant behind the round handed over
+// pre-rendered for the reason the sessions list's rows are: relative text
+// needs a clock, and a view that read one could not be asserted on. The
+// timeline shows AtRelative and carries AtExact in the time element's
+// datetime, title and data-krill-updated-at, so hovering answers "exactly
+// when" with or without the head script.
+//
+// Summary is the one sentence describing what this round DID, composed by
+// package main from the round's own content (see revisionEventSummary there).
+// It exists because revision_event has no prose column -- migration 008
+// stores entity_deltas and open_questions_delta and nothing else -- so the
+// text an operator reads in a timeline box has to be derived rather than
+// read, and deriving it in one helper is what lets a test pin it.
 type RevisionEventRow struct {
-	ID                string
-	SeqNo             int
-	EventType         string
-	Acting            string
-	OnBehalfOf        string
+	ID string
+	// SeqNo is the round's position in the session's log; the timeline
+	// renders it in the entry's own hook so a test can assert log order
+	// without parsing prose.
+	SeqNo     int
+	EventType string
+	// Acting is the acting subject the server recorded, in the composite
+	// form ("kind sub@iss") the rest of krill's surfaces use.
+	Acting string
+	// OnBehalfOf is that subject's on-behalf-of counterpart, rendered only
+	// when it differs from Acting: repeating "on behalf of yourself" on
+	// every entry of a timeline reads as a second, different actor.
+	OnBehalfOf string
+	// OnBehalfOfDiffers reports whether OnBehalfOf is worth showing at
+	// all. A revision_event carries no persona column, so nothing here is
+	// inferred -- this is only the recorded pair, deciding whether it is
+	// worth a second line.
+	OnBehalfOfDiffers bool
 	VerifiedAgainst   string
 	SignoffStatus     string
 	CreatedAt         string
+	AtRelative        string
+	AtExact           string
+	Summary           string
 	EntityDeltas      []EntityDeltaRow
 	OpenedQuestions   []OpenQuestionDeltaRow
 	ResolvedQuestions []string
@@ -189,17 +219,55 @@ type DesignSessionDetailPage struct {
 	ProductSessionsPath    string
 	Events                 []RevisionEventRow
 	OpenQuestions          []OpenQuestionRow
+	// LogError and QuestionsError are the two reads whose failure
+	// degrades this page rather than taking it down (FR e5ad1a5b, NFR
+	// ca90dc03): a log read that breaks renders an inline alert IN PLACE
+	// OF the timeline and a question read that breaks renders one inside
+	// the rail, while the rest of the page still renders.
+	//
+	// They carry an operator-facing sentence and never a store's own error
+	// text -- the log can fail for reasons naming an internal URL or a
+	// driver, and a browser is not the place for that.
+	//
+	// A read that FAILED is never rendered as an empty list: "No revision
+	// events yet." and "this session's timeline is unavailable" are
+	// different facts, and conflating them tells an operator their session
+	// is empty when in fact krill could not read it.
+	LogError              string
+	QuestionsError        string
 	Error                  string
 	FollowUp               string
 	CheckedResolve         map[string]bool
 	AnswersPath            string
 }
 
+// LogError and QuestionsError are the two reads whose failure degrades this
+// page rather than taking it down (FR e5ad1a5b, NFR ca90dc03). The session
+// itself is still read fatally -- an unknown or foreign session is the 404
+// path -- but a log or question read that breaks renders an inline alert in
+// place of that one region while the rest of the page, including the rail,
+// still renders.
+//
+// They carry an operator-facing sentence and NEVER a store's own error text:
+// the log can fail for reasons that name an internal URL or a driver, and the
+// browser is not the place for that.
 // IsChecked reports whether a resolve box for the given question id was
 // ticked, so a rejected follow-up round re-renders the form with the
 // operator's original ticks intact. A nil CheckedResolve reads every id as
 // unticked, which is the GET handler's normal case.
 func (p DesignSessionDetailPage) IsChecked(id string) bool { return p.CheckedResolve[id] }
+
+// FollowUpFormAnchor is the DOM id of the follow-up form, and -- the reason
+// it is exported rather than spelled twice -- the id the rail's resolve
+// checkboxes name in their `form` attribute.
+//
+// The wireframe puts the boxes in the rail and the submit control in the
+// main column, so the boxes belong to the form BY REFERENCE: HTML's `form`
+// attribute associates an input with a form anywhere in the document, which
+// is what keeps one submission carrying the operator's ticks with no
+// JavaScript and no second set of boxes. An input that duplicated the boxes
+// inside the form would be the same question answered twice.
+const FollowUpFormAnchor = "follow-up-form"
 
 // designSessionListAnchor is the DOM id this page's region carries, so a
 // test -- and the empty state's own action -- name one element rather than
@@ -505,10 +573,18 @@ func designSessionCrumbs(page DesignSessionDetailPage) []DesignSessionCrumb {
 
 // designSessionEventsRegion is the session's ordered log, in the main
 // column.
+//
+// A read that FAILED and a log that is genuinely empty render differently,
+// and must keep doing so (NFR ca90dc03): "this timeline is unavailable" and
+// "this session has no rounds yet" are different facts, and rendering both
+// as "No revision events yet." tells an operator their session is empty when
+// in fact krill could not read it.
 templ designSessionEventsRegion(page DesignSessionDetailPage) {
 	<section id={ designSessionEventsAnchor }>
 		<h3>Revision events</h3>
-		if len(page.Events) > 0 {
+		if page.LogError != "" {
+			@htmxui.Alert(htmxui.AlertError, page.LogError, nil)
+		} else if len(page.Events) > 0 {
 			<ol class="space-y-3">
 				for _, ev := range page.Events {
 					@revisionEvent(ev)
@@ -520,34 +596,48 @@ templ designSessionEventsRegion(page DesignSessionDetailPage) {
 	</section>
 }
 
-// designSessionQuestionsRegion is the rail's open-questions card, holding
-// the question table this page has always shown.
+// designSessionQuestionsRegion is the rail's open-questions card. Same rule
+// as the timeline: a failed read is an alert in the rail, never an empty
+// card body that reads as "nothing is waiting on you".
 templ designSessionQuestionsRegion(page DesignSessionDetailPage) {
 	<section id={ designSessionQuestionsAnchor }>
 		<h3>Open questions</h3>
-		if len(page.OpenQuestions) > 0 {
-			<table class="table table-sm">
-				<thead>
-					<tr>
-						<th>Question</th>
-						<th>Tag</th>
-						<th>Opened at</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, q := range page.OpenQuestions {
-						<tr>
-							<td><code>{ q.QuestionID }</code> — { q.Text }</td>
-							<td>{ q.Blocking }</td>
-							<td>#{ itoa(q.OpenedAtSeqNo) }</td>
-						</tr>
-					}
-				</tbody>
-			</table>
+		if page.QuestionsError != "" {
+			@htmxui.Alert(htmxui.AlertError, page.QuestionsError, nil)
 		} else {
-			<p>No open questions.</p>
+			@designSessionQuestionList(page.OpenQuestions)
 		}
 	</section>
+}
+
+// designSessionQuestionList is the rail's question body: the currently-open
+// questions, each with the badge that says whether the session is held up by
+// it, or an empty state saying so when none are (NFR ca90dc03 -- an empty
+// result renders EmptyState rather than an empty card body).
+templ designSessionQuestionList(questions []OpenQuestionRow) {
+	if len(questions) > 0 {
+		<table class="table table-sm">
+			<thead>
+				<tr>
+					<th>Question</th>
+					<th>Tag</th>
+					<th>Opened at</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, q := range questions {
+					<tr>
+						<td><code>{ q.QuestionID }</code> — { q.Text }</td>
+						<td>{ q.Blocking }</td>
+						<td>#{ itoa(q.OpenedAtSeqNo) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	} else {
+		@htmxui.EmptyState("No open questions.", "Nothing is waiting on an answer.", "", "",
+			templ.Attributes{"data-krill": "open-questions-empty"})
+	}
 }
 
 // designSessionPropertiesCard is the rail's properties card: who opened the

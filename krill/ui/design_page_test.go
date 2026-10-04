@@ -801,15 +801,23 @@ func TestDesignRead_ErrorPaths_SeparateStores(t *testing.T) {
 	productID := uuid.New()
 	boom := fmt.Errorf("pq: password authentication failed for user krill")
 
-	t.Run("revision-event read error is 500", func(t *testing.T) {
+	t.Run("revision-event read error degrades the timeline, not the page", func(t *testing.T) {
+		// FR e5ad1a5b: a log that cannot be read costs the operator the
+		// timeline and nothing else, so this is a 200 with an alert where
+		// the timeline was -- not a 500 that takes the session's opening
+		// statement and rail with it.
 		app := newDesignReadApp(
 			fakeDesignSessions{byID: map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}}},
 			fakeRevisionEvents{err: boom},
 		)
 		rec := get(designReadMux(app), designSessionPath(productID, sessionID))
-		assert.Equal(t, http.StatusInternalServerError, rec.Code)
-		assert.NotEmpty(t, strings.TrimSpace(rec.Body.String()))
-		assert.NotContains(t, rec.Body.String(), "password authentication", "store error text must not reach the browser")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		body := rec.Body.String()
+		assert.Contains(t, body, "could not be loaded", "the failing read says so inline")
+		assert.NotContains(t, body, "password authentication", "store error text must not reach the browser")
+		// And a failed read is never rendered as an empty list (NFR ca90dc03).
+		assert.NotContains(t, body, "No revision events yet.",
+			"a read that failed must not be rendered as a log with nothing in it")
 	})
 
 	t.Run("aggregate read error is 500 on the list", func(t *testing.T) {
