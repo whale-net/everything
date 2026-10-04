@@ -145,7 +145,9 @@ templ MilestoneDetail(page MilestoneDetailPage) {
 		data-krill-container-id={ page.ID } data-krill-container-kind={ page.Kind } class="space-y-4">
 		@milestoneDetailHeader(page)
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="milestone-detail-frame">
-			<div class="min-w-0 space-y-4" data-krill="milestone-detail-main">@milestoneDetailCards(page)</div>
+			<div class="min-w-0 space-y-4" data-krill="milestone-detail-main">
+				@milestoneDetailCards(page)
+			</div>
 			<aside data-krill="milestone-detail-rail"></aside>
 		</div>
 	</section>
