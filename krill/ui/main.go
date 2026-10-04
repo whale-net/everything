@@ -175,8 +175,10 @@ type App struct {
 	mcpProvider *auth.Provider
 
 	// credentials is the store behind both the self-serve JSON API and the
-	// credentials page's htmx handlers (credentials_page.go).
-	credentials auth.CredentialStore
+	// credentials page's htmx handlers (credentials_page.go). It is the
+	// named variant because the page mints with an operator-chosen name;
+	// the JSON API and /authorize's code path use the unnamed Mint.
+	credentials auth.NamedCredentialStore
 
 	// writes is the client this binary's own app pages use to issue krill
 	// writes (writeclient.go): it mints a krill session whose acting /

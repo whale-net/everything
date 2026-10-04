@@ -412,3 +412,286 @@ func TestASSShaped_WithoutExplicitCast_StillWorks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, identity, gotIdentity)
 }
+
+// ── named credentials (StoreConfig.NameColumn) ──────────────────────────
+
+// namedCredentialSchema mirrors migration 039's shape: a nullable name
+// column plus the partial unique index that makes one live credential per
+// (identity, name) a database-enforced fact rather than a store convention.
+const namedCredentialSchema = genericCredentialSchema + `
+	ALTER TABLE mcp_credential ADD COLUMN name TEXT;
+	CREATE UNIQUE INDEX mcp_credential_identity_name_live
+		ON mcp_credential(identity, name)
+		WHERE revoked_at IS NULL AND name IS NOT NULL;
+`
+
+func newNamedStore(t *testing.T, ctx context.Context, db *dbtest.Postgres) NamedCredentialStore {
+	t.Helper()
+	store, err := NewCredentialStore(ctx, StoreConfig{Pool: db.Pool, NameColumn: "name"})
+	require.NoError(t, err)
+	named, ok := store.(NamedCredentialStore)
+	require.True(t, ok, "a NameColumn-configured store must satisfy NamedCredentialStore")
+	return named
+}
+
+// TestNamed_MintNamed_PersistsNameAndListReturnsIt: the name survives the
+// round trip, which is the whole point -- the credentials page lists it.
+func TestNamed_MintNamed_PersistsNameAndListReturnsIt(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	const identity = "svc-account-named"
+	rawToken, minted, err := store.MintNamed(ctx, identity, "deploy bot")
+	require.NoError(t, err)
+	assert.NotEmpty(t, rawToken)
+	assert.Equal(t, "deploy bot", minted.Name)
+
+	// It is on disk under exactly that name, not just on the returned struct.
+	var storedName *string
+	require.NoError(t, db.Pool.QueryRow(ctx, "SELECT name FROM mcp_credential WHERE id = $1", minted.ID).Scan(&storedName))
+	require.NotNil(t, storedName)
+	assert.Equal(t, "deploy bot", *storedName)
+
+	creds, err := store.List(ctx, identity)
+	require.NoError(t, err)
+	require.Len(t, creds, 1)
+	assert.Equal(t, "deploy bot", creds[0].Name)
+
+	// A named credential is still an ordinary credential: it verifies, and
+	// only its hash is stored.
+	gotIdentity, _, err := store.Verify(ctx, rawToken)
+	require.NoError(t, err)
+	assert.Equal(t, identity, gotIdentity)
+	var storedHash string
+	require.NoError(t, db.Pool.QueryRow(ctx, "SELECT token_hash FROM mcp_credential WHERE id = $1", minted.ID).Scan(&storedHash))
+	assert.Equal(t, hashToken(rawToken), storedHash)
+}
+
+// TestNamed_MintNamed_TrimsTheStoredName: the trimmed form is what the
+// index sees, so " deploy " collides with "deploy".
+func TestNamed_MintNamed_TrimsTheStoredName(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	const identity = "svc-account-trim"
+	_, minted, err := store.MintNamed(ctx, identity, "  deploy  ")
+	require.NoError(t, err)
+	assert.Equal(t, "deploy", minted.Name)
+
+	_, _, err = store.MintNamed(ctx, identity, "deploy")
+	assert.ErrorIs(t, err, ErrCredentialNameTaken, "the untrimmed form must collide with the trimmed one")
+}
+
+// TestNamed_MintNamed_EmptyNameRefused: the refusal happens before any
+// query, so no row is created and the operator's error is the named one.
+func TestNamed_MintNamed_EmptyNameRefused(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	const identity = "svc-account-empty"
+	for _, name := range []string{"", "   ", "\t\n"} {
+		_, _, err := store.MintNamed(ctx, identity, name)
+		assert.ErrorIs(t, err, ErrCredentialNameRequired, "name %q", name)
+	}
+
+	creds, err := store.List(ctx, identity)
+	require.NoError(t, err)
+	assert.Empty(t, creds, "a refused name must not have created a row")
+}
+
+// TestNamed_DuplicateLiveName_RefusedSameIdentity: the second live
+// credential with a name already in use is refused with the name-taken
+// error, and no second row appears.
+func TestNamed_DuplicateLiveName_RefusedSameIdentity(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	const identity = "svc-account-dup"
+	_, first, err := store.MintNamed(ctx, identity, "deploy")
+	require.NoError(t, err)
+
+	_, _, err = store.MintNamed(ctx, identity, "deploy")
+	assert.ErrorIs(t, err, ErrCredentialNameTaken)
+	assert.NotErrorIs(t, err, ErrCredentialNameRequired)
+
+	creds, err := store.List(ctx, identity)
+	require.NoError(t, err)
+	require.Len(t, creds, 1, "the refused duplicate must not have been persisted")
+	assert.Equal(t, first.ID, creds[0].ID)
+}
+
+// TestNamed_DuplicateNameRefusalIsNotADriverMessage is the UI-facing
+// half of the above: the error a page renders must be the named refusal,
+// never the raw Postgres text an operator should never see.
+func TestNamed_DuplicateNameRefusalIsNotADriverMessage(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	const identity = "svc-account-msg"
+	_, _, err := store.MintNamed(ctx, identity, "deploy")
+	require.NoError(t, err)
+
+	_, _, err = store.MintNamed(ctx, identity, "deploy")
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Equal(t, ErrCredentialNameTaken.Error(), msg)
+	for _, leak := range []string{"duplicate key", "SQLSTATE", "23505", "mcp_credential_identity_name_live", "23505:"} {
+		assert.NotContains(t, msg, leak, "the driver detail %q must not reach a caller", leak)
+	}
+}
+
+// TestNamed_SameNameDifferentIdentity_Allowed: the index is on
+// (identity, name), so the name is scoped per identity -- two operators may
+// each call their own credential "deploy".
+func TestNamed_SameNameDifferentIdentity_Allowed(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	_, a, err := store.MintNamed(ctx, "identity-a", "deploy")
+	require.NoError(t, err)
+	_, b, err := store.MintNamed(ctx, "identity-b", "deploy")
+	require.NoError(t, err)
+
+	assert.Equal(t, "deploy", a.Name)
+	assert.Equal(t, "deploy", b.Name)
+	assert.NotEqual(t, a.ID, b.ID)
+}
+
+// TestNamed_RevokeFreesTheName: the index's partial predicate is what makes
+// a revoked credential's name reusable, and both halves of the rule are
+// asserted -- a live holder blocks, a revoked one does not.
+func TestNamed_RevokeFreesTheName(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	const identity = "svc-account-revoke"
+	_, first, err := store.MintNamed(ctx, identity, "deploy")
+	require.NoError(t, err)
+
+	// Still live: the name is held.
+	_, _, err = store.MintNamed(ctx, identity, "deploy")
+	assert.ErrorIs(t, err, ErrCredentialNameTaken)
+
+	require.NoError(t, store.Revoke(ctx, first.ID, identity))
+
+	_, second, err := store.MintNamed(ctx, identity, "deploy")
+	require.NoError(t, err, "a revoked credential must free its name for reuse")
+	assert.NotEqual(t, first.ID, second.ID)
+
+	// And the revoked row keeps its name in the listing -- history is not
+	// rewritten by the reuse.
+	creds, err := store.List(ctx, identity)
+	require.NoError(t, err)
+	require.Len(t, creds, 2)
+	assert.Nil(t, creds[0].RevokedAt)
+	assert.NotNil(t, creds[1].RevokedAt)
+	assert.Equal(t, "deploy", creds[0].Name)
+	assert.Equal(t, "deploy", creds[1].Name)
+}
+
+// TestNamed_UnnamedCredentialsNeverCollide: Mint writes NULL, and the
+// index excludes NULL, so an operator with several unnamed credentials
+// (the self-serve JSON API's shape) is never refused.
+func TestNamed_UnnamedCredentialsNeverCollide(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	const identity = "svc-account-unnamed"
+	for i := 0; i < 3; i++ {
+		_, minted, err := store.Mint(ctx, identity)
+		require.NoError(t, err)
+		assert.Empty(t, minted.Name, "Mint must keep writing a NULL name")
+	}
+
+	creds, err := store.List(ctx, identity)
+	require.NoError(t, err)
+	require.Len(t, creds, 3)
+	for _, c := range creds {
+		assert.Empty(t, c.Name)
+	}
+}
+
+// TestNamed_UnnamedAndNamedMixFreely: a named credential does not disturb
+// the unnamed ones minted alongside it.
+func TestNamed_UnnamedAndNamedMixFreely(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: namedCredentialSchema})
+	store := newNamedStore(t, ctx, db)
+
+	const identity = "svc-account-mix"
+	_, _, err := store.Mint(ctx, identity)
+	require.NoError(t, err)
+	_, namedCred, err := store.MintNamed(ctx, identity, "deploy")
+	require.NoError(t, err)
+	_, _, err = store.Mint(ctx, identity)
+	require.NoError(t, err)
+
+	creds, err := store.List(ctx, identity)
+	require.NoError(t, err)
+	require.Len(t, creds, 3)
+
+	var namedCount, unnamedCount int
+	for _, c := range creds {
+		if c.Name == "deploy" {
+			namedCount++
+			assert.Equal(t, namedCred.ID, c.ID)
+		} else {
+			unnamedCount++
+			assert.Empty(t, c.Name)
+		}
+	}
+	assert.Equal(t, 1, namedCount)
+	assert.Equal(t, 2, unnamedCount)
+}
+
+// TestWithoutNameColumn_MintsAndListsExactlyAsBefore is the other domains'
+// contract, asserted against a table that has no name column at all: a
+// store configured without NameColumn must never reference one.
+func TestWithoutNameColumn_MintsAndListsExactlyAsBefore(t *testing.T) {
+	ctx := context.Background()
+	// genericCredentialSchema has no name column -- any reference to one
+	// would fail the query outright.
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: genericCredentialSchema})
+
+	store, err := NewCredentialStore(ctx, StoreConfig{Pool: db.Pool})
+	require.NoError(t, err)
+
+	const identity = "svc-account-no-name-column"
+	rawToken, minted, err := store.Mint(ctx, identity)
+	require.NoError(t, err)
+	assert.Empty(t, minted.Name)
+	assert.NotEqual(t, uuid.Nil, minted.ID)
+
+	gotIdentity, verified, err := store.Verify(ctx, rawToken)
+	require.NoError(t, err)
+	assert.Equal(t, identity, gotIdentity)
+	assert.Empty(t, verified.Name)
+
+	creds, err := store.List(ctx, identity)
+	require.NoError(t, err)
+	require.Len(t, creds, 1)
+	assert.Empty(t, creds[0].Name)
+
+	require.NoError(t, store.Revoke(ctx, minted.ID, identity))
+	_, _, err = store.Verify(ctx, rawToken)
+	assert.ErrorIs(t, err, ErrInvalidCredential)
+
+	// MintNamed on such a store is a named misconfiguration, never a
+	// silent unnamed mint.
+	_, _, err = store.(NamedCredentialStore).MintNamed(ctx, identity, "deploy")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NameColumn")
+
+	// ...and nothing was persisted by the refused call.
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, "SELECT count(*) FROM mcp_credential WHERE identity = $1", identity).Scan(&count))
+	assert.Equal(t, 1, count)
+}

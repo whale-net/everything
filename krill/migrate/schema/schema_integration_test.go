@@ -3572,3 +3572,124 @@ func TestMigration037_ShipsAlongsideSCD2(t *testing.T) {
 	require.NoError(t, runner.Up())
 	assert.True(t, columnExists(t, ctx, db, "milestone_ships_alongside", "valid_to"))
 }
+
+// ── 039_mcp_credential_name ──────────────────────────────────────────────
+
+// indexDefinition returns a named index's full definition (columns and WHERE
+// predicate), normalized to single-spaced lowercase — so a partial unique
+// index's shape can be asserted against what Postgres actually stored
+// rather than against the migration file's text.
+func indexDefinition(t *testing.T, ctx context.Context, db *dbtest.Postgres, index string) string {
+	t.Helper()
+	var def string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = current_schema() AND indexname = $1
+	`, index).Scan(&def))
+	return strings.ToLower(strings.Join(strings.Fields(def), " "))
+}
+
+// ptr returns a pointer to v, for the nullable name column below.
+func ptr[T any](v T) *T { return &v }
+
+// TestMigration039_MCPCredentialName asserts the shape migration 039
+// commits to: a nullable name column on mcp_credential (nullable so every
+// credential minted before it keeps working with no backfill), and a
+// UNIQUE index on (identity, name) predicated to live, non-NULL rows.
+// Down removes both and Up re-adds them.
+func TestMigration039_MCPCredentialName(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+
+	// Before 039: no name column, no index.
+	require.NoError(t, runner.Migrate(38))
+	assert.False(t, columnExists(t, ctx, db, "mcp_credential", "name"), "039 must add the column")
+	assert.False(t, hasIndexNamed(t, ctx, db, "mcp_credential", "mcp_credential_identity_name_live"))
+
+	require.NoError(t, runner.Up())
+
+	// The column is nullable TEXT -- a pre-039 row survives untouched.
+	dataType, nullable := nullableColumn(t, ctx, db, "mcp_credential", "name")
+	assert.Equal(t, "text", dataType)
+	assert.Equal(t, "YES", nullable, "name must be nullable: credentials minted before 039 have none, and Mint writes NULL")
+
+	// The index covers (identity, name), is unique, and is partial on
+	// live rows with a name.
+	assert.True(t, hasIndexNamed(t, ctx, db, "mcp_credential", "mcp_credential_identity_name_live"))
+	def := indexDefinition(t, ctx, db, "mcp_credential_identity_name_live")
+	assert.Contains(t, def, "create unique index")
+	assert.Contains(t, def, "(identity, name)")
+	assert.Contains(t, def, "(revoked_at is null) and (name is not null)")
+
+	// Down reverses it, and Up re-applies it -- the index must be dropped
+	// before the column it is built on.
+	require.NoError(t, runner.Migrate(38))
+	assert.False(t, columnExists(t, ctx, db, "mcp_credential", "name"), "039's Down must drop the column")
+	assert.False(t, hasIndexNamed(t, ctx, db, "mcp_credential", "mcp_credential_identity_name_live"), "039's Down must drop the index")
+	// The rest of the table survives: Down is scoped to the column, not the table.
+	assert.True(t, tableExists(t, ctx, db, "mcp_credential"))
+
+	require.NoError(t, runner.Up())
+	assert.True(t, columnExists(t, ctx, db, "mcp_credential", "name"), "039 must be re-appliable")
+	assert.True(t, hasIndexNamed(t, ctx, db, "mcp_credential", "mcp_credential_identity_name_live"))
+}
+
+// TestMigration039_IndexEnforcesItsPromise exercises the index as SQL rather
+// than as a definition: one live credential per (identity, name), the name
+// freed by revocation, unnamed rows never colliding, and the same name free
+// for a different identity.
+func TestMigration039_IndexEnforcesItsPromise(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	insert := func(identity string, name *string, revoked bool) {
+		t.Helper()
+		var revokedAt any
+		if revoked {
+			revokedAt = time.Now()
+		}
+		_, err := db.Pool.Exec(ctx, `
+			INSERT INTO mcp_credential (identity, token_hash, name, revoked_at)
+			VALUES ($1, $2, $3, $4)
+		`, identity, uuid.NewString(), name, revokedAt)
+		require.NoError(t, err)
+	}
+
+	// A row that predates 039 in shape (no name at all).
+	insert("identity-nameless", nil, false)
+	insert("identity-nameless", nil, false)
+	insert("identity-nameless", nil, false)
+
+	insert("identity-a", ptr("deploy"), false)
+	// A second live credential with the same name is refused.
+	err = db.Pool.QueryRow(ctx, `
+		INSERT INTO mcp_credential (identity, token_hash, name)
+		VALUES ('identity-a', $1, 'deploy') RETURNING id
+	`, uuid.NewString()).Scan(new(uuid.UUID))
+	require.Error(t, err, "a second live (identity, name) must violate the index")
+
+	// Revoking frees the name.
+	_, err = db.Pool.Exec(ctx, "UPDATE mcp_credential SET revoked_at = NOW() WHERE identity = 'identity-a' AND name = 'deploy'")
+	require.NoError(t, err)
+	insert("identity-a", ptr("deploy"), false)
+
+	// The same name under a different identity was never in conflict.
+	insert("identity-b", ptr("deploy"), false)
+
+	// Two revoked rows sharing a name are harmless history.
+	insert("identity-b", ptr("retired"), true)
+	insert("identity-b", ptr("retired"), true)
+}
