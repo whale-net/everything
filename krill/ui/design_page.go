@@ -152,21 +152,34 @@ func firstLine(s string) string {
 // resolved (productNameFor), not from a read of the product here: the pid
 // is in the path, so a second product lookup would be the same row asked
 // for twice.
-func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid.UUID) (pages.DesignSessionDetailPage, error) {
+//
+// only the SESSION read is fatal. ListBySession and ListOpenQuestions are
+// read independently and independently tolerated (FR e5ad1a5b, NFR
+// ca90dc03): a log that cannot be read costs the operator the timeline and
+// nothing else, so the page renders with an alert where the timeline was
+// and the rail still answers. An unknown or foreign session -- which is
+// what GetSummaryByID returns ErrNotFound for -- stays the 404 path, because
+// that is a missing page rather than a degraded one.
+//
+// now is passed rather than read from the clock so every event's relative
+// age is measured against one instant: a timeline whose entries disagree
+// about "now" by the time the page took to render reads as a history
+// recorded in more than one timeline.
+func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid.UUID, now time.Time) (pages.DesignSessionDetailPage, error) {
 	summary, err := app.designSessions.GetSummaryByID(ctx, id)
 	if err != nil {
 		return pages.DesignSessionDetailPage{}, err
 	}
-	events, err := app.revisionEvents.ListBySession(ctx, id)
-	if err != nil {
-		return pages.DesignSessionDetailPage{}, err
+	events, logErr := app.revisionEvents.ListBySession(ctx, id)
+	questions, questionsErr := app.revisionEvents.ListOpenQuestions(ctx, id)
+	if logErr != nil {
+		logger.Error("design session timeline read failed", "design_session_id", id, "error", logErr)
 	}
-	questions, err := app.revisionEvents.ListOpenQuestions(ctx, id)
-	if err != nil {
-		return pages.DesignSessionDetailPage{}, err
+	if questionsErr != nil {
+		logger.Error("design session open questions read failed", "design_session_id", id, "error", questionsErr)
 	}
 	openedBy, openedByTitle := openingOperatorLabel(summary.OpenedBy)
-	return pages.DesignSessionDetailPage{
+	page := pages.DesignSessionDetailPage{
 		ID:                     summary.ID.String(),
 		ProductID:              summary.ProductID.String(),
 		ProductName:            app.productNameFor(ctx, productID),
@@ -179,10 +192,19 @@ func (app *App) buildDesignSessionDetail(ctx context.Context, productID, id uuid
 		OpenedByKrillSessionID: summary.OpenedByKrillSessionID.String(),
 		CreatedAt:              formatTime(summary.CreatedAt),
 		ProductSessionsPath:    designProductSessionsPath(summary.ProductID),
-		Events:                 revisionEventRows(events),
-		OpenQuestions:          openQuestionRows(questions),
 		AnswersPath:            designAnswersPath(summary.ProductID, summary.ID),
-	}, nil
+	}
+	if logErr == nil {
+		page.Events = revisionEventRows(events, now)
+	} else {
+		page.LogError = "This session's timeline could not be loaded."
+	}
+	if questionsErr == nil {
+		page.OpenQuestions = openQuestionRows(questions)
+	} else {
+		page.QuestionsError = "This session's open questions could not be loaded."
+	}
+	return page, nil
 }
 
 // openingOperatorLabel renders the identity that opened a session for the
@@ -202,7 +224,7 @@ func openingOperatorLabel(s store.Subject) (label, title string) {
 	return s.Sub, s.Sub + "@" + s.Iss
 }
 
-func revisionEventRows(events []store.RevisionEvent) []pages.RevisionEventRow {
+func revisionEventRows(events []store.RevisionEvent, now time.Time) []pages.RevisionEventRow {
 	rows := make([]pages.RevisionEventRow, 0, len(events))
 	for _, ev := range events {
 		deltas := make([]pages.EntityDeltaRow, 0, len(ev.EntityDeltas))
@@ -221,21 +243,149 @@ func revisionEventRows(events []store.RevisionEvent) []pages.RevisionEventRow {
 				Blocking:   blockingTag(q.Blocking),
 			})
 		}
+		acting := subjectLabel(ev.Acting)
+		onBehalfOf := subjectLabel(ev.OnBehalfOf)
 		rows = append(rows, pages.RevisionEventRow{
 			ID:                ev.ID.String(),
 			SeqNo:             ev.SeqNo,
 			EventType:         string(ev.EventType),
-			Acting:            subjectLabel(ev.Acting),
-			OnBehalfOf:        subjectLabel(ev.OnBehalfOf),
+			Acting:            acting,
+			OnBehalfOf:        onBehalfOf,
+			OnBehalfOfDiffers: ev.OnBehalfOf.Sub != "" && onBehalfOf != acting,
 			VerifiedAgainst:   derefString(ev.VerifiedAgainst),
 			SignoffStatus:     derefSignoff(ev.SignoffStatus),
 			CreatedAt:         formatTime(ev.CreatedAt),
+			AtRelative:        relativeTime(ev.CreatedAt, now),
+			AtExact:           ev.CreatedAt.UTC().Format(time.RFC3339),
+			Summary:           revisionEventSummary(ev),
 			EntityDeltas:      deltas,
 			OpenedQuestions:   opened,
 			ResolvedQuestions: ev.OpenQuestionsDelta.Resolved,
 		})
 	}
 	return rows
+}
+
+// revisionEventSummary composes the one sentence a timeline box shows for
+// one round.
+//
+// It has to be composed rather than read: migration 008's revision_event has
+// no prose column at all -- a round is an event_type, two identity triples,
+// an entity_deltas array and an open_questions_delta object, and nothing
+// else. So the sentence an operator reads is derived here from the round's
+// OWN content, in the round's own store order, and derived in exactly one
+// place: a summary assembled at three call sites is three summaries that can
+// disagree.
+//
+// What each part contributes, in the order the schema stores them:
+//
+//   - entity_deltas: each entry's summary_line, which is the only human text
+//     an entity change carries. A delta with no summary_line contributes the
+//     bare count rather than an empty clause, so a round that touched three
+//     entities and wrote nothing down says "3 entity changes" -- which is
+//     true -- instead of saying nothing at all.
+//   - opened questions: the count, then each question's text, falling back to
+//     its id when the text is empty (migration 008 does not require one).
+//   - resolved question ids: there is no text for a resolution to restate,
+//     because resolving a question never mutates it -- so the ids ARE the
+//     content.
+//
+// Nothing here reads anything the round does not carry. A revision_event has
+// no persona column, so the acting identity rendered beside this sentence
+// comes from the recorded triples and is not repeated or re-interpreted here.
+func revisionEventSummary(ev store.RevisionEvent) string {
+	parts := make([]string, 0, 3)
+	if clause := entityDeltaSummary(ev.EntityDeltas); clause != "" {
+		parts = append(parts, clause)
+	}
+	if clause := openedQuestionsSummary(ev.OpenQuestionsDelta.Opened); clause != "" {
+		parts = append(parts, clause)
+	}
+	if clause := resolvedQuestionsSummary(ev.OpenQuestionsDelta.Resolved); clause != "" {
+		parts = append(parts, clause)
+	}
+	if len(parts) == 0 {
+		// A round that recorded nothing is a real state -- a signoff, or an
+		// answer that only closed a question elsewhere -- and saying so is
+		// better than rendering an empty line where a sentence belongs.
+		return "No further detail was recorded for this round."
+	}
+	return joinSentences(parts)
+}
+
+// entityDeltaSummary is the entity-change clause: the round's summary lines
+// verbatim, or a bare count when the round wrote none.
+func entityDeltaSummary(deltas []store.EntityDelta) string {
+	if len(deltas) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(deltas))
+	for _, d := range deltas {
+		if s := strings.TrimSpace(d.SummaryLine); s != "" {
+			lines = append(lines, s)
+		}
+	}
+	if len(lines) == 0 {
+		if len(deltas) == 1 {
+			return "1 entity change"
+		}
+		return fmt.Sprintf("%d entity changes", len(deltas))
+	}
+	return strings.Join(lines, "; ")
+}
+
+// openedQuestionsSummary is the clause for the questions this round opened:
+// how many, then what each asks.
+func openedQuestionsSummary(opened []store.OpenQuestionOpened) string {
+	if len(opened) == 0 {
+		return ""
+	}
+	texts := make([]string, 0, len(opened))
+	for _, q := range opened {
+		if t := strings.TrimSpace(q.Text); t != "" {
+			texts = append(texts, t)
+		} else {
+			// A question with no text is still a question; naming its id is
+			// the only honest description of it.
+			texts = append(texts, q.QuestionID)
+		}
+	}
+	if len(opened) == 1 {
+		return fmt.Sprintf("1 question opened: %s", texts[0])
+	}
+	return fmt.Sprintf("%d questions opened: %s", len(opened), strings.Join(texts, "; "))
+}
+
+// resolvedQuestionsSummary is the clause for the questions this round
+// closed: their ids, joined the way a sentence lists them.
+func resolvedQuestionsSummary(resolved []string) string {
+	switch len(resolved) {
+	case 0:
+		return ""
+	case 1:
+		return "resolved " + resolved[0]
+	case 2:
+		return "resolved " + resolved[0] + " and " + resolved[1]
+	default:
+		return "resolved " + strings.Join(resolved[:len(resolved)-1], ", ") + " and " + resolved[len(resolved)-1]
+	}
+}
+
+// joinSentences terminates each clause and separates them, leaving a clause
+// that already ends in its own punctuation -- an opened question's text ends
+// in "?" -- alone rather than following it with a stray period.
+func joinSentences(parts []string) string {
+	var b strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(p)
+		if !strings.HasSuffix(p, ".") && !strings.HasSuffix(p, "?") {
+			b.WriteByte('.')
+		}
+	}
+	return b.String()
 }
 
 func openQuestionRows(questions []store.OpenQuestion) []pages.OpenQuestionRow {
@@ -478,7 +628,7 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid design session id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	detail, err := app.buildDesignSessionDetail(r.Context(), productID, id)
+	detail, err := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
 	if errors.Is(err, store.ErrNotFound) || (err == nil && detail.ProductID != productID.String()) {
 		if err == nil {
 			logger.Info("design session not under the product the URL names",

@@ -225,7 +225,7 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 		writeWriteError(w, err)
 		return
 	}
-	detail, detailErr := app.buildDesignSessionDetail(r.Context(), productID, id)
+	detail, detailErr := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
 	if detailErr != nil {
 		logger.Error("failed to re-render answer form after rejection", "design_session_id", id, "error", detailErr)
 		if isHXRequest(r) {

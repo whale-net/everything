@@ -414,7 +414,8 @@ func TestDesignSessionDetail_Shell_ListAndDetailAgreeOnStageAndTitle(t *testing.
 
 // TestDesignSessionDetail_Shell_LogAndQuestionsStillRender is the
 // regression this shell could plausibly have broken: moving the log and the
-// question table into new regions must not lose a row of either.
+// question list into new regions must not lose a round or a question of
+// either.
 //
 // It asserts presence rather than re-parsing: design_page_test.go already
 // pins both against get_design_session's and list_open_questions's own
@@ -449,16 +450,16 @@ func TestDesignSessionDetail_Shell_LogAndQuestionsStillRender(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	log := detailRegion(t, rec.Body.String(), regionRevisionLog, "</section>")
-	assert.Contains(t, log, "#1 draft", "the log region still holds the session's rounds")
+	assert.Contains(t, log, `data-krill-seq-no="1"`, "the log region still holds the session's rounds")
 	assert.Contains(t, log, "added the rollback requirement")
 	assert.Contains(t, log, "spec.md#1")
 
 	questions := detailRegion(t, rec.Body.String(), regionOpenQuestion, "</section>")
 	assert.Contains(t, questions, "needs a decision", "the questions region still holds the open questions")
-	assert.Contains(t, questions, "blocking")
+	assert.Contains(t, questions, components.QuestionBlockingLabel("blocking"))
 
-	// The follow-up form's resolve checkboxes read the SAME question set,
-	// so it must still be offered for this session.
+	// The rail's resolve boxes read the SAME question set, so it must still
+	// be offered for this session.
 	assert.Contains(t, rec.Body.String(), `value="blocker"`,
-		"the follow-up form's checkbox set survives the relayout")
+		"the resolve checkbox set survives the relayout")
 }

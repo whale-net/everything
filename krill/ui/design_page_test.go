@@ -29,6 +29,7 @@ import (
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/components"
 )
 
 // ---------------------------------------------------------------------------
@@ -145,9 +146,18 @@ func designSummary(id, productID uuid.UUID, opening string, stage store.Stage, c
 
 // fakeRevisionEvents is an in-memory RevisionEventStore returning canned,
 // already-ordered logs and open questions.
+//
+// logErr and questionsErr fail the two accessors INDEPENDENTLY, which is
+// the only way to reach FR e5ad1a5b's two degraded pages: with one shared
+// err, a "the log read failed" case necessarily also breaks the question
+// read, and a test cannot tell "the rail survives a log failure" apart from
+// "the rail fails too". err still fails both, for the older whole-store
+// cases.
 type fakeRevisionEvents struct {
 	bySession     map[uuid.UUID][]store.RevisionEvent
 	openQuestions map[uuid.UUID][]store.OpenQuestion
+	logErr        error
+	questionsErr  error
 	err           error
 }
 
@@ -159,12 +169,18 @@ func (f fakeRevisionEvents) ListBySession(_ context.Context, sessionID uuid.UUID
 	if f.err != nil {
 		return nil, f.err
 	}
+	if f.logErr != nil {
+		return nil, f.logErr
+	}
 	return f.bySession[sessionID], nil
 }
 
 func (f fakeRevisionEvents) ListOpenQuestions(_ context.Context, sessionID uuid.UUID) ([]store.OpenQuestion, error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.questionsErr != nil {
+		return nil, f.questionsErr
 	}
 	return f.openQuestions[sessionID], nil
 }
@@ -286,18 +302,20 @@ func TestDesignSessionDetail_FullOrderedLog(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := rec.Body.String()
 
-	// Every event type appears.
+	// Every event type appears, as its own round badge.
 	for _, et := range []store.EventType{store.EventTypeDraft, store.EventTypeAnswer, store.EventTypeSignoff, store.EventTypeRuling} {
 		assert.Contains(t, body, string(et), "event type %q must be rendered", et)
 	}
 
-	// seq_no order is preserved: draft(1) before answer(2) before signoff(3)
-	// before ruling(4), by position in the rendered body.
-	order := []int{indexOf(body, "#1 draft"), indexOf(body, "#2 answer"), indexOf(body, "#3 signoff"), indexOf(body, "#4 ruling")}
-	for i, pos := range order {
-		require.NotEqual(t, -1, pos, "event %d must be rendered", i+1)
+	// Log order is the store's: the timeline renders each round's own seq_no,
+	// and the entries come out in ascending order, which is the exact list
+	// get_design_session returns (FR a1b955e4).
+	got := parseRenderedEvents(t, body)
+	require.Len(t, got, len(log), "one timeline entry per wire event")
+	for i, w := range got {
+		assert.Equal(t, log[i].SeqNo, w.SeqNo, "round %d renders the store's own seq_no", i)
 		if i > 0 {
-			assert.Less(t, order[i-1], pos, "events must render in seq_no order")
+			assert.Less(t, got[i-1].SeqNo, w.SeqNo, "the timeline is in ascending seq_no order")
 		}
 	}
 
@@ -351,9 +369,10 @@ func TestDesignSessionDetail_SameFromListAndDirect(t *testing.T) {
 // FR db08d930 -- open questions, each tagged blocking or non-blocking
 // ---------------------------------------------------------------------------
 
-// TestDesignSessionDetail_OpenQuestionsTagged is FR db08d930: the open
-// questions table shows every currently-open question, each tagged blocking
-// or non-blocking, matching list_open_questions.
+// TestDesignSessionDetail_OpenQuestionsTagged is FR db08d930: the rail's
+// card shows every currently-open question, each tagged blocking or
+// non-blocking through the one mapper that vocabulary has, matching
+// list_open_questions.
 func TestDesignSessionDetail_OpenQuestionsTagged(t *testing.T) {
 	sessionID := uuid.New()
 	productID := uuid.New()
@@ -371,17 +390,22 @@ func TestDesignSessionDetail_OpenQuestionsTagged(t *testing.T) {
 
 	rec := get(designReadMux(app), designSessionPath(productID, sessionID))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	body := rec.Body.String()
 
-	for _, q := range []store.OpenQuestion{
+	got := parseRenderedOpenQuestions(t, rec.Body.String())
+	require.Len(t, got, 2, "one entry per open question")
+	for i, q := range []store.OpenQuestion{
 		{QuestionID: "blocker", Text: "needs a decision", Blocking: true},
 		{QuestionID: "nit", Text: "wording tweak", Blocking: false},
 	} {
-		assert.Contains(t, body, q.QuestionID)
-		assert.Contains(t, body, q.Text)
+		assert.Equal(t, q.QuestionID, got[i].QuestionID)
+		assert.Equal(t, q.Text, got[i].Text)
+		// The tag is the shared label mapper's own answer, not a class
+		// literal: the claim under test is that the vocabulary resolves
+		// through one owner (FR dcecb049), and asserting against the mapper
+		// keeps that true across a restyle of either side.
+		assert.Equal(t, components.QuestionBlockingLabel(wantBlockingTag(q.Blocking)), got[i].Tag,
+			"%s: the badge must carry the shared label for this tag", q.QuestionID)
 	}
-	assert.Equal(t, 1, strings.Count(body, ">blocking<"), "exactly one question is blocking")
-	assert.Equal(t, 1, strings.Count(body, ">non-blocking<"), "exactly one question is non-blocking")
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +473,11 @@ type renderedEvent struct {
 	EventID         string
 	Acting          string
 	OnBehalfOf      string
+	AtExact         string
+	AtTitle         string
+	AtRelative      string
 	CreatedAt       string
+	Summary         string
 	VerifiedAgainst string
 	SignoffStatus   string
 	Deltas          []renderedDelta
@@ -457,15 +485,32 @@ type renderedEvent struct {
 	Resolved        []string
 }
 
+// The rendered-log parsers below read the timeline's markup. Each one names
+// a stable data-krill hook or the element's own semantic tag rather than a
+// class or a heading's layout, so a restyle of the timeline cannot break
+// them (htmxui ARCHITECTURE §14: assert the claim, not the byte layout).
 var (
-	reEventHeader = regexp.MustCompile(`<strong>#(\d+) ([^<]+)</strong>`)
-	reSignoffCell = regexp.MustCompile(`signoff: ([^<]+)`)
-	reEventMeta   = regexp.MustCompile(`acting: ([^·]*) · on behalf of: ([^·]*) · ([^<]*)`)
-	reEventID     = regexp.MustCompile(`event id: <code>([^<]+)</code>`)
-	reVerified    = regexp.MustCompile(`verified against: ([^<]+)`)
-	reDeltaLI     = regexp.MustCompile(`(?s)<li[^>]*>\s*(created|updated) <code>([^<]+)</code> — (.*?)</li>`)
-	reOpenedLI    = regexp.MustCompile(`(?s)<li[^>]*><code>([^<]+)</code> \((blocking|non-blocking)\): (.*?)</li>`)
-	reResolvedSec = regexp.MustCompile(`(?s)Resolved questions:(.*)$`)
+	// reEventSeq reads the store's own seq_no off the entry, which is what
+	// "the list is in log order" is actually about: the number is the
+	// store's, and the entry renders it rather than a template's own count.
+	reEventSeq  = regexp.MustCompile(`data-krill="revision-event" data-krill-seq-no="(\d+)"`)
+	reEventType = regexp.MustCompile(`data-krill="revision-event"[^>]*data-krill-event-type="([^"]+)"`)
+	// reEventBadge reads the round's LABELLED badge -- the spine node is an
+	// unlabelled badge in the same colour and must not be mistaken for it.
+	reEventBadge = regexp.MustCompile(`<span[^>]*data-krill="design-session-event-type">([^<]*)</span>`)
+	reSignoff    = regexp.MustCompile(`<dd data-krill="revision-event-signoff">([^<]*)</dd>`)
+	reActing     = regexp.MustCompile(`<span[^>]*data-krill="revision-event-acting">([^<]*)</span>`)
+	reOnBehalfOf = regexp.MustCompile(`<span[^>]*data-krill="revision-event-on-behalf-of">on behalf of ([^<]*)</span>`)
+	reAt         = regexp.MustCompile(`<time[^>]*data-krill="revision-event-at"[^>]*datetime="([^"]+)"[^>]*title="([^"]+)"[^>]*>([^<]*)</time>`)
+	reEventID    = regexp.MustCompile(`<code data-krill="revision-event-id">([^<]*)</code>`)
+	reVerified   = regexp.MustCompile(`<dd data-krill="revision-event-verified-against">([^<]*)</dd>`)
+	reSummary    = regexp.MustCompile(`<p class="mt-1 text-sm" data-krill="revision-event-summary">([^<]*)</p>`)
+	reDeltaLI    = regexp.MustCompile(`(?s)<li[^>]*>\s*(created|updated) <code>([^<]+)</code> — (.*?)</li>`)
+	reOpenedLI   = regexp.MustCompile(`(?s)<li[^>]*><code>([^<]+)</code> \((blocking|non-blocking)\): (.*?)</li>`)
+	// reResolvedSec scopes the resolved ids to their own paragraph, which
+	// is the only place a bare <code> is a question id rather than an
+	// entity id.
+	reResolvedSec = regexp.MustCompile(`(?s)Resolved questions</p><p>(.*?)</p>`)
 	reCodeTag     = regexp.MustCompile(`<code>([^<]*)</code>`)
 )
 
@@ -545,19 +590,22 @@ func allSubmatch(re *regexp.Regexp, s string) []string {
 	return out
 }
 
+// parseRenderedEvents reads the timeline back out of the served page: one
+// renderedEvent per <li data-krill="revision-event">, which is the element
+// the timeline itself marks rather than one this test guesses at.
 func parseRenderedEvents(t *testing.T, body string) []renderedEvent {
 	t.Helper()
 	region := pageSection(t, body, regionRevisionLog, regionOpenQuestion)
 	blocks := topLevelLIs(region)
 	events := make([]renderedEvent, 0, len(blocks))
 	for _, b := range blocks {
-		head := reEventHeader.FindStringSubmatch(b)
-		require.NotNil(t, head, "every event block must open with #seq type: %q", b)
-		seq, err := strconv.Atoi(head[1])
+		seq := firstSubmatch(reEventSeq, b)
+		require.NotEmpty(t, seq, "every event block must carry its own seq_no: %q", b)
+		n, err := strconv.Atoi(seq)
 		require.NoError(t, err)
 
-		meta := reEventMeta.FindStringSubmatch(b)
-		require.NotNil(t, meta, "every event block must render its acting/on-behalf-of meta: %q", b)
+		at := reAt.FindStringSubmatch(b)
+		require.NotNil(t, at, "every event block must render its own instant: %q", b)
 
 		deltas := make([]renderedDelta, 0)
 		for _, m := range reDeltaLI.FindAllStringSubmatch(b, -1) {
@@ -573,20 +621,42 @@ func parseRenderedEvents(t *testing.T, body string) []renderedEvent {
 		}
 
 		events = append(events, renderedEvent{
-			SeqNo:           seq,
-			EventType:       head[2],
+			SeqNo:           n,
+			EventType:       firstSubmatch(reEventType, b),
 			EventID:         firstSubmatch(reEventID, b),
-			Acting:          strings.TrimSpace(meta[1]),
-			OnBehalfOf:      strings.TrimSpace(meta[2]),
-			CreatedAt:       strings.TrimSpace(meta[3]),
+			Acting:          firstSubmatch(reActing, b),
+			OnBehalfOf:      firstSubmatch(reOnBehalfOf, b),
+			AtExact:         at[1],
+			AtTitle:         at[2],
+			AtRelative:      at[3],
+			CreatedAt:       recordedInstant(b),
+			Summary:         firstSubmatch(reSummary, b),
 			VerifiedAgainst: firstSubmatch(reVerified, b),
-			SignoffStatus:   firstSubmatch(reSignoffCell, b),
+			SignoffStatus:   firstSubmatch(reSignoff, b),
 			Deltas:          deltas,
 			Opened:          opened,
 			Resolved:        resolved,
 		})
 	}
 	return events
+}
+
+// recordedInstant is the round's UTC instant as the entry's own detail line
+// records it. It is the human form; AtExact is the machine one, and the two
+// are asserted separately because an operator hovers for the second and a
+// reader auditing a round reads the first.
+func recordedInstant(block string) string {
+	i := strings.Index(block, `data-krill="revision-event-recorded-at"`)
+	if i < 0 {
+		return ""
+	}
+	rest := block[i:]
+	j := strings.Index(rest, "</dd>")
+	if j < 0 {
+		return ""
+	}
+	rest = rest[strings.Index(rest, ">")+1 : j]
+	return strings.TrimSpace(rest)
 }
 
 // wantBlockingTag is the test's own rendering of a wire-level blocking
@@ -608,6 +678,26 @@ func wantDeref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// wantRenderedOnBehalfOf is what the timeline should show for a round's
+// on_behalf_of: the wire's own triple when the store recorded a SECOND,
+// different actor, and nothing at all otherwise.
+//
+// Written out here rather than read off the view so a change to the view's
+// rule has to change this too. The rule is about what an operator reads, not
+// about the schema: "on behalf of yourself" repeated down every round of a
+// timeline reads as a second, different actor, and a round the store
+// recorded with no on-behalf-of subject at all must not acquire an empty
+// one.
+func wantRenderedOnBehalfOf(w handlers.RevisionEventWire) string {
+	if w.OnBehalfOf.Sub == "" {
+		return ""
+	}
+	if w.OnBehalfOf == w.Acting {
+		return ""
+	}
+	return strings.TrimSpace(wantSubject(w.OnBehalfOf))
 }
 
 // TestDesignSessionDetail_LogMatchesGetDesignSessionWire is FR a1b955e4's
@@ -696,8 +786,14 @@ func TestDesignSessionDetail_LogMatchesGetDesignSessionWire(t *testing.T) {
 		assert.Equal(t, w.EventType, r.EventType, "%s: event_type", where)
 		assert.Equal(t, w.ID, r.EventID, "%s: the event's own id", where)
 		assert.Equal(t, strings.TrimSpace(wantSubject(w.Acting)), r.Acting, "%s: acting identity triple", where)
-		assert.Equal(t, strings.TrimSpace(wantSubject(w.OnBehalfOf)), r.OnBehalfOf, "%s: on_behalf_of identity triple", where)
+		assert.Equal(t, wantRenderedOnBehalfOf(w), r.OnBehalfOf, "%s: on_behalf_of identity triple", where)
 		assert.Equal(t, w.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), r.CreatedAt, "%s: created_at", where)
+		// The instant is also machine-readable on the entry's own <time>,
+		// which is what makes it hoverable and what the head script's
+		// data-krill-updated-at hook reads.
+		assert.Equal(t, w.CreatedAt.UTC().Format(time.RFC3339), r.AtExact, "%s: the exact instant on the time element", where)
+		assert.Equal(t, w.CreatedAt.UTC().Format(time.RFC3339), r.AtTitle, "%s: and its title, so hovering answers exactly when", where)
+		assert.NotEmpty(t, r.AtRelative, "%s: the time element renders a readable age server-side", where)
 		assert.Equal(t, wantDeref(w.VerifiedAgainst), r.VerifiedAgainst, "%s: verified_against", where)
 		assert.Equal(t, wantDeref(w.SignoffStatus), r.SignoffStatus, "%s: signoff_status", where)
 
@@ -727,9 +823,9 @@ func TestDesignSessionDetail_LogMatchesGetDesignSessionWire(t *testing.T) {
 }
 
 // TestDesignSessionDetail_OpenQuestionsMatchListOpenQuestionsWire is FR
-// db08d930's parity criterion: the rendered open-questions table matches
+// db08d930's parity criterion: the rail's card matches
 // ListOpenQuestionsResponse field by field, each question tagged blocking or
-// non-blocking.
+// non-blocking and carrying a box whose value is its own id.
 func TestDesignSessionDetail_OpenQuestionsMatchListOpenQuestionsWire(t *testing.T) {
 	sessionID := uuid.New()
 	productID := uuid.New()
@@ -753,40 +849,59 @@ func TestDesignSessionDetail_OpenQuestionsMatchListOpenQuestionsWire(t *testing.
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	got := parseRenderedOpenQuestions(t, rec.Body.String())
-	require.Len(t, got, len(wire.OpenQuestions), "one row per open question, no more, no fewer")
+	require.Len(t, got, len(wire.OpenQuestions), "one entry per open question, no more, no fewer")
 	for i, w := range wire.OpenQuestions {
 		r := got[i]
 		where := w.QuestionID
 		assert.Equal(t, w.QuestionID, r.QuestionID, "%s: question_id", where)
 		assert.Equal(t, w.Text, r.Text, "%s: text", where)
 		assert.Equal(t, wantBlockingTag(w.Blocking), r.Tag, "%s: blocking tag", where)
-		assert.Equal(t, w.OpenedAtSeqNo, r.OpenedAtSeqNo, "%s: opened_at_seq_no", where)
+		assert.Equal(t, w.QuestionID, r.ResolveValue,
+			"%s: the box's value is the question id the answer posts", where)
 	}
 }
 
+// renderedOpenQuestion is one rail entry read back off the served page. It
+// is keyed on the data-krill hook the card marks rather than on its layout,
+// so the entry can restyle without this parse noticing.
 type renderedOpenQuestion struct {
-	QuestionID    string
-	Text          string
-	Tag           string
-	OpenedAtSeqNo int
+	QuestionID   string
+	Text         string
+	Tag          string
+	ResolveValue string
+	// Form is the id of the form the entry's box belongs to by reference,
+	// and Checked whether it rendered ticked -- both read off the input's
+	// own tag, because attribute serialisation order is not a contract.
+	Form    string
+	Checked bool
 }
 
-var reOpenQuestionRow = regexp.MustCompile(
-	`<tr><td><code>([^<]+)</code> — (.*?)</td><td>(blocking|non-blocking)</td><td>#(\d+)</td></tr>`)
+var (
+	reOpenQuestionEntry = regexp.MustCompile(`<label[^>]*data-krill="open-question-row" data-krill-question-id="([^"]+)"(.*?)</label>`)
+	reResolveInput      = regexp.MustCompile(`<input[^>]*data-krill="open-question-resolve"[^>]*>`)
+	reResolveValue      = regexp.MustCompile(`value="([^"]*)"`)
+	reResolveForm       = regexp.MustCompile(`form="([^"]*)"`)
+	reBlockingTag       = regexp.MustCompile(`<span[^>]*data-krill="question-blocking">([^<]*)</span>`)
+	reQuestionText      = regexp.MustCompile(`<span class="block text-sm">([^<]*)</span>`)
+)
 
 func parseRenderedOpenQuestions(t *testing.T, body string) []renderedOpenQuestion {
 	t.Helper()
 	region := pageSection(t, body, regionOpenQuestion, regionSessionNav)
 	var out []renderedOpenQuestion
-	for _, m := range reOpenQuestionRow.FindAllStringSubmatch(region, -1) {
-		seq, err := strconv.Atoi(m[4])
-		require.NoError(t, err)
-		out = append(out, renderedOpenQuestion{
-			QuestionID:    m[1],
-			Text:          strings.TrimSpace(m[2]),
-			Tag:           m[3],
-			OpenedAtSeqNo: seq,
-		})
+	for _, m := range reOpenQuestionEntry.FindAllStringSubmatch(region, -1) {
+		inner := m[2]
+		entry := renderedOpenQuestion{
+			QuestionID: m[1],
+			Tag:        firstSubmatch(reBlockingTag, inner),
+			Text:       firstSubmatch(reQuestionText, inner),
+		}
+		if input := reResolveInput.FindString(inner); input != "" {
+			entry.ResolveValue = firstSubmatch(reResolveValue, input)
+			entry.Form = firstSubmatch(reResolveForm, input)
+			entry.Checked = strings.Contains(input, " checked")
+		}
+		out = append(out, entry)
 	}
 	return out
 }
@@ -801,15 +916,23 @@ func TestDesignRead_ErrorPaths_SeparateStores(t *testing.T) {
 	productID := uuid.New()
 	boom := fmt.Errorf("pq: password authentication failed for user krill")
 
-	t.Run("revision-event read error is 500", func(t *testing.T) {
+	t.Run("revision-event read error degrades the timeline, not the page", func(t *testing.T) {
+		// FR e5ad1a5b: a log that cannot be read costs the operator the
+		// timeline and nothing else, so this is a 200 with an alert where
+		// the timeline was -- not a 500 that takes the session's opening
+		// statement and rail with it.
 		app := newDesignReadApp(
 			fakeDesignSessions{byID: map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productID}}},
 			fakeRevisionEvents{err: boom},
 		)
 		rec := get(designReadMux(app), designSessionPath(productID, sessionID))
-		assert.Equal(t, http.StatusInternalServerError, rec.Code)
-		assert.NotEmpty(t, strings.TrimSpace(rec.Body.String()))
-		assert.NotContains(t, rec.Body.String(), "password authentication", "store error text must not reach the browser")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		body := rec.Body.String()
+		assert.Contains(t, body, "could not be loaded", "the failing read says so inline")
+		assert.NotContains(t, body, "password authentication", "store error text must not reach the browser")
+		// And a failed read is never rendered as an empty list (NFR ca90dc03).
+		assert.NotContains(t, body, "No revision events yet.",
+			"a read that failed must not be rendered as a log with nothing in it")
 	})
 
 	t.Run("aggregate read error is 500 on the list", func(t *testing.T) {

@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -632,10 +633,28 @@ func TestDesignWrite_RejectedAnswer_RerendersFormInShell(t *testing.T) {
 	assert.NotContains(t, body, `{"error":`, "the raw JSON rejection must not leak into the page")
 	assert.NotContains(t, body, `"error":`)
 
-	// Text and ticks survive; only the ticked box comes back checked.
+	// Text and ticks survive; only the ticked box comes back checked. The
+	// boxes live in the rail and are checked on the input's own tag rather
+	// than by string-matching an attribute order that is not a contract.
 	assert.Contains(t, body, ">"+followUp+"</textarea>", "the submitted follow-up must be preserved")
-	assert.Contains(t, body, `value="`+testClosedQuestion+`" checked`, "the ticked resolve box must stay ticked")
-	assert.NotContains(t, body, `value="`+testKeptQuestion+`" checked`, "an unticked box must not come back ticked")
+	assert.True(t, resolveBoxChecked(t, body, testClosedQuestion),
+		"the ticked resolve box must stay ticked")
+	assert.False(t, resolveBoxChecked(t, body, testKeptQuestion),
+		"an unticked box must not come back ticked")
+}
+
+// resolveBoxChecked reports whether the resolve box for questionID is
+// rendered with the checked attribute. It parses the input carrying that
+// question's own value rather than looking for `value="X" checked`, because
+// the box now also carries the form it belongs to and attribute
+// serialisation order is not a contract (krill/ui/README.md, Testing
+// conventions).
+func resolveBoxChecked(t *testing.T, body, questionID string) bool {
+	t.Helper()
+	re := regexp.MustCompile(`<input[^>]*value="` + regexp.QuoteMeta(questionID) + `"[^>]*>`)
+	input := re.FindString(body)
+	require.NotEmpty(t, input, "no resolve box for %q in the rendered page", questionID)
+	return strings.Contains(input, " checked")
 }
 
 // ---------------------------------------------------------------------------
@@ -789,8 +808,14 @@ func TestDesignWrite_RejectedOpen_HXReRendersFormInline(t *testing.T) {
 
 // TestDesignWrite_RejectedAnswer_HXReRendersFormInline is the answer
 // form's htmx refusal: 200 with the bare follow-up form, the error
-// inline, and both the typed text and the ticked resolve box preserved
-// per-id.
+// inline, and the typed text preserved.
+//
+// The ticked resolve boxes are NOT in this fragment, and that is the state
+// of the world rather than an oversight: the boxes belong to the rail, which
+// this swap does not render, so the whole-page refusal above is what
+// currently preserves a tick across a rejection. Restoring it for the htmx
+// half means swapping the rail alongside the form, which is the in-place
+// post's own work -- see the scope note on task f12d1042.
 func TestDesignWrite_RejectedAnswer_HXReRendersFormInline(t *testing.T) {
 	env := newDesignWriteEnv(t)
 	env.API.onRequest(func(req recordedRequest) (int, string) {
@@ -813,10 +838,12 @@ func TestDesignWrite_RejectedAnswer_HXReRendersFormInline(t *testing.T) {
 	assert.Contains(t, body, "409: question q-flag-store was never opened")
 	assert.NotContains(t, body, `"error":`)
 
-	// Text and ticks survive; only the ticked box comes back checked.
+	// The text and the form's wiring survive; the boxes do not appear a
+	// second time inside the form, which is the whole point of the rail
+	// owning them.
 	assert.Contains(t, body, ">"+followUp+"</textarea>", "the submitted follow-up must be preserved")
-	assert.Contains(t, body, `value="`+testClosedQuestion+`" checked`, "the ticked resolve box must stay ticked")
-	assert.NotContains(t, body, `value="`+testKeptQuestion+`" checked`, "an unticked box must not come back ticked")
+	assert.NotContains(t, body, `type="checkbox"`,
+		"the form fragment must not carry a second set of resolve boxes")
 	assert.Contains(t, body, `hx-post="`+env.answerPath()+`"`, "the doubled form keeps its htmx wiring across a re-render")
 }
 
