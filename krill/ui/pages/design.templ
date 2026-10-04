@@ -124,15 +124,45 @@ type OpenQuestionDeltaRow struct {
 }
 
 // RevisionEventRow is one round of a session's ordered log.
+//
+// AtRelative and AtExact are the instant behind the round handed over
+// pre-rendered for the reason the sessions list's rows are: relative text
+// needs a clock, and a view that read one could not be asserted on. The
+// timeline shows AtRelative and carries AtExact in the time element's
+// datetime, title and data-krill-updated-at, so hovering answers "exactly
+// when" with or without the head script.
+//
+// Summary is the one sentence describing what this round DID, composed by
+// package main from the round's own content (see revisionEventSummary there).
+// It exists because revision_event has no prose column -- migration 008
+// stores entity_deltas and open_questions_delta and nothing else -- so the
+// text an operator reads in a timeline box has to be derived rather than
+// read, and deriving it in one helper is what lets a test pin it.
 type RevisionEventRow struct {
-	ID                string
-	SeqNo             int
-	EventType         string
-	Acting            string
-	OnBehalfOf        string
+	ID string
+	// SeqNo is the round's position in the session's log; the timeline
+	// renders it in the entry's own hook so a test can assert log order
+	// without parsing prose.
+	SeqNo     int
+	EventType string
+	// Acting is the acting subject the server recorded, in the composite
+	// form ("kind sub@iss") the rest of krill's surfaces use.
+	Acting string
+	// OnBehalfOf is that subject's on-behalf-of counterpart, rendered only
+	// when it differs from Acting: repeating "on behalf of yourself" on
+	// every entry of a timeline reads as a second, different actor.
+	OnBehalfOf string
+	// OnBehalfOfDiffers reports whether OnBehalfOf is worth showing at
+	// all. A revision_event carries no persona column, so nothing here is
+	// inferred -- this is only the recorded pair, deciding whether it is
+	// worth a second line.
+	OnBehalfOfDiffers bool
 	VerifiedAgainst   string
 	SignoffStatus     string
 	CreatedAt         string
+	AtRelative        string
+	AtExact           string
+	Summary           string
 	EntityDeltas      []EntityDeltaRow
 	OpenedQuestions   []OpenQuestionDeltaRow
 	ResolvedQuestions []string
@@ -189,17 +219,55 @@ type DesignSessionDetailPage struct {
 	ProductSessionsPath    string
 	Events                 []RevisionEventRow
 	OpenQuestions          []OpenQuestionRow
+	// LogError and QuestionsError are the two reads whose failure
+	// degrades this page rather than taking it down (FR e5ad1a5b, NFR
+	// ca90dc03): a log read that breaks renders an inline alert IN PLACE
+	// OF the timeline and a question read that breaks renders one inside
+	// the rail, while the rest of the page still renders.
+	//
+	// They carry an operator-facing sentence and never a store's own error
+	// text -- the log can fail for reasons naming an internal URL or a
+	// driver, and a browser is not the place for that.
+	//
+	// A read that FAILED is never rendered as an empty list: "No revision
+	// events yet." and "this session's timeline is unavailable" are
+	// different facts, and conflating them tells an operator their session
+	// is empty when in fact krill could not read it.
+	LogError              string
+	QuestionsError        string
 	Error                  string
 	FollowUp               string
 	CheckedResolve         map[string]bool
 	AnswersPath            string
 }
 
+// LogError and QuestionsError are the two reads whose failure degrades this
+// page rather than taking it down (FR e5ad1a5b, NFR ca90dc03). The session
+// itself is still read fatally -- an unknown or foreign session is the 404
+// path -- but a log or question read that breaks renders an inline alert in
+// place of that one region while the rest of the page, including the rail,
+// still renders.
+//
+// They carry an operator-facing sentence and NEVER a store's own error text:
+// the log can fail for reasons that name an internal URL or a driver, and the
+// browser is not the place for that.
 // IsChecked reports whether a resolve box for the given question id was
 // ticked, so a rejected follow-up round re-renders the form with the
 // operator's original ticks intact. A nil CheckedResolve reads every id as
 // unticked, which is the GET handler's normal case.
 func (p DesignSessionDetailPage) IsChecked(id string) bool { return p.CheckedResolve[id] }
+
+// FollowUpFormAnchor is the DOM id of the follow-up form, and -- the reason
+// it is exported rather than spelled twice -- the id the rail's resolve
+// checkboxes name in their `form` attribute.
+//
+// The wireframe puts the boxes in the rail and the submit control in the
+// main column, so the boxes belong to the form BY REFERENCE: HTML's `form`
+// attribute associates an input with a form anywhere in the document, which
+// is what keeps one submission carrying the operator's ticks with no
+// JavaScript and no second set of boxes. An input that duplicated the boxes
+// inside the form would be the same question answered twice.
+const FollowUpFormAnchor = "follow-up-form"
 
 // designSessionListAnchor is the DOM id this page's region carries, so a
 // test -- and the empty state's own action -- name one element rather than
@@ -505,49 +573,132 @@ func designSessionCrumbs(page DesignSessionDetailPage) []DesignSessionCrumb {
 
 // designSessionEventsRegion is the session's ordered log, in the main
 // column.
+//
+// A read that FAILED and a log that is genuinely empty render differently,
+// and must keep doing so (NFR ca90dc03): "this timeline is unavailable" and
+// "this session has no rounds yet" are different facts, and rendering both
+// as "No revision events yet." tells an operator their session is empty when
+// in fact krill could not read it.
 templ designSessionEventsRegion(page DesignSessionDetailPage) {
 	<section id={ designSessionEventsAnchor }>
 		<h3>Revision events</h3>
-		if len(page.Events) > 0 {
-			<ol class="space-y-3">
-				for _, ev := range page.Events {
-					@revisionEvent(ev)
-				}
-			</ol>
+		if page.LogError != "" {
+			@htmxui.Alert(htmxui.AlertError, page.LogError, templ.Attributes{
+				"data-krill": "revision-events-error",
+			})
+		} else if len(page.Events) > 0 {
+			@revisionEventTimeline(page.Events)
 		} else {
-			<p>No revision events yet.</p>
+			<p data-krill="revision-events-empty">No revision events yet.</p>
 		}
 	</section>
 }
 
-// designSessionQuestionsRegion is the rail's open-questions card, holding
-// the question table this page has always shown.
+// revisionEventTimeline is the session's log as a vertical daisyUI
+// timeline: every round in ListBySession's own order, which is ascending
+// seq_no -- the exact list get_design_session returns, so a browser and an
+// MCP client read one history in one order (FR a1b955e4).
+//
+// A <ol> rather than a <ul> because the order IS the content: the numbers
+// are the store's, not decoration.
+templ revisionEventTimeline(events []RevisionEventRow) {
+	<ol class="timeline timeline-vertical timeline-compact timeline-snap-icon" data-krill="revision-event-timeline">
+		for i, ev := range events {
+			@revisionEvent(ev, i > 0)
+		}
+	</ol>
+}
+
+// designSessionQuestionsRegion is the rail's open-questions card. Same rule
+// as the timeline: a failed read is an alert in the rail, never an empty
+// card body that reads as "nothing is waiting on you".
 templ designSessionQuestionsRegion(page DesignSessionDetailPage) {
 	<section id={ designSessionQuestionsAnchor }>
 		<h3>Open questions</h3>
-		if len(page.OpenQuestions) > 0 {
-			<table class="table table-sm">
-				<thead>
-					<tr>
-						<th>Question</th>
-						<th>Tag</th>
-						<th>Opened at</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, q := range page.OpenQuestions {
-						<tr>
-							<td><code>{ q.QuestionID }</code> — { q.Text }</td>
-							<td>{ q.Blocking }</td>
-							<td>#{ itoa(q.OpenedAtSeqNo) }</td>
-						</tr>
-					}
-				</tbody>
-			</table>
+		if page.QuestionsError != "" {
+			@htmxui.Alert(htmxui.AlertError, page.QuestionsError, templ.Attributes{
+				"data-krill": "open-questions-error",
+			})
 		} else {
-			<p>No open questions.</p>
+			@designSessionQuestionList(page)
 		}
 	</section>
+}
+
+// designSessionQuestionList is the rail's card body: one entry per
+// question that is open RIGHT NOW, or an empty state saying so when none
+// are (NFR ca90dc03 -- an empty result renders EmptyState rather than an
+// empty card body).
+//
+// "Open now" is not derived here: the list is the store's
+// last-event-wins ListOpenQuestions, the same accessor list_open_questions
+// reads, so a question resolved by any later round is already absent and
+// this card cannot show one (FR db08d930).
+templ designSessionQuestionList(page DesignSessionDetailPage) {
+	if len(page.OpenQuestions) > 0 {
+		<ul class="space-y-3">
+			for _, q := range page.OpenQuestions {
+				@openQuestionEntry(q, page.IsChecked(q.QuestionID))
+			}
+		</ul>
+	} else {
+		@htmxui.EmptyState("No open questions.", "Nothing is waiting on an answer.", "", "",
+			templ.Attributes{"data-krill": "open-questions-empty"})
+	}
+}
+
+// openQuestionEntry is one open question: a box to say the follow-up answers
+// it, and the text and severity that say why it is still here.
+//
+// checked comes from the page's own ticked-id set rather than being read
+// here, so a refused follow-up re-renders the rail with the operator's
+// original ticks intact (FR 1942d934).
+//
+// The box is inside the label, so clicking the question text ticks it -- an
+// operator reading a question and wanting to close it should not have to
+// find the box first.
+//
+// It belongs to the follow-up form BY REFERENCE. The wireframe puts the
+// boxes here in the rail and the submit control in the main column, and
+// HTML's `form` attribute associates an input with a form anywhere in the
+// document, so one submission carries these ticks with no JavaScript and no
+// second copy of the same questions inside the form.
+templ openQuestionEntry(q OpenQuestionRow, checked bool) {
+	<label class="flex gap-2" data-krill="open-question-row" data-krill-question-id={ q.QuestionID }>
+		<input
+			type="checkbox"
+			name="resolve"
+			value={ q.QuestionID }
+			form={ FollowUpFormAnchor }
+			checked?={ checked }
+			class="checkbox checkbox-sm mt-0.5"
+			data-krill="open-question-resolve"
+		/>
+		<span class="space-y-1">
+			@questionBlockingBadge(q.Blocking)
+			<span class="block text-sm">{ q.Text }</span>
+		</span>
+	</label>
+}
+
+// questionBlockingBadge is one question's severity, through the one mapper
+// that vocabulary has. The rail and the sessions table's blocking count are
+// the same fact read at two scales -- what a session is waiting on -- so
+// they wear one register (FR dcecb049, f2a2dfce).
+templ questionBlockingBadge(blocking string) {
+	{{ s := components.QuestionBlockingStyle(blocking) }}
+	@htmxui.Badge(components.QuestionBlockingLabel(blocking), s.Variant, s.Size, s.Soft, templ.Attributes{
+		"data-krill": "question-blocking",
+	})
+}
+
+// designSessionEventTypeBadge is one round's kind in the timeline, through
+// the one mapper the five-round vocabulary has.
+templ designSessionEventTypeBadge(eventType string) {
+	{{ s := components.DesignSessionEventTypeStyle(eventType) }}
+	@htmxui.Badge(components.DesignSessionEventTypeLabel(eventType), s.Variant, s.Size, s.Soft, templ.Attributes{
+		"data-krill": "design-session-event-type",
+	})
 }
 
 // designSessionPropertiesCard is the rail's properties card: who opened the
@@ -606,48 +757,144 @@ func sessionChipText(id string) string {
 	return id[:8]
 }
 
-// revisionEvent is one round of the session's ordered log. The #seq type
-// header, the acting/on-behalf-of meta, and the delta/opened-question
-// list items are the specific claims design_page_test.go parses, so their
-// text -- not their classes -- is what is load-bearing here.
-templ revisionEvent(ev RevisionEventRow) {
-	<li>
-		<strong>#{ itoa(ev.SeqNo) } { ev.EventType }</strong>
-		if ev.SignoffStatus != "" {
-			{ " — signoff: " }
-			{ ev.SignoffStatus }
+// revisionEvent is one round of the session's log, as a daisyUI timeline
+// entry: a node on the spine, then a box carrying the round's kind, who
+// acted, when, and what it did.
+//
+// The box's header line is what an operator scans -- kind, actor, age --
+// and the sentence under it is the round's own content, composed in package
+// main (revisionEventSummary) because migration 008 stores no prose for it.
+//
+// connector draws the spine segment BETWEEN this entry and the one above it,
+// so the first round has none: a connector above the first node reads as a
+// round that happened before the session did.
+//
+// The detail disclosure underneath is not decoration: the event's own id and
+// its verified_against are the parity surface design_page_test.go compares
+// field by field against get_design_session's wire, so they stay rendered on
+// the page rather than being dropped in a redesign.
+templ revisionEvent(ev RevisionEventRow, connector bool) {
+	<li data-krill="revision-event" data-krill-seq-no={ itoa(ev.SeqNo) } data-krill-event-type={ ev.EventType }>
+		if connector {
+			<hr/>
 		}
-		<br>
-		<small>acting: { ev.Acting } · on behalf of: { ev.OnBehalfOf } · { ev.CreatedAt }</small>
-		<br>
-		<small>event id: <code>{ ev.ID }</code></small>
-		if ev.VerifiedAgainst != "" {
-			<br>
-			<small>verified against: { ev.VerifiedAgainst }</small>
-		}
-		if len(ev.EntityDeltas) > 0 {
-			<ul>
-				for _, d := range ev.EntityDeltas {
-					<li>{ d.Change } <code>{ d.EntityID }</code> — { d.SummaryLine }</li>
+		<div class="timeline-middle">
+			@revisionEventNode(ev.EventType)
+		</div>
+		<div class="timeline-end timeline-box w-full" data-krill="revision-event-box">
+			<div class="flex flex-wrap items-center gap-2">
+				@designSessionEventTypeBadge(ev.EventType)
+				<span class="font-medium text-sm" data-krill="revision-event-acting">{ ev.Acting }</span>
+				if ev.OnBehalfOfDiffers {
+					<span class="text-sm text-base-content/70" data-krill="revision-event-on-behalf-of">on behalf of { ev.OnBehalfOf }</span>
 				}
-			</ul>
-		}
-		if len(ev.OpenedQuestions) > 0 {
-			<p>Opened questions:</p>
-			<ul>
-				for _, q := range ev.OpenedQuestions {
-					<li><code>{ q.QuestionID }</code> ({ q.Blocking }): { q.Text }</li>
-				}
-			</ul>
-		}
-		if len(ev.ResolvedQuestions) > 0 {
-			<p>Resolved questions:
-				for _, qid := range ev.ResolvedQuestions {
-					<code>{ qid }</code>
-				}
-			</p>
-		}
+				@revisionEventAt(ev)
+			</div>
+			<p class="mt-1 text-sm" data-krill="revision-event-summary">{ ev.Summary }</p>
+			@revisionEventDetail(ev)
+		</div>
 	</li>
+}
+
+// revisionEventNode is the spine node: an unlabelled badge in this round's
+// own colour, so a reader scanning the timeline sees the shape of the
+// session -- draft, answer, signoff -- before reading a word of any of it.
+//
+// It goes through the same shared Badge primitive and the same mapper as the
+// round's labelled badge above it rather than a hand-written class string
+// (FR 21f5f0d0), which is also what makes the two impossible to drift: a
+// sixth round added to the mapper appears on the spine the day it is added.
+//
+// aria-hidden because it carries no information the labelled badge beside it
+// does not: a screen reader announcing an empty badge tells an operator
+// nothing.
+templ revisionEventNode(eventType string) {
+	{{ s := components.DesignSessionEventTypeStyle(eventType) }}
+	@htmxui.Badge("", s.Variant, htmxui.BadgeSizeXS, s.Soft, templ.Attributes{
+		"data-krill": "revision-event-node",
+		"aria-hidden": "true",
+	})
+}
+
+// revisionEventAt renders one round's instant: the relative age as the
+// visible text, the exact instant carried in the datetime, the title and
+// the data-krill-updated-at hook, so hovering answers "exactly when".
+//
+// This is statusTransitionAt's shape from the milestone status register,
+// reused rather than re-invented: a timeline whose age is relative-only
+// cannot be dated, and one whose exact time is visible-only cannot be
+// scanned.
+templ revisionEventAt(ev RevisionEventRow) {
+	<time class="text-sm text-base-content/70" data-krill="revision-event-at"
+		data-krill-updated-at={ ev.AtExact } datetime={ ev.AtExact } title={ ev.AtExact }>{ ev.AtRelative }</time>
+}
+
+// revisionEventDetail is the round's own record: what it changed, what it
+// opened, what it resolved, and the identifiers a reader needs to find the
+// same round through the API.
+//
+// It is a disclosure rather than always-visible body text because it is the
+// audit half of the entry: an operator scanning the timeline wants the
+// sentence, and an operator checking the record wants the ids, and showing
+// both at the same weight makes neither readable.
+templ revisionEventDetail(ev RevisionEventRow) {
+	<details class="collapse collapse-arrow mt-2" data-krill="revision-event-detail">
+		<summary class="collapse-title min-h-0 py-1 text-xs text-base-content/70">Round detail</summary>
+		<div class="collapse-content space-y-2 text-xs">
+			<dl class="grid grid-cols-1 gap-x-4">
+				<div>
+					<dt class="text-base-content/70">Event id</dt>
+					<dd><code data-krill="revision-event-id">{ ev.ID }</code></dd>
+				</div>
+				if ev.VerifiedAgainst != "" {
+					<div>
+						<dt class="text-base-content/70">Verified against</dt>
+						<dd data-krill="revision-event-verified-against">{ ev.VerifiedAgainst }</dd>
+					</div>
+				}
+				if ev.SignoffStatus != "" {
+					<div>
+						<dt class="text-base-content/70">Signoff</dt>
+						<dd data-krill="revision-event-signoff">{ ev.SignoffStatus }</dd>
+					</div>
+				}
+				<div>
+					<dt class="text-base-content/70">Recorded</dt>
+					<dd data-krill="revision-event-recorded-at">{ ev.CreatedAt }</dd>
+				</div>
+			</dl>
+			if len(ev.EntityDeltas) > 0 {
+				<div>
+					<p class="text-base-content/70">Entity changes</p>
+					<ul>
+						for _, d := range ev.EntityDeltas {
+							<li>{ d.Change } <code>{ d.EntityID }</code> — { d.SummaryLine }</li>
+						}
+					</ul>
+				</div>
+			}
+			if len(ev.OpenedQuestions) > 0 {
+				<div>
+					<p class="text-base-content/70">Opened questions</p>
+					<ul>
+						for _, q := range ev.OpenedQuestions {
+							<li><code>{ q.QuestionID }</code> ({ q.Blocking }): { q.Text }</li>
+						}
+					</ul>
+				</div>
+			}
+			if len(ev.ResolvedQuestions) > 0 {
+				<div>
+					<p class="text-base-content/70">Resolved questions</p>
+					<p>
+						for _, qid := range ev.ResolvedQuestions {
+							<code>{ qid }</code>
+						}
+					</p>
+				</div>
+			}
+		</div>
+	</details>
 }
 
 // FollowUpForm is the "submit follow-up" form, and the hx-post swap target
@@ -657,6 +904,14 @@ templ revisionEvent(ev RevisionEventRow) {
 // appended round changes the log, the open-question table, and this form's
 // own checkbox set -- all outside the swap target).
 //
+// It carries NO resolve checkboxes. The rail owns them: the wireframe puts
+// the boxes beside the timeline and the submit control here, and HTML's
+// `form` attribute lets an input join a form it is not a descendant of, so
+// the boxes in the rail post with this form under no JavaScript at all. A
+// second copy inside the form would be the same question answered twice, and
+// an operator ticking one and not the other would have their answer
+// silently disagree with themselves.
+//
 // The textarea is deliberately not required: an answer round is meaningful
 // with follow-up text OR at least one ticked resolve box, so the empty
 // round is refused server-side (renderAnswerFormFailure) and the error is
@@ -664,7 +919,7 @@ templ revisionEvent(ev RevisionEventRow) {
 // was a second, worse copy of that rule.
 templ FollowUpForm(page DesignSessionDetailPage) {
 	<form
-		id="follow-up-form"
+		id={ FollowUpFormAnchor }
 		method="post"
 		action={ templ.URL(page.AnswersPath) }
 		hx-post={ page.AnswersPath }
@@ -674,25 +929,16 @@ templ FollowUpForm(page DesignSessionDetailPage) {
 		if page.Error != "" {
 			@htmxui.Alert(htmxui.AlertError, "Not saved: "+page.Error, nil)
 		}
-		if len(page.OpenQuestions) > 0 {
-			<fieldset class="fieldset">
-				<legend class="fieldset-legend">Open questions this answer closes</legend>
-				for _, q := range page.OpenQuestions {
-					<p>
-						<label class="label cursor-pointer justify-start gap-2">
-							<input type="checkbox" name="resolve" value={ q.QuestionID } checked?={ page.IsChecked(q.QuestionID) } class="checkbox checkbox-sm"/>
-							<span><code>{ q.QuestionID }</code> ({ q.Blocking }): { q.Text }</span>
-						</label>
-					</p>
-				}
-			</fieldset>
-		} else if len(page.CheckedResolve) > 0 {
+		if len(page.OpenQuestions) == 0 && len(page.CheckedResolve) > 0 {
 			// The open questions could not be re-read, so there is nothing
 			// to show a checkbox against -- but the ids the operator ticked
 			// are still known, and a resubmit must not silently drop them.
 			// Carried as hidden inputs rather than fake checkboxes: the
 			// operator is not being asked to re-approve anything, we are
 			// preserving what they already chose.
+			//
+			// This is the one place a resolve id travels inside the form,
+			// and it is the case where there is no rail to render a box in.
 			<fieldset class="fieldset" data-krill="degraded-resolve">
 				<legend class="fieldset-legend">Still selected (this session's open questions could not be reloaded)</legend>
 				for qid := range page.CheckedResolve {
