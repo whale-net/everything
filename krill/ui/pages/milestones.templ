@@ -166,7 +166,11 @@ func (r MilestoneRow) ExpanderLabel() string {
 	if r.Expanded {
 		verb = "Hide"
 	}
-	return verb + " the " + itoa(len(r.Milepebbles)) + " milepebbles cut from " + r.Name
+	noun := "milepebbles"
+	if len(r.Milepebbles) == 1 {
+		noun = "milepebble"
+	}
+	return verb + " the " + itoa(len(r.Milepebbles)) + " " + noun + " cut from " + r.Name
 }
 
 // ExpanderClass is the expander's daisyUI button classes, rotating the
@@ -400,7 +404,7 @@ templ MilestoneTable(rows []MilestoneRow) {
 							}
 						</td>
 					</tr>
-					if m.Expanded {
+					if m.Expanded && m.HasMilepebbles() {
 						<tr data-krill="milepebble-expansion" data-krill-for-milestone-id={ m.ID }>
 							<td colspan="5" class="bg-base-200/60">
 								@MilepebbleTable(m.Milepebbles)
