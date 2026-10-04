@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -264,6 +265,149 @@ func TestNonGoalsFieldParityAndKinds(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("non-goals page missing %q", want)
+		}
+	}
+}
+
+// The three non-Capabilities tabs' EMPTY state: each tab shows a designed
+// EmptyState when its read succeeded with nothing in it, and shows the
+// error path -- never the empty state -- when the read failed (FR
+// fe0ebe94). The two are claims about different things: "this product has
+// no decisions" is a fact about the product, and a store that could not be
+// read is not entitled to make it.
+//
+// Both branches go through the real handlers, so this covers the wiring as
+// well as the three components.
+
+// failingListSpecReader fails the Personas and NonGoals reads while the
+// product read SUCCEEDS.
+//
+// It exists because failingSpecReader (spec_capabilities_test.go) fails
+// Product too, which is what the Personas/Non-goals handlers read FIRST --
+// so against that reader their error path after the product read is never
+// reached, and a handler that degraded a failed LIST read to an empty state
+// would go unnoticed. Between the two readers both failure points on those
+// two tabs are exercised.
+type failingListSpecReader struct{ specStubReader }
+
+func (failingListSpecReader) Personas(context.Context, uuid.UUID) ([]store.Persona, error) {
+	return nil, errors.New("the spec store is unavailable")
+}
+
+func (failingListSpecReader) NonGoals(context.Context, uuid.UUID) ([]store.NonGoal, error) {
+	return nil, errors.New("the spec store is unavailable")
+}
+
+// specTabFailureMux mounts the three non-Capabilities tab handlers at the
+// paths routes.go really registers, against the reader every tab read
+// fails.
+func specTabFailureMux(reader specReadClient) *http.ServeMux {
+	app := &App{spec: reader, scopes: chromeScopes{}, tasks: chromeTaskCounter{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+specProductPath+"/decisions", app.handleSpecDecisions)
+	mux.HandleFunc("GET "+specProductPath+"/personas", app.handleSpecPersonas)
+	mux.HandleFunc("GET "+specProductPath+"/non-goals", app.handleSpecNonGoals)
+	return mux
+}
+
+// specTabEmptyStates pairs each of the three tabs with its own path and
+// its own designed empty-state copy, so the assertion below cannot pass by
+// finding one tab's empty state on another tab's page.
+//
+// readers are the failures each tab must survive: the Decisions tab reads
+// the product slice, so the ProductSlice failure applies to it; the other
+// two read the product first and then a list, so BOTH failures apply --
+// the first one the handler hits and the one after it.
+var specTabEmptyStates = []struct {
+	suffix   string
+	empty    string
+	readers []specReadClient
+}{
+	{"/decisions", "No load-bearing decisions yet.", []specReadClient{failingSpecReader{}}},
+	{"/personas", "No personas yet.", []specReadClient{failingSpecReader{}, failingListSpecReader{}}},
+	{"/non-goals", "No non-goals yet.", []specReadClient{failingSpecReader{}, failingListSpecReader{}}},
+}
+
+func TestNonCapabilitiesTabsShowEmptyStateOnlyOnASuccessfulEmptyRead(t *testing.T) {
+	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
+
+	for _, tab := range specTabEmptyStates {
+		path := productPath(productID) + tab.suffix
+
+		t.Run(tab.suffix+" renders the designed empty state on a successful empty read", func(t *testing.T) {
+			rec := fetch(t, specModeMux(), path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, tab.empty) {
+				t.Errorf("a read that succeeded and found nothing did not render %q", tab.empty)
+			}
+			// The designed empty state, not a bare sentence: htmxui's
+			// EmptyState renders a card with its own description line.
+			if !strings.Contains(body, "card bg-base-100") {
+				t.Errorf("GET %s did not render the designed EmptyState component, only flat text", path)
+			}
+		})
+
+		for i, reader := range tab.readers {
+			t.Run(tab.suffix+" never renders the empty state on a failed read", func(t *testing.T) {
+				rec := fetch(t, specTabFailureMux(reader), path)
+				if rec.Code != http.StatusInternalServerError {
+					t.Errorf("GET %s with failing reader %d = %d, want 500", path, i, rec.Code)
+				}
+				body := rec.Body.String()
+				if strings.Contains(body, tab.empty) {
+					t.Errorf("GET %s with failing reader %d rendered %q; that is a claim about the product nobody could make",
+						path, i, tab.empty)
+				}
+				if !strings.Contains(body, "Could not load the spec") {
+					t.Errorf("GET %s with failing reader %d did not render the alert path", path, i)
+				}
+			})
+		}
+	}
+}
+
+// TestNonCapabilitiesTabsCarryNoAttentionContent pins the read-only
+// invariant over the three panels this task owns (FR df5bffd1's, applied
+// to the whole page body). It renders each panel with real content --
+// decisions, personas, and both kinds of non-goal -- because a panel with
+// nothing in it cannot carry attention content whatever it renders.
+func TestNonCapabilitiesTabsCarryNoAttentionContent(t *testing.T) {
+	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
+	product := store.Product{ID: productID, Name: "krill"}
+
+	panels := map[string]string{
+		"decisions": mustRenderComponent(pages.Decisions(decisionsPageOf(slice.Document{
+			Product: &slice.ProductEntity{Name: "krill"},
+			Decisions: []slice.DecisionEntity{{
+				EntityRef: slice.EntityRef{ID: mustID(t, "66666666-6666-6666-6666-666666666666")},
+				Name:      "One document type", Body: ptr("one type, not two"),
+			}},
+		}, productID))),
+		"personas": mustRenderComponent(pages.Personas(personasPageOf(product,
+			[]store.Persona{{ID: mustID(t, "77777777-7777-7777-7777-777777777777"), Name: "Operator", Description: ptr("runs it")}},
+			productID))),
+		"non-goals": mustRenderComponent(pages.NonGoals(nonGoalsPageOf(product, []store.NonGoal{
+			{ID: mustID(t, "88888888-8888-8888-8888-888888888888"), Kind: store.NonGoalKindPermanent, Name: "No web editing", Body: ptr("write-only")},
+			{ID: mustID(t, "99999999-9999-9999-9999-999999999999"), Kind: store.NonGoalKindDeferred, Name: "History in the UI", Body: ptr("later")},
+		}, productID))),
+	}
+
+	for tab, body := range panels {
+		for _, forbidden := range []string{"<form", "hx-post", "hx-put", "hx-delete"} {
+			if strings.Contains(strings.ToLower(body), forbidden) {
+				t.Errorf("%s tab: the spec panel is read-only but carries %q", tab, forbidden)
+			}
+		}
+		// The non-goal kind badge is the one NEW badge on these tabs, so
+		// the attention-content check has to hold across it too: it is a
+		// scope fact, not something needing anybody's action.
+		for _, forbidden := range []string{"Needs attention", "escalated", "Escalate", "badge-error", "badge-warning"} {
+			if strings.Contains(body, forbidden) {
+				t.Errorf("%s tab: the spec panel carries attention content (%q)", tab, forbidden)
+			}
 		}
 	}
 }

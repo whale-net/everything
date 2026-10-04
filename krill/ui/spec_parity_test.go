@@ -466,6 +466,53 @@ func TestNonGoalsCarryEveryWireField(t *testing.T) {
 		t.Errorf("non-goals rendered under the wrong kind section (perm@%d/%d def@%d/%d)",
 			permAt, permHeading, defAt, defHeading)
 	}
+
+	// The kind is ALSO per row (FR fe0ebe94): each non-goal carries its
+	// own badge, so a row read on its own -- quoted in a review, scanned
+	// after its heading is out of view -- says which kind it is. The badge
+	// is asserted per row by id rather than by counting badges globally,
+	// because a page that put every badge in one section would pass a
+	// count.
+	requireNonGoalKindBadge(t, html, permID.String(), "permanent", "Permanent", "badge-secondary")
+	requireNonGoalKindBadge(t, html, defID.String(), "deferred", "Deferred", "badge-info")
+}
+
+// requireNonGoalKindBadge asserts that the non-goal row whose <li> carries
+// id renders EXACTLY ONE kind badge, and that the badge is the right one:
+// the wire kind in its data hook, the human label, and the colour variant
+// the shared mapper gives that kind.
+//
+// "Exactly one" is the load-bearing half. A row carrying both kinds' badges
+// -- or none -- would read as decided or undecided respectively, and a
+// whole-page count cannot tell those apart from a correct render.
+func requireNonGoalKindBadge(t *testing.T, html, id, wantKind, wantLabel, wantVariant string) {
+	t.Helper()
+
+	start := strings.Index(html, `<li id="`+id+`">`)
+	if start < 0 {
+		t.Errorf("no non-goal row with id %s rendered", id)
+		return
+	}
+	rest := html[start:]
+	if end := strings.Index(rest, "</li>"); end >= 0 {
+		rest = rest[:end]
+	}
+
+	badges := strings.Count(rest, `data-krill="non-goal-kind"`)
+	if badges != 1 {
+		t.Errorf("non-goal %s carries %d kind badges, want exactly 1; row: %s", id, badges, rest)
+		return
+	}
+	hook := `data-krill-non-goal-kind="` + wantKind + `"`
+	if !strings.Contains(rest, hook) {
+		t.Errorf("non-goal %s badge does not carry %s; row: %s", id, hook, rest)
+	}
+	if !strings.Contains(rest, ">"+wantLabel+"<") {
+		t.Errorf("non-goal %s badge is not labelled %q; row: %s", id, wantLabel, rest)
+	}
+	if !strings.Contains(rest, wantVariant) {
+		t.Errorf("non-goal %s badge does not carry the %s class %s; row: %s", id, wantKind, wantVariant, rest)
+	}
 }
 
 // TestCarriedWireFieldPresenceIsNonVacuous guards the parity tests themselves:
