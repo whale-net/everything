@@ -310,8 +310,34 @@ func (app *App) handleCapabilityMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The Milestone column reads the product-wide delivery listing through
+	// the same seam the Milestones table does (app.spec.Delivery, the
+	// list_product_delivery querier underneath), so the milestone a spec
+	// row names is the milestone the roadmap shows. A failed read costs the
+	// column only -- the capability map itself has already been read
+	// successfully by this point, so it still renders.
+	listing, deliveryErr := app.capabilityMilestoneDelivery(r, productID)
+
 	app.renderSpecTabPage(w, r, "Capability map", productID,
-		pages.CapabilityMap(capabilityPageOf(doc, productID, parseCapabilityExpansion(r))))
+		pages.CapabilityMap(capabilityPageWithMilestonesOf(doc, productID, parseCapabilityExpansion(r), listing, deliveryErr)))
+}
+
+// capabilityMilestoneDelivery reads the delivery listing the Milestone
+// column is built from, returning the listing and any error rather than
+// failing the page.
+//
+// It is logged at WARNING, not ERROR: the read failed but the page still
+// renders, with every cell saying what could not be read (AGENTS.md's
+// logging levels -- ERROR is for an operation that cannot continue).
+func (app *App) capabilityMilestoneDelivery(r *http.Request, productID uuid.UUID) (slice.DeliveryListing, error) {
+	// A nil status filter means "all", mirroring the querier's contract.
+	listing, err := app.spec.Delivery(r.Context(), productID, nil)
+	if err != nil {
+		logger.Warn("spec milestone delivery read failed; the Milestone column cannot be read",
+			"product", productID.String(), "error", err)
+		return slice.DeliveryListing{}, err
+	}
+	return listing, nil
 }
 
 // capabilityPageOf assembles the capability map from a slice.Document,
@@ -322,15 +348,36 @@ func (app *App) handleCapabilityMap(w http.ResponseWriter, r *http.Request) {
 // section is this request's expansion state, which the URL supplies -- see
 // capabilityExpansion. It travels in rather than being read from the
 // request here so the whole view model stays a pure function of its inputs.
+//
+// It carries no delivery data, so every Milestone cell renders blank. The
+// handler builds the page through capabilityPageWithMilestonesOf, which is
+// the one that can answer them; this form exists for the parity tests,
+// which are about the get_product_slice read and have no delivery fixture.
 func capabilityPageOf(doc slice.Document, productID uuid.UUID, section capabilityExpansion) pages.CapabilityPage {
+	return capabilityPageWithMilestonesOf(doc, productID, section, slice.DeliveryListing{}, nil)
+}
+
+// capabilityPageWithMilestonesOf is capabilityPageOf plus the Milestone
+// column's derivation (FR 18afc5a8), from the product-wide delivery listing
+// -- the same read the Milestones table makes, so the two pages can never
+// disagree about what delivers a feature.
+//
+// deliveryErr is the failed read's error, kept as an error rather than a
+// bool because the caller's log line is worth having beside it. A non-nil
+// one costs the Milestone column only: every cell states that delivery
+// could not be read, and the rest of the map still renders.
+func capabilityPageWithMilestonesOf(doc slice.Document, productID uuid.UUID, section capabilityExpansion, listing slice.DeliveryListing, deliveryErr error) pages.CapabilityPage {
 	page := pages.CapabilityPage{
 		Product: productHeaderOfEntity(doc.Product, productID),
 		Path:    productPath(productID),
 	}
 
+	milestones := capabilityMilestoneIndexOf(listing, deliveryErr)
+
 	// Index requirements and features by parent id so the component can
 	// nest them without a second pass per level.
 	reqsByFeature := map[uuid.UUID][]pages.CapabilityRequirement{}
+	reqIDsByFeature := map[uuid.UUID][]uuid.UUID{}
 	for _, rq := range doc.Requirements {
 		reqsByFeature[rq.FeatureID] = append(reqsByFeature[rq.FeatureID], pages.CapabilityRequirement{
 			ID:   rq.ID.String(),
@@ -338,6 +385,7 @@ func capabilityPageOf(doc slice.Document, productID uuid.UUID, section capabilit
 			Name: rq.Name,
 			Body: deref(rq.Body),
 		})
+		reqIDsByFeature[rq.FeatureID] = append(reqIDsByFeature[rq.FeatureID], rq.ID)
 	}
 	featsBySet := map[uuid.UUID][]pages.CapabilityFeature{}
 	for _, f := range doc.Features {
@@ -348,6 +396,7 @@ func capabilityPageOf(doc slice.Document, productID uuid.UUID, section capabilit
 			Description:      deref(f.Description),
 			RequirementCount: len(reqsByFeature[f.ID]),
 			Requirements:     reqsByFeature[f.ID],
+			Milestone:        milestones.cell(f.ID, reqIDsByFeature[f.ID]),
 		})
 	}
 	// The first feature set is the default open one (FR 18afc5a8). Resolving
@@ -371,6 +420,145 @@ func capabilityPageOf(doc slice.Document, productID uuid.UUID, section capabilit
 		})
 	}
 	return page
+}
+
+// -- the Milestone column ------------------------------------------------
+
+// capabilityMilestoneUnreadMessage is what every Milestone cell says when
+// the delivery listing could not be read.
+//
+// It is not empty and it is not a blank cell: a blank cell asserts that
+// nothing delivers the feature, which is a claim about delivery that a
+// failed read cannot support.
+const capabilityMilestoneUnreadMessage = "Milestone delivery could not be read. See the logs."
+
+// milestoneBadgeSource is one milestone as the Milestone column needs it:
+// its id (to count DISTINCT milestones rather than distinct associations),
+// its name (what a single-milestone cell shows) and its status (the word
+// components.MilestoneStatusStyle colours the badge by).
+type milestoneBadgeSource struct {
+	id     uuid.UUID
+	name   string
+	status string
+}
+
+// capabilityMilestoneIndex is the delivery listing indexed by the entities
+// it delivers, so one feature's Milestone cell is a map read rather than a
+// pass over every milestone.
+type capabilityMilestoneIndex struct {
+	byEntity map[uuid.UUID][]milestoneBadgeSource
+
+	// Unread records that the listing itself could not be read, which
+	// every cell reports instead of answering.
+	Unread bool
+}
+
+// capabilityMilestoneIndexOf indexes listing by delivered entity id.
+//
+// Only TOP-LEVEL milestones are indexed (listing.Milestones), never a
+// milestone's milepebbles: a milepebble's Delivers is a subset of its
+// parent's, so counting milepebbles would read as several milestones
+// delivering one feature where the cut has exactly one.
+//
+// A milestone delivering both a feature AND one of its requirements is
+// indexed once for that feature's cell, so "N" counts milestones and not
+// associations.
+func capabilityMilestoneIndexOf(listing slice.DeliveryListing, err error) capabilityMilestoneIndex {
+	idx := capabilityMilestoneIndex{byEntity: map[uuid.UUID][]milestoneBadgeSource{}, Unread: err != nil}
+	if idx.Unread {
+		return idx
+	}
+	for _, m := range listing.Milestones {
+		source := milestoneBadgeSource{id: m.ID, name: m.Name, status: string(m.Status)}
+		for _, f := range m.Delivers.Features {
+			idx.byEntity[f.ID] = append(idx.byEntity[f.ID], source)
+		}
+		for _, r := range m.Delivers.Requirements {
+			idx.byEntity[r.ID] = append(idx.byEntity[r.ID], source)
+		}
+	}
+	return idx
+}
+
+// cell is one feature's Milestone cell, derived in the order the
+// requirement spells out (FR 18afc5a8):
+//
+//  1. exactly one milestone delivering the FEATURE itself names it;
+//  2. none does, so the DISTINCT milestones delivering its REQUIREMENTS --
+//     exactly one names it, several give the neutral "N milestones" badge;
+//  3. none at all leaves the cell blank.
+//
+// A failed listing read outranks all three: every cell says what could not
+// be read rather than answering a question nobody could answer.
+//
+// The requirement does not spell out "several milestones deliver the
+// FEATURE itself". It takes the same neutral count badge as case 2's
+// several: there is no single milestone to name, and naming one arbitrarily
+// would be a worse answer than counting. That choice is stated in the PR
+// description rather than left buried here.
+func (idx capabilityMilestoneIndex) cell(featureID uuid.UUID, requirementIDs []uuid.UUID) pages.CapabilityMilestone {
+	if idx.Unread {
+		return pages.CapabilityMilestone{Kind: pages.CapabilityMilestoneUnread, Message: capabilityMilestoneUnreadMessage}
+	}
+	// A milestone delivering the feature itself decides the cell outright,
+	// at whatever count -- the requirement's requirements are never consulted
+	// once the feature itself is delivered. Falling through to them on the
+	// several case would report a milestone count about something else.
+	if delivering := distinctMilestones(idx.byEntity[featureID]); len(delivering) > 0 {
+		return idx.cellOf(delivering)
+	}
+	return idx.cellOf(distinctMilestonesAcross(idx.byEntity, requirementIDs))
+}
+
+// distinctMilestonesAcross unions the delivering milestones of several
+// entities, deduplicated by milestone id: two of one feature's requirements
+// delivered by one milestone is still ONE milestone, and a count that read
+// it as two would be a fact about the listing, not about delivery.
+func distinctMilestonesAcross(byEntity map[uuid.UUID][]milestoneBadgeSource, entityIDs []uuid.UUID) []milestoneBadgeSource {
+	var out []milestoneBadgeSource
+	seen := map[uuid.UUID]bool{}
+	for _, id := range entityIDs {
+		for _, m := range byEntity[id] {
+			if !seen[m.id] {
+				seen[m.id] = true
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
+// distinctMilestones deduplicates one entity's delivering milestones by id,
+// for the same reason distinctMilestonesAcross does.
+func distinctMilestones(sources []milestoneBadgeSource) []milestoneBadgeSource {
+	var out []milestoneBadgeSource
+	seen := map[uuid.UUID]bool{}
+	for _, m := range sources {
+		if !seen[m.id] {
+			seen[m.id] = true
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// cellOf turns a set of delivering milestones into a cell: one names it,
+// several count, none is blank. The name and status come from the listing;
+// nothing here is re-derived from the other read.
+func (idx capabilityMilestoneIndex) cellOf(sources []milestoneBadgeSource) pages.CapabilityMilestone {
+	switch len(sources) {
+	case 0:
+		return pages.CapabilityMilestone{Kind: pages.CapabilityMilestoneNone}
+	case 1:
+		return pages.CapabilityMilestone{
+			Kind:   pages.CapabilityMilestoneNamed,
+			Name:   sources[0].name,
+			Status: sources[0].status,
+			Count:  1,
+		}
+	default:
+		return pages.CapabilityMilestone{Kind: pages.CapabilityMilestoneSeveral, Count: len(sources)}
+	}
 }
 
 // capabilityExpansionQueryParam names the one feature-set section the

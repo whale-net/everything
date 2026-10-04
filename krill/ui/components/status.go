@@ -56,6 +56,19 @@ func MilestoneStatusStyle(status string) StatusStyle {
 	}
 }
 
+// MilestoneCountStyle is the badge for a milestone cell that COUNTS rather
+// than names -- "N milestones", where several deliver one feature's
+// requirements and there is no single status to colour by.
+//
+// Neutral for that reason, the same value the unknown-status fallback in
+// MilestoneStatusStyle returns: a count asserts no state, so it takes no
+// state colour. It lives beside the mapper rather than being spelled at the
+// call site so a future count badge cannot acquire a second, hand-picked
+// tone.
+func MilestoneCountStyle() StatusStyle {
+	return StatusStyle{htmxui.BadgeNeutral, htmxui.BadgeSizeSM, false}
+}
+
 // ShipmentStyle maps an item's shipment state onto a daisyUI badge. It is
 // the only place that vocabulary acquires a colour, so every table that
 // shows a Shipment column shows it the same way.

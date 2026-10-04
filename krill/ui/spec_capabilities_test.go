@@ -382,11 +382,6 @@ func TestCapabilitiesFeatureCellRendersNumberNameAndDescription(t *testing.T) {
 			t.Errorf("the feature table missing %q", want)
 		}
 	}
-	// The Milestone column is the follow-up task's; asserting its absence
-	// here stops this task's table from quietly growing it.
-	if strings.Contains(html, "<th>Milestone</th>") {
-		t.Errorf("the feature table carries a Milestone column; that belongs to the badge task")
-	}
 }
 
 // TestCapabilitiesHeadingCarriesNameCountAndDescription pins the section
