@@ -59,6 +59,47 @@ musicpollinstance.next_instance_id IS NOT NULL
 AND NOT EXISTS (musicpollresponse for this instance)
 ```
 
+## How a scheduled run picks its songs
+
+The poll a scheduled (or manually started) weekly run posts is chosen by one
+Temporal activity (`temporal/db/music_poll_activity.py`), which runs the whole
+pick — the clock read and the random tie-breaks included — so the workflow that
+calls it only orchestrates. The selection itself lives in
+`db/dal/music_poll_selection.py`:
+
+1. **Eligible pool** — every `musicpollresponse` recorded from the channel's
+   *closed* windows. A window is closed once its successor exists, and window
+   order comes from the `next_instance_id` chain, never from timestamps.
+   Submissions that share a song identity — the Spotify track ID or YouTube
+   video ID when the URL carries one, otherwise the URL with its tracking
+   parameters stripped — count as one song, attributed to its earliest
+   submission. A song's age, posted month and submitter come from the Slack
+   message it was shared in, read as UTC, not from when the pickup recorded
+   the row.
+2. **Exclusions** — a song is ineligible when its earliest submission sits in
+   either of the channel's two most recent closed windows (the grace period),
+   or when it appeared as an option in any of the channel's last eight
+   run-posted polls, manual runs included. Re-sharing changes nothing: a
+   re-shared song keeps its earliest submission's window, date, submitter and
+   month.
+3. **Submitter variety** — options come from distinct submitters whenever
+   enough distinct submitters have eligible songs; a submitter appears twice
+   only once distinct submitters run out, and never more than twice. The cap
+   wins over the slot split below.
+4. **Option count and slots** — the option count is how many songs can be
+   picked within the two-per-submitter cap: four when four or more are
+   pickable, three when exactly three are. The slots aim for two recent songs
+   (2–10 weeks old at run time) and the rest goldies, filling from each other
+   best-effort within the cap. Within a slot, the songs featured least often
+   across the channel's past run-posted polls go first, ties broken uniformly
+   at random — so songs newly past the grace period surface before anything
+   already featured.
+
+Fewer than three pickable songs means no poll that week: the previous poll
+stays open and the skip is logged at INFO. Each run's picks are recorded in
+`scheduledpollrun` / `scheduledpollrunoption` (see the tables above), which is
+what the no-repeat rule and the appearance counts read.
+
 ## Diagnosing it: start here
 
 **The pickup is healthy.** The chain is running — the post job posts each week, the archive job

@@ -34,6 +34,14 @@ from .music_poll_dal import (
     update_music_poll_instance,
     update_music_poll_response,
 )
+from .music_poll_selection import (
+    SelectedOption,
+    SongCandidate,
+    SongSubmission,
+    select_poll_options,
+    select_scheduled_poll_options,
+    song_identity,
+)
 from .poll_dal import (
     PollSnapshot,
     VoteOutcome,
@@ -135,6 +143,13 @@ __all__ = [
     "get_music_poll_responses",
     "update_music_poll_response",
     "delete_music_poll_response",
+    # Weekly music-poll selection
+    "SelectedOption",
+    "SongCandidate",
+    "SongSubmission",
+    "select_poll_options",
+    "select_scheduled_poll_options",
+    "song_identity",
     # Poll functions
     "PollSnapshot",
     "VoteOutcome",

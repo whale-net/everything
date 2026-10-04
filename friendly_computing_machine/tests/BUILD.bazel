@@ -96,7 +96,8 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
-# Music poll pickup chain, bot config, and window/eligibility query (SQLite-backed)
+# Music poll pickup chain, bot config, weekly selection,
+# and window/eligibility query (SQLite-backed)
 py_test(
     name = "test_music_poll",
     size = "small",
@@ -104,6 +105,7 @@ py_test(
         "conftest.py",
         "poll/test_music_poll_bot_config.py",
         "poll/test_music_poll_pickup.py",
+        "poll/test_music_poll_selection.py",
         "poll/test_scheduled_poll_dal.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],

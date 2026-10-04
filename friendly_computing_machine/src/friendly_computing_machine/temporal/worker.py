@@ -27,6 +27,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.db.job_a
     delete_slack_message_duplicates_activity,
     upsert_slack_user_creates_activity,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.db.music_poll_activity import (
+    select_music_poll_options_activity,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.sample import (
     SayHello,
     build_hello_prompt,
@@ -90,6 +93,7 @@ ACTIVITIES = [
     backfill_genai_text_slack_user_id_activity,
     backfill_genai_text_slack_channel_id_activity,
     fix_slack_tagging_activity,
+    select_music_poll_options_activity,
     start_whagent_session_activity,
     send_whagent_turn_activity,
     get_whagent_session_activity,
