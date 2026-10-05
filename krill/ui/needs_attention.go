@@ -341,7 +341,7 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	// sentence, so the three cannot describe different containers.
 	containers := app.needsAttentionMilestoneContainers(r.Context(), product.ID)
 	view, err := app.needsAttentionResults(r.Context(), product.ID, filter,
-		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r), readAt)
+		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r), readAt, "")
 	if err != nil {
 		app.writeNeedsAttentionQueryError(w, r, product.ID, filter, containers, tab, err)
 		return
@@ -499,6 +499,11 @@ type needsAttentionTabView struct {
 // words, for the empty state a filtered tab renders instead of its generic
 // "No claimed tasks."
 //
+// message is an inline refusal to carry above the rows, empty for an
+// ordinary GET. The intervention path passes one to re-derive the region
+// after a refused write, so it renders through this same loader rather than
+// a second reading of the tab.
+//
 // The Escalated tab is the exception on row SHAPE: its columns are its own
 // (FR 772b044b, needsAttentionEscalatedResults below), because what the
 // operator scans there is not the console view's. Its rows are still the one
@@ -511,7 +516,7 @@ type needsAttentionTabView struct {
 // (FR 7f10bd5d) rather than a footer itself: the total belongs to the strip's
 // per-tab count read, which is taken only where the strip is rendered, so the
 // caller pairs this answer's Shown and NextHref with that figure.
-func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time) (needsAttentionTabView, error) {
+func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time, message string) (needsAttentionTabView, error) {
 	console := filter.console(productID)
 	switch tab {
 	case needsAttentionTabClaimed:
@@ -519,9 +524,10 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 		if err != nil {
 			return needsAttentionTabView{}, err
 		}
-		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "claimed tasks"); ok {
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "claimed tasks"); ok && message == "" {
 			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
+		d.Error = message
 		return needsAttentionTabView{
 			Results:  pages.ClaimedResults(d),
 			Shown:    len(d.Rows),
@@ -532,9 +538,10 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 		if err != nil {
 			return needsAttentionTabView{}, err
 		}
-		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "cancelled tasks"); ok {
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "cancelled tasks"); ok && message == "" {
 			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
+		d.Error = message
 		return needsAttentionTabView{
 			Results:  pages.NeedsAttentionCancelledResults(d),
 			Shown:    len(d.Rows),
@@ -545,9 +552,10 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 		if err != nil {
 			return needsAttentionTabView{}, err
 		}
-		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "open notes"); ok {
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "open notes"); ok && message == "" {
 			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
+		d.Error = message
 		return needsAttentionTabView{
 			Results:  pages.NeedsAttentionNotesResults(d),
 			Shown:    len(d.Rows),
@@ -558,9 +566,10 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 		if err != nil {
 			return needsAttentionTabView{}, err
 		}
-		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "escalated tasks"); ok {
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "escalated tasks"); ok && message == "" {
 			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
+		d.Error = message
 		return needsAttentionTabView{
 			Results:  pages.EscalatedQueueResults(d),
 			Shown:    len(d.Rows),
@@ -714,7 +723,7 @@ func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID,
 		EscalatedAt:         r.EscalatedAt.UTC().Format(time.RFC3339),
 		EscalatedAtRelative: relativeTime(r.EscalatedAt, now),
 		EscalationID:        observedEscalationID(r),
-		Actions:             escalatedRowActions(r.TaskID.String(), observedEscalationID(r), string(r.Lane), returnTo),
+		Actions:             escalatedRowActions(r.TaskID.String(), observedEscalationID(r), r.Lane, returnTo),
 	}
 }
 
@@ -725,9 +734,10 @@ func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID,
 // reaches krill api unchanged rather than being renamed on the way through.
 const escalatedGuardField = "expected_escalation_id"
 
-// escalatedRowActions builds one escalated row's controls (FR 772b044b):
-// Requeue and Cancel, and never Release -- an escalated task holds no
-// claim, so there is nothing to force-close.
+// escalatedRowActions builds one escalated row's controls (FR 772b044b) from
+// the shared legality predicate: Requeue, and Cancel only where the predicate
+// allows it, and never Release -- an escalated task holds no claim, so there
+// is nothing to force-close.
 //
 // Both controls carry the escalation id THIS row observed: Requeue as a
 // hidden form field, Cancel as a query parameter on its confirmation link,
@@ -735,33 +745,33 @@ const escalatedGuardField = "expected_escalation_id"
 // is taken from the row and never typed, so an escalation that changed
 // since the page loaded is refused against what the operator saw rather
 // than against whatever is current.
-//
-// A Done-lane task is offered no Cancel (FR af61631d): the task is
-// finished, and dead-lettering it is not an intervention this queue may
-// offer. Requeue stays, because returning a finished-but-escalated task to
-// claimable is the recovery the queue exists for.
-func escalatedRowActions(taskID, escalationID, lane, returnTo string) templ.Component {
-	requeue := interventionActions[actionRequeue]
-	controls := []pages.TaskActionControl{{
-		Kind:          "form",
-		Label:         requeue.Label,
-		ReasonHint:    requeue.ReasonHint,
-		Action:        opsTaskActionBase + taskID + "/" + actionRequeue,
-		ReturnTo:      returnTo,
-		ObservedField: escalatedGuardField,
-		ObservedID:    escalationID,
-	}}
-	if lane != string(store.LaneDone) {
-		cancel := interventionActions[actionCancel]
-		href := cancelConfirmHref(taskID, returnTo)
-		if escalationID != "" {
-			href += "&" + url.Values{escalatedGuardField: {escalationID}}.Encode()
+func escalatedRowActions(taskID, escalationID string, lane store.Lane, returnTo string) templ.Component {
+	verbs := legalInterventions(taskInterventionEscalated, lane)
+	controls := make([]pages.TaskActionControl, 0, len(verbs))
+	for _, action := range verbs {
+		a := interventionActions[action]
+		if a.Destructive {
+			href := cancelConfirmHref(taskID, returnTo)
+			if escalationID != "" {
+				href += "&" + url.Values{escalatedGuardField: {escalationID}}.Encode()
+			}
+			controls = append(controls, pages.TaskActionControl{
+				Kind:       "confirm",
+				Label:      a.Label,
+				ReasonHint: a.ReasonHint,
+				Action:     href,
+				ReturnTo:   returnTo,
+			})
+			continue
 		}
 		controls = append(controls, pages.TaskActionControl{
-			Kind:     "confirm",
-			Label:    cancel.Label,
-			Action:   href,
-			ReturnTo: returnTo,
+			Kind:          "form",
+			Label:         a.Label,
+			ReasonHint:    a.ReasonHint,
+			Action:        opsTaskActionBase + taskID + "/" + action,
+			ReturnTo:      returnTo,
+			ObservedField: escalatedGuardField,
+			ObservedID:    escalationID,
 		})
 	}
 	return pages.TaskActions(controls)
@@ -1014,26 +1024,11 @@ func claimedBy(acting, onBehalfOf store.Subject) string {
 	return by
 }
 
-// claimedRowVerbs is the intervention legality of a claimed row, which is
-// task detail's own: Release is always offered (the task holds a claim),
-// while Escalate and Cancel are not offered on a task in the Done lane --
-// a finished task is neither flagged for attention nor dead-lettered,
-// whichever lane it reached Done from.
-//
-// One function rather than a condition inside the row builder, so the
-// order the FR names the verbs in ("Release, Escalate and Cancel") is
-// stated once.
-func claimedRowVerbs(lane store.Lane) []string {
-	verbs := []string{actionRelease}
-	if lane == store.LaneDone {
-		return verbs
-	}
-	return append(verbs, actionEscalate, actionCancel)
-}
-
-// claimedRowActions renders a claimed row's controls with the verbs legal
-// for its lane, each carrying the claim the row observed so the action's
-// guard is checked against the state the operator actually saw.
+// claimedRowActions renders a claimed row's controls with the verbs the
+// shared legality predicate allows for a claimed task in its lane, each
+// carrying the claim the row observed so the action's guard is checked
+// against the state the operator actually saw.
 func claimedRowActions(r store.ClaimedTaskRow, returnTo string) templ.Component {
-	return renderClaimedTaskActions(r.TaskID.String(), r.ClaimID, returnTo, claimedRowVerbs(r.CurrentLane)...)
+	return renderClaimedTaskActions(r.TaskID.String(), r.ClaimID, returnTo,
+		legalInterventions(taskInterventionClaimed, r.CurrentLane)...)
 }
