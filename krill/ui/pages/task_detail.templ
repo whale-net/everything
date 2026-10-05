@@ -290,6 +290,31 @@ type TaskDetailPage struct {
 	BoardPath     string
 	ContainerName string
 
+	// Actions is the task's intervention controls, built in package main
+	// from the ONE shared legality predicate (krill/ui/intervention_legality.go):
+	// the detail offers exactly the verbs the Needs attention rows offer for
+	// the same state and lane, and no verb a state forbids. It is nil when no
+	// verb is legal -- a cancelled task, or a ready one in the Done lane --
+	// and a nil component renders no callout at all rather than an empty
+	// Actions box claiming there is nothing to do.
+	Actions templ.Component
+
+	// Popovers is the reason popovers for those controls (FR 0cf360c5),
+	// rendered inside the same callout as Actions. A control's trigger points
+	// its popovertarget at one of these ids, so without them the button opens
+	// nothing and the optional reason is lost. It is nil exactly when Actions
+	// is -- no verbs, no callout, no popovers -- and it is rendered inside the
+	// section the controls swap, so a post-action re-render rebuilds it with
+	// fresh ids rather than leaving the triggers pointing at orphans.
+	Popovers templ.Component
+
+	// ActionError names a refused intervention inline (FR c69a42b4). It is
+	// set only on a detail region re-derived after a refusal, so it is empty
+	// on the first render of the page: a refusal is never an empty region,
+	// and an alert that appeared on every load would be read past exactly
+	// when it means something.
+	ActionError string
+
 	// Tab is the resolved tab key -- one of the four constants above, and
 	// never a raw ?tab= value: the handler resolves an unknown one to
 	// overview before the view model sees it, so a component never has to
@@ -336,6 +361,8 @@ templ TaskDetail(page TaskDetailPage) {
 			<a href={ templ.URL(page.TasksPath) } class="link link-primary" data-krill="tasks-link">Back to { page.ContainerName } tasks</a>
 			<a href={ templ.URL(page.BoardPath) } class="link link-primary ml-2" data-krill="board-link">Board</a>
 		</p>
+		@taskActionError(page)
+		@taskActionsCallout(page)
 		<div class="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="task-detail-frame">
 			<section class="min-w-0 space-y-4" data-krill="task-detail-main">
 				@taskLaneSteps(page.Steps)
@@ -347,6 +374,47 @@ templ TaskDetail(page TaskDetailPage) {
 			</aside>
 		</div>
 	</section>
+}
+
+// taskActionError is the inline alert naming a refused intervention on the
+// detail region re-derived from fresh state (FR c69a42b4). It renders
+// nothing when no refusal is being presented, so the page's own first
+// render carries no alert at all.
+templ taskActionError(page TaskDetailPage) {
+	if page.ActionError != "" {
+		<div class="mt-4" data-krill="task-action-error">
+			@htmxui.Alert(htmxui.AlertError, page.ActionError, nil)
+		</div>
+	}
+}
+
+// taskActionsCallout is the detail's actions region: the intervention
+// controls legal for the task's state, inside the section a post-action
+// re-render swaps so the header, the rail and this callout move together
+// (FR af61631d).
+//
+// It renders NOTHING when no verb is legal. A cancelled task offers no
+// action, and an empty "Actions" box beside it would read as a control that
+// failed to render rather than as the terminal state the task is in.
+//
+// The reason popovers ride here too, after the controls (FR 0cf360c5): each
+// control's trigger opens its popover by id, so a trigger whose popover is
+// not rendered is a dead button and an operator who clicks it loses the
+// optional reason. Keeping them inside the callout also keeps the callout
+// the page's ONE write surface -- every write affordance the page has, the
+// triggers and the popover submits both, sits in this one region.
+templ taskActionsCallout(page TaskDetailPage) {
+	if page.Actions != nil {
+		<div class="mt-4 card bg-base-100 border border-base-300" data-krill="task-actions">
+			<div class="card-body gap-2 p-4">
+				<h2 class="card-title text-sm font-semibold">Actions</h2>
+				<div class="flex flex-wrap items-center gap-2">
+					@page.Actions
+				</div>
+				@page.Popovers
+			</div>
+		</div>
+	}
 }
 
 // taskPropertiesCard is the rail's properties card: one label/value row per

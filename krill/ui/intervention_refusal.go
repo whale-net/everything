@@ -25,6 +25,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/pages"
 )
@@ -218,13 +220,18 @@ func refusalBackLabel(returnTo string) string {
 // http.Error would answer text/plain with no nav, on exactly the page the
 // operator most needs to navigate away from.
 //
+// taskID is the task the refused write acted on, threaded through so the
+// htmx re-derivation applies the same return_to/acted-on guard the success
+// path does: a refusal whose return_to names a different task is answered
+// with the reload warning rather than another task's region.
+//
 // status is the status the failure earns -- the api's own for a refusal it
 // made, and the transport's own for one that never reached it. It is only
 // ever used on the browser half: an htmx response is always 200 because the
 // swap target's status is not surfaced to the operator.
-func (app *App) writeInterventionRefusal(w http.ResponseWriter, r *http.Request, action, returnTo string, ref interventionRefusal, status int) {
+func (app *App) writeInterventionRefusal(w http.ResponseWriter, r *http.Request, taskID uuid.UUID, action, returnTo string, ref interventionRefusal, status int) {
 	if isHtmxRequest(r) {
-		app.renderInterventionResults(w, r, returnTo, &ref, action, "")
+		app.renderInterventionResults(w, r, taskID, returnTo, &ref, action, "")
 		return
 	}
 	app.renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{

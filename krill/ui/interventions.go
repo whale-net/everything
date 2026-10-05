@@ -192,7 +192,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			// from. The detail is logged rather than shown, so a transport
 			// error never leaks an internal URL into the page.
 			logger.Error("failed to issue an operator write", "error", err)
-			app.writeInterventionRefusal(w, r, action, returnTo,
+			app.writeInterventionRefusal(w, r, taskID, action, returnTo,
 				interventionNotIssuedRefusal(), interventionNotIssuedStatus(err))
 			return
 		}
@@ -204,7 +204,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			resp.Body.Close() //nolint:errcheck
 			if isHtmxRequest(r) {
-				app.renderInterventionSuccess(w, r, action, card)
+				app.renderInterventionSuccess(w, r, taskID, action, card)
 				return
 			}
 			// A 303 has no body to carry the confirmation in, so the
@@ -226,15 +226,17 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 		refusal := interventionRefusalOf(status, message)
 		logInterventionRefusal(action, status, refusal, message)
 
-		// A refused cancel is answered into whichever of its two regions the
+		// A refused cancel is answered into whichever of its regions the
 		// request came from. The confirm card swaps ITSELF, so a refusal
 		// posted from the card re-renders the card -- rebuilt from freshly
 		// read state, never from the ids the refused request carried, because
-		// those are exactly the ids the store just refused. The row's
-		// control, by contrast, swaps the results block, so a refusal there
-		// is answered like the other three verbs: the view re-derived from
-		// fresh state with the refusal inline.
-		if isHtmxRequest(r) && action == actionCancel && !cancelRefusalFromTheRow(r) {
+		// those are exactly the ids the store just refused. Every other origin
+		// -- a console row's control, whose swap target is the results block
+		// (cancelRefusalFromTheRow), or the task detail's, whose is the detail
+		// section -- swaps the view it acted from, so a refusal there is
+		// answered like the other three verbs: the view re-derived from fresh
+		// state with the refusal inline.
+		if isHtmxRequest(r) && action == actionCancel && !cancelRefusalFromTheRow(r) && cancelRefusalFromTheCard(r) {
 			if fresh, ok := app.freshCancelConfirmData(r.Context(), taskID, returnTo, refusal.message(action)); ok {
 				renderFragment(w, r, pages.CancelConfirmCard(fresh))
 				return
@@ -245,7 +247,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			// reloaded -- the same answer the three in-place verbs give when
 			// their view cannot be rebuilt.
 		}
-		app.writeInterventionRefusal(w, r, action, returnTo, refusal, status)
+		app.writeInterventionRefusal(w, r, taskID, action, returnTo, refusal, status)
 	}
 }
 
@@ -264,7 +266,11 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 // (An HX-Redirect is keyed on the verb, not on where the request came
 // from, because cancel is the only verb whose hx-post originates on the
 // confirm card: its console-row control is a link, never a form.)
-func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request, action string, card pages.CancelConfirmData) {
+//
+// taskID is the task the write acted on, threaded through so the
+// re-derivation cannot render a different task than the one the operator
+// acted on.
+func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request, taskID uuid.UUID, action string, card pages.CancelConfirmData) {
 	message := interventionSuccessMessage(action)
 	if action == actionCancel {
 		// HX-Redirect is a full page load, so the target page is rendered
@@ -275,7 +281,7 @@ func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, pages.CancelConfirmCard(card))
 		return
 	}
-	app.renderInterventionResults(w, r, card.ReturnTo, nil, action, message)
+	app.renderInterventionResults(w, r, taskID, card.ReturnTo, nil, action, message)
 }
 
 // interventionSuccessMessage is the confirmation a successful
@@ -317,32 +323,60 @@ func interventionSuccessMessage(action string) string {
 // forbids.
 const interventionReloadFailure = "The intervention was applied, but this view could not be reloaded."
 
-// renderInterventionResults re-reads the Needs attention view the operator
-// acted from and writes its results block at 200, with any refusal carried
-// inline above the rows.
+// renderInterventionResults re-reads the view the operator acted from and
+// writes its results at 200, with any refusal carried inline above the rows.
 //
-// The region is re-derived by the tab's OWN loader (needsAttentionResults),
-// the same function a GET of that tab calls, so the rows an operator sees
-// after an intervention are exactly the rows a reload would show them --
-// never a second reading of the same store query that could drift from it.
-// That is also what makes a row which left its tab (a released claim, a
-// requeued escalation) disappear from the table it was in, and what makes
-// the counts and the escalated shape come along with it.
+// Which view is re-derived is decided by return_to, the address the acting
+// control carried, and there are two shapes of it: a console queue, whose
+// whole results block is re-derived by the tab's OWN loader
+// (needsAttentionResults), and the task detail, whose whole SECTION is
+// re-derived (renderTaskDetailRegion). Either way the region a GET of that
+// address would serve is the region an intervention answers with, never a
+// second rendering path that could drift from it.
 //
-// refusal, when non-nil, is why the intervention did not take -- the inline
-// alert this region carries, and the sentence it inherits if the re-read
-// itself fails. A nil refusal is the success path, whose failed re-read may
-// honestly say the write landed because it did. The two are separate for the
-// same reason a refusal and a toast are: an outcome stated inline must be
-// true of THIS response, so a refusal must never inherit the success path's
-// "the intervention was applied" -- that would be the assumed success the
-// requirement forbids, said adversarially loudly.
-func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo string, refusal *interventionRefusal, action, toast string) {
+// refusal, when non-nil, is why the intervention did not take: it carries
+// the inline alert this region shows, and the sentence the region inherits
+// if the re-read itself fails. A nil refusal is the success path, whose
+// failed re-read may honestly say the write landed because it did. The
+// refusal rides inline (it must stay on the page until read) while a success
+// rides in toast (it is transient): an outcome stated inline must be true of
+// THIS response, so a refusal must never inherit the success path's "the
+// intervention was applied" -- that would be the assumed success the
+// requirement forbids, said adversarially loudly. Callers pass at most one
+// of the two -- a response that is both a success and a refusal does not
+// exist.
+//
+// taskID is the task the write acted on. A detail path names a task of its
+// own, and the re-derivation renders THAT task's fresh state; a return_to
+// naming a different task is refused below rather than answered with
+// another task's detail, whose own controls would then post an
+// intervention on a task the operator never chose.
+func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, taskID uuid.UUID, returnTo string, refusal *interventionRefusal, action, toast string) {
 	reloadFailure := interventionReloadFailure
+	message := ""
 	if refusal != nil {
 		reloadFailure = refusal.reloadFailure(action)
+		message = refusal.message(action)
 	}
 	ctx := r.Context()
+	if u, err := url.Parse(returnTo); err == nil {
+		if pid, tid, ok := productTaskDetailIDsOfPath(u.Path); ok {
+			if tid != taskID {
+				// The page is re-derived from the address the acting control
+				// carried, and that address names the task whose fresh state
+				// the operator must see. A path naming another task is not a
+				// view this action can be answered with: rendering it would
+				// show a task this write never touched, and its own controls
+				// would post against that other task.
+				logger.Warn("intervention: return_to names a task other than the one acted on; rendering the reload warning",
+					"acted_on", taskID.String(), "return_to", returnTo)
+				renderFragment(w, r, withToast(toast, pages.OpsInlineError(reloadFailure)))
+				return
+			}
+			app.renderTaskDetailRegion(w, r, pid, tid, u, message, reloadFailure, toast)
+			return
+		}
+	}
 	target, ok := app.interventionReturnTargetOf(r, returnTo)
 	if !ok {
 		// The guard has already refused anything off-site, so this is a
@@ -357,10 +391,6 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 	// exactly as the tab's GET builds it, so a filtered-empty tab reads back
 	// the same filters whichever request emptied it.
 	containers := app.needsAttentionMilestoneContainers(ctx, target.productID)
-	message := ""
-	if refusal != nil {
-		message = refusal.message(action)
-	}
 	view, err := app.needsAttentionResults(ctx, target.productID, target.filter,
 		needsAttentionFilterSentence(target.filter, containers), target.tab,
 		target.page, target.selfPath, app.clock(), message)
@@ -374,6 +404,63 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 		return
 	}
 	renderFragment(w, r, withToast(toast, view.Results))
+}
+
+// renderTaskDetailRegion answers an intervention posted from the task detail
+// by re-deriving the detail SECTION -- header, properties rail and actions
+// callout together -- from a fresh read of the task (FR af61631d).
+//
+// The detail's controls swap the whole section rather than a queue's results
+// block, because the state an intervention changes is spread across all three
+// of those: an escalation moves the task's badges and the rail's Escalated
+// row, a release empties the rail's Claim row, and either changes which verbs
+// the callout offers. Re-deriving only part of that would leave the page
+// contradicting itself. A refusal rides the same region as an inline alert
+// (FR c69a42b4).
+//
+// self is the detail page's own address -- path and query -- taken from the
+// acting control's return_to. It is the page re-derived, not the POST's URL,
+// which names the verb's route; and because it is the page's address, the tab
+// the operator was on, the Refresh button's own link and the controls'
+// return_to all come back unchanged.
+//
+// reloadFailure is the sentence a failed re-read shows. It is threaded in
+// rather than the success constant used directly, because an intervention
+// from the detail can be refused too: a refusal's failed re-read must say why
+// the action did not take, never the success path's "the intervention was
+// applied" (FR c69a42b4).
+//
+// ok false -- a task that can no longer be read, or one whose container is no
+// longer under the product's listing -- answers with the same reload warning
+// the queue branch uses, rather than rendering a detail that contradicts what
+// the write just did.
+func (app *App) renderTaskDetailRegion(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, self *url.URL, message, reloadFailure, toast string) {
+	ctx := r.Context()
+	page, ok := app.reloadTaskDetail(ctx, r, pid, tid, self)
+	if !ok {
+		logger.Error("failed to reload the task detail after an intervention",
+			"task", tid.String(), "product", pid.String())
+		renderFragment(w, r, withToast(toast, pages.OpsInlineError(reloadFailure)))
+		return
+	}
+	page.ActionError = message
+	renderFragment(w, r, withToast(toast, pages.TaskDetail(page)))
+}
+
+// reloadTaskDetail re-reads the task a detail-page intervention acted on and
+// recomposes the detail section from it. ok is false when the task or its
+// container can no longer be read.
+func (app *App) reloadTaskDetail(ctx context.Context, r *http.Request, pid, tid uuid.UUID, self *url.URL) (pages.TaskDetailPage, bool) {
+	task, err := app.tasks.GetTaskByID(ctx, tid)
+	if err != nil {
+		logger.Error("failed to re-read a task for a detail-page intervention", "task", tid.String(), "error", err)
+		return pages.TaskDetailPage{}, false
+	}
+	c, ok := app.taskDetailContainerOf(ctx, pid, task)
+	if !ok {
+		return pages.TaskDetailPage{}, false
+	}
+	return app.taskDetailViewFor(ctx, r, pid, task, c, self), true
 }
 
 // interventionReturnTarget is the Needs attention view a successful
@@ -468,6 +555,46 @@ func needsAttentionProductOfPath(path string) (uuid.UUID, bool) {
 	return pid, true
 }
 
+// productTaskDetailOfPath returns the product a product-scoped task detail
+// path is scoped to, when the path is exactly one of this binary's own:
+// /products/{pid}/tasks/{tid} (the route main.go registers for
+// handleProductTaskDetail). Any other shape -- a different sub-page, a
+// missing or malformed task id, a trailing segment -- answers false, so a
+// detail page's return path is honoured only when it is a page this binary
+// actually serves.
+func productTaskDetailOfPath(path string) (uuid.UUID, bool) {
+	pid, _, ok := productTaskDetailIDsOfPath(path)
+	return pid, ok
+}
+
+// productTaskDetailIDsOfPath is productTaskDetailOfPath for a caller that
+// needs the task as well as the product: the intervention re-derivation
+// re-reads the task the path names, so it needs both ids, and it must read
+// them by the same rule that decided the path was this binary's own.
+func productTaskDetailIDsOfPath(path string) (uuid.UUID, uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(path, productsPath+"/")
+	if !ok {
+		return uuid.Nil, uuid.Nil, false
+	}
+	rawPID, suffix, ok := strings.Cut(rest, "/")
+	if !ok {
+		return uuid.Nil, uuid.Nil, false
+	}
+	rawTID, ok := strings.CutPrefix(suffix, strings.TrimPrefix(tasksSuffix, "/")+"/")
+	if !ok || rawTID == "" || strings.Contains(rawTID, "/") {
+		return uuid.Nil, uuid.Nil, false
+	}
+	pid, err := uuid.Parse(rawPID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, false
+	}
+	tid, err := uuid.Parse(rawTID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, false
+	}
+	return pid, tid, true
+}
+
 // legacyOpsTab is the Needs attention tab a retired ops console URL becomes
 // (routes.go's legacyURLs), or ok false for a path that was never one of the
 // console's views. The console root names no queue of its own, so it is the
@@ -516,12 +643,15 @@ func interventionRejection(resp *http.Response) (int, string) {
 }
 
 // interventionReturnTo is the view a successful intervention returns to,
-// read from the form's return_to field. Two of this binary's own path
+// read from the form's return_to field. Three of this binary's own path
 // shapes are honored, and nothing else: the ops console's own paths
-// (/ops/...), and a product-scoped Needs attention tab
+// (/ops/...), a product-scoped Needs attention tab
 // (/products/{pid}/needs-attention), which is where every row control now
-// posts from so the operator lands back on the tab they acted from.
-// Anything unrecognized (or absent) falls back to the ops root.
+// posts from so the operator lands back on the tab they acted from, and a
+// product-scoped task detail (/products/{pid}/tasks/{tid}), which is where
+// the detail page's own controls post from so they land back on the detail
+// rather than on a queue (FR af61631d). Anything unrecognized (or absent)
+// falls back to the ops root.
 func interventionReturnTo(r *http.Request) string {
 	fallback := opsPath
 	to := strings.TrimSpace(r.FormValue("return_to"))
@@ -543,7 +673,9 @@ func interventionReturnTo(r *http.Request) string {
 	//   - Matching at segment boundaries rejects "/opsarchive", which
 	//     shares the raw prefix but is not a view this binary serves, and
 	//     the same boundary rule is what admits a Needs attention tab URL
-	//     without admitting "/products/{pid}/needs-attention/anything".
+	//     or a task detail URL without admitting
+	//     "/products/{pid}/needs-attention/anything" or
+	//     "/products/{pid}/tasks/{tid}/anything".
 	//
 	// None of these is an open-redirect defence on its own: the value is
 	// only ever used as a same-origin Location or HX-Redirect. They are
@@ -558,7 +690,9 @@ func interventionReturnTo(r *http.Request) string {
 	}
 	if u.Path != opsPath && !strings.HasPrefix(u.Path, opsPath+"/") {
 		if _, ok := needsAttentionProductOfPath(u.Path); !ok {
-			return fallback
+			if _, ok := productTaskDetailOfPath(u.Path); !ok {
+				return fallback
+			}
 		}
 	}
 	return to
@@ -585,7 +719,26 @@ const expectedClaimIDParam = "expected_claim_id"
 // row the operator is looking at, so "Cancel <title>?" cannot confirm a
 // different row than the one the operator read.
 func renderTaskActions(taskID, title, returnTo string, actions ...string) templ.Component {
-	return pages.TaskActions(taskActionControls(taskID, title, returnTo, actions...))
+	return renderTaskActionsWith(taskActionOptions{}, taskID, title, returnTo, actions...)
+}
+
+// taskActionOptions are the per-caller adjustments to the controls
+// taskActionControls builds. Its zero value is a Needs attention row: the
+// console results block as the swap target, and no verb marked primary. The
+// task detail is the only caller that sets either (FR af61631d).
+type taskActionOptions struct {
+	// target is the DOM region the controls swap; empty keeps the results
+	// block the rows swap.
+	target string
+	// primary names the one verb rendered as the state's primary action;
+	// empty renders every verb as the ghost button the rows use.
+	primary string
+}
+
+// renderTaskActionsWith is renderTaskActions for a caller that names a
+// different swap region or a primary verb.
+func renderTaskActionsWith(opts taskActionOptions, taskID, title, returnTo string, actions ...string) templ.Component {
+	return pages.TaskActions(taskActionControls(opts, taskID, title, returnTo, actions...))
 }
 
 // renderClaimedTaskActions is renderTaskActions for a row that holds a
@@ -598,7 +751,13 @@ func renderTaskActions(taskID, title, returnTo string, actions ...string) templ.
 // controls rather than carrying an all-zero uuid, which is not a claim any
 // write could match.
 func renderClaimedTaskActions(taskID, title string, claimID uuid.UUID, returnTo string, actions ...string) templ.Component {
-	controls := taskActionControls(taskID, title, returnTo, actions...)
+	return renderClaimedTaskActionsWith(taskActionOptions{}, taskID, title, claimID, returnTo, actions...)
+}
+
+// renderClaimedTaskActionsWith is renderClaimedTaskActions for a caller that
+// names a different swap region or a primary verb.
+func renderClaimedTaskActionsWith(opts taskActionOptions, taskID, title string, claimID uuid.UUID, returnTo string, actions ...string) templ.Component {
+	controls := taskActionControls(opts, taskID, title, returnTo, actions...)
 	if claimID == uuid.Nil {
 		return pages.TaskActions(controls)
 	}
@@ -622,7 +781,13 @@ func renderClaimedTaskActions(taskID, title string, claimID uuid.UUID, returnTo 
 // controls rather than an all-zero uuid, which is not an escalation any write
 // could match.
 func renderEscalatedTaskActions(taskID, title, escalationID, returnTo string, actions ...string) templ.Component {
-	controls := taskActionControls(taskID, title, returnTo, actions...)
+	return renderEscalatedTaskActionsWith(taskActionOptions{}, taskID, title, escalationID, returnTo, actions...)
+}
+
+// renderEscalatedTaskActionsWith is renderEscalatedTaskActions for a caller
+// that names a different swap region or a primary verb.
+func renderEscalatedTaskActionsWith(opts taskActionOptions, taskID, title, escalationID, returnTo string, actions ...string) templ.Component {
+	controls := taskActionControls(opts, taskID, title, returnTo, actions...)
 	if escalationID == "" {
 		return pages.TaskActions(controls)
 	}
@@ -644,7 +809,7 @@ func renderEscalatedTaskActions(taskID, title, escalationID, returnTo string, ac
 // It takes the same arguments as renderTaskActions and derives the same ids,
 // so a caller cannot render a popover for a control the row does not have.
 func renderTaskActionPopovers(taskID, title, returnTo string, actions ...string) templ.Component {
-	return pages.TaskActionPopovers(taskActionControls(taskID, title, returnTo, actions...))
+	return pages.TaskActionPopovers(taskActionControls(taskActionOptions{}, taskID, title, returnTo, actions...))
 }
 
 // taskActionControls is the one builder of a row's verb controls: the four
@@ -659,7 +824,7 @@ func renderTaskActionPopovers(taskID, title, returnTo string, actions ...string)
 // row's trigger opens, and ReasonID labels the input. They are a pure
 // function of the task id and the verb, so the row's triggers and its
 // popovers -- built by two separate calls -- always agree on them.
-func taskActionControls(taskID, title, returnTo string, actions ...string) []pages.TaskActionControl {
+func taskActionControls(opts taskActionOptions, taskID, title, returnTo string, actions ...string) []pages.TaskActionControl {
 	controls := make([]pages.TaskActionControl, 0, len(actions))
 	for _, action := range actions {
 		a, ok := interventionActions[action]
@@ -670,6 +835,8 @@ func taskActionControls(taskID, title, returnTo string, actions ...string) []pag
 			Label:      a.Label,
 			ReasonHint: a.ReasonHint,
 			ReturnTo:   returnTo,
+			Target:     opts.target,
+			Primary:    action == opts.primary,
 			FormID:     taskActionFormID(taskID, action),
 			PopoverID:  taskActionPopoverID(taskID, action),
 			ReasonID:   taskActionReasonID(taskID, action),
@@ -775,14 +942,36 @@ func cancelObservedFrom(r *http.Request) cancelObservedIDs {
 	}
 }
 
+// cancelRefusalFromTheCard reports whether a refused cancel was posted by the
+// confirm card's own form rather than by a control on the view the operator
+// acted from.
+//
+// Every Cancel POSTs the same route, so the only thing that tells the origins
+// apart is which region htmx was swapping: a control targets the view it sits
+// on (a console row's the results block, a task detail's the detail section),
+// while the card's form targets the card. htmx sends the resolved target's id
+// in HX-Target -- the bare id, no leading "#" -- and omits the header when
+// that target is the posting element itself, so the card is "no target named,
+// or the card's own id".
+func cancelRefusalFromTheCard(r *http.Request) bool {
+	switch r.Header.Get("HX-Target") {
+	case "", pages.CancelConfirmAnchor:
+		return true
+	default:
+		return false
+	}
+}
+
 // cancelRefusalFromTheRow reports whether a refused cancel was posted by a
-// console row's Cancel control rather than by the confirm card's own form.
+// console row's Cancel control rather than by the confirm card's own form or
+// the task detail's control.
 //
 // Both halves of a row's Cancel POST the same route, so the only thing that
 // tells the two origins apart is which region htmx was swapping: the row's
 // control targets the results block, while the card's form targets the card
-// itself. htmx sends the resolved target's id in HX-Target, so a request that
-// names the results block is the row's.
+// itself and the detail's control its own section. htmx sends the resolved
+// target's id in HX-Target, so a request that names the results block is the
+// row's.
 func cancelRefusalFromTheRow(r *http.Request) bool {
 	return r.Header.Get("HX-Target") == pages.OpsResultsAnchor
 }

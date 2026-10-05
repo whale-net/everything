@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/slice"
@@ -559,33 +561,138 @@ func (app *App) handleProductTaskDetail(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// serveTaskDetail is the one read-and-render both detail routes share:
-// resolve the task, refuse it unless container says this URL's answer, then
-// compose and serve. That resolver is the only thing the two routes disagree
-// on, so the reads that build the page cannot drift between them.
-func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, container func(store.Task) (taskContainer, bool)) {
-	ctx := r.Context()
-	task, err := app.tasks.GetTaskByID(ctx, tid)
-	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
-			logger.Error("task read failed", "task", tid.String(), "error", err)
-			app.renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
-				Title:    "Could not load the task",
-				Detail:   "The task could not be read. See the logs.",
-				BackHref: productHref(pid, tasksSuffix),
-				BackText: "Back to tasks",
-			})
-			return
-		}
-		app.renderProductTaskDetailNotFound(w, r, pid)
-		return
+// taskInterventionStateOf reads the state a task's intervention legality is
+// decided from: the same view-level reading the Needs attention rows make of
+// their own row, taken from the task the detail loaded. The states are
+// mutually exclusive and the terminal one wins -- a cancelled task carries no
+// intervention whatever else the row says -- then an escalation, then a live
+// claim, and otherwise the task is ready.
+func taskInterventionStateOf(t store.Task) taskInterventionState {
+	switch {
+	case t.CancelledAt != nil:
+		return taskInterventionCancelled
+	case t.CurrentEscalationID != nil:
+		return taskInterventionEscalated
+	case t.CurrentClaimID != nil:
+		return taskInterventionClaimed
+	default:
+		return taskInterventionReady
 	}
-	c, found := container(task)
-	if !found {
-		app.renderProductTaskDetailNotFound(w, r, pid)
-		return
-	}
+}
 
+// taskDetailControls is the ONE builder of the detail's intervention controls
+// (FR af61631d) from the shared legality predicate, so the detail and the
+// Needs attention rows cannot drift into two readings of which verbs a state
+// offers. It returns nil when the predicate offers none, which the view model
+// renders as no callout and no popovers at all.
+//
+// Each control carries what THIS page observed -- the claim id for Release,
+// Escalate and Cancel on a claimed task, the escalation id for Requeue and
+// Cancel on an escalated one, and neither on a ready task -- taken from the
+// task the page loaded and never from typed input, so a claim or escalation
+// that changed since the read is refused against the state the operator
+// actually saw.
+//
+// Two things differ from a Needs attention row's controls, and both are the
+// FR's: they swap the detail SECTION rather than a queue's results block, so
+// the header, the rail and this callout move together; and an escalated
+// task's Requeue is rendered as the primary action. Nothing else about the
+// verbs -- their order, their guards, their confirmation -- is the detail's
+// own invention.
+//
+// The controls are built ONCE here and rendered twice: the triggers in the
+// callout (taskDetailActions) and the reason popovers beside them
+// (taskDetailActionPopovers, FR 0cf360c5). Deriving the popovers from a verb
+// set of their own would let a trigger point at a popover id that is never
+// rendered -- the dead-button regression this builder exists to prevent.
+func taskDetailControls(t store.Task, returnTo string) []pages.TaskActionControl {
+	state := taskInterventionStateOf(t)
+	verbs := legalInterventions(state, t.CurrentLane)
+	if len(verbs) == 0 {
+		return nil
+	}
+	opts := taskActionOptions{target: pages.TaskDetailAnchor}
+	if state == taskInterventionEscalated {
+		opts.primary = actionRequeue
+	}
+	controls := taskActionControls(opts, t.ID.String(), t.Title, returnTo, verbs...)
+	switch state {
+	case taskInterventionClaimed:
+		// A claimed task holds its claim id; all-zero is no claim any write
+		// could match, so a row that somehow read one stays unguarded rather
+		// than carrying it (the same rule renderClaimedTaskActions applies).
+		if id := *t.CurrentClaimID; id != uuid.Nil {
+			observed := id.String()
+			for i := range controls {
+				// Both halves carry it as the same hidden expected_claim_id
+				// input: the htmx half posts it to the verb, the no-JS half
+				// hands it to the confirmation page, which carries it on to
+				// the verb's own form.
+				controls[i].ObservedClaimID = observed
+			}
+		}
+	case taskInterventionEscalated:
+		observed := t.CurrentEscalationID.String()
+		for i := range controls {
+			controls[i].ObservedField = escalatedGuardField
+			controls[i].ObservedID = observed
+		}
+	}
+	return controls
+}
+
+// taskDetailActions renders the detail's intervention controls: the trigger
+// half of taskDetailControls. It is nil when the predicate offers no verb,
+// which the view model renders as no callout at all.
+func taskDetailActions(t store.Task, returnTo string) templ.Component {
+	controls := taskDetailControls(t, returnTo)
+	if controls == nil {
+		return nil
+	}
+	return pages.TaskActions(controls)
+}
+
+// taskDetailActionPopovers renders the reason popovers for the detail's
+// controls (FR 0cf360c5): one per control, whose optional reason field and
+// submit button name exactly the form taskDetailActions rendered for the same
+// verb, so a reason typed here reaches the handler on both the htmx and the
+// no-JS path. It is nil exactly when the actions are, so no trigger is left
+// pointing at an id the page does not render.
+func taskDetailActionPopovers(t store.Task, returnTo string) templ.Component {
+	controls := taskDetailControls(t, returnTo)
+	if controls == nil {
+		return nil
+	}
+	return pages.TaskActionPopovers(controls)
+}
+
+// taskDetailContainerOf resolves the container a task sits under, against the
+// product's own delivery listing -- the same rule handleProductTaskDetail
+// applies, so a task from another product (or from a container the product no
+// longer lists) is not this page's answer. A delivery read that fails is a
+// false, not a guess.
+func (app *App) taskDetailContainerOf(ctx context.Context, pid uuid.UUID, task store.Task) (taskContainer, bool) {
+	listing, err := app.spec.Delivery(ctx, pid, nil)
+	if err != nil {
+		logger.Error("task detail: delivery listing read failed", "product", pid.String(), "error", err)
+		return taskContainer{}, false
+	}
+	return resolveTaskContainer(listing, task.MilestoneID)
+}
+
+// taskDetailViewFor composes the detail view from reads the caller has
+// already resolved: the task, its container, and self -- the address the page
+// is being served at.
+//
+// self is a parameter rather than read off r because the two callers reach
+// here from different requests: a GET serves the page at its own address,
+// while an intervention re-derives it from the POST to the verb's route and
+// only knows the page's address from the control's return_to. Everything the
+// page bakes its address into -- the Refresh button, the tab strip's hrefs,
+// the actions' return_to -- reads self, so a re-derived section and a
+// reloaded one are the same markup.
+func (app *App) taskDetailViewFor(ctx context.Context, r *http.Request, pid uuid.UUID, task store.Task, c taskContainer, self *url.URL) pages.TaskDetailPage {
+	tid := task.ID
 	in := taskDetailInputs{Task: task, DepTasks: map[uuid.UUID]store.Task{}}
 	in.Deps, in.DepsErr = app.tasks.ListDependencies(ctx, task.ScopeID, tid)
 	if in.DepsErr != nil {
@@ -648,13 +755,55 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 	// the page was LOADED with -- not the tab the operator is on. The
 	// button takes the tab from the panel region at press time instead
 	// (see the refresh button's hx-include).
-	page.Path = r.URL.Path
-	// The tab is resolved from the URL, and the strip is built over the
+	page.Path = self.Path
+	// The tab is resolved from the address, and the strip is built over the
 	// page's own path with it applied -- so a tab survives a reload, a
 	// shared link and Back, and an unknown value renders the Overview
 	// rather than failing (FR 7e463e31).
-	page.Tab = taskDetailTabOf(r)
-	page.Tabs = taskDetailTabsOf(r.URL.Path, page.Tab, page.Notes, page.NotesError, page.Deps, page.DepsError)
+	page.Tab = taskDetailTabOf(&http.Request{URL: self})
+	page.Tabs = taskDetailTabsOf(self.Path, page.Tab, page.Notes, page.NotesError, page.Deps, page.DepsError)
+	// The detail's own actions are bound to the shared legality predicate
+	// (FR af61631d). return_to is this page's own address -- path AND query,
+	// so the tab survives the round trip -- and it is validated on the way
+	// back by the same guard every other return path goes through
+	// (interventionReturnTo), so a detail-page control can never be pointed
+	// off-site or at a path this binary does not serve.
+	page.Actions = taskDetailActions(task, self.RequestURI())
+	// The matching reason popovers (FR 0cf360c5). Not setting them is the
+	// defect this pairing guards: every control's trigger opens its popover,
+	// so a page without them has dead buttons and no optional reason.
+	page.Popovers = taskDetailActionPopovers(task, self.RequestURI())
+	return page
+}
+
+// serveTaskDetail is the one read-and-render both detail routes share:
+// resolve the task, refuse it unless container says this URL's answer, then
+// compose and serve. That resolver is the only thing the two routes disagree
+// on, so the reads that build the page cannot drift between them.
+func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, container func(store.Task) (taskContainer, bool)) {
+	ctx := r.Context()
+	task, err := app.tasks.GetTaskByID(ctx, tid)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			logger.Error("task read failed", "task", tid.String(), "error", err)
+			app.renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
+				Title:    "Could not load the task",
+				Detail:   "The task could not be read. See the logs.",
+				BackHref: productHref(pid, tasksSuffix),
+				BackText: "Back to tasks",
+			})
+			return
+		}
+		app.renderProductTaskDetailNotFound(w, r, pid)
+		return
+	}
+	c, found := container(task)
+	if !found {
+		app.renderProductTaskDetailNotFound(w, r, pid)
+		return
+	}
+
+	page := app.taskDetailViewFor(ctx, r, pid, task, c, r.URL)
 	// A tab click and a Refresh are the same route asked for different
 	// things. HX-Target is what tells them apart: the tabs target the
 	// panel region, the Refresh button targets the whole detail section.

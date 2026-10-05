@@ -285,11 +285,21 @@ func TestTaskDetailFullFragmentIsStillOneSection(t *testing.T) {
 		assert.NotContains(t, frag, outside,
 			"%s is outside the swap region and must not travel with the panel", outside)
 	}
-	// The read-only contract still holds on a tabbed page: the tab strip
-	// is four links, not four forms.
-	for _, body := range []string{frag, region} {
-		assert.NotContains(t, body, "<form")
-		assert.NotContains(t, body, "hx-post")
+	// The read-only contract still holds on a tabbed page's READ-ONLY
+	// regions: everything except the actions callout. The callout is the
+	// page's one write surface (FR af61631d), so it is split out and each
+	// side of it asserted form-free -- which pins the header, the
+	// breadcrumb, the lane-step strip and the tab strip too, rather than
+	// only the panel body and the rail.
+	//
+	// The two renderings that carry the whole section are the full page and
+	// the Refresh-shaped section fragment; the panel fragment above is a
+	// narrower swap and by design contains no callout at all.
+	_, section := f.get(task.ID.String(), true)
+	for _, body := range []string{section, region} {
+		for _, readOnly := range readOnlyOutsideActions(t, body) {
+			assertNoWriteAffordances(t, readOnly)
+		}
 	}
 }
 

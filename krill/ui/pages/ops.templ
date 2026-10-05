@@ -256,6 +256,18 @@ type TaskActionControl struct {
 	// console forwards it to krill api unchanged rather than renaming it on
 	// the way through.
 	ObservedField string
+
+	// Target is the DOM id the control's htmx half swaps. Empty means the
+	// console results block every Needs attention row swaps; the task detail
+	// sets it to its own section, so an action taken there re-derives the
+	// header, the rail and the callout together rather than a queue's rows.
+	Target string
+
+	// Primary marks the one verb a caller renders as its state's primary
+	// action, so it is a filled button rather than the ghost button every
+	// row's verbs are. Only the task detail sets it, for Requeue on an
+	// escalated task (FR af61631d).
+	Primary bool
 }
 
 // InterventionErrorData is the in-shell rejection page's data.
@@ -661,7 +673,7 @@ templ TaskActions(controls []TaskActionControl) {
 				action={ templ.URL(c.Action) }
 				id={ c.FormID }
 				hx-post={ c.Action }
-				hx-target={ "#" + OpsResultsAnchor }
+				hx-target={ taskControlTarget(c.Target) }
 				hx-swap="outerHTML"
 				class="inline"
 			>
@@ -672,7 +684,7 @@ templ TaskActions(controls []TaskActionControl) {
 				if c.ObservedID != "" {
 					<input type="hidden" name={ c.ObservedField } value={ c.ObservedID } />
 				}
-				<button type="button" popovertarget={ c.PopoverID } class="btn btn-ghost btn-xs">{ c.Label }</button>
+				<button type="button" popovertarget={ c.PopoverID } class={ taskControlButtonClass(c.Primary) }>{ c.Label }</button>
 			</form>
 		} else {
 			<form
@@ -680,7 +692,7 @@ templ TaskActions(controls []TaskActionControl) {
 				action={ templ.URL(c.Action) }
 				id={ c.FormID }
 				hx-post={ c.PostAction }
-				hx-target={ "#" + OpsResultsAnchor }
+				hx-target={ taskControlTarget(c.Target) }
 				hx-swap="outerHTML"
 				hx-confirm={ c.Confirm }
 				class="inline"
@@ -696,6 +708,27 @@ templ TaskActions(controls []TaskActionControl) {
 			</form>
 		}
 	}
+}
+
+// taskControlTarget is the DOM id one control's htmx half swaps: the region
+// the caller named, or the console results block a Needs attention row
+// swaps when its control names none.
+func taskControlTarget(target string) string {
+	if target == "" {
+		return "#" + OpsResultsAnchor
+	}
+	return "#" + target
+}
+
+// taskControlButtonClass is a non-destructive control's button class. A
+// caller may mark one verb as its state's primary action; every other verb --
+// and every verb on a row, which marks none -- is the ghost button the
+// console has always used.
+func taskControlButtonClass(primary bool) string {
+	if primary {
+		return "btn btn-primary btn-xs"
+	}
+	return "btn btn-ghost btn-xs"
 }
 
 // TaskActionPopovers renders one reason popover per control (FR 0cf360c5):

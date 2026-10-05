@@ -234,7 +234,9 @@ func TestHandlerSuccessWithNoMessageRendersNoToast(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/ops/tasks/x/escalate", nil)
 	req.Header.Set("HX-Request", "true")
-	app.renderInterventionResults(rec, req, "/ops/escalated", nil, "", "")
+	// return_to names a console tab, so the acted-on task id is never
+	// consulted; any id does.
+	app.renderInterventionResults(rec, req, uuid.Nil, "/ops/escalated", nil, "", "")
 
 	got := rec.Body.String()
 	assert.Equal(t, http.StatusOK, rec.Code)
