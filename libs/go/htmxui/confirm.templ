@@ -64,6 +64,21 @@ type ConfirmProps struct {
 	// when empty.
 	CancelLabel string
 
+	// CancelAttrs is the escape hatch for the cancel LINK, forwarded onto
+	// the same <a> CancelHref renders -- so a caller can carry both halves
+	// of a doubled control on one element: CancelHref's href as the no-JS
+	// destination, and hx-get/hx-target/hx-swap as the in-place one. htmx
+	// intercepts the click and swaps; a browser without it follows the
+	// href. Unset (the default) adds no attribute at all, so every
+	// existing call site renders exactly as it did before.
+	//
+	// It rides on the anchor rather than replacing it because an anchor
+	// with no href is not navigable, and a cancel that only works under
+	// JavaScript is the failure mode this primitive exists to avoid. Do
+	// not put an href here: templ.URL sanitizes CancelHref, and a raw
+	// attribute would not.
+	CancelAttrs templ.Attributes
+
 	// Disabled and DisabledReason cover the role-gated / no-history-to-
 	// roll-back-to disabled submit pattern shared by all three call sites:
 	// a disabled submit still renders (never hidden) with DisabledReason
@@ -133,7 +148,7 @@ templ confirmBody(p ConfirmProps, submitAttrs templ.Attributes) {
 	{ children... }
 	<div class="flex gap-2 justify-end mt-4">
 		if p.CancelHref != "" {
-			<a href={ templ.URL(p.CancelHref) } class="btn btn-secondary">{ confirmCancelLabel(p) }</a>
+			<a href={ templ.URL(p.CancelHref) } class="btn btn-secondary" { p.CancelAttrs... }>{ confirmCancelLabel(p) }</a>
 		}
 		<button type="submit" class={ buttonClasses(confirmSubmitVariant(p.Intent), ButtonSizeMD, p.Disabled) } disabled?={ p.Disabled } title={ p.DisabledReason } { submitAttrs... }>
 			{ p.SubmitLabel }
