@@ -8,10 +8,12 @@ package pages
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/a-h/templ"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // render renders a component to a string, failing the test on error.
@@ -32,22 +34,42 @@ func render(t *testing.T, c templ.Component) string {
 // hx-target + hx-swap). A form missing either half silently breaks one
 // of the two browsers, and neither failure shows up in the other one's
 // tests.
+//
+// The reason prompt is NOT in the row any more (FR 0cf360c5): it lives in
+// the control's popover, which is rendered outside the table and submits the
+// row's form through the form= attribute. This case asserts both halves, so
+// a prompt that drifted away from its form would fail here.
 func TestTaskActionsDoublesTheInlineForm(t *testing.T) {
-	got := render(t, TaskActions([]TaskActionControl{{
-		Kind:       "form",
-		Label:      "Release",
-		Action:     "/ops/tasks/t1/release",
-		ReasonHint: "why release the claim? (optional)",
-		ReturnTo:   "/ops/claimed",
-	}}))
+	control := TaskActionControl{
+		Kind:        "form",
+		Label:       "Release",
+		Action:      "/ops/tasks/t1/release",
+		ReasonHint:  "why release the claim? (optional)",
+		SubmitLabel: "Release",
+		ReturnTo:    "/ops/claimed",
+		FormID:      "krill-action-form-t1-release",
+		PopoverID:   "krill-reason-popover-t1-release",
+		ReasonID:    "krill-reason-popover-t1-release-reason",
+	}
+	got := render(t, TaskActions([]TaskActionControl{control}))
 
-	assert.Contains(t, got, `<form method="post" action="/ops/tasks/t1/release"`)
+	assert.Contains(t, got, `<form method="post" action="/ops/tasks/t1/release" id="krill-action-form-t1-release"`)
 	assert.Contains(t, got, `hx-post="/ops/tasks/t1/release"`, "the htmx half posts to the same route")
 	assert.Contains(t, got, `hx-target="#ops-results"`, "the htmx half swaps the view's whole results block")
 	assert.Contains(t, got, `hx-swap="outerHTML"`)
 	assert.Contains(t, got, `name="return_to" value="/ops/claimed"`)
-	assert.Contains(t, got, `placeholder="why release the claim? (optional)"`)
 	assert.Contains(t, got, "Release")
+	assert.NotContains(t, got, "<input type=\"text\"", "the row control renders no text input")
+
+	popovers := render(t, TaskActionPopovers([]TaskActionControl{control}))
+	assert.Contains(t, popovers, `id="krill-reason-popover-t1-release"`)
+	assert.Contains(t, popovers, `popover`)
+	assert.Contains(t, popovers, `id="krill-reason-popover-t1-release-reason"`)
+	assert.Contains(t, popovers, `type="text" name="reason" form="krill-action-form-t1-release"`,
+		"the popover's reason field submits the row's own form")
+	assert.Contains(t, popovers, `placeholder="why release the claim? (optional)"`)
+	assert.Contains(t, popovers, `type="submit" form="krill-action-form-t1-release"`,
+		"the popover's submit button submits the row's own form")
 }
 
 // TestTaskActionsDoublesTheDestructiveControl requires the destructive verb's
@@ -64,13 +86,17 @@ func TestTaskActionsDoublesTheDestructiveControl(t *testing.T) {
 		Action:          "/ops/tasks/t1/cancel/confirm",
 		PostAction:      "/ops/tasks/t1/cancel",
 		Confirm:         "Cancel a task? It moves to Cancelled and cannot be claimed again.",
+		SubmitLabel:     "Confirm cancel",
 		ReturnTo:        "/ops/claimed",
+		FormID:          "krill-action-form-t1-cancel",
+		PopoverID:       "krill-reason-popover-t1-cancel",
+		ReasonID:        "krill-reason-popover-t1-cancel-reason",
 		ObservedClaimID: "bbbbbbbb-1111-2222-3333-444444444444",
 	}}))
 
 	// The no-JS half opens the confirmation page and carries the row's guard
 	// there, so the page's own form can post it.
-	assert.Contains(t, got, `<form method="get" action="/ops/tasks/t1/cancel/confirm"`)
+	assert.Contains(t, got, `<form method="get" action="/ops/tasks/t1/cancel/confirm" id="krill-action-form-t1-cancel"`)
 	// The htmx half posts the verb, but only after the confirmation.
 	assert.Contains(t, got, `hx-post="/ops/tasks/t1/cancel"`)
 	assert.Contains(t, got, `hx-confirm="Cancel a task? It moves to Cancelled and cannot be claimed again."`)
@@ -78,7 +104,11 @@ func TestTaskActionsDoublesTheDestructiveControl(t *testing.T) {
 	assert.Contains(t, got, `hx-swap="outerHTML"`)
 	assert.Contains(t, got, `type="hidden" name="return_to" value="/ops/claimed"`)
 	assert.Contains(t, got, `type="hidden" name="expected_claim_id" value="bbbbbbbb-1111-2222-3333-444444444444"`)
-	assert.Contains(t, got, `type="submit" class="btn btn-error btn-xs">Cancel</button>`)
+	assert.Contains(t, got, `type="button" popovertarget="krill-reason-popover-t1-cancel" class="btn btn-error btn-xs">Cancel</button>`,
+		"the row's trigger opens the control's reason popover and posts nothing itself")
+	assert.NotContains(t, got, `type="submit" popovertarget`,
+		"the trigger is not a submit button: a submit button with a form owner submits it and returns before any popover invoker behaviour runs")
+	assert.NotContains(t, got, "<input type=\"text\"", "the destructive row control renders no text input")
 	assert.NotContains(t, got, `<form method="post" action="/ops/tasks/t1/cancel"`,
 		"nothing posts the destructive verb from the row without the htmx confirm")
 	assert.NotContains(t, got, `href="/ops/tasks/t1/cancel/confirm"`,
@@ -110,6 +140,116 @@ func TestCancelConfirmCardIsASelfTargetingDoubledForm(t *testing.T) {
 	assert.Contains(t, got, `type="hidden" name="expected_escalation_id" value="dddddddd-1111-2222-3333-444444444444"`)
 	assert.Contains(t, got, `required`, "the reason is required on the irreversible path")
 	assert.Contains(t, got, "Back to the console")
+}
+
+// rowSections returns every <tr>...</tr> run in markup, so a test can ask
+// what a ROW contains rather than what the page does.
+func rowSections(markup string) []string {
+	var out []string
+	rest := markup
+	for {
+		i := strings.Index(rest, "<tr")
+		if i < 0 {
+			return out
+		}
+		rest = rest[i:]
+		j := strings.Index(rest, "</tr>")
+		if j < 0 {
+			return out
+		}
+		out = append(out, rest[:j+len("</tr>")])
+		rest = rest[j+len("</tr>"):]
+	}
+}
+
+// tableSection is the markup from the first <table to its close, the region
+// the FR's "no row contains a text input" is about.
+func tableSection(t *testing.T, markup string) string {
+	t.Helper()
+	i := strings.Index(markup, "<table")
+	require.GreaterOrEqual(t, i, 0, "the results region renders a table")
+	j := strings.Index(markup[i:], "</table>")
+	require.GreaterOrEqual(t, j, 0, "the table is closed")
+	return markup[i : i+j+len("</table>")]
+}
+
+// TestRowActionsRenderNoTextInputAndHoistTheReasonPopover is FR 0cf360c5's
+// shape at the component level: a row's action cell renders only buttons, no
+// other row contains a text input, and the reason fields live in popovers
+// rendered AFTER the table, each naming the row's form through form= so it
+// still submits that row's action.
+func TestRowActionsRenderNoTextInputAndHoistTheReasonPopover(t *testing.T) {
+	control := TaskActionControl{
+		Kind:        "form",
+		Label:       "Release",
+		Action:      "/ops/tasks/t1/release",
+		ReasonHint:  "why release the claim? (optional)",
+		SubmitLabel: "Release",
+		ReturnTo:    "/ops/claimed",
+		FormID:      "krill-action-form-t1-release",
+		PopoverID:   "krill-reason-popover-t1-release",
+		ReasonID:    "krill-reason-popover-t1-release-reason",
+	}
+	actions := TaskActions([]TaskActionControl{control})
+	popovers := TaskActionPopovers([]TaskActionControl{control})
+
+	claimed := render(t, claimedTable([]ClaimedRow{{TaskID: "t1", Title: "a task", ClaimID: "c1", Actions: actions, Popovers: popovers}}))
+	escalated := render(t, escalatedQueueTable([]NeedsAttentionEscalatedRow{{TaskID: "t2", Title: "another", Actions: actions, Popovers: popovers}}))
+
+	for name, markup := range map[string]string{"claimed": claimed, "escalated": escalated} {
+		t.Run(name, func(t *testing.T) {
+			table := tableSection(t, markup)
+			assert.NotContains(t, table, `<input type="text"`, "no row contains a text input")
+			assert.NotContains(t, table, `<textarea`, "no row contains a textarea either")
+			for _, row := range rowSections(table) {
+				assert.NotContains(t, row, `type="text"`,
+					"a row carries only its hidden guard/return_to fields, never a text field")
+			}
+
+			// The popover is the table's SIBLING, after its close -- never in it.
+			pop := strings.Index(markup, `data-krill="reason-popover"`)
+			require.GreaterOrEqual(t, pop, 0, "the row's action renders its reason popover")
+			assert.Greater(t, pop, strings.Index(markup, "</table>"),
+				"the popover renders after the table, never inside a row")
+		})
+	}
+}
+
+// TestReasonPopoverOpensFromTheRowControlAndSubmitsItsForm pins the
+// open/close behaviour of the scaffold: the row's button is the popover's
+// invoker (popovertarget), the popover carries the native popover attribute,
+// a close control hides it, and the reason field plus the submit button both
+// name the row's form so the action carries the reason the operator typed.
+func TestReasonPopoverOpensFromTheRowControlAndSubmitsItsForm(t *testing.T) {
+	control := TaskActionControl{
+		Kind:        "confirm",
+		Label:       "Cancel",
+		Action:      "/ops/tasks/t1/cancel/confirm",
+		PostAction:  "/ops/tasks/t1/cancel",
+		Confirm:     "Cancel a task? It moves to Cancelled and cannot be claimed again.",
+		ReasonHint:  "why dead-letter it? (optional)",
+		SubmitLabel: "Confirm cancel",
+		ReturnTo:    "/ops/claimed",
+		FormID:      "krill-action-form-t1-cancel",
+		PopoverID:   "krill-reason-popover-t1-cancel",
+		ReasonID:    "krill-reason-popover-t1-cancel-reason",
+	}
+
+	row := render(t, TaskActions([]TaskActionControl{control}))
+	assert.Contains(t, row, `popovertarget="krill-reason-popover-t1-cancel"`,
+		"the row's own button opens the control's popover")
+
+	popover := render(t, TaskActionPopovers([]TaskActionControl{control}))
+	assert.Contains(t, popover, `id="krill-reason-popover-t1-cancel"`)
+	assert.Contains(t, popover, ` popover`, "the popover uses the native popover attribute")
+	assert.Contains(t, popover, `popovertarget="krill-reason-popover-t1-cancel" popovertargetaction="hide"`,
+		"the popover has a close control")
+	assert.Contains(t, popover, `type="text" name="reason" form="krill-action-form-t1-cancel"`,
+		"the reason field submits the row's form")
+	assert.Contains(t, popover, `type="submit" form="krill-action-form-t1-cancel"`,
+		"and so does the popover's submit button")
+	assert.Contains(t, popover, `placeholder="why dead-letter it? (optional)"`)
+	assert.Contains(t, popover, ">Confirm cancel</button>")
 }
 
 // TestCancelConfirmCardShowsARefusalInline requires a refusal to render

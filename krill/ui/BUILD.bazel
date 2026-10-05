@@ -167,14 +167,19 @@ go_test(
 # same api endpoint its MCP tool drives, with the same {"reason"} body,
 # attributed to the real signed-in operator, and 303s back to the originating
 # view; plus open-redirect-safe return_to, the in-shell rejection page, and
-# cancel's confirm-before-post affordance. Reuses the sign-in / fake-Keycloak /
-# fake-api harness in harness_test.go, which is compiled in alongside it.
+# cancel's confirm-before-post affordance. Also the optional-reason popover
+# (FR 0cf360c5): the trigger is never a submit button, the popover's reason
+# rides the row's own form for all four verbs, and Cancel's no-JS confirm page
+# pre-fills its required field from the reason the row carried. Reuses the
+# sign-in / fake-Keycloak / fake-api harness in harness_test.go, which is
+# compiled in alongside it.
 go_test(
     name = "ui_interventions_test",
     srcs = [
         "writes_test.go",
         "interventions_test.go",
         "interventions_rows_test.go",
+        "intervention_reason_test.go",
         "cancel_from_row_test.go",
         "task_detail_intervention_swap_test.go",
         "intervention_refusal_test.go",
