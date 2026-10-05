@@ -481,24 +481,13 @@ func (app *App) cancelledResults(ctx context.Context, filter store.ConsoleFilter
 	}
 	rows := make([]pages.CancelledRow, len(result.Items))
 	for i, row := range result.Items {
-		rows[i] = newCancelledRow(row)
+		rows[i] = newCancelledRow(row, productTaskLinkOf(filter.ProductID, row.TaskID))
 	}
 	return pages.CancelledData{
 		Rows:     rows,
 		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
 		Href:     selfPath,
 	}, nil
-}
-
-func newCancelledRow(r store.CancelledTaskRow) pages.CancelledRow {
-	return pages.CancelledRow{
-		TaskID:     r.TaskID.String(),
-		Title:      r.Title,
-		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
-		By:         opsActor(r.CancelledByActing),
-		OnBehalfOf: opsSubject(r.CancelledByOnBehalfOf),
-		At:         opsTime(r.CancelledAt),
-	}
 }
 
 // handleCancelledTasks serves the cancelled-task view in both of its modes.
@@ -540,33 +529,17 @@ func (app *App) openNotesResults(ctx context.Context, filter store.ConsoleFilter
 	}
 	rows := make([]pages.NoteRow, len(result.Items))
 	for i, row := range result.Items {
-		rows[i] = newNoteRow(row)
+		href := ""
+		if row.TaskContext != nil {
+			href = productTaskLinkOf(filter.ProductID, row.TaskContext.TaskID)
+		}
+		rows[i] = newNoteRow(row, href)
 	}
 	return pages.NotesData{
 		Rows:     rows,
 		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
 		Href:     selfPath,
 	}, nil
-}
-
-func newNoteRow(r store.OpenNoteRow) pages.NoteRow {
-	// Exactly one of TaskContext/EntityContext is set (task_note's own
-	// exactly-one-target CHECK), so at most one branch fills Target. The
-	// target's id is rendered next to its title so the row names the same
-	// entity the note points at, not just its human label.
-	target := "-"
-	if r.TaskContext != nil {
-		target = "task: " + r.TaskContext.Title + " (" + r.TaskContext.TaskID.String() + ")"
-	} else if r.EntityContext != nil {
-		target = string(r.EntityContext.EntityKind) + ": " + r.EntityContext.Title + " (" + r.EntityContext.EntityID.String() + ")"
-	}
-	return pages.NoteRow{
-		NoteID:    r.NoteID.String(),
-		Kind:      string(r.Kind),
-		Target:    target,
-		CreatedAt: opsTime(r.CreatedAt),
-		Body:      r.Body,
-	}
 }
 
 // handleOpenNotes serves the open-notes view in both of its modes.
