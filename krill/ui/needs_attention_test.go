@@ -3,6 +3,10 @@
 // selected tab carried in the URL, the four /ops URLs retired into it, and
 // the header's "Updated N ago" stamp carrying the exact instant on hover.
 //
+// The Escalated tab's own row contract (FR 772b044b) is pinned at the end
+// of this file: the columns, the observed escalation id each row carries,
+// and the two actions -- with no Release, and no Cancel on a Done-lane task.
+//
 // The fixture is a record-keeping task store, so the two claims that make
 // the page more than a re-render -- "the tab's rows are the matching
 // console read, under the current product" and "the badge is the count
@@ -641,5 +645,192 @@ func TestNeedsAttentionCutoverMovesOnlyTheFiveOpsGetPages(t *testing.T) {
 		if !seen[pattern] {
 			t.Errorf("legacyURLs no longer names %s: an operator's bookmark would 404", pattern)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 6. the Escalated tab's table (FR 772b044b)
+// ---------------------------------------------------------------------------
+
+// escalatedTabSubject is one side of an escalation's subject pair, built
+// the way the store builds it, so the sub-line assertions below are about
+// what the page renders rather than about a fixture-shaped string.
+func escalatedTabSubject(iss, sub string, kind store.SubjectKind) store.Subject {
+	return store.Subject{Iss: iss, Sub: sub, Kind: kind}
+}
+
+// escalatedTableRow is one row of the read, with every column the FR names
+// populated. counter is nil for a manual escalation, which is the case
+// with no triggering counter at all.
+func escalatedTableRow(t *testing.T, title string, reason store.EscalationReason, counter *int, lane store.Lane, at time.Time) store.EscalatedTaskRow {
+	t.Helper()
+	return store.EscalatedTaskRow{
+		TaskID:                uuid.New(),
+		Title:                 title,
+		DeliveryRef:           store.EscalatedTaskDeliveryRef{ID: uuid.New(), Kind: store.MilestoneKindMilestone, Title: "M5"},
+		EscalationID:          uuid.New(),
+		Reason:                reason,
+		CounterValue:          counter,
+		CapValue:              counter,
+		Lane:                  lane,
+		EscalatedAt:           at,
+		EscalatedByActing:     escalatedTabSubject("worker-3", "w3", store.SubjectKindService),
+		EscalatedByOnBehalfOf: escalatedTabSubject("alex", "alex", store.SubjectKindHuman),
+		AttemptCount:          3,
+	}
+}
+
+// TestEscalatedTabRendersTheFRRowContract is the FR's row-by-row contract:
+// the seven columns, the task title linking to the product-scoped detail,
+// the escalation's own subjects beneath it, the milestone, the shared lane
+// badge, the reason badge in its human wording, the attempt count against
+// the cap, and the escalated instant as a relative time whose title carries
+// the exact UTC instant.
+//
+// It walks the three reasons the store can report -- the two automatic
+// counter-driven ones and the manual one with no counter at all -- because
+// the FR names all three and the manual row is the one with no CapValue to
+// read.
+func TestEscalatedTabRendersTheFRRowContract(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+	counter := 3
+	at := needsAttentionNow.Add(-12 * time.Minute)
+	manualAt := needsAttentionNow.Add(-3 * time.Hour)
+
+	f.tasks.escalated = []store.EscalatedTaskRow{
+		escalatedTableRow(t, "a thrash-capped task", store.EscalationReasonThrashCap, &counter, store.LaneImplementation, at),
+		escalatedTableRow(t, "an attempt-capped task", store.EscalationReasonAttemptCap, &counter, store.LaneTesting, at),
+	}
+	// The manual row has no on-behalf-of, which is the sub-line's other
+	// shape: the acting half alone, never "for -".
+	manual := escalatedTableRow(t, "a manually escalated task", store.EscalationReasonManual, nil, store.LaneScaffold, manualAt)
+	manual.CounterValue, manual.CapValue = nil, nil
+	manual.EscalatedByOnBehalfOf = store.Subject{}
+	manual.AttemptCount = 1
+	f.tasks.escalated = append(f.tasks.escalated, manual)
+
+	body := fetch(t, f.mux, f.path(needsAttentionTabEscalated)).Body.String()
+
+	// The columns, in the FR's own order.
+	assert.Contains(t, body, `<thead><tr><th>Task</th><th>Milestone</th><th>Lane</th><th>Reason</th>`+
+		`<th class="text-right">Attempts</th><th>Escalated</th><th class="text-right">Actions</th></tr></thead>`,
+		"the table carries the FR's seven columns")
+
+	for _, row := range f.tasks.escalated {
+		t.Run(row.Title, func(t *testing.T) {
+			// The task cell: the title, linking to the PRODUCT-scoped
+			// detail (the row may belong to any milestone under the
+			// product).
+			assert.Contains(t, body, `href="`+productTaskDetailPath(f.pid, row.TaskID)+`"`,
+				"the title links to the product-scoped detail")
+			assert.Contains(t, body, `data-krill="escalated-task-title">`+row.Title+`<`)
+			// Milestone: the delivery reference's own title.
+			assert.Contains(t, body, `data-krill="escalated-milestone">M5<`)
+			// Escalated: the exact UTC instant on hover, the relative form
+			// as the text.
+			exact := row.EscalatedAt.UTC().Format(time.RFC3339)
+			assert.Contains(t, body, `datetime="`+exact+`"`)
+			assert.Contains(t, body, `title="`+exact+`"`)
+			assert.Contains(t, body, ">"+relativeTime(row.EscalatedAt, needsAttentionNow)+"</time>")
+		})
+	}
+
+	// The escalation's own subjects, not the operator's.
+	assert.Contains(t, body, `data-krill="escalated-by">by worker-3 w3 (service) for alex alex<`)
+	assert.Contains(t, body, `data-krill="escalated-by">by worker-3 w3 (service)<`,
+		"a manual escalation with no on-behalf-of names only the acting half")
+
+	// The reason badge, in the operator's wording for all three reasons.
+	for _, label := range []string{"thrash cap", "attempt cap", "manual"} {
+		assert.Contains(t, body, `data-krill="escalated-reason">`+label+`</span>`,
+			"the reason %q renders through the shared vocabulary", label)
+	}
+
+	// The lane badge goes through the one shared mapper, so this table
+	// cannot drift from the Tasks list, the Board or the detail.
+	assert.Contains(t, body, `data-krill="task-lane">Implementation<`)
+	assert.Contains(t, body, `data-krill="task-lane">Testing<`)
+	assert.Contains(t, body, `data-krill="task-lane">Scaffold<`)
+
+	// Attempts: the count against the cap. The manual row has no CapValue
+	// and still states a cap -- the attempt cap, not the escalation's
+	// counter cap, which a thrash-cap row does not have.
+	assert.Contains(t, body, `data-krill="escalated-attempts">3 of 3<`)
+	assert.Contains(t, body, `data-krill="escalated-attempts">1 of 3<`)
+}
+
+// TestEscalatedTabRowCarriesTheObservedEscalationID is the FR's guard
+// clause: the row states the escalation it observed, and its two actions
+// carry that same id -- Requeue as a hidden form field, Cancel on its
+// confirmation link -- so a write is refused against what the operator saw
+// rather than against whatever is current by then.
+func TestEscalatedTabRowCarriesTheObservedEscalationID(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+	counter := 3
+	row := escalatedTableRow(t, "a thrash-capped task", store.EscalationReasonThrashCap, &counter, store.LaneImplementation, needsAttentionNow)
+	f.tasks.escalated = []store.EscalatedTaskRow{row}
+	escID := row.EscalationID.String()
+
+	body := fetch(t, f.mux, f.path(needsAttentionTabEscalated)).Body.String()
+
+	assert.Contains(t, body, `data-krill-escalation-id="`+escID+`"`,
+		"the row states the escalation it observed")
+	assert.Contains(t, body, `name="expected_escalation_id" value="`+escID+`"`,
+		"Requeue carries the observed escalation id as its guard")
+	assert.Contains(t, body, `expected_escalation_id=`+escID,
+		"Cancel's confirmation link carries the same id on the no-JS path")
+	// Release is never offered here: an escalated task holds no claim, so
+	// there is nothing to force-close.
+	assert.NotContains(t, body, actionRelease)
+	assert.NotContains(t, body, ">Release<")
+}
+
+// TestEscalatedTabDoneLaneRowOffersNoCancel is the action-legality clause
+// (FR af61631d, which the tab's rows must honour): a task in the Done lane
+// is offered no Cancel, while Requeue -- the recovery that returns a
+// finished-but-escalated task to claimable -- stays.
+func TestEscalatedTabDoneLaneRowOffersNoCancel(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+	row := escalatedTableRow(t, "a done but escalated task", store.EscalationReasonManual, nil, store.LaneDone, needsAttentionNow)
+	row.CounterValue, row.CapValue = nil, nil
+	f.tasks.escalated = []store.EscalatedTaskRow{row}
+
+	body := fetch(t, f.mux, f.path(needsAttentionTabEscalated)).Body.String()
+
+	assert.Contains(t, body, ">Requeue<", "the recovery is still offered")
+	assert.Contains(t, body, `name="expected_escalation_id" value="`+row.EscalationID.String()+`"`,
+		"and it still carries the observed escalation id")
+	assert.NotContains(t, body, cancelConfirmSuffix,
+		"a Done-lane task is offered no Cancel, not even its confirmation page")
+	assert.NotContains(t, body, ">Cancel…<")
+}
+
+// TestEscalatedTabRowsMatchTheRead is the FR's "content matches
+// list_escalated_tasks": the table's rows are the ones the store read
+// returned, under the same product narrowing the badge beside them is read
+// with. A row the read did not return cannot appear, and a row it did
+// cannot be dropped.
+func TestEscalatedTabRowsMatchTheRead(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+	counter := 2
+	want := []store.EscalatedTaskRow{
+		escalatedTableRow(t, "the first escalated task", store.EscalationReasonThrashCap, &counter, store.LaneScaffold, needsAttentionNow.Add(-time.Minute)),
+		escalatedTableRow(t, "the second escalated task", store.EscalationReasonAttemptCap, &counter, store.LaneValidation, needsAttentionNow.Add(-2*time.Minute)),
+	}
+	f.tasks.escalated = want
+
+	body := fetch(t, f.mux, f.path(needsAttentionTabEscalated)).Body.String()
+
+	assert.Equal(t, len(want), strings.Count(body, `data-krill="escalated-row"`),
+		"one table row per row the read returned")
+	if assert.Len(t, f.tasks.listFilters, 1) {
+		if assert.NotNil(t, f.tasks.listFilters[0].ProductID) {
+			assert.Equal(t, f.pid, *f.tasks.listFilters[0].ProductID,
+				"the rows are the read narrowed to the product the URL names")
+		}
+	}
+	for _, row := range want {
+		assert.Contains(t, body, row.Title)
+		assert.Contains(t, body, row.EscalationID.String())
 	}
 }
