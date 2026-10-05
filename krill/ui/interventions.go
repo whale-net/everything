@@ -104,11 +104,20 @@ const opsTaskActionBase = opsPath + "/tasks/"
 const cancelConfirmSuffix = "/" + actionCancel + "/confirm"
 
 // taskInterventionRequest mirrors the four api request bodies (handlers'
-// release/requeue/escalate/cancel Request types), which are all exactly the
-// same: an optional free-text rationale. ScopeID and both subjects are
-// supplied by the gated session, never this body (NFR6).
+// release/requeue/escalate/cancel Request types): an optional free-text
+// rationale plus the observed-state guard the acting row carried. ScopeID and
+// both subjects are supplied by the gated session, never this body (NFR6).
 type taskInterventionRequest struct {
 	Reason *string `json:"reason"`
+
+	// ExpectedClaimID and ExpectedEscalationID are the observed-state guard:
+	// the id the acting row saw, forwarded under the api's own wire names so
+	// the api's store guard (store.ErrObservedStateMismatch) refuses an
+	// intervention whose claim or escalation changed since the page loaded.
+	// Each is omitted when the row observed none -- a ready task carries
+	// neither, and a claimed row carries only the claim.
+	ExpectedClaimID      *string `json:"expected_claim_id,omitempty"`
+	ExpectedEscalationID *string `json:"expected_escalation_id,omitempty"`
 }
 
 // handleTaskIntervention is the console's intervention endpoint for one verb.
