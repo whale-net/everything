@@ -641,6 +641,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /link/ass/result", app.auth.RequireAuthFunc(app.handleLinkASSResult))
 	mux.HandleFunc("POST /link/manmanv2", app.auth.RequireAuthFunc(app.handleLinkManmanv2Start))
 	mux.HandleFunc("GET /link/manmanv2/result", app.auth.RequireAuthFunc(app.handleLinkManmanv2Result))
+	mux.HandleFunc("POST /unlink/manmanv2", app.auth.RequireAuthFunc(app.handleUnlinkManmanv2Start))
 
 	// Admin all-operators grant list and revoke page (FR14/FR15/NFR3, issue
 	// #2433): app.grant.Store/Index is intentionally NOT threaded through

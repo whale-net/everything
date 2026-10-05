@@ -62,6 +62,36 @@ func TestStore_LinkResolve(t *testing.T) {
 	assert.Equal(t, "user-1", got)
 }
 
+func TestStore_Unlink(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	removed, err := s.Unlink(ctx, "iss", "sub")
+	require.NoError(t, err)
+	assert.False(t, removed)
+
+	_, err = s.Link(ctx, "iss", "sub", "user-1")
+	require.NoError(t, err)
+	_, err = s.Link(ctx, "iss", "other", "user-1")
+	require.NoError(t, err)
+
+	removed, err = s.Unlink(ctx, "iss", "sub")
+	require.NoError(t, err)
+	assert.True(t, removed)
+
+	_, found, err := s.Resolve(ctx, "iss", "sub")
+	require.NoError(t, err)
+	assert.False(t, found)
+	_, found, err = s.Resolve(ctx, "iss", "other")
+	require.NoError(t, err)
+	assert.True(t, found, "other identities stay linked")
+
+	// Relinking after an unlink works, including to a different user.
+	out, err := s.Link(ctx, "iss", "sub", "user-2")
+	require.NoError(t, err)
+	assert.Equal(t, Created, out)
+}
+
 func TestStore_ConsumeReplayAndReap(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

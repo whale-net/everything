@@ -63,6 +63,20 @@ func (s Store) Link(ctx context.Context, iss, sub, userSub string) (Outcome, err
 	return 0, ErrLinkedToOtherUser
 }
 
+// Unlink removes the mapping for (iss, sub), reporting whether one existed.
+func (s Store) Unlink(ctx context.Context, iss, sub string) (bool, error) {
+	res, err := s.DB.ExecContext(ctx,
+		`DELETE FROM whagent_identity_link WHERE iss = $1 AND sub = $2`, iss, sub)
+	if err != nil {
+		return false, fmt.Errorf("identitylink: unlink: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("identitylink: unlink: %w", err)
+	}
+	return n > 0, nil
+}
+
 // Resolve returns the manmanv2 Keycloak sub linked to (iss, sub), if any.
 func (s Store) Resolve(ctx context.Context, iss, sub string) (string, bool, error) {
 	var userSub string

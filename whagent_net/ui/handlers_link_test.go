@@ -232,7 +232,7 @@ func TestMint_OnlyCalledFromStartLink(t *testing.T) {
 	require.NotEmpty(t, srcFiles, "no non-test .go sources discovered in %s -- guard is not checking anything", dir)
 
 	mintCallSites := 0
-	allowedStartLinkCallers := map[string]bool{"handleLinkASSStart": true, "handleLinkManmanv2Start": true}
+	allowedStartLinkCallers := map[string]bool{"handleLinkASSStart": true, "handleLinkManmanv2Start": true, "handleUnlinkManmanv2Start": true}
 	for _, srcFile := range srcFiles {
 		resolved := filepath.Join(dir, srcFile)
 		fset := token.NewFileSet()
@@ -333,6 +333,41 @@ func TestHandleGrants_ShowsLinkManmanv2ActionWhenConfigured(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "Link manmanv2 identity")
 	assert.Contains(t, w.Body.String(), `action="/link/manmanv2"`)
+	assert.Contains(t, w.Body.String(), `action="/unlink/manmanv2"`)
+}
+
+// TestHandleUnlinkManmanv2Start_RedirectsWithAssertion: POST /unlink/manmanv2
+// sends the Operator to the manmanv2 UI's /unlink/whagent with an assertion.
+func TestHandleUnlinkManmanv2Start_RedirectsWithAssertion(t *testing.T) {
+	linkKey, pub := newTestLinkAssertKey(t)
+	app := &App{
+		auth:            devModeAuthenticator(t),
+		oidcIssuer:      testIssuer,
+		publicURL:       "https://ui.example",
+		manmanv2LinkURL: "https://manman.example",
+		linkAssertKey:   linkKey,
+	}
+	w := httptest.NewRecorder()
+	app.auth.RequireAuthFunc(app.handleUnlinkManmanv2Start)(w, httptest.NewRequest(http.MethodPost, "/unlink/manmanv2", nil))
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	loc := w.Header().Get("Location")
+	require.True(t, strings.HasPrefix(loc, "https://manman.example/unlink/whagent?"), "Location = %q", loc)
+
+	parsedLoc, err := url.Parse(loc)
+	require.NoError(t, err)
+	parsed, err := jwt.ParseSigned(parsedLoc.Query().Get("token"), []jose.SignatureAlgorithm{jose.EdDSA})
+	require.NoError(t, err)
+	var claims linkAssertionClaims
+	require.NoError(t, parsed.Claims(pub, &claims))
+	assert.Equal(t, "dev-user", claims.Subject)
+	assert.Equal(t, "https://ui.example/link/manmanv2/result", claims.ReturnURL)
+
+	unconfigured := &App{auth: devModeAuthenticator(t), oidcIssuer: testIssuer}
+	w = httptest.NewRecorder()
+	unconfigured.auth.RequireAuthFunc(unconfigured.handleUnlinkManmanv2Start)(w, httptest.NewRequest(http.MethodPost, "/unlink/manmanv2", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Empty(t, w.Header().Get("Location"))
 }
 
 func TestHandleLinkManmanv2Result_DistinctOutcomes(t *testing.T) {
@@ -344,13 +379,15 @@ func TestHandleLinkManmanv2Result_DistinctOutcomes(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 		return w.Body.String()
 	}
-	outcomes := []string{"linked", "already_linked", "conflict", "rejected", "garbage"}
+	outcomes := []string{"linked", "already_linked", "unlinked", "not_linked", "conflict", "rejected", "garbage"}
 	bodies := map[string]string{}
 	for _, o := range outcomes {
 		bodies[o] = render(o)
 	}
 	assert.Contains(t, bodies["linked"], "alert-success")
 	assert.Contains(t, bodies["already_linked"], "alert-success")
+	assert.Contains(t, bodies["unlinked"], "alert-success")
+	assert.Contains(t, bodies["not_linked"], "alert-success")
 	for _, o := range []string{"conflict", "rejected", "garbage"} {
 		assert.Contains(t, bodies[o], "alert-error")
 	}

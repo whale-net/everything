@@ -22,6 +22,8 @@ const (
 	linkOutcomeAlreadyLinked = "already_linked"
 	linkOutcomeConflict      = "conflict"
 	linkOutcomeRejected      = "rejected"
+	linkOutcomeUnlinked      = "unlinked"
+	linkOutcomeNotLinked     = "not_linked"
 )
 
 const linkCompletePath = "/link/whagent/complete"
@@ -32,6 +34,7 @@ type linkVerifier interface {
 
 type linkStore interface {
 	Link(ctx context.Context, iss, sub, userSub string) (identitylink.Outcome, error)
+	Unlink(ctx context.Context, iss, sub string) (bool, error)
 	IsConsumed(ctx context.Context, jti string) (bool, error)
 	Consume(ctx context.Context, jti string, expiresAt time.Time) error
 }
@@ -164,6 +167,63 @@ func (h *whagentLinkHandlers) handleConfirm(w http.ResponseWriter, r *http.Reque
 	if !started {
 		h.redirectOutcome(w, r, a.ReturnURL, outcome)
 	}
+}
+
+// handleUnlinkShow is GET /unlink/whagent: asks the user to confirm removing
+// the link for the asserted whagent-net identity.
+func (h *whagentLinkHandlers) handleUnlinkShow(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	a := h.verify(w, r, token)
+	if a == nil {
+		return
+	}
+	data := pages.WhagentLinkConfirmData{
+		Layout:       h.layout(r, "Unlink whagent-net identity"),
+		UserLabel:    userLabel(htmxauth.GetUser(r.Context())),
+		SubjectLabel: a.Subject + " (" + a.SubjectIssuer + ")",
+		Token:        token,
+	}
+	if err := RenderTempl(w, r, data.Layout.Title, pages.WhagentUnlinkConfirm(data)); err != nil {
+		h.logger().ErrorContext(r.Context(), "render unlink confirmation failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleUnlinkConfirm is POST /unlink/whagent/confirm: consumes the assertion
+// and removes the asserted identity's mapping. The verified assertion proves
+// the caller owns that whagent-net identity, so it may revoke its own link
+// whichever manmanv2 user it points at.
+func (h *whagentLinkHandlers) handleUnlinkConfirm(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !sameOriginPost(r) {
+		http.Error(w, "cross-site request refused", http.StatusForbidden)
+		return
+	}
+	a := h.verify(w, r, r.FormValue("token"))
+	if a == nil {
+		return
+	}
+	if err := h.store.Consume(ctx, a.ID, a.Expiry); err != nil {
+		if errors.Is(err, identitylink.ErrAssertionConsumed) {
+			h.redirectOutcome(w, r, a.ReturnURL, linkOutcomeRejected)
+			return
+		}
+		h.logger().ErrorContext(ctx, "consume unlink assertion failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	removed, err := h.store.Unlink(ctx, a.SubjectIssuer, a.Subject)
+	if err != nil {
+		h.logger().ErrorContext(ctx, "remove whagent identity link failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	outcome := linkOutcomeNotLinked
+	if removed {
+		outcome = linkOutcomeUnlinked
+	}
+	h.logger().InfoContext(ctx, "whagent-net identity unlinked", "iss", a.SubjectIssuer, "sub", a.Subject, "outcome", outcome)
+	h.redirectOutcome(w, r, a.ReturnURL, outcome)
 }
 
 // handleComplete is GET /link/whagent/complete: resumes the return to
