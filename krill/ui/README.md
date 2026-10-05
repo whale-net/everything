@@ -1254,7 +1254,12 @@ posting element itself, so "no header, or `cancel-confirm`" is the card
 (rebuild the card from fresh state) and every other origin — a row's results
 block, or the detail's section — re-derives the view it acted from. A failed
 re-read answers with the same reload warning the queue branch uses rather
-than a confident, wrong render.
+than a confident, wrong render. So does a `return_to` naming a task *other*
+than the one acted on: the region is re-derived from the address the action
+carried, and that address names the task whose fresh state the operator must
+see, so a mismatch is refused rather than answered with another task's
+detail — whose own controls would then post an intervention against a task
+the operator never chose.
 
 #### The facet tabs: `?tab=` and the in-place swap (FR 7e463e31)
 

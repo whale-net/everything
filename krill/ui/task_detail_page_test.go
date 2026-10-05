@@ -247,6 +247,81 @@ func breadcrumbOf(t *testing.T, html string) string {
 	return regionBetween(t, html, `data-krill="task-breadcrumb"`, "</nav>")
 }
 
+// readOnlyOutsideActions is the detail section split around its actions
+// callout: everything BEFORE it, and everything FROM the tab frame onward.
+//
+// The callout is the page's ONE write surface (FR af61631d), and it sits
+// between those two spans. Asserting read-only over a fixed sub-region
+// instead (the panel body and the rail) leaves the header, the breadcrumb,
+// the lane-step strip, the tab strip and the "Back to X tasks" links
+// unpinned -- a write introduced into any of them would pass unnoticed. The
+// split is anchored on markers that must each appear exactly once, so it
+// cannot silently degrade into "the whole page, minus nothing".
+func readOnlyOutsideActions(t *testing.T, section string) []string {
+	t.Helper()
+	require.Equal(t, 1, strings.Count(section, `data-krill="task-actions"`),
+		"this split assumes exactly one actions callout; found a different count")
+	callout := strings.Index(section, `data-krill="task-actions"`)
+	frame := strings.Index(section, `data-krill="task-detail-frame"`)
+	require.Greater(t, frame, callout, "the tab frame must follow the actions callout")
+	return []string{section[:callout], section[frame:]}
+}
+
+// writeAffordances is the write affordances a region carries: the markers
+// that mean "this region can post or poll". Empty IS the read-only contract,
+// and returning the markers rather than only asserting their absence lets
+// the detector be checked against a page it must reject.
+func writeAffordances(region string) []string {
+	var found []string
+	for _, marker := range []string{"<form", "hx-post", "hx-put", "hx-delete", `hx-trigger="every`} {
+		if strings.Contains(region, marker) {
+			found = append(found, marker)
+		}
+	}
+	return found
+}
+
+// assertNoWriteAffordances asserts a region carries no form, no htmx verb
+// and no poll -- the whole read-only contract, stated once so the two
+// tests that pin it cannot drift apart.
+func assertNoWriteAffordances(t *testing.T, region string) {
+	t.Helper()
+	assert.Empty(t, writeAffordances(region),
+		"a read-only region carries no form, no htmx verb and no poll")
+}
+
+// TestReadOnlySweepCatchesAWriteInTheHeader is the detector's own check, and
+// it is aimed at exactly the gap the narrowed span left: the page header and
+// the tab strip. readOnlyOutsideActions + writeAffordances have to see a
+// write introduced anywhere in the section, not only in the panel body and
+// the rail the old fixed span covered -- otherwise the strengthened
+// assertion would be no stronger than the one it replaced.
+func TestReadOnlySweepCatchesAWriteInTheHeader(t *testing.T) {
+	f := newDetailFixture(t)
+	task := f.add(store.Task{Title: "t"})
+	_, section := f.get(task.ID.String(), true)
+
+	parts := readOnlyOutsideActions(t, section)
+	require.Len(t, parts, 2)
+	for _, part := range parts {
+		require.Empty(t, writeAffordances(part), "the real page is read-only outside the callout")
+	}
+
+	// A write in the header, which the previous span did not cover at all.
+	injected := strings.Replace(section, `data-krill="task-detail-header"`,
+		`data-krill="task-detail-header" hx-post="/ops/tasks/x/escalate"`, 1)
+	require.NotEqual(t, section, injected, "the header marker must exist to inject into")
+	assert.Equal(t, []string{"hx-post"}, writeAffordances(readOnlyOutsideActions(t, injected)[0]),
+		"a write in the header must be caught")
+
+	// And one in the tab strip, the other span the narrowing dropped.
+	injectedTabs := strings.Replace(section, `data-krill="task-tabs"`,
+		`data-krill="task-tabs" hx-delete="/ops/tasks/x"`, 1)
+	require.NotEqual(t, section, injectedTabs, "the tab strip marker must exist to inject into")
+	assert.Contains(t, writeAffordances(readOnlyOutsideActions(t, injectedTabs)[1]), "hx-delete",
+		"a write in the tab strip must be caught")
+}
+
 // laneStepsOf is the lane step strip's own markup.
 func laneStepsOf(t *testing.T, html string) string {
 	t.Helper()
@@ -915,11 +990,12 @@ func TestTaskDetailFragmentShapeAndReadOnly(t *testing.T) {
 	assert.Contains(t, frag, `hx-get="`+taskDetailPath(f.pid, f.mid, task.ID)+`"`)
 
 	// The read-only assertions are about the parts of THIS page that stay
-	// read-only: the tab panel and the properties rail. The page as a whole
-	// is no longer read-only -- its actions callout carries the intervention
-	// controls (FR af61631d) -- so pinning the whole fragment would assert
-	// the opposite of what this milestone delivers. The callout is excluded
-	// from each region below and asserted on its own.
+	// read-only: everything except the actions callout. The page as a whole
+	// is no longer read-only -- its callout carries the intervention
+	// controls (FR af61631d) -- so the callout is split out and each side of
+	// it is asserted form-free, rather than narrowing the assertion to one
+	// fixed span and leaving the header, the breadcrumb, the lane-step
+	// strip, the tab strip and the "Back to X tasks" links unchecked.
 	//
 	// The chrome around the page is still not the page's: the sidebar's
 	// Product switcher is a form of its own, and asserting against the whole
@@ -927,12 +1003,10 @@ func TestTaskDetailFragmentShapeAndReadOnly(t *testing.T) {
 	// the switcher happens to have anything to pick.
 	region := regionBetween(t, full, `data-krill="task-detail"`, "</main>")
 	for _, body := range []string{frag, region} {
-		readOnly := regionBetween(t, body, `data-krill="task-panel-body"`, `</aside>`)
-		assert.NotContains(t, readOnly, "<form")
-		assert.NotContains(t, readOnly, "hx-post")
-		assert.NotContains(t, readOnly, "hx-put")
-		assert.NotContains(t, readOnly, "hx-delete")
-		assert.NotContains(t, readOnly, `hx-trigger="every`)
+		for _, readOnly := range readOnlyOutsideActions(t, body) {
+			assertNoWriteAffordances(t, readOnly)
+		}
 	}
-	assert.Contains(t, frag, `data-krill="task-actions"`)
+	assert.Equal(t, 1, strings.Count(frag, `data-krill="task-actions"`),
+		"the callout the read-only contract is carved out for appears exactly once")
 }

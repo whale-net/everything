@@ -191,7 +191,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			// an internal URL into the page.
 			logger.Error("failed to issue an operator write", "error", err)
 			if isHtmxRequest(r) {
-				app.renderInterventionResults(w, r, returnTo, "the write could not be issued as the signed-in operator", "")
+				app.renderInterventionResults(w, r, taskID, returnTo, "the write could not be issued as the signed-in operator", "")
 				return
 			}
 			writeWriteError(w, err)
@@ -205,7 +205,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			resp.Body.Close() //nolint:errcheck
 			if isHtmxRequest(r) {
-				app.renderInterventionSuccess(w, r, action, card)
+				app.renderInterventionSuccess(w, r, taskID, action, card)
 				return
 			}
 			// A 303 has no body to carry the confirmation in, so the
@@ -243,7 +243,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 				// answer the three in-place verbs give when their view cannot
 				// be rebuilt.
 			}
-			app.renderInterventionResults(w, r, returnTo, refusal, "")
+			app.renderInterventionResults(w, r, taskID, returnTo, refusal, "")
 			return
 		}
 		app.renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{
@@ -269,7 +269,11 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 // (An HX-Redirect is keyed on the verb, not on where the request came
 // from, because cancel is the only verb whose hx-post originates on the
 // confirm card: its console-row control is a link, never a form.)
-func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request, action string, card pages.CancelConfirmData) {
+//
+// taskID is the task the write acted on, threaded through so the
+// re-derivation cannot render a different task than the one the operator
+// acted on.
+func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request, taskID uuid.UUID, action string, card pages.CancelConfirmData) {
 	message := interventionSuccessMessage(action)
 	if action == actionCancel {
 		// HX-Redirect is a full page load, so the target page is rendered
@@ -280,7 +284,7 @@ func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, pages.CancelConfirmCard(card))
 		return
 	}
-	app.renderInterventionResults(w, r, card.ReturnTo, "", message)
+	app.renderInterventionResults(w, r, taskID, card.ReturnTo, "", message)
 }
 
 // interventionSuccessMessage is the confirmation a successful
@@ -333,10 +337,28 @@ const interventionReloadFailure = "The intervention was applied, but this view c
 // pass at most one of the two -- a response that is both a success and a
 // refusal does not exist, and giving it a way to be both would put a
 // dismissible toast next to the record of its own opposite.
-func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo, message, toast string) {
+//
+// taskID is the task the write acted on. A detail path names a task of its
+// own, and the re-derivation renders THAT task's fresh state; a return_to
+// naming a different task is refused below rather than answered with
+// another task's detail, whose own controls would then post an
+// intervention on a task the operator never chose.
+func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, taskID uuid.UUID, returnTo, message, toast string) {
 	ctx := r.Context()
 	if u, err := url.Parse(returnTo); err == nil {
 		if pid, tid, ok := productTaskDetailIDsOfPath(u.Path); ok {
+			if tid != taskID {
+				// The page is re-derived from the address the acting control
+				// carried, and that address names the task whose fresh state
+				// the operator must see. A path naming another task is not a
+				// view this action can be answered with: rendering it would
+				// show a task this write never touched, and its own controls
+				// would post against that other task.
+				logger.Warn("intervention: return_to names a task other than the one acted on; rendering the reload warning",
+					"acted_on", taskID.String(), "return_to", returnTo)
+				renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
+				return
+			}
 			app.renderTaskDetailRegion(w, r, pid, tid, u, message, toast)
 			return
 		}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/whale-net/everything/krill/store"
@@ -294,7 +295,9 @@ func TestInterventionReReadFailureNeverLooksEmpty(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, opsClaimedPath, nil)
 	rec := httptest.NewRecorder()
-	app.renderInterventionResults(rec, req, opsClaimedPath, "", "")
+	// The task the write acted on is irrelevant here: return_to names a
+	// console tab, so the re-derivation never consults it.
+	app.renderInterventionResults(rec, req, uuid.Nil, opsClaimedPath, "", "")
 
 	out := rec.Body.String()
 	assert.NotContains(t, out, "No claimed tasks.",
