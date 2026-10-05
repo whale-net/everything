@@ -21,6 +21,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/a-h/templ"
 	"github.com/google/uuid"
@@ -127,30 +128,78 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tab := needsAttentionTabOf(r)
+	// The read instant is taken once, before the reads, and is the only
+	// clock the page's freshness stamp consults: a stamp judged against a
+	// second, later time.Now() would report an age the rows it describes
+	// were never read at.
+	readAt := app.clock()
 	results, err := app.needsAttentionResults(r.Context(), product.ID, tab, page, opsSelfPath(r))
 	if err != nil {
-		app.writeConsoleQueryError(w, r, "Needs attention", err)
+		app.writeNeedsAttentionQueryError(w, r, product.ID, tab, err)
 		return
 	}
 
 	// The results block alone: the claimed tab's poll and the Refresh
-	// button both name it, and neither may take the strip with it.
+	// button both name it, and neither may take the strip with it. The
+	// freshness stamp rides with the strip for that reason as well: its
+	// instant moves on every read, and a polled fragment owes byte-stable
+	// bytes for unchanged state.
 	if htmx && !needsAttentionPanelSwap(r) {
 		renderFragment(w, r, results)
 		return
 	}
 
-	d := pages.NeedsAttentionData{
-		Tabs:        app.needsAttentionTabs(product.ID, tab),
-		Tab:         tab,
-		RefreshHref: r.URL.RequestURI(),
-		Results:     results,
-	}
+	d := app.needsAttentionPage(r, product.ID, tab, readAt, results)
 	if htmx {
 		renderFragment(w, r, pages.NeedsAttention(d))
 		return
 	}
 	app.renderShell(w, r, "Needs attention", r.URL.Path, pages.NeedsAttention(d))
+}
+
+// writeNeedsAttentionQueryError answers a failed tab read in each of the
+// page's response shapes, so a failure never costs the operator the strip
+// they navigate with.
+//
+//   - A htmx request naming the results block (the claimed tab's poll, or
+//     Refresh) gets the bare refusal, exactly the block it asked for.
+//   - A htmx request naming the region gets the region, with the refusal in
+//     the results slot -- so the strip, its counts and the freshness stamp
+//     survive and the operator can still click another tab. Replacing the
+//     region with a bare fragment would delete the swap target itself, and
+//     the next tab click would silently no-op (ops.templ's OpsInlineError
+//     note, applied to the outer region).
+//   - A browser keeps the shell and gets the message with a way back, which
+//     is what the console's own query-error page is for.
+func (app *App) writeNeedsAttentionQueryError(w http.ResponseWriter, r *http.Request, productID uuid.UUID, tab string, err error) {
+	status, message := consoleQueryError(err)
+	failure := pages.OpsInlineError(message)
+
+	if isHtmxRequest(r) {
+		if needsAttentionPanelSwap(r) {
+			renderFragment(w, r, pages.NeedsAttention(
+				app.needsAttentionPage(r, productID, tab, app.clock(), failure)))
+			return
+		}
+		renderFragment(w, r, failure)
+		return
+	}
+	app.renderShellStatus(w, r, "Needs attention", r.URL.Path,
+		pages.OpsQueryError(message, opsRecoveryPath(r)), status)
+}
+
+// needsAttentionPage is the one assembly of the page's view model, so the
+// success and failure answers cannot describe different strips. readAt is
+// the instant the freshness stamp reports as when this view was read.
+func (app *App) needsAttentionPage(r *http.Request, productID uuid.UUID, tab string, readAt time.Time, results templ.Component) pages.NeedsAttentionData {
+	return pages.NeedsAttentionData{
+		Tabs:            app.needsAttentionTabs(r.Context(), productID, tab),
+		Tab:             tab,
+		UpdatedAt:       readAt.UTC().Format(time.RFC3339),
+		UpdatedRelative: relativeTime(readAt, app.clock()),
+		RefreshHref:     r.URL.RequestURI(),
+		Results:         results,
+	}
 }
 
 // needsAttentionResults reads the selected tab's rows and renders them with
@@ -187,16 +236,61 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 }
 
 // needsAttentionTabs builds the strip: the four tabs, each at its own
-// product-scoped URL, with the request's tab marked active.
-func (app *App) needsAttentionTabs(productID uuid.UUID, active string) []pages.NeedsAttentionTab {
+// product-scoped URL and each labelled with its count, with the request's
+// tab marked active.
+//
+// Each count is the store's dedicated count read (CountClaimedTasks and
+// friends) under the SAME params type -- and therefore the same
+// ConsoleFilter -- the matching list was read with, so a badge and the
+// table beneath it cannot disagree about how many rows there are. The
+// figure is the whole filtered set, never the current page's length.
+//
+// A count that could not be read carries NO badge rather than a zero. Zero
+// is a claim about the queue and we could not read the queue; a tab with no
+// badge says nothing, which is the honest state (nav.go's unreadableBadge,
+// applied to a tab).
+func (app *App) needsAttentionTabs(ctx context.Context, productID uuid.UUID, active string) []pages.NeedsAttentionTab {
 	tabs := make([]pages.NeedsAttentionTab, 0, len(needsAttentionTabOrder))
+	scopeID, scopeErr := app.soleScopeID(ctx)
+	if scopeErr != nil {
+		logger.Warn("needs attention: could not resolve scope for the tab counts", "error", scopeErr)
+	}
 	for _, key := range needsAttentionTabOrder {
-		tabs = append(tabs, pages.NeedsAttentionTab{
+		tab := pages.NeedsAttentionTab{
 			Key:    key,
 			Label:  needsAttentionTabLabels[key],
 			Href:   needsAttentionTabHref(productID, key),
 			Active: key == active,
-		})
+		}
+		if scopeErr == nil {
+			count, err := app.needsAttentionCount(ctx, scopeID, productID, key)
+			if err != nil {
+				logger.Warn("needs attention: tab count unreadable, omitting the badge",
+					"tab", key, "product", productID, "error", err)
+			} else {
+				tab.Count, tab.HasCount = count, true
+			}
+		}
+		tabs = append(tabs, tab)
 	}
 	return tabs
+}
+
+// needsAttentionCount reads one tab's count through the params type the
+// matching list read takes, narrowed to the same product, so the count and
+// the list are the same question asked of the same store query
+// (store.CountClaimedTasks shares its FROM/JOIN/WHERE with
+// ListClaimedTasks, and so on for the other three).
+func (app *App) needsAttentionCount(ctx context.Context, scopeID, productID uuid.UUID, tab string) (int, error) {
+	filter := store.ConsoleFilter{ProductID: &productID}
+	switch tab {
+	case needsAttentionTabClaimed:
+		return app.tasks.CountClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+	case needsAttentionTabCancelled:
+		return app.tasks.CountCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+	case needsAttentionTabNotes:
+		return app.tasks.CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: filter})
+	default:
+		return app.tasks.CountEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+	}
 }

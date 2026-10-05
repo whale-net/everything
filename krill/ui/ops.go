@@ -131,23 +131,42 @@ func (app *App) writeOpsQueryError(w http.ResponseWriter, r *http.Request, err e
 // title is the page's own name, so the in-shell answer names the page the
 // operator was on rather than the console area it came from.
 func (app *App) writeConsoleQueryError(w http.ResponseWriter, r *http.Request, title string, err error) {
-	status := http.StatusInternalServerError
-	message := "Failed to load console data. Try again."
-	switch {
-	case errors.Is(err, store.ErrTokenScopeMismatch), errors.Is(err, store.ErrInvalidContinuationToken):
-		// The caller's own bad token; saying which input is wrong is
-		// useful, and saying the store's package path is not.
-		status = http.StatusBadRequest
-		message = "This page's page_token is not valid for this view. Reload the view to start from the first page."
-	default:
-		logger.Error("failed to load an ops console view", "error", err)
-	}
+	status, message := consoleQueryError(err)
 
 	if isHtmxRequest(r) {
 		renderFragment(w, r, pages.OpsInlineError(message))
 		return
 	}
 	app.renderShellStatus(w, r, title, opsActivePath(r), pages.OpsQueryError(message, opsRecoveryPath(r)), status)
+}
+
+// consoleQueryError maps a console read's store error onto the status and
+// the operator-facing message the response carries.
+//
+// A cross-scope or malformed continuation token is the caller's error
+// (400), never a genuine store failure (500), and neither branch hands the
+// operator the store's own text: a sentinel error's message is a Go
+// package-qualified string dating an internal package, and a genuine
+// failure can carry a connection string. The operator gets krill's own
+// wording either way, and on-call humans still get the real error from the
+// logger.
+//
+// It is a function rather than a branch inside the writer because a page
+// with more than one response shape -- Needs attention's panel fragment,
+// its results fragment, and its shell -- has to answer a failure in each
+// of them, and the mapping must be one implementation rather than three
+// that could disagree about which failures are the caller's.
+func consoleQueryError(err error) (int, string) {
+	switch {
+	case errors.Is(err, store.ErrTokenScopeMismatch), errors.Is(err, store.ErrInvalidContinuationToken):
+		// The caller's own bad token; saying which input is wrong is
+		// useful, and saying the store's package path is not.
+		return http.StatusBadRequest,
+			"This page's page_token is not valid for this view. Reload the view to start from the first page."
+	default:
+		logger.Error("failed to load an ops console view", "error", err)
+		return http.StatusInternalServerError, "Failed to load console data. Try again."
+	}
 }
 
 // opsActivePath is the path the nav marks active for a console page. The

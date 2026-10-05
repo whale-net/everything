@@ -127,17 +127,22 @@ type legacyURL struct {
 // milestone task list and board were the first to move, because the
 // product-wide Tasks and Board have replaced them (FR f41a352d), and the
 // per-milestone task detail followed, because the product-scoped detail has
-// replaced it (FR 0c03eac1).
+// replaced it (FR 0c03eac1). The ops console's four read views moved last,
+// into the Needs attention page's four tabs (FR 5fd47f4d).
 func legacyURLs() []legacyURL {
 	return []legacyURL{
-		// The ops console. "/" is named by c4bd4bf8 among the un-prefixed
-		// URLs; it renders the Overview at every phase of the facelift.
+		// The ops console. Its four read views ARE the Needs attention
+		// page's tabs now (FR 5fd47f4d), so the five GET pages retire into
+		// that page's matching tab -- the same cutover the per-container
+		// task URLs made into the product-wide views. "/" is named by
+		// c4bd4bf8 among the un-prefixed URLs; it renders the Overview at
+		// every phase of the facelift.
 		{Pattern: "/{$}", Serve: (*App).handleShellHome},
-		{Pattern: opsPath, Serve: (*App).handleOps},
-		{Pattern: opsClaimedPath, Serve: (*App).handleClaimedTasks},
-		{Pattern: opsEscalatedPath, Serve: (*App).handleEscalatedTasks},
-		{Pattern: opsCancelledPath, Serve: (*App).handleCancelledTasks},
-		{Pattern: opsNotesPath, Serve: (*App).handleOpenNotes},
+		{Pattern: opsPath, Successor: legacyNeedsAttentionSuccessor("")},
+		{Pattern: opsClaimedPath, Successor: legacyNeedsAttentionSuccessor(needsAttentionTabClaimed)},
+		{Pattern: opsEscalatedPath, Successor: legacyNeedsAttentionSuccessor(needsAttentionTabEscalated)},
+		{Pattern: opsCancelledPath, Successor: legacyNeedsAttentionSuccessor(needsAttentionTabCancelled)},
+		{Pattern: opsNotesPath, Successor: legacyNeedsAttentionSuccessor(needsAttentionTabNotes)},
 
 		// The spec and delivery browser.
 		{Pattern: specPath, Serve: (*App).handleSpec},
@@ -280,6 +285,34 @@ func legacyTaskSuccessor(suffix string) func(*App, *http.Request) (string, bool)
 	}
 }
 
+// legacyNeedsAttentionSuccessor is the successor for a pre-redesign ops
+// console URL: the Needs attention page's matching tab, under the product
+// an un-prefixed URL resolves to (FR 5fd47f4d).
+//
+// tab is the tab that URL's queue became. The empty string is /ops, the
+// console root, which names no queue of its own and so targets the page's
+// bare address -- which is the default tab, the same address /ops and the
+// sidebar's Needs attention item both open.
+//
+// The product is resolved exactly as any un-prefixed page resolves one
+// (product_scope.go): a prefixed target needs a product in its path, and a
+// browser has no way to learn one. A scope holding no product resolves none,
+// and serveLegacy then renders the product index rather than a redirect to
+// nowhere -- the one case this successor cannot answer with a target.
+//
+// The page the redirect lands on is what records the last-viewed product;
+// this successor only reads, so a hop never moves where the operator's
+// next un-prefixed link lands.
+func legacyNeedsAttentionSuccessor(tab string) func(*App, *http.Request) (string, bool) {
+	return func(app *App, r *http.Request) (string, bool) {
+		product, err := app.resolveProductForUnprefixed(r)
+		if err != nil || product.ID == uuid.Nil {
+			return "", false
+		}
+		return needsAttentionTabHref(product.ID, tab), true
+	}
+}
+
 // legacyDeliverySuccessor is the successor for the pre-redesign delivery
 // URL: the product's own Milestones table.
 //
@@ -412,21 +445,6 @@ func legacyTaskDetailSuccessor(app *App, r *http.Request) (string, bool) {
 // chrome; the read and write surfaces under these prefixes are registered
 // alongside these roots.
 
-// opsIndexLinks is the ops console root's body: the four read views it
-// owns, one link each (ops.go renders the views themselves).
-var opsIndexLinks = []pages.AreaLink{
-	{opsClaimedPath, "Claimed tasks", "every task that currently holds a claim."},
-	{opsEscalatedPath, "Escalated tasks", "every task with an active escalation, and why."},
-	{opsCancelledPath, "Cancelled tasks", "every cancelled (dead-lettered) task."},
-	{opsNotesPath, "Open notes", "every note still in an open lifecycle status."},
-}
-
-// handleOps is the ops console root, linking its four read views.
-func (app *App) handleOps(w http.ResponseWriter, r *http.Request) {
-	r, _ = app.rememberUnprefixedProduct(w, r)
-	app.renderShell(w, r, "Ops console", opsPath, pages.AreaIndex("Ops console", opsIndexLinks))
-}
-
 // handleDesign is the design-session browser root. "/design" names no
 // product, so it resolves one server-side and serves that product's session
 // list -- one page, two URLs, exactly as "/" and /products/{pid}/overview
@@ -459,21 +477,8 @@ func (app *App) handleSpec(w http.ResponseWriter, r *http.Request) {
 	}))
 }
 
-// handleProductPlaceholder serves every product-scoped sub-path whose own
-// page has not shipped. It resolves the product the URL names -- so the
-// prefixes, the in-shell 404, and the last-viewed cookie are all live and
-// testable from this point -- and renders a body that names the product
-// and links onward, rather than the area's real content.
-func (app *App) handleProductPlaceholder(w http.ResponseWriter, r *http.Request) {
-	r, product, ok := app.resolveProductFromPath(w, r)
-	if !ok {
-		return
-	}
-	setLastViewedProductCookie(w, product.ID)
-
-	app.renderShell(w, r, product.Name, r.URL.Path,
-		pages.ProductPlaceholder(pages.ProductPlaceholderData{
-			Product: productHeaderOf(product),
-			Area:    r.PathValue("area"),
-		}))
-}
+// handleProductPlaceholder is gone: every product-scoped sub-path now
+// serves its own page -- the last holdout was the Needs attention prefix,
+// which the page in needs_attention.go replaced (FR 5fd47f4d). The
+// resolver and the in-shell 404 it shared live on in product_scope.go, and
+// each real page resolves its product through them.
