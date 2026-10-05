@@ -443,10 +443,18 @@ type fakeFragmentTasks struct {
 	escalated []store.EscalatedTaskRow
 
 	// task is what GetTaskByID answers with: the freshly read state a refused
-	// cancel rebuilds its confirmation from (FR 336335f1). Its zero value is
-	// a task holding neither a claim nor an escalation, the unguarded shape.
+	// cancel rebuilds its confirmation from (FR 336335f1). newHtmxInterventionApp
+	// gives it a live claim (harnessObservedClaimID) rather than its zero value,
+	// so "the card was rebuilt from fresh state" is observable -- against a
+	// zero-value task the re-rendered card carries no guard at all and an
+	// assertion about WHICH id it carries would be vacuous.
 	task store.Task
 }
+
+// harnessObservedClaimID is the claim the harness's fake task holds, so a
+// refused cancel's re-rendered confirmation has a fresh id to carry -- distinct
+// from the stale id a refused request would have supplied.
+var harnessObservedClaimID = uuid.MustParse("f1f1f1f1-2222-3333-4444-555555555555")
 
 // GetTaskByID is the fresh read a refused cancel's re-rendered confirmation
 // is rebuilt from, in place of the ids the refused request carried.
@@ -483,6 +491,9 @@ func newHtmxInterventionApp(t *testing.T, api *fakeAPI, operatorSub string) (*Ap
 	app.tasks = &fakeFragmentTasks{
 		claimed:   []store.ClaimedTaskRow{{TaskID: uuid.New(), Title: "a still-claimed task"}},
 		escalated: []store.EscalatedTaskRow{{TaskID: uuid.New(), Title: "a still-escalated task"}},
+		// A task holding a live claim, so a refused cancel's re-rendered card
+		// has a fresh id to carry (harnessObservedClaimID).
+		task: store.Task{CurrentClaimID: &harnessObservedClaimID},
 	}
 	return app, sessionCookie, idp.server.URL
 }
