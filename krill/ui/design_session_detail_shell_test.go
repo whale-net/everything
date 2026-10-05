@@ -280,7 +280,7 @@ func TestDesignSessionDetail_Shell_TwoColumnRegions(t *testing.T) {
 
 // TestDesignSessionDetail_Shell_PropertiesCardShowsWhoOpenedIt is FR
 // d8146d9e: an "Opened by" line naming the operator the server read, and
-// the krill session it was opened through as a copy chip.
+// the design session's own id as a copy chip.
 func TestDesignSessionDetail_Shell_PropertiesCardShowsWhoOpenedIt(t *testing.T) {
 	productID, sessionID := uuid.New(), uuid.New()
 	f := renderDetailShell(t, productID, sessionID, operatorAlex, store.StageInDraft)
@@ -296,15 +296,31 @@ func TestDesignSessionDetail_Shell_PropertiesCardShowsWhoOpenedIt(t *testing.T) 
 			"the full (sub, iss) pair is available on the element's title")
 	})
 
-	t.Run("the krill session is a copy chip carrying the whole id", func(t *testing.T) {
+	t.Run("the design session id is a copy chip carrying the whole id", func(t *testing.T) {
 		chip := betweenTags(t, card, markerCopyChip, "</button>")
 		// The chip shows a readable prefix; the whole value is what the
 		// clipboard receives, which is the attribute the shared head script
 		// reads.
-		assert.Equal(t, f.krillSess[:8], strings.TrimSpace(chip),
+		assert.Equal(t, f.sessionID.String()[:8], strings.TrimSpace(chip),
 			"the chip shows the id's first eight characters, not all 36")
-		assert.Contains(t, card, `data-task-id="`+f.krillSess+`"`,
+		assert.Contains(t, card, `data-task-id="`+f.sessionID.String()+`"`,
 			"the full id is what the chip copies")
+		// The krill session it was opened through is a DIFFERENT id, and it
+		// is set in this fixture: a chip that carried it would satisfy every
+		// label on the page while copying the wrong value, which is the
+		// defect this assertion exists to keep fixed.
+		require.NotEqual(t, f.sessionID.String(), f.krillSess,
+			"the two ids must differ or this case cannot detect the wrong binding")
+		assert.NotContains(t, card, `data-task-id="`+f.krillSess+`"`,
+			"the chip must not carry the krill session id the design session was opened through")
+		// The krill session is not lost by that -- FR d8146d9e asks for it
+		// too, and get_design_session returns it. It renders as its own
+		// labelled row, which is the one place it belongs now that the chip
+		// is not wearing it.
+		assert.Contains(t, card, `data-krill="design-session-opened-by-krill-session"`,
+			"the krill session still renders, as provenance beside the chip")
+		assert.Contains(t, card, f.krillSess,
+			"the provenance row carries the whole krill session id")
 		// Ships disabled, like every other chip in this app: a control that
 		// cannot work until the head script binds it must not look live.
 		assert.Contains(t, card, "disabled",
@@ -351,9 +367,14 @@ func TestDesignSessionDetail_Shell_MissingKrillSessionRendersNoLabel(t *testing.
 
 	// The id chip still renders: it is a fact the design_session row does
 	// hold, and dropping it would hide the session's own provenance.
-	assert.Contains(t, card, markerCopyChip, "the krill session chip renders even without an operator")
-	assert.Contains(t, card, `data-task-id="`+f.krillSess+`"`,
-		"the chip still carries the whole krill session id")
+	assert.Contains(t, card, markerCopyChip, "the design session id chip renders even without an operator")
+	assert.Contains(t, card, `data-task-id="`+f.sessionID.String()+`"`,
+		"the chip still carries the whole design session id")
+	assert.NotContains(t, card, `data-task-id="`+f.krillSess+`"`,
+		"an unreadable krill_session must not change which id the chip carries")
+	assert.Contains(t, card, `data-krill="design-session-opened-by-krill-session"`,
+		"and the provenance row still renders: the design_session row holds this id "+
+			"whether or not the krill_session behind it could be read")
 
 	// And the card invents no substitute: no issuer, no bare subject, no
 	// placeholder text standing in for the operator it could not read.
