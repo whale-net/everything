@@ -651,3 +651,122 @@ templ NeedsAttentionPagingFooter(p NeedsAttentionPaging) {
 		</div>
 	</div>
 }
+
+// cancelled tab (FR b22e1d60)
+// ---------------------------------------------------------------------------
+
+// NeedsAttentionCancelledResults renders the Cancelled tab's rows inside
+// the shared results block, so the manual Refresh target, the paging link
+// and the inline-refusal slot are the ones every tab already uses.
+templ NeedsAttentionCancelledResults(d CancelledData) {
+	@opsResults(OpsResultsData{
+		Table:      needsAttentionCancelledTable(d.Rows),
+		NextHref:   d.NextHref,
+		Error:      d.Error,
+		ReadFailed: d.ReadFailed,
+	})
+}
+
+// needsAttentionCancelledTable is the Cancelled tab's table: Task (the
+// title, linking to the product-scoped detail), Milestone, Lane badge,
+// who cancelled it and when, and the reason when one was given.
+templ needsAttentionCancelledTable(rows []CancelledRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No cancelled tasks.", "Nothing has been cancelled in this product.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Task</th>
+						<th>Milestone</th>
+						<th>Lane</th>
+						<th>Cancelled by</th>
+						<th>On behalf of</th>
+						<th>Cancelled at</th>
+						<th>Reason</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover" data-krill="needs-attention-cancelled-row">
+							<td class="text-sm">
+								if row.TaskHref != "" {
+									<a href={ templ.URL(row.TaskHref) } class="link font-medium" data-krill="needs-attention-task-link">{ row.Title }</a>
+								} else {
+									{ row.Title }
+								}
+							</td>
+							<td class="text-sm">{ row.Delivery }</td>
+							<td class="text-sm">@TaskLaneBadge(row.Lane)</td>
+							<td class="text-sm">{ row.By }</td>
+							<td class="text-sm">{ row.OnBehalfOf }</td>
+							<td class="text-sm">{ row.At }</td>
+							<td class="text-sm">{ row.Reason }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// ---------------------------------------------------------------------------
+// open-notes tab (FR b22e1d60)
+// ---------------------------------------------------------------------------
+
+// NeedsAttentionNotesResults renders the Open notes tab's rows inside the
+// shared results block, exactly as the Cancelled tab does.
+templ NeedsAttentionNotesResults(d NotesData) {
+	@opsResults(OpsResultsData{
+		Table:      needsAttentionNotesTable(d.Rows),
+		NextHref:   d.NextHref,
+		Error:      d.Error,
+		ReadFailed: d.ReadFailed,
+	})
+}
+
+// needsAttentionNotesTable is the Open notes tab's table: the note's
+// target (a link when the target is a task, and never a link when it is a
+// spec-axis entity, which has no task page), a kind badge, a lifecycle
+// status badge, the body as markdown, and the created time.
+templ needsAttentionNotesTable(rows []NoteRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No open notes.", "No note in this product is still awaiting a decision.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Target</th>
+						<th>Kind</th>
+						<th>Status</th>
+						<th>Created</th>
+						<th>Body</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover" data-krill="needs-attention-note-row">
+							<td class="text-sm">
+								if row.TaskHref != "" {
+									<a href={ templ.URL(row.TaskHref) } class="link font-medium" data-krill="needs-attention-task-link">{ row.Target }</a>
+								} else {
+									{ row.Target }
+								}
+							</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Kind, htmxui.BadgeInfo, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "needs-attention-note-kind"})
+							</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Status, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "needs-attention-note-status"})
+							</td>
+							<td class="text-sm">{ row.CreatedAt }</td>
+							<td class="text-sm krill-md">@templ.Raw(renderMarkdown(row.Body))</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}

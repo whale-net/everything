@@ -190,10 +190,19 @@ type CancelledTaskDeliveryRef struct {
 }
 
 // CancelledTaskRow is one row of ListCancelledTasks' page (FR10, issue
-// #2873): a cancelled task's id, title, delivery reference, and the
-// cancellation's own acting/on-behalf-of subjects (NFR3) and timestamp --
-// "what was dead-lettered, and who did it" answerable without a second
-// lookup. CancelledByActing/CancelledByOnBehalfOf/CancelledAt are read
+// #2873): a cancelled task's id, title, delivery reference, the lane it
+// sat in when it was cancelled, the optional cancellation rationale, and
+// the cancellation's own acting/on-behalf-of subjects (NFR3) and
+// timestamp -- "what was dead-lettered, where, and who did it" answerable
+// without a second lookup.
+//
+// Lane is task.current_lane at read time: CancelTask leaves the lane
+// exactly where it was rather than routing the task anywhere, so it names
+// the lane the task was cancelled out of. Reason is the intervention's
+// own free-text rationale (task_intervention_event.reason), nil when the
+// operator gave none -- never the escalation vocabulary.
+//
+// CancelledByActing/CancelledByOnBehalfOf/CancelledAt/Reason are read
 // from the task's own `task_intervention_event` row with action='cancel'
 // -- CancelTask (task_cancel.go) refuses to cancel an already-cancelled
 // task (ErrTaskAlreadyCancelled), so exactly one such row exists per
@@ -202,6 +211,9 @@ type CancelledTaskRow struct {
 	TaskID      uuid.UUID
 	Title       string
 	DeliveryRef CancelledTaskDeliveryRef
+
+	Lane   Lane
+	Reason *string
 
 	CancelledByActing     Subject
 	CancelledByOnBehalfOf Subject
@@ -251,6 +263,7 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 	fromWhere, args := cancelledTasksQuery(params)
 	query := `
 		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
+			task.current_lane, ev.reason,
 			ev.created_by_acting_iss, ev.created_by_acting_sub, ev.created_by_acting_kind,
 			ev.created_by_on_behalf_of_iss, ev.created_by_on_behalf_of_sub, ev.created_by_on_behalf_of_kind,
 			ev.created_at
@@ -277,10 +290,11 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 	var items []CancelledTaskRow
 	for rows.Next() {
 		var row CancelledTaskRow
-		var kind string
+		var kind, currentLane string
 		var actingKind, onBehalfOfKind string
 		if err := rows.Scan(
 			&row.TaskID, &row.Title, &row.DeliveryRef.ID, &kind, &row.DeliveryRef.Title,
+			&currentLane, &row.Reason,
 			&row.CancelledByActing.Iss, &row.CancelledByActing.Sub, &actingKind,
 			&row.CancelledByOnBehalfOf.Iss, &row.CancelledByOnBehalfOf.Sub, &onBehalfOfKind,
 			&row.CancelledAt,
@@ -288,6 +302,7 @@ func (s taskStore) ListCancelledTasks(ctx context.Context, params ListCancelledT
 			return Page[CancelledTaskRow]{}, fmt.Errorf("scan cancelled task row: %w", err)
 		}
 		row.DeliveryRef.Kind = MilestoneKind(kind)
+		row.Lane = Lane(currentLane)
 		row.CancelledByActing.Kind = SubjectKind(actingKind)
 		row.CancelledByOnBehalfOf.Kind = SubjectKind(onBehalfOfKind)
 		items = append(items, row)

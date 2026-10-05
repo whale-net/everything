@@ -854,3 +854,120 @@ func TestEscalatedTabRowsMatchTheRead(t *testing.T) {
 		assert.Contains(t, body, row.EscalationID.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// the Cancelled and Open notes tabs' row contracts (FR b22e1d60)
+// ---------------------------------------------------------------------------
+
+// TestNeedsAttentionCancelledTabRendersTheRowContract walks the FR's
+// cancelled-row clause: the task title links to the product-scoped detail
+// page, and the row names its milestone, its lane (as the shared lane
+// badge), who cancelled it and when, and the reason when one was given.
+func TestNeedsAttentionCancelledTabRendersTheRowContract(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+	withReasonID, withoutReasonID := uuid.New(), uuid.New()
+	reason := "superseded by the P5 recut"
+	f.tasks.cancelled = []store.CancelledTaskRow{
+		{
+			TaskID:                withReasonID,
+			Title:                 "dead-lettered with a reason",
+			DeliveryRef:           store.CancelledTaskDeliveryRef{Kind: store.MilestoneKindMilestone, Title: "M5"},
+			Lane:                  store.LaneImplementation,
+			Reason:                &reason,
+			CancelledByActing:     store.Subject{Iss: "https://kc", Sub: "carol", Kind: store.SubjectKindHuman},
+			CancelledByOnBehalfOf: store.Subject{Iss: "https://svc", Sub: "operator"},
+			CancelledAt:           needsAttentionNow,
+		},
+		{
+			TaskID:      withoutReasonID,
+			Title:       "dead-lettered without one",
+			DeliveryRef: store.CancelledTaskDeliveryRef{Kind: store.MilestoneKindMilepebble, Title: "MP1"},
+			Lane:        store.LaneTesting,
+			CancelledAt: needsAttentionNow,
+		},
+	}
+
+	got := fetchHX(t, f.mux, f.path(needsAttentionTabCancelled), "").Body.String()
+
+	wantHref := productTaskDetailPath(f.pid, withReasonID)
+	assert.Contains(t, got, `href="`+wantHref+`"`,
+		"the cancelled row's title links to the product-scoped detail page")
+	assert.Contains(t, got, productTaskDetailPath(f.pid, withoutReasonID),
+		"every cancelled row links, reason or not")
+	assert.Contains(t, got, "dead-lettered with a reason")
+	assert.Contains(t, got, "milestone: M5", "the row names its milestone container")
+	assert.Contains(t, got, "milepebble: MP1", "and a milepebble cut names itself")
+	assert.Contains(t, got, `data-krill="task-lane"`, "the lane renders through the shared lane badge")
+	assert.Contains(t, got, "Implementation", "the lane the task was cancelled out of")
+	assert.Contains(t, got, "Testing")
+	assert.Contains(t, got, "https://kc carol (human)", "who cancelled it, with its kind")
+	assert.Contains(t, got, "https://svc operator", "and the on-behalf-of subject")
+	assert.Contains(t, got, needsAttentionNow.UTC().Format(time.RFC3339), "and when")
+	assert.Contains(t, got, reason, "the reason is shown when given")
+	assert.Equal(t, 1, strings.Count(got, reason), "only the row that gave a reason carries one")
+}
+
+// TestNeedsAttentionCancelledTabEmptyState covers the FR's "empty tabs
+// show an empty state" clause for the cancelled queue.
+func TestNeedsAttentionCancelledTabEmptyState(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+	f.tasks.cancelled = nil
+
+	got := fetchHX(t, f.mux, f.path(needsAttentionTabCancelled), "").Body.String()
+	assert.Contains(t, got, "No cancelled tasks.", "an empty cancelled tab says so")
+	assert.NotContains(t, got, `data-krill="needs-attention-cancelled-row"`, "and renders no rows")
+}
+
+// TestNeedsAttentionNotesTabRendersTheRowContract walks the FR's
+// open-notes-row clause: the task link, a note-kind badge, a
+// note-lifecycle-status badge, the body as markdown, and the created
+// time.
+func TestNeedsAttentionNotesTabRendersTheRowContract(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+	taskID, entityID := uuid.New(), uuid.New()
+	f.tasks.notes = []store.OpenNoteRow{
+		{
+			NoteID:      uuid.New(),
+			Kind:        store.NoteKindScopeNote,
+			Body:        "**bold** body that must not be escaped",
+			CreatedAt:   needsAttentionNow,
+			TaskContext: &store.OpenNoteTaskContext{TaskID: taskID, Title: "the note's task"},
+		},
+		{
+			NoteID:        uuid.New(),
+			Kind:          store.NoteKindComment,
+			Body:          "a spec-entity note",
+			CreatedAt:     needsAttentionNow,
+			EntityContext: &store.OpenNoteEntityContext{EntityKind: store.NoteEntityKindFeature, EntityID: entityID, Title: "a feature"},
+		},
+	}
+
+	got := fetchHX(t, f.mux, f.path(needsAttentionTabNotes), "").Body.String()
+
+	assert.Contains(t, got, `href="`+productTaskDetailPath(f.pid, taskID)+`"`,
+		"a task-targeted note links to its task")
+	assert.Contains(t, got, string(store.NoteKindScopeNote), "the note-kind badge renders the store's own kind")
+	assert.Contains(t, got, `data-krill="needs-attention-note-kind"`)
+	assert.Contains(t, got, string(store.NoteLifecycleStatusNoted), "the note-status badge renders the store's own status")
+	assert.Contains(t, got, `data-krill="needs-attention-note-status"`)
+	assert.Contains(t, got, "<strong>bold</strong>", "the body renders as markdown")
+	assert.NotContains(t, got, "**bold**", "and is not left as raw markdown")
+	assert.Contains(t, got, needsAttentionNow.UTC().Format(time.RFC3339), "the created time is shown")
+
+	// A spec-entity note names its target but is NEVER given a task link:
+	// exactly one row (the task-targeted one) carries one.
+	assert.Contains(t, got, "a feature", "the spec-entity note names its target")
+	assert.Equal(t, 1, strings.Count(got, `data-krill="needs-attention-task-link"`),
+		"only the task-targeted note links; a spec entity has no task page")
+}
+
+// TestNeedsAttentionNotesTabEmptyState covers the FR's empty-tab clause
+// for the open-notes queue.
+func TestNeedsAttentionNotesTabEmptyState(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+	f.tasks.notes = nil
+
+	got := fetchHX(t, f.mux, f.path(needsAttentionTabNotes), "").Body.String()
+	assert.Contains(t, got, "No open notes.", "an empty open-notes tab says so")
+	assert.NotContains(t, got, `data-krill="needs-attention-note-row"`, "and renders no rows")
+}
