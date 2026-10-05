@@ -89,7 +89,7 @@ var interventionActions = map[string]interventionAction{
 	actionRelease:  {Label: "Release", ReasonHint: "why release the claim? (optional)"},
 	actionRequeue:  {Label: "Requeue", ReasonHint: "why safe to retry? (optional)"},
 	actionEscalate: {Label: "Escalate", ReasonHint: "why does it need attention? (optional)"},
-	actionCancel:   {Label: "Cancel", ReasonHint: "why dead-letter it? (required)", Destructive: true},
+	actionCancel:   {Label: "Cancel", ReasonHint: "why dead-letter it? (optional)", Destructive: true},
 }
 
 // actionLabel is the human label for a verb, falling back to the raw verb
@@ -731,8 +731,14 @@ func (app *App) handleCancelConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid task id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	app.renderShell(w, r, "Confirm cancel", opsPath, pages.CancelConfirmCard(
-		cancelConfirmData(taskID.String(), interventionReturnTo(r), "", cancelObservedFrom(r))))
+	card := cancelConfirmData(taskID.String(), interventionReturnTo(r), "", cancelObservedFrom(r))
+	// The row's Cancel popover rides its optional reason onto this page as a
+	// query parameter, because this page IS the no-JS half of that control
+	// (FR 0cf360c5). Pre-filling the card's own reason field keeps "both paths
+	// carry it" true: without this the no-JS half would land the operator on an
+	// empty required field and silently drop what they typed.
+	card.Reason = strings.TrimSpace(r.FormValue("reason"))
+	app.renderShell(w, r, "Confirm cancel", opsPath, pages.CancelConfirmCard(card))
 }
 
 // cancelObservedIDs is the observed-state guard a cancel request carries: the

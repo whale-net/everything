@@ -288,6 +288,14 @@ type CancelConfirmData struct {
 	// ObservedField (the api request field's own name).
 	ObservedID    string
 	ObservedField string
+
+	// Reason is the optional rationale the acting row's Cancel popover carried
+	// onto this page as a query parameter (FR 0cf360c5). The card pre-fills its
+	// own reason field with it, so a reason typed in the row's popover is not
+	// silently dropped when the no-JavaScript half lands here; the operator can
+	// still edit or clear it, and this field is required on this page exactly
+	// as it was before the popover.
+	Reason string
 }
 
 // ---------------------------------------------------------------------------
@@ -608,14 +616,21 @@ templ notesTable(rows []NoteRow) {
 // difference is only which confirmation the browser gets.
 //
 // Every control's shape is: a <form> carrying the hidden fields and an
-// observed-state guard, and a trigger button that opens the control's reason
-// POPOVER (popovertarget, the native HTML popover API -- no browser JS needed)
-// and posts nothing until that popover is submitted. A browser without
-// popover support ignores popovertarget and submits the form as it always
-// did, so the no-JS branch is unchanged; that is the doubling this file has
-// always kept. The reason field itself is NOT here: it lives in the popover
-// (TaskActionPopovers), which renders outside the table so no row contains a
-// text input (FR 0cf360c5).
+// observed-state guard, and a type="button" trigger that opens the control's
+// reason POPOVER (popovertarget, the native HTML popover API -- no browser JS
+// needed) and posts nothing until that popover is submitted. The trigger is
+// type="button" and not a submit button on purpose: a submit button that owns
+// a form submits it and returns before any popover invoker behaviour runs
+// (HTML's button activation behavior), so a type="submit" trigger would post
+// the verb at once and never open the popover. The reason field itself is NOT
+// here: it lives in the popover (TaskActionPopovers), which renders outside
+// the table so no row contains a text input (FR 0cf360c5).
+//
+// The popover's own submit button names this form through the form= attribute
+// and IS a real submit button, so the no-htmx path is a native submission of
+// this same form, reason and guards included -- the doubling the rest of this
+// file documents is preserved, just carried by the popover's submit rather
+// than by the trigger.
 //
 // Both halves are doubled in the same sense as the non-destructive form
 // (htmxui ARCHITECTURE §9: the <form> element and its hx-* attributes stay
@@ -643,7 +658,7 @@ templ TaskActions(controls []TaskActionControl) {
 				if c.ObservedID != "" {
 					<input type="hidden" name={ c.ObservedField } value={ c.ObservedID } />
 				}
-				<button type="submit" popovertarget={ c.PopoverID } class="btn btn-ghost btn-xs">{ c.Label }</button>
+				<button type="button" popovertarget={ c.PopoverID } class="btn btn-ghost btn-xs">{ c.Label }</button>
 			</form>
 		} else {
 			<form
@@ -663,7 +678,7 @@ templ TaskActions(controls []TaskActionControl) {
 				if c.ObservedID != "" {
 					<input type="hidden" name={ c.ObservedField } value={ c.ObservedID } />
 				}
-				<button type="submit" popovertarget={ c.PopoverID } class="btn btn-error btn-xs">{ c.Label }</button>
+				<button type="button" popovertarget={ c.PopoverID } class="btn btn-error btn-xs">{ c.Label }</button>
 			</form>
 		}
 	}
@@ -677,9 +692,11 @@ templ TaskActions(controls []TaskActionControl) {
 // through the HTML form= attribute, so the popover submits the row's own
 // form, guards and all, with no JS and no second form.
 //
-// Submitting an empty reason is allowed: the field is optional, and the
-// popover's submit button is the control's real one, so a blank reason is
-// forwarded exactly as an absent one is.
+// Submitting an empty reason is allowed: the field is optional (no required
+// attribute, so htmx's own reportValidity gate lets it through too), and the
+// popover's submit button is the control's real one -- htmx intercepts the
+// form's submit when it is loaded, and a browser without htmx submits the same
+// form natively -- so a blank reason is forwarded exactly as an absent one is.
 templ TaskActionPopovers(controls []TaskActionControl) {
 	for _, c := range controls {
 		<div
@@ -774,6 +791,11 @@ templ InterventionError(d InterventionErrorData) {
 // Cancel, so the id the row observed has to survive the round trip through
 // this page for the eventual POST to be guarded against the state the
 // operator saw.
+//
+// Its reason field is pre-filled from the reason the row's popover carried in
+// (d.Reason), so the no-JavaScript half of a Cancel does not drop the
+// rationale the operator already typed; the field stays required and editable
+// exactly as it was.
 templ CancelConfirmCard(d CancelConfirmData) {
 	<div id={ CancelConfirmAnchor } class="card bg-base-100 border-2 border-error/40 shadow-md">
 		<div class="card-body">
@@ -801,7 +823,7 @@ templ CancelConfirmCard(d CancelConfirmData) {
 				}
 				<label class="form-control" for="reason">
 					<span class="label-text">Reason (required):</span>
-					<textarea id="reason" name="reason" rows="3" cols="48" required class="textarea textarea-bordered"></textarea>
+					<textarea id="reason" name="reason" rows="3" cols="48" required class="textarea textarea-bordered">{ d.Reason }</textarea>
 				</label>
 				<button type="submit" class="btn btn-error mt-4">Confirm cancel</button>
 			</form>
