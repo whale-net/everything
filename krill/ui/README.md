@@ -386,6 +386,35 @@ a confident, wrong "No claimed tasks." — indistinguishable from success.
 Set `Error` on the fallback branch so the operator is told the view could
 not be reloaded.
 
+## The refusal-text rule
+
+**A refusal says the reason in operator words, never in api's or the
+store's.** `operatorRejectionText` (`design_write.go`) is the one place a
+`*writeRejection` becomes an operator sentence: it keeps the status and
+replaces the message. A `store.ErrInvalidRevisionEvent` naming a cause
+gets a sentence the operator can act on; an unrecognised cause degrades
+to a generic refusal, never to the raw string, so a validation rule added
+to the store later cannot start leaking by being unmapped.
+
+The translation lives here rather than in `api`'s handler on purpose.
+api's error body is a contract other tools read — `append_revision_event`
+is contractually required to surface the store's own message verbatim —
+so rewriting it there would change a shared surface for every consumer to
+fix the half of it that renders to a human. The cost of this choice is
+that the match is textual (`strings.CutPrefix` on
+`store.ErrInvalidRevisionEvent`'s own text), because over HTTP an error
+arrives as a string and there is no `errors.As` to run. A store reword
+degrades to the generic refusal, which is safe; a store reformat would
+stop matching, which is why the format string is duplicated in the test.
+
+**Test `errors.As` for a rejection *before* computing any
+`transportFailureMessage`.** That helper logs at ERROR, and a refusal is
+handled control flow — evaluating it into a `message` default on the way
+past a correctly-refused write emits "krill could not be reached" for a
+call krill answered. Both `renderOpenFormFailure` and
+`renderAnswerFormFailure` test the rejection first; assert on captured
+logger output, not just the rendered alert, because the log is the defect.
+
 ## The doubled-form rule
 
 Every mutating form carries **`method` + `action` *and* `hx-post` +
