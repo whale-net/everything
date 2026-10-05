@@ -126,9 +126,9 @@ func countToasts(body string) int {
 // copy behind.
 func TestSuccessfulMutationShowsOneToastInTheHost(t *testing.T) {
 	for _, tc := range []struct{ verb, message string }{
-		{"escalate", "Task escalated for attention."},
-		{"release", "Claim released."},
-		{"requeue", "Task requeued; it is claimable again."},
+		{"escalate", "Task escalated"},
+		{"release", "Claim released"},
+		{"requeue", "Task requeued"},
 	} {
 		t.Run(tc.verb, func(t *testing.T) {
 			api := newFakeAPI(t)
@@ -169,7 +169,7 @@ func TestToastHostIsAnAriaLiveRegionOutsideTheSwappedRegion(t *testing.T) {
 	assert.Contains(t, host, `id="`+components.ToastHostID+`"`, "the host's id is the OOB swap's address")
 	assert.NotContains(t, host, "alert-", "the host itself carries no message; toasts arrive by swap")
 
-	oob := mustRenderComponent(components.ToastOOB("Claim released."))
+	oob := mustRenderComponent(components.ToastOOB("Claim released"))
 	assert.Contains(t, oob, `hx-swap-oob="beforeend"`)
 	assert.NotContains(t, oob, `hx-swap-oob="outerHTML"`,
 		"an outerHTML swap would replace the host, so the second toast of a session would announce nothing")
@@ -314,7 +314,7 @@ func TestNoJSFormPostLandsOnSuccessAlert(t *testing.T) {
 	landing := jar.get(mux, "/ops/claimed", sessionCookie)
 	require.Equal(t, http.StatusOK, landing.Code)
 	body := landing.Body.String()
-	assert.Contains(t, body, "Task escalated for attention.",
+	assert.Contains(t, body, "Task escalated",
 		"the landing page states the same message the toast would have shown")
 	assert.Contains(t, body, `data-krill="toast-flash"`)
 	assert.Contains(t, body, "alert-success", "the no-JS rendering is success severity")
@@ -328,7 +328,7 @@ func TestNoJSFormPostLandsOnSuccessAlert(t *testing.T) {
 	assert.False(t, stillArmed, "the flash cookie must be expired by the response that shows it")
 
 	next := jar.get(mux, "/ops/claimed", sessionCookie)
-	assert.NotContains(t, next.Body.String(), "Task escalated for attention.",
+	assert.NotContains(t, next.Body.String(), "Task escalated",
 		"a confirmation is not repeated on the next page load")
 }
 
@@ -340,12 +340,12 @@ func TestNoJSFormPostLandsOnSuccessAlert(t *testing.T) {
 func TestNoJSFragmentRequestDoesNotConsumeTheFlash(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/ops/claimed", nil)
 	req.Header.Set("HX-Request", "true")
-	req.AddCookie(&http.Cookie{Name: toastCookieName, Value: "Q2xhaW0gcmVsZWFzZWQu"})
+	req.AddCookie(&http.Cookie{Name: toastCookieName, Value: "Q2xhaW0gcmVsZWFzZWQ"})
 	rec := httptest.NewRecorder()
 
 	body := withFlashSuccess(req, rec, pages.ClaimedResults(pages.ClaimedData{Href: "/ops/claimed"}))
 
-	assert.NotContains(t, mustRenderComponent(body), "Claim released.",
+	assert.NotContains(t, mustRenderComponent(body), "Claim released",
 		"a fragment must not render a page-level flash")
 	assert.Nil(t, toastCookie(rec), "the cookie is left armed for the page load that can show it")
 }

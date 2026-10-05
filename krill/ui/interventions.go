@@ -152,6 +152,20 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			req.Reason = &reason
 		}
 
+		// The observed-state guard rides the form under the api's own wire
+		// names, so the value a row rendered is the value the api's store
+		// guard checks (store.ErrObservedStateMismatch, 409). It is taken
+		// from the row the table read and never from typed input: the
+		// operator cannot type it and cannot be asked to. A control that
+		// observed none carries an empty value, which is forwarded as an
+		// omitted guard rather than an all-zero id no write could match.
+		if v := strings.TrimSpace(r.FormValue(expectedClaimIDParam)); v != "" {
+			req.ExpectedClaimID = &v
+		}
+		if v := strings.TrimSpace(r.FormValue(escalatedGuardField)); v != "" {
+			req.ExpectedEscalationID = &v
+		}
+
 		card := cancelConfirmData(taskID.String(), returnTo, "")
 
 		var resp *http.Response
@@ -249,15 +263,20 @@ func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request
 // intervention states. It is derived from the verb's own label rather
 // than declared per call site, so the four verbs cannot drift into four
 // differently-worded confirmations.
+//
+// The three in-place verbs word their confirmation exactly as FR
+// 43e39aae names it ("Task requeued", "Claim released", "Task
+// escalated"): the toast is the operator's only confirmation, so its
+// wording is part of the requirement rather than free prose.
 func interventionSuccessMessage(action string) string {
 	label := strings.ToLower(actionLabel(action))
 	switch action {
 	case actionRelease:
-		return "Claim released."
+		return "Claim released"
 	case actionRequeue:
-		return "Task requeued; it is claimable again."
+		return "Task requeued"
 	case actionEscalate:
-		return "Task escalated for attention."
+		return "Task escalated"
 	case actionCancel:
 		return "Task cancelled."
 	default:
@@ -265,16 +284,25 @@ func interventionSuccessMessage(action string) string {
 	}
 }
 
-// renderInterventionResults re-reads the console view the operator acted
-// from and writes its results block at 200, with any message carried
+// interventionReloadFailure is the message a post-write re-derivation shows
+// when the region could not be rebuilt -- a read that failed, or a return_to
+// that names no view this binary serves. One wording for both: either way
+// the write may have landed and the view around it could not be re-read, and
+// the operator needs the same warning rather than a distinction between two
+// causes they can do nothing different about.
+const interventionReloadFailure = "The intervention was applied, but this view could not be reloaded."
+
+// renderInterventionResults re-reads the Needs attention view the operator
+// acted from and writes its results block at 200, with any message carried
 // inline above the rows.
 //
-// The whole block, deliberately not a single row: release removes the task
-// from /ops/claimed and requeue removes it from /ops/escalated, so a
-// row-level swap would leave the operator looking at a row the store no
-// longer has. The re-read is always page one -- an intervention's whole
-// effect is on the first page, and the POST carries no continuation token
-// to resume from.
+// The region is re-derived by the tab's OWN loader (needsAttentionResults),
+// the same function a GET of that tab calls, so the rows an operator sees
+// after an intervention are exactly the rows a reload would show them --
+// never a second reading of the same store query that could drift from it.
+// That is also what makes a row which left its tab (a released claim, a
+// requeued escalation) disappear from the table it was in, and what makes
+// the counts and the escalated shape come along with it.
 //
 // message and toast are separate because they answer to opposite
 // outcomes: a refusal rides inline in message (it must stay on the page
@@ -284,29 +312,145 @@ func interventionSuccessMessage(action string) string {
 // dismissible toast next to the record of its own opposite.
 func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo, message, toast string) {
 	ctx := r.Context()
-	if returnTo == opsEscalatedPath {
-		d, err := app.escalatedResults(ctx, store.ConsoleFilter{}, nil, store.PageParams{}, returnTo)
-		if err != nil {
-			logger.Error("failed to reload the escalated view after an intervention", "error", err)
-			// A read failure must not render as an empty view: the
-			// intervention itself may well have succeeded, and "nothing
-			// escalated" would be a confident, wrong answer. Say the view
-			// could not be reloaded instead.
-			d = pages.EscalatedData{Href: returnTo, Error: "The intervention was applied, but this view could not be reloaded.", ReadFailed: true}
-		} else {
-			d.Error = message
-		}
-		renderFragment(w, r, withToast(toast, pages.EscalatedResults(d)))
+	target, ok := app.interventionReturnTargetOf(r, returnTo)
+	if !ok {
+		// The guard has already refused anything off-site, so this is a
+		// same-origin path with no tab behind it. Answering 200 with the
+		// reload warning keeps the swap target in place rather than
+		// rendering another view's rows under a path that never named them.
+		logger.Warn("intervention: return_to names no view; rendering the reload warning", "return_to", returnTo)
+		renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
 		return
 	}
-	d, err := app.claimedResults(ctx, store.ConsoleFilter{}, store.PageParams{}, returnTo)
+	// The filter bar's sentence is built from the product's own containers,
+	// exactly as the tab's GET builds it, so a filtered-empty tab reads back
+	// the same filters whichever request emptied it.
+	containers := app.needsAttentionMilestoneContainers(ctx, target.productID)
+	results, err := app.needsAttentionResults(ctx, target.productID, target.filter,
+		needsAttentionFilterSentence(target.filter, containers), target.tab,
+		target.page, target.selfPath, app.clock(), message)
 	if err != nil {
-		logger.Error("failed to reload the claimed view after an intervention", "error", err)
-		d = pages.ClaimedData{Href: returnTo, Error: "The intervention was applied, but this view could not be reloaded.", ReadFailed: true}
-	} else {
-		d.Error = message
+		// A read failure must not render as an empty view: the intervention
+		// itself may well have succeeded, and "nothing escalated" would be a
+		// confident, wrong answer. Say the view could not be reloaded instead.
+		logger.Error("failed to reload the needs attention view after an intervention", "error", err)
+		renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
+		return
 	}
-	renderFragment(w, r, withToast(toast, pages.ClaimedResults(d)))
+	renderFragment(w, r, withToast(toast, results))
+}
+
+// interventionReturnTarget is the Needs attention view a successful
+// intervention re-derives in place: the product the acting row's page was
+// scoped to, the tab it was on, and the filter and page its own URL carried.
+type interventionReturnTarget struct {
+	productID uuid.UUID
+	tab       string
+	filter    needsAttentionFilter
+	page      store.PageParams
+	selfPath  string
+}
+
+// interventionReturnTargetOf resolves the view a successful intervention
+// re-derives from the form's return_to -- the address the acting row's
+// control carried.
+//
+// Two shapes resolve, and both are paths this binary itself serves:
+//
+//   - A Needs attention tab URL, /products/{pid}/needs-attention?tab=...,
+//     which is what every row control posts. Its {pid} is the page's scope
+//     and its query is the tab, the filters and any paging the operator had
+//     in force.
+//   - A legacy ops console URL (/ops, /ops/claimed, /ops/escalated, ...),
+//     which a form built before the cutover still carries. It resolves to
+//     the tab it retires into, under the product the un-prefixed URL would
+//     have redirected to, so an older form re-derives the right view rather
+//     than falling back to a fixed one.
+//
+// ok is false when neither shape names a view this binary serves, which the
+// caller answers with the same reload warning it uses for a failed read.
+func (app *App) interventionReturnTargetOf(r *http.Request, returnTo string) (interventionReturnTarget, bool) {
+	u, err := url.Parse(returnTo)
+	if err != nil {
+		return interventionReturnTarget{}, false
+	}
+	if pid, ok := needsAttentionProductOfPath(u.Path); ok {
+		// The return_to URL is the request the tab's query parsers would have
+		// read, so the tab, the filters and the paging are parsed by the very
+		// functions the GET uses rather than by a second reading here.
+		req := &http.Request{URL: u}
+		filter, err := parseNeedsAttentionFilter(req)
+		if err != nil {
+			return interventionReturnTarget{}, false
+		}
+		page, err := parseOpsPageParams(req)
+		if err != nil {
+			return interventionReturnTarget{}, false
+		}
+		return interventionReturnTarget{
+			productID: pid,
+			tab:       needsAttentionTabOf(req),
+			filter:    filter,
+			page:      page,
+			selfPath:  returnTo,
+		}, true
+	}
+	tab, ok := legacyOpsTab(u.Path)
+	if !ok {
+		return interventionReturnTarget{}, false
+	}
+	product, err := app.resolveProductForUnprefixed(r)
+	if err != nil || product.ID == uuid.Nil {
+		return interventionReturnTarget{}, false
+	}
+	page, err := parseOpsPageParams(&http.Request{URL: u})
+	if err != nil {
+		return interventionReturnTarget{}, false
+	}
+	return interventionReturnTarget{productID: product.ID, tab: tab, page: page, selfPath: returnTo}, true
+}
+
+// needsAttentionProductOfPath returns the product a Needs attention path is
+// scoped to, when the path is exactly one of this binary's own:
+// /products/{pid}/needs-attention. Any other shape -- a different sub-page,
+// a missing or malformed id, a trailing segment -- is not this page and
+// answers false, so a caller never honours a path this binary does not
+// serve.
+func needsAttentionProductOfPath(path string) (uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(path, productsPath+"/")
+	if !ok {
+		return uuid.Nil, false
+	}
+	rawPID, suffix, ok := strings.Cut(rest, "/")
+	if !ok || "/"+suffix != needsAttentionSuffix {
+		return uuid.Nil, false
+	}
+	pid, err := uuid.Parse(rawPID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return pid, true
+}
+
+// legacyOpsTab is the Needs attention tab a retired ops console URL becomes
+// (routes.go's legacyURLs), or ok false for a path that was never one of the
+// console's views. The console root names no queue of its own, so it is the
+// default tab -- the same address it redirects to.
+func legacyOpsTab(path string) (string, bool) {
+	switch path {
+	case opsPath:
+		return needsAttentionTabEscalated, true
+	case opsClaimedPath:
+		return needsAttentionTabClaimed, true
+	case opsEscalatedPath:
+		return needsAttentionTabEscalated, true
+	case opsCancelledPath:
+		return needsAttentionTabCancelled, true
+	case opsNotesPath:
+		return needsAttentionTabNotes, true
+	default:
+		return "", false
+	}
 }
 
 // apiError mirrors api/handlers' jsonError: the single {"error": "..."} shape
@@ -335,10 +479,13 @@ func interventionRejection(resp *http.Response) (int, string) {
 	return status, e.Error
 }
 
-// interventionReturnTo is the console view a successful intervention
-// returns to, read from the form's return_to field. Only this binary's own
-// ops paths are honored. Anything unrecognized (or absent) falls back to
-// the ops root.
+// interventionReturnTo is the view a successful intervention returns to,
+// read from the form's return_to field. Two of this binary's own path
+// shapes are honored, and nothing else: the ops console's own paths
+// (/ops/...), and a product-scoped Needs attention tab
+// (/products/{pid}/needs-attention), which is where every row control now
+// posts from so the operator lands back on the tab they acted from.
+// Anything unrecognized (or absent) falls back to the ops root.
 func interventionReturnTo(r *http.Request) string {
 	fallback := opsPath
 	to := strings.TrimSpace(r.FormValue("return_to"))
@@ -358,7 +505,9 @@ func interventionReturnTo(r *http.Request) string {
 	//     string would pass the encoded form straight through, and the
 	//     browser would then normalise it to a path outside /ops.
 	//   - Matching at segment boundaries rejects "/opsarchive", which
-	//     shares the raw prefix but is not a view this binary serves.
+	//     shares the raw prefix but is not a view this binary serves, and
+	//     the same boundary rule is what admits a Needs attention tab URL
+	//     without admitting "/products/{pid}/needs-attention/anything".
 	//
 	// None of these is an open-redirect defence on its own: the value is
 	// only ever used as a same-origin Location or HX-Redirect. They are
@@ -372,7 +521,9 @@ func interventionReturnTo(r *http.Request) string {
 		return fallback
 	}
 	if u.Path != opsPath && !strings.HasPrefix(u.Path, opsPath+"/") {
-		return fallback
+		if _, ok := needsAttentionProductOfPath(u.Path); !ok {
+			return fallback
+		}
 	}
 	return to
 }

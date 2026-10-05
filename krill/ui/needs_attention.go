@@ -341,7 +341,7 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	// sentence, so the three cannot describe different containers.
 	containers := app.needsAttentionMilestoneContainers(r.Context(), product.ID)
 	results, err := app.needsAttentionResults(r.Context(), product.ID, filter,
-		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r), readAt)
+		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r), readAt, "")
 	if err != nil {
 		app.writeNeedsAttentionQueryError(w, r, product.ID, filter, containers, tab, err)
 		return
@@ -467,6 +467,11 @@ func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID
 // words, for the empty state a filtered tab renders instead of its generic
 // "No claimed tasks."
 //
+// message is an inline refusal to carry above the rows, empty for an
+// ordinary GET. The intervention path passes one to re-derive the region
+// after a refused write, so it renders through this same loader rather than
+// a second reading of the tab.
+//
 // The Escalated tab is the exception on row SHAPE: its columns are its own
 // (FR 772b044b, needsAttentionEscalatedResults below), because what the
 // operator scans there is not the console view's. Its rows are still the one
@@ -474,7 +479,7 @@ func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID
 //
 // now is the request's read instant, so the escalated tab's relative
 // timestamps are judged against the same moment the freshness stamp reports.
-func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time) (templ.Component, error) {
+func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time, message string) (templ.Component, error) {
 	console := filter.console(productID)
 	switch tab {
 	case needsAttentionTabClaimed:
@@ -482,36 +487,40 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 		if err != nil {
 			return nil, err
 		}
-		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "claimed tasks"); ok {
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "claimed tasks"); ok && message == "" {
 			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
+		d.Error = message
 		return pages.ClaimedResults(d), nil
 	case needsAttentionTabCancelled:
 		d, err := app.cancelledResults(ctx, console, page, selfPath)
 		if err != nil {
 			return nil, err
 		}
-		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "cancelled tasks"); ok {
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "cancelled tasks"); ok && message == "" {
 			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
+		d.Error = message
 		return pages.CancelledResults(d), nil
 	case needsAttentionTabNotes:
 		d, err := app.openNotesResults(ctx, console, page, selfPath)
 		if err != nil {
 			return nil, err
 		}
-		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "open notes"); ok {
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "open notes"); ok && message == "" {
 			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
+		d.Error = message
 		return pages.NotesResults(d), nil
 	default:
 		d, err := app.needsAttentionEscalatedResults(ctx, productID, filter, page, selfPath, now)
 		if err != nil {
 			return nil, err
 		}
-		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "escalated tasks"); ok {
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "escalated tasks"); ok && message == "" {
 			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
+		d.Error = message
 		return pages.EscalatedQueueResults(d), nil
 	}
 }

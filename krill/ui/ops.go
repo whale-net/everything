@@ -324,6 +324,12 @@ func claimedPollingDue(rows []store.ClaimedTaskRow, now time.Time) bool {
 //
 // filter is the read's own narrowing: empty for the ops console's
 // scope-wide view, the current product for a Needs attention tab.
+//
+// selfPath is the view's own address -- /ops/claimed for the console, the
+// tab's product-scoped URL for Needs attention -- and is what each row's
+// action controls carry as return_to, so an intervention lands the
+// operator back on the view the row was rendered in rather than on a
+// fixed path that may not be the tab they were reading.
 func (app *App) claimedResults(ctx context.Context, filter store.ConsoleFilter, page store.PageParams, selfPath string) (pages.ClaimedData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
@@ -342,7 +348,7 @@ func (app *App) claimedResults(ctx context.Context, filter store.ConsoleFilter, 
 	}
 	rows := make([]pages.ClaimedRow, len(result.Items))
 	for i, row := range result.Items {
-		rows[i] = newClaimedRow(row, pid, opsClaimedPath)
+		rows[i] = newClaimedRow(row, pid, selfPath)
 	}
 	return pages.ClaimedData{
 		Rows:     rows,
