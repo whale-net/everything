@@ -20,7 +20,9 @@
 package main
 
 import (
+	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/whale-net/everything/krill/store"
@@ -47,7 +49,29 @@ const (
 	// refusalReported: krill api refused the write for a reason of its own,
 	// already worded for a reader and carrying no store text.
 	refusalReported
+	// refusalNotIssued: the write never reached krill -- the operator's
+	// identity could not be resolved, the krill session could not be
+	// minted, or api could not be reached. Nothing was attributed anywhere,
+	// and the operator is told the same way as any other refusal.
+	refusalNotIssued
 )
+
+// String names the kind for a log line, so a refusal's shape is greppable
+// without parsing the sentence it produced.
+func (k interventionRefusalKind) String() string {
+	switch k {
+	case refusalStateChanged:
+		return "state-changed"
+	case refusalNotApplicable:
+		return "not-applicable"
+	case refusalNotIssued:
+		return "not-issued"
+	case refusalReported:
+		return "reported"
+	default:
+		return "unknown"
+	}
+}
 
 // interventionRefusal is what the operator is told about a refused
 // intervention, and the one place that wording is decided.
@@ -70,6 +94,16 @@ func (ref interventionRefusal) heading(action string) string {
 // message is the whole sentence the operator reads, wherever it is shown.
 func (ref interventionRefusal) message(action string) string {
 	return ref.heading(action) + " " + ref.reason
+}
+
+// reloadFailure is what the results region says when the refusal could be
+// stated but the view behind it could not be re-read at all. It composes the
+// refusal rather than replacing it, so the operator still learns why their
+// action did not take -- and it never borrows the success path's "the
+// intervention was applied", which would be an assumed success stated about
+// a write krill refused.
+func (ref interventionRefusal) reloadFailure(action string) string {
+	return ref.message(action) + " The state that is current now could not be reloaded; reload this tab to see it."
 }
 
 // interventionRefusalOf maps a rejected write onto the wording the operator
@@ -122,6 +156,55 @@ func hasStoreText(message string) bool {
 	return strings.Contains(message, storeTextPrefix)
 }
 
+// interventionNotIssuedRefusal is the answer to a write this binary could
+// not issue at all -- withKrillSession could not resolve the operator, mint
+// the krill session, or reach krill api.
+//
+// It is a refusal like any other as far as the response is concerned: the
+// operator acted, nothing changed, and the page they are looking at is not
+// the state krill holds. So it takes the same route (200 with the refusal
+// inline for htmx, the same sentence in the shell for a browser) rather than
+// a bare 502 that takes the nav with it. The difference is only the status
+// the browser half earns, which interventionNotIssuedStatus supplies.
+func interventionNotIssuedRefusal() interventionRefusal {
+	return interventionRefusal{
+		Kind: refusalNotIssued,
+		reason: "The write could not be issued as the signed-in operator. " +
+			"Nothing was changed; this view has been re-read from the task's current state.",
+	}
+}
+
+// interventionNotIssuedStatus is the status a write that never reached krill
+// earns. It reuses writeWriteError's own mapping rather than flattening every
+// cause to 502: an unresolvable operator identity is still a 401 and api's
+// own rejection of the session (a reader role, say) is still whatever api
+// answered, so the browser half does not claim an upstream outage where the
+// real answer was "not you".
+func interventionNotIssuedStatus(err error) int {
+	if errors.Is(err, errNoOperator) {
+		return http.StatusUnauthorized
+	}
+	var rejection *writeRejection
+	if errors.As(err, &rejection) {
+		return rejection.status
+	}
+	return http.StatusBadGateway
+}
+
+// refusalBackLabel names the link out of the in-shell refusal page. It is
+// the requirement's "a link back to the tab" made literal: a refusal posted
+// from a Needs attention row returns to a tab, so the link says so; a form
+// whose return_to is one of the retired /ops paths keeps the console label
+// it has always had.
+func refusalBackLabel(returnTo string) string {
+	if u, err := url.Parse(returnTo); err == nil {
+		if _, ok := needsAttentionProductOfPath(u.Path); ok {
+			return "Back to the tab"
+		}
+	}
+	return "Back to the console"
+}
+
 // writeInterventionRefusal is the one refusal-to-response mapping every
 // verb's handler answers a refused intervention through.
 //
@@ -141,13 +224,14 @@ func hasStoreText(message string) bool {
 // swap target's status is not surfaced to the operator.
 func (app *App) writeInterventionRefusal(w http.ResponseWriter, r *http.Request, action, returnTo string, ref interventionRefusal, status int) {
 	if isHtmxRequest(r) {
-		app.renderInterventionResults(w, r, returnTo, ref.message(action), "")
+		app.renderInterventionResults(w, r, returnTo, &ref, action, "")
 		return
 	}
 	app.renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{
-		Heading:  ref.heading(action),
-		Detail:   ref.reason,
-		ReturnTo: returnTo,
+		Heading:   ref.heading(action),
+		Detail:    ref.reason,
+		ReturnTo:  returnTo,
+		BackLabel: refusalBackLabel(returnTo),
 	}), status)
 }
 
@@ -159,6 +243,7 @@ func logInterventionRefusal(action string, status int, ref interventionRefusal, 
 	fields := []any{
 		"action", action,
 		"status", status,
+		"kind", ref.Kind.String(),
 		"refusal", ref.reason,
 		"api_message", apiMessage,
 	}

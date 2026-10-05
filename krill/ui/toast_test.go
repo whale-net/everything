@@ -234,7 +234,7 @@ func TestHandlerSuccessWithNoMessageRendersNoToast(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/ops/tasks/x/escalate", nil)
 	req.Header.Set("HX-Request", "true")
-	app.renderInterventionResults(rec, req, "/ops/escalated", "", "")
+	app.renderInterventionResults(rec, req, "/ops/escalated", nil, "", "")
 
 	got := rec.Body.String()
 	assert.Equal(t, http.StatusOK, rec.Code)

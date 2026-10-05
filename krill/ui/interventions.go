@@ -183,18 +183,17 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			resp, err = app.writes.Write(ctx, sessionID, http.MethodPost, "tasks/"+taskID.String()+"/"+action, req)
 			return err
 		}); err != nil {
-			// The write never reached krill api. htmx still gets a 200 the
-			// operator can read -- a refusal rides inside the fragment,
-			// never in a status code a swap target would discard -- but it
-			// says exactly what the no-JS branch says, and the detail is
-			// logged rather than shown, so a transport error never leaks
-			// an internal URL into the page.
+			// The write never reached krill api, so nothing is attributed
+			// anywhere -- which is the correct outcome when the operator's
+			// identity could not be established. It takes the same route a
+			// refusal the store made does: a transport failure is a refusal
+			// too, and a bare http.Error would take the nav with it on
+			// exactly the page the operator most needs to navigate away
+			// from. The detail is logged rather than shown, so a transport
+			// error never leaks an internal URL into the page.
 			logger.Error("failed to issue an operator write", "error", err)
-			if isHtmxRequest(r) {
-				app.renderInterventionResults(w, r, returnTo, "the write could not be issued as the signed-in operator", "")
-				return
-			}
-			writeWriteError(w, err)
+			app.writeInterventionRefusal(w, r, action, returnTo,
+				interventionNotIssuedRefusal(), interventionNotIssuedStatus(err))
 			return
 		}
 
@@ -276,7 +275,7 @@ func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, pages.CancelConfirmCard(card))
 		return
 	}
-	app.renderInterventionResults(w, r, card.ReturnTo, "", message)
+	app.renderInterventionResults(w, r, card.ReturnTo, nil, action, message)
 }
 
 // interventionSuccessMessage is the confirmation a successful
@@ -304,16 +303,22 @@ func interventionSuccessMessage(action string) string {
 	}
 }
 
-// interventionReloadFailure is the message a post-write re-derivation shows
-// when the region could not be rebuilt -- a read that failed, or a return_to
-// that names no view this binary serves. One wording for both: either way
-// the write may have landed and the view around it could not be re-read, and
-// the operator needs the same warning rather than a distinction between two
-// causes they can do nothing different about.
+// interventionReloadFailure is the message the SUCCESS path's re-derivation
+// shows when the region could not be rebuilt -- a read that failed, or a
+// return_to that names no view this binary serves. One wording for both:
+// either way the write landed and the view around it could not be re-read,
+// and the operator needs the same warning rather than a distinction between
+// two causes they can do nothing different about.
+//
+// It is the success path's sentence and only the success path's. A refused
+// intervention's failed re-read inherits the refusal's own wording instead
+// (interventionRefusal.reloadFailure), because "the intervention was
+// applied" stated after a refusal is the assumed success FR c69a42b4
+// forbids.
 const interventionReloadFailure = "The intervention was applied, but this view could not be reloaded."
 
 // renderInterventionResults re-reads the Needs attention view the operator
-// acted from and writes its results block at 200, with any message carried
+// acted from and writes its results block at 200, with any refusal carried
 // inline above the rows.
 //
 // The region is re-derived by the tab's OWN loader (needsAttentionResults),
@@ -324,13 +329,19 @@ const interventionReloadFailure = "The intervention was applied, but this view c
 // requeued escalation) disappear from the table it was in, and what makes
 // the counts and the escalated shape come along with it.
 //
-// message and toast are separate because they answer to opposite
-// outcomes: a refusal rides inline in message (it must stay on the page
-// until read) while a success rides in toast (it is transient). Callers
-// pass at most one of the two -- a response that is both a success and a
-// refusal does not exist, and giving it a way to be both would put a
-// dismissible toast next to the record of its own opposite.
-func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo, message, toast string) {
+// refusal, when non-nil, is why the intervention did not take -- the inline
+// alert this region carries, and the sentence it inherits if the re-read
+// itself fails. A nil refusal is the success path, whose failed re-read may
+// honestly say the write landed because it did. The two are separate for the
+// same reason a refusal and a toast are: an outcome stated inline must be
+// true of THIS response, so a refusal must never inherit the success path's
+// "the intervention was applied" -- that would be the assumed success the
+// requirement forbids, said adversarially loudly.
+func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo string, refusal *interventionRefusal, action, toast string) {
+	reloadFailure := interventionReloadFailure
+	if refusal != nil {
+		reloadFailure = refusal.reloadFailure(action)
+	}
 	ctx := r.Context()
 	target, ok := app.interventionReturnTargetOf(r, returnTo)
 	if !ok {
@@ -339,22 +350,27 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 		// reload warning keeps the swap target in place rather than
 		// rendering another view's rows under a path that never named them.
 		logger.Warn("intervention: return_to names no view; rendering the reload warning", "return_to", returnTo)
-		renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
+		renderFragment(w, r, withToast(toast, pages.OpsInlineError(reloadFailure)))
 		return
 	}
 	// The filter bar's sentence is built from the product's own containers,
 	// exactly as the tab's GET builds it, so a filtered-empty tab reads back
 	// the same filters whichever request emptied it.
 	containers := app.needsAttentionMilestoneContainers(ctx, target.productID)
+	message := ""
+	if refusal != nil {
+		message = refusal.message(action)
+	}
 	view, err := app.needsAttentionResults(ctx, target.productID, target.filter,
 		needsAttentionFilterSentence(target.filter, containers), target.tab,
 		target.page, target.selfPath, app.clock(), message)
 	if err != nil {
-		// A read failure must not render as an empty view: the intervention
-		// itself may well have succeeded, and "nothing escalated" would be a
-		// confident, wrong answer. Say the view could not be reloaded instead.
+		// A read failure must not render as an empty view: "nothing
+		// escalated" would be a confident, wrong answer, and it would also
+		// silently stop the claimed tab's poll. Say the view could not be
+		// reloaded instead.
 		logger.Error("failed to reload the needs attention view after an intervention", "error", err)
-		renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
+		renderFragment(w, r, withToast(toast, pages.OpsInlineError(reloadFailure)))
 		return
 	}
 	renderFragment(w, r, withToast(toast, view.Results))
