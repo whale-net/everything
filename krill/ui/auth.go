@@ -30,6 +30,8 @@ import (
 // It also implements auth.PersonaCaller: the persona is resolved from the
 // verified session's realm_access.roles, and an identity holding neither
 // configured role is refused -- /authorize mints no credential for it.
+// Under AUTH_MODE=none both halves resolve to the dev operator, the same
+// pair and persona api resolves for its own dev token.
 func (app *App) mcpCallerResolver() auth.CallerResolver {
 	return mcpResolver{app: app}
 }
@@ -41,11 +43,7 @@ func (m mcpResolver) ResolveCaller(r *http.Request) (string, bool) {
 }
 
 func (m mcpResolver) ResolveCallerPersona(r *http.Request) (string, bool) {
-	user, err := m.app.auth.CurrentUser(r)
-	if err != nil {
-		return "", false
-	}
-	persona, ok := m.app.roles.ResolvePersona(user.Roles)
+	persona, ok := m.app.operatorPersona(r)
 	return string(persona), ok
 }
 

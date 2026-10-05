@@ -178,9 +178,8 @@ func (app *App) handleMintCredential(w http.ResponseWriter, r *http.Request) {
 		fail("Enter a name for this credential.")
 		return
 	}
-	roles, err := app.requestRoles(r)
-	persona, hasPersona := app.roles.ResolvePersona(roles)
-	if err != nil || !hasPersona {
+	persona, hasPersona := app.operatorPersona(r)
+	if !hasPersona {
 		fail("Your account holds no role that may mint a credential.")
 		return
 	}
