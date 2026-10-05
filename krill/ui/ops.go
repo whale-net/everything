@@ -333,35 +333,26 @@ func (app *App) claimedResults(ctx context.Context, filter store.ConsoleFilter, 
 	if err != nil {
 		return pages.ClaimedData{}, err
 	}
+	// The detail link each row carries is spelled against the product the
+	// read was narrowed to; a read with no product narrowing (the console's
+	// own scope-wide view) leaves the rows unlinked.
+	pid := uuid.Nil
+	if filter.ProductID != nil {
+		pid = *filter.ProductID
+	}
 	rows := make([]pages.ClaimedRow, len(result.Items))
 	for i, row := range result.Items {
-		rows[i] = newClaimedRow(row)
+		rows[i] = newClaimedRow(row, pid, opsClaimedPath)
 	}
 	return pages.ClaimedData{
 		Rows:     rows,
 		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
 		Href:     selfPath,
-		Polling:  claimedPollingDue(result.Items, time.Now()),
+		// The poll decision is judged against the same clock the view's
+		// handler reads at, so a test can hold time still and pin the
+		// fragment's poll attributes against the lease it was given.
+		Polling: claimedPollingDue(result.Items, app.clock()),
 	}, nil
-}
-
-func newClaimedRow(r store.ClaimedTaskRow) pages.ClaimedRow {
-	return pages.ClaimedRow{
-		TaskID:       r.TaskID.String(),
-		Title:        r.Title,
-		Delivery:     string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
-		Session:      r.ClaimantSessionID.String(),
-		Claimant:     opsActor(r.ClaimantActing),
-		OnBehalfOf:   opsSubject(r.ClaimantOnBehalfOf),
-		Lane:         string(r.CurrentLane),
-		ClaimedSince: opsTime(r.ClaimedAt),
-		Lease:        opsTime(r.LeaseExpiresAt),
-		Attempts:     r.AttemptCount,
-		// A claimed task is the one view a Swarm Operator force-releases
-		// (release), flags for attention (escalate), or dead-letters
-		// (cancel) from directly.
-		Actions: renderTaskActions(r.TaskID.String(), opsClaimedPath, actionRelease, actionEscalate, actionCancel),
-	}
 }
 
 // handleClaimedTasks serves the claimed-task view in both of its modes:

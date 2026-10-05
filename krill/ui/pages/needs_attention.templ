@@ -1,6 +1,10 @@
 package pages
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
 
 // The Needs attention page (FR 5fd47f4d): the tab strip and the one
 // results region every tab swaps.
@@ -157,4 +161,106 @@ func needsAttentionTabSelected(active bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// ---------------------------------------------------------------------------
+// the Claimed tab's table (FR a149d28f)
+// ---------------------------------------------------------------------------
+
+// ClaimedRow is one row of the Claimed tab: the task, the milestone it
+// belongs to, its lane, who holds the claim and for whom, when the claim
+// was taken, when its lease lapses, and the actions legal for a claimed
+// task. Every field is a pre-formatted plain string built by newClaimedRow
+// in package main, so this file stays free of store reach-in and pointer
+// logic.
+//
+// ClaimedSince and LeaseExpiresAt are absolute RFC3339 instants, never a
+// relative "in 4 min". This is the one results block the page polls
+// (claimedPollAttrs, chosen by claimedPollingDue), and a fragment whose
+// bytes shifted between two polls for no state change would make every
+// poll a spurious change. The lease's relative form is derived in the
+// browser from the element's datetime instead (leaseCountdownScript,
+// krill/ui/templ_render.go), which is also what keeps the exact UTC
+// instant available on hover.
+//
+// ClaimID is the claim the row OBSERVED, read from the store row and
+// carried untouched. It is what the row's actions are guarded by: every
+// control posts it back as expected_claim_id, so a claim that changed
+// since the page loaded is refused rather than acted on.
+type ClaimedRow struct {
+	TaskID string
+	Title  string
+	// TaskHref is the product-scoped task detail URL. Empty when the read
+	// was not product-narrowed, in which case the title renders unlinked
+	// rather than pointing at a nil product.
+	TaskHref string
+	// Milestone is the row's delivery reference (a milestone or milepebble
+	// title, store.ClaimedTaskDeliveryRef).
+	Milestone      string
+	Lane           string
+	Claimant       string
+	ClaimedSince   string
+	LeaseExpiresAt string
+	ClaimID        string
+	Actions        templ.Component
+}
+
+// claimedTable is the Claimed tab's rows, in the order the read returned
+// them (soonest lease first).
+//
+// The lane renders through the shared TaskLaneBadge mapper the Tasks list,
+// the Board and the detail already use (FR de4d0e42), so one lane has one
+// colour everywhere.
+templ claimedTable(rows []ClaimedRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No claimed tasks.", "Nothing holds a claim in this scope right now.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm" data-krill="claimed-table">
+				<thead>
+					<tr>
+						<th>Task</th>
+						<th>Milestone</th>
+						<th>Lane</th>
+						<th>Claimant</th>
+						<th>Claimed since</th>
+						<th>Lease expires</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						// data-krill-claim-id is the claim this row observed:
+						// the same value its action controls post.
+						<tr class="hover" data-krill="claimed-row"
+							data-krill-task-id={ row.TaskID } data-krill-claim-id={ row.ClaimID }>
+							<td class="text-sm">
+								if row.TaskHref != "" {
+									<a href={ templ.URL(row.TaskHref) } class="link font-medium" data-krill="task-title">{ row.Title }</a>
+								} else {
+									<span data-krill="task-title">{ row.Title }</span>
+								}
+							</td>
+							<td class="text-sm" data-krill="task-milestone">{ row.Milestone }</td>
+							<td class="text-sm">@TaskLaneBadge(row.Lane)</td>
+							<td class="text-sm" data-krill="task-claimant">{ row.Claimant }</td>
+							<td class="text-sm">
+								<time datetime={ row.ClaimedSince } title={ row.ClaimedSince }>{ row.ClaimedSince }</time>
+							</td>
+							<td class="text-sm">
+								<time data-krill="task-lease" datetime={ row.LeaseExpiresAt } title={ row.LeaseExpiresAt }>{ row.LeaseExpiresAt }</time>
+							</td>
+							<td class="text-sm">
+								<div class="flex flex-wrap items-center gap-1">
+									if row.Actions != nil {
+										@row.Actions
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
 }
