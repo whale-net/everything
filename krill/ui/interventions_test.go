@@ -224,17 +224,32 @@ func TestInterventionRejectionRendersInShellErrorPage(t *testing.T) {
 // 6. cancel's confirm step + the non-destructive inline forms
 // ---------------------------------------------------------------------------
 
-// TestCancelRendersAsConfirmLinkNotForm requires the destructive verb to
-// render as a link to its confirmation page (nothing posts until the operator
-// confirms), never as a form that posts to the cancel route directly.
-func TestCancelRendersAsConfirmLinkNotForm(t *testing.T) {
+// taskTitle is the title the control tests render a row with, so the
+// destructive verb's confirmation copy can be asserted against the task it
+// names rather than against the task id.
+const taskTitle = "Paginate ListClaimedTasks"
+
+// TestCancelRendersAsAConfirmingControlNotAForm requires the destructive verb
+// to be reachable without posting anything: with JavaScript its htmx half
+// confirms (hx-confirm, naming the task) before it posts, and without
+// JavaScript its no-JS half is a GET to the confirmation page. Neither half
+// may be a plain form that POSTs the cancel route.
+func TestCancelRendersAsAConfirmingControlNotAForm(t *testing.T) {
 	taskID := uuid.NewString()
-	html := mustRenderComponent(renderTaskActions(taskID, "/ops/claimed", "cancel"))
-	assert.Contains(t, html, fmt.Sprintf(`<a href="/ops/tasks/%s/cancel/confirm?`, taskID),
-		"cancel renders as a link to its confirm page")
-	assert.Contains(t, html, "Cancel")
+	title := "Paginate ListClaimedTasks"
+	html := mustRenderComponent(renderTaskActions(taskID, title, "/ops/claimed", "cancel"))
+
+	assert.Contains(t, html, fmt.Sprintf(`<form method="get" action="/ops/tasks/%s/cancel/confirm"`, taskID),
+		"the no-JS half opens the confirm page")
+	assert.Contains(t, html, fmt.Sprintf(`hx-post="/ops/tasks/%s/cancel"`, taskID),
+		"the htmx half posts the cancel route")
+	assert.Contains(t, html, `hx-confirm="`+cancelConfirmMessage(title)+`"`,
+		"the confirmation is the FR's own copy, naming the task")
+	assert.Equal(t, `Cancel `+title+`? It moves to Cancelled and cannot be claimed again.`,
+		cancelConfirmMessage(title), "the copy is exactly the FR's")
+	assert.Contains(t, html, ">Cancel</button>")
 	assert.NotContains(t, html, fmt.Sprintf(`action="/ops/tasks/%s/cancel"`, taskID),
-		"cancel must not render a form that posts to the cancel route directly")
+		"cancel must not render a form whose no-JS half posts the cancel route directly")
 }
 
 // TestNonDestructiveVerbsRenderInlineForms requires release/requeue/escalate
@@ -245,7 +260,7 @@ func TestNonDestructiveVerbsRenderInlineForms(t *testing.T) {
 	placeholders := map[string]string{}
 	for _, verb := range []string{"release", "requeue", "escalate"} {
 		t.Run(verb, func(t *testing.T) {
-			html := mustRenderComponent(renderTaskActions(taskID, "/ops/claimed", verb))
+			html := mustRenderComponent(renderTaskActions(taskID, taskTitle, "/ops/claimed", verb))
 			assert.Contains(t, html, "<form method=\"post\"")
 			assert.Contains(t, html, fmt.Sprintf(`action="/ops/tasks/%s/%s"`, taskID, verb))
 			assert.Contains(t, html, `name="return_to" value="/ops/claimed"`)
@@ -265,7 +280,7 @@ func TestNonDestructiveVerbsRenderInlineForms(t *testing.T) {
 func TestNonDestructiveFormsAreDoubled(t *testing.T) {
 	taskID := uuid.NewString()
 	action := "/ops/tasks/" + taskID + "/release"
-	html := mustRenderComponent(renderTaskActions(taskID, "/ops/claimed", "release"))
+	html := mustRenderComponent(renderTaskActions(taskID, taskTitle, "/ops/claimed", "release"))
 
 	assert.Contains(t, html, `<form method="post" action="`+action+`"`,
 		"the no-JS half posts to the same route it always did")
@@ -310,11 +325,13 @@ func placeholderOf(html string) string {
 	return rest[:j]
 }
 
-// TestCancelConfirmPageRequiresReasonAndPostsToCancel walks the full cancel
-// affordance: the confirm page the Cancel link points at renders a form that
-// requires a reason and posts to the cancel route, and submitting that route
-// reaches the api's cancel endpoint -- so the destructive verb posts only
-// after an explicit confirmation, and then exactly as the MCP tool would.
+// TestCancelConfirmPageRequiresReasonAndPostsToCancel walks the full no-JS
+// cancel affordance: the row's GET (the doubled control's no-JS half) opens
+// the confirm page carrying the guard the row observed, that page renders a
+// form requiring a reason and posting the cancel route with the guard still on
+// it, and submitting therefore reaches the api's cancel endpoint with the same
+// observed-state guard the htmx half posts -- so a claim or escalation that
+// changed since the row was read is refused on both paths, not just one.
 func TestCancelConfirmPageRequiresReasonAndPostsToCancel(t *testing.T) {
 	operatorSub := uuid.NewString()
 	idp := newFakeIDP(t, operatorSub)
@@ -324,10 +341,14 @@ func TestCancelConfirmPageRequiresReasonAndPostsToCancel(t *testing.T) {
 	mux := newInterventionMux(app)
 
 	taskID := uuid.NewString()
-	// GET the confirmation page the Cancel link points at.
-	getRec := serveWithCookie(mux, http.MethodGet,
-		"/ops/tasks/"+taskID+"/cancel/confirm?return_to="+url.QueryEscape("/ops/claimed"),
-		"", sessionCookie)
+	observed := uuid.NewString()
+	// The row's own GET: the no-JS half of the doubled control, carrying the
+	// guard the row observed as a query parameter.
+	confirmURL := "/ops/tasks/" + taskID + "/cancel/confirm?" + url.Values{
+		"return_to":          {"/ops/claimed"},
+		expectedClaimIDParam: {observed},
+	}.Encode()
+	getRec := serveWithCookie(mux, http.MethodGet, confirmURL, "", sessionCookie)
 	require.Equal(t, http.StatusOK, getRec.Code, getRec.Body.String())
 	page := getRec.Body.String()
 	// It names the task, restates the consequence, requires a reason, and its
@@ -337,17 +358,28 @@ func TestCancelConfirmPageRequiresReasonAndPostsToCancel(t *testing.T) {
 	assert.Contains(t, page, `name="reason"`)
 	assert.Contains(t, page, "required")
 	assert.Contains(t, page, fmt.Sprintf(`action="/ops/tasks/%s/cancel"`, taskID))
+	// The guard the row observed survives the round trip onto the page's own
+	// form: without it the confirm would post an unguarded cancel.
+	assert.Equal(t, observed, hiddenInputValue(t, page, expectedClaimIDParam),
+		"the confirm page hands the row's observed guard on to its own form")
+	assert.Equal(t, "/ops/claimed", hiddenInputValue(t, page, "return_to"))
 
-	// Confirming posts to that cancel route and reaches the api endpoint.
+	// Confirming posts the guard the page rendered, and reaches the api.
 	postRec := serveFormPost(mux, "/ops/tasks/"+taskID+"/cancel",
-		url.Values{"reason": {"dead-lettered after confirmation"}, "return_to": {"/ops/claimed"}},
+		url.Values{
+			"reason":             {"dead-lettered after confirmation"},
+			"return_to":          {hiddenInputValue(t, page, "return_to")},
+			expectedClaimIDParam: {hiddenInputValue(t, page, expectedClaimIDParam)},
+		},
 		sessionCookie)
 	require.Equal(t, http.StatusSeeOther, postRec.Code, postRec.Body.String())
 	assertInterventionAttribution(t, api, idp.server.URL, operatorSub)
 	recorded := api.recorded()
 	require.Len(t, recorded, 2)
 	assert.Equal(t, "/tasks/"+taskID+"/cancel", recorded[1].Path)
-	assert.JSONEq(t, `{"reason":"dead-lettered after confirmation"}`, string(recorded[1].Body))
+	assert.JSONEq(t, `{"reason":"dead-lettered after confirmation","expected_claim_id":"`+observed+`"}`,
+		string(recorded[1].Body),
+		"the no-JS path's cancel is guarded by the same observed id the row rendered")
 }
 
 // ---------------------------------------------------------------------------

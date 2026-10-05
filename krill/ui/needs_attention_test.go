@@ -781,9 +781,10 @@ func TestEscalatedTabRendersTheFRRowContract(t *testing.T) {
 
 // TestEscalatedTabRowCarriesTheObservedEscalationID is the FR's guard
 // clause: the row states the escalation it observed, and its two actions
-// carry that same id -- Requeue as a hidden form field, Cancel on its
-// confirmation link -- so a write is refused against what the operator saw
-// rather than against whatever is current by then.
+// carry that same id -- as a hidden expected_escalation_id input, on both
+// halves of the doubled Cancel control as well as on Requeue's form -- so a
+// write is refused against what the operator saw rather than against whatever
+// is current by then.
 func TestEscalatedTabRowCarriesTheObservedEscalationID(t *testing.T) {
 	f := newNeedsAttentionFixture(t)
 	counter := 3
@@ -795,10 +796,14 @@ func TestEscalatedTabRowCarriesTheObservedEscalationID(t *testing.T) {
 
 	assert.Contains(t, body, `data-krill-escalation-id="`+escID+`"`,
 		"the row states the escalation it observed")
-	assert.Contains(t, body, `name="expected_escalation_id" value="`+escID+`"`,
-		"Requeue carries the observed escalation id as its guard")
-	assert.Contains(t, body, `expected_escalation_id=`+escID,
-		"Cancel's confirmation link carries the same id on the no-JS path")
+	assert.Equal(t, 2, strings.Count(body, `name="expected_escalation_id" value="`+escID+`"`),
+		"Requeue and Cancel both carry the observed escalation id as their guard")
+	assert.Contains(t, body, `hx-post="/ops/tasks/`+row.TaskID.String()+`/cancel"`,
+		"Cancel's htmx half posts the cancel route, guarded by that id")
+	assert.Contains(t, body, `action="/ops/tasks/`+row.TaskID.String()+`/cancel/confirm"`,
+		"and its no-JS half opens the confirmation page, carrying it there")
+	assert.Contains(t, body, `hx-confirm="`+cancelConfirmMessage(row.Title)+`"`,
+		"the browser confirmation names the task, in the FR's own copy")
 	// Release is never offered here: an escalated task holds no claim, so
 	// there is nothing to force-close.
 	assert.NotContains(t, body, actionRelease)
@@ -822,7 +827,9 @@ func TestEscalatedTabDoneLaneRowOffersNoCancel(t *testing.T) {
 		"and it still carries the observed escalation id")
 	assert.NotContains(t, body, cancelConfirmSuffix,
 		"a Done-lane task is offered no Cancel, not even its confirmation page")
-	assert.NotContains(t, body, ">Cancel…<")
+	assert.NotContains(t, body, ">Cancel</button>")
+	assert.NotContains(t, body, "hx-confirm",
+		"and nothing offers a confirmation for an action the row does not have")
 }
 
 // TestEscalatedTabRowsMatchTheRead is the FR's "content matches

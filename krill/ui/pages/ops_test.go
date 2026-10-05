@@ -50,35 +50,64 @@ func TestTaskActionsDoublesTheInlineForm(t *testing.T) {
 	assert.Contains(t, got, "Release")
 }
 
-// TestTaskActionsRendersDestructiveVerbAsALinkNotAForm requires the
-// destructive verb to stay a link: the confirmation step IS the affordance,
-// so nothing may post to the cancel route from a console row.
-func TestTaskActionsRendersDestructiveVerbAsALinkNotAForm(t *testing.T) {
+// TestTaskActionsDoublesTheDestructiveControl requires the destructive verb's
+// control to carry both halves of the doubled rule, and to carry them as two
+// ROUTES rather than one: the htmx half confirms (hx-confirm) before it posts
+// the verb in place, and the no-JS half is a GET to the verb's confirmation
+// page. Nothing may post to the destructive route from a browser that never
+// confirmed -- neither half may be method="post" to the verb -- and neither
+// half may drop the observed-state ids the row rendered.
+func TestTaskActionsDoublesTheDestructiveControl(t *testing.T) {
 	got := render(t, TaskActions([]TaskActionControl{{
-		Kind:     "confirm",
-		Label:    "Cancel",
-		Action:   "/ops/tasks/t1/cancel/confirm?return_to=%2Fops%2Fclaimed",
-		ReturnTo: "/ops/claimed",
+		Kind:            "confirm",
+		Label:           "Cancel",
+		Action:          "/ops/tasks/t1/cancel/confirm",
+		PostAction:      "/ops/tasks/t1/cancel",
+		Confirm:         "Cancel a task? It moves to Cancelled and cannot be claimed again.",
+		ReturnTo:        "/ops/claimed",
+		ObservedClaimID: "bbbbbbbb-1111-2222-3333-444444444444",
 	}}))
 
-	assert.Contains(t, got, `<a href="/ops/tasks/t1/cancel/confirm?return_to=`)
-	assert.NotContains(t, got, "<form", "the destructive verb posts nothing from the row")
+	// The no-JS half opens the confirmation page and carries the row's guard
+	// there, so the page's own form can post it.
+	assert.Contains(t, got, `<form method="get" action="/ops/tasks/t1/cancel/confirm"`)
+	// The htmx half posts the verb, but only after the confirmation.
+	assert.Contains(t, got, `hx-post="/ops/tasks/t1/cancel"`)
+	assert.Contains(t, got, `hx-confirm="Cancel a task? It moves to Cancelled and cannot be claimed again."`)
+	assert.Contains(t, got, `hx-target="#ops-results"`, "the htmx half swaps the view's whole results block")
+	assert.Contains(t, got, `hx-swap="outerHTML"`)
+	assert.Contains(t, got, `type="hidden" name="return_to" value="/ops/claimed"`)
+	assert.Contains(t, got, `type="hidden" name="expected_claim_id" value="bbbbbbbb-1111-2222-3333-444444444444"`)
+	assert.Contains(t, got, `type="submit" class="btn btn-error btn-xs">Cancel</button>`)
+	assert.NotContains(t, got, `<form method="post" action="/ops/tasks/t1/cancel"`,
+		"nothing posts the destructive verb from the row without the htmx confirm")
+	assert.NotContains(t, got, `href="/ops/tasks/t1/cancel/confirm"`,
+		"the no-JS half is the doubled form's own GET, not a second affordance")
 }
 
 // TestCancelConfirmCardIsASelfTargetingDoubledForm requires the confirm
 // card to carry the id its own form swaps, alongside both halves of the
 // doubled form, so a refused confirm re-renders the card in place.
+//
+// It also requires the card to carry the observed-state guard the acting row
+// handed it: the card IS the no-JS half of that row's Cancel, so dropping the
+// id here would post an unguarded cancel and lose the guard the row rendered.
 func TestCancelConfirmCardIsASelfTargetingDoubledForm(t *testing.T) {
 	got := render(t, CancelConfirmCard(CancelConfirmData{
-		TaskID:   "t1",
-		Action:   "/ops/tasks/t1/cancel",
-		ReturnTo: "/ops/claimed",
+		TaskID:          "t1",
+		Action:          "/ops/tasks/t1/cancel",
+		ReturnTo:        "/ops/claimed",
+		ObservedID:      "dddddddd-1111-2222-3333-444444444444",
+		ObservedField:   "expected_escalation_id",
+		ObservedClaimID: "bbbbbbbb-1111-2222-3333-444444444444",
 	}))
 
 	assert.Contains(t, got, `id="cancel-confirm"`)
 	assert.Contains(t, got, `hx-target="#cancel-confirm"`)
 	assert.Contains(t, got, `<form method="post" action="/ops/tasks/t1/cancel"`)
 	assert.Contains(t, got, `hx-post="/ops/tasks/t1/cancel"`)
+	assert.Contains(t, got, `type="hidden" name="expected_claim_id" value="bbbbbbbb-1111-2222-3333-444444444444"`)
+	assert.Contains(t, got, `type="hidden" name="expected_escalation_id" value="dddddddd-1111-2222-3333-444444444444"`)
 	assert.Contains(t, got, `required`, "the reason is required on the irreversible path")
 	assert.Contains(t, got, "Back to the console")
 }

@@ -723,7 +723,7 @@ func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID,
 		EscalatedAt:         r.EscalatedAt.UTC().Format(time.RFC3339),
 		EscalatedAtRelative: relativeTime(r.EscalatedAt, now),
 		EscalationID:        observedEscalationID(r),
-		Actions:             escalatedRowActions(r.TaskID.String(), observedEscalationID(r), r.Lane, returnTo),
+		Actions:             escalatedRowActions(r.TaskID.String(), r.Title, observedEscalationID(r), r.Lane, returnTo),
 	}
 }
 
@@ -739,42 +739,15 @@ const escalatedGuardField = "expected_escalation_id"
 // allows it, and never Release -- an escalated task holds no claim, so there
 // is nothing to force-close.
 //
-// Both controls carry the escalation id THIS row observed: Requeue as a
-// hidden form field, Cancel as a query parameter on its confirmation link,
-// since the destructive verb's control is a link rather than a form. The id
-// is taken from the row and never typed, so an escalation that changed
-// since the page loaded is refused against what the operator saw rather
-// than against whatever is current.
-func escalatedRowActions(taskID, escalationID string, lane store.Lane, returnTo string) templ.Component {
-	verbs := legalInterventions(taskInterventionEscalated, lane)
-	controls := make([]pages.TaskActionControl, 0, len(verbs))
-	for _, action := range verbs {
-		a := interventionActions[action]
-		if a.Destructive {
-			href := cancelConfirmHref(taskID, returnTo)
-			if escalationID != "" {
-				href += "&" + url.Values{escalatedGuardField: {escalationID}}.Encode()
-			}
-			controls = append(controls, pages.TaskActionControl{
-				Kind:       "confirm",
-				Label:      a.Label,
-				ReasonHint: a.ReasonHint,
-				Action:     href,
-				ReturnTo:   returnTo,
-			})
-			continue
-		}
-		controls = append(controls, pages.TaskActionControl{
-			Kind:          "form",
-			Label:         a.Label,
-			ReasonHint:    a.ReasonHint,
-			Action:        opsTaskActionBase + taskID + "/" + action,
-			ReturnTo:      returnTo,
-			ObservedField: escalatedGuardField,
-			ObservedID:    escalationID,
-		})
-	}
-	return pages.TaskActions(controls)
+// Both controls carry the escalation id THIS row observed -- as a hidden
+// expected_escalation_id input, on both halves of a doubled control -- and
+// title is what the destructive verb's browser confirmation names. The id is
+// taken from the row and never typed, so an escalation that changed since the
+// page loaded is refused against what the operator saw rather than against
+// whatever is current.
+func escalatedRowActions(taskID, title, escalationID string, lane store.Lane, returnTo string) templ.Component {
+	return renderEscalatedTaskActions(taskID, title, escalationID, returnTo,
+		legalInterventions(taskInterventionEscalated, lane)...)
 }
 
 // observedEscalationID is the row's observed escalation id as a string,
@@ -1029,6 +1002,6 @@ func claimedBy(acting, onBehalfOf store.Subject) string {
 // carrying the claim the row observed so the action's guard is checked
 // against the state the operator actually saw.
 func claimedRowActions(r store.ClaimedTaskRow, returnTo string) templ.Component {
-	return renderClaimedTaskActions(r.TaskID.String(), r.ClaimID, returnTo,
+	return renderClaimedTaskActions(r.TaskID.String(), r.Title, r.ClaimID, returnTo,
 		legalInterventions(taskInterventionClaimed, r.CurrentLane)...)
 }

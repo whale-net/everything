@@ -48,8 +48,8 @@ func claimedTabPage(t *testing.T, f *needsAttentionFixture) string {
 }
 
 // claimedResultsBlockID is the id the claimed results block carries, spelled
-// once so the polls these tests issue name the same target the markup does
-// (the pages package's own opsResultsID is unexported to package main).
+// as a literal here so the polls these tests issue name the target the
+// markup renders independently of the production constant.
 const claimedResultsBlockID = "ops-results"
 
 // claimedTabPoll is one poll of the tab: an htmx request naming the results
@@ -96,7 +96,7 @@ func TestClaimedTabRendersTheFRsColumns(t *testing.T) {
 	// can be released, escalated or cancelled.
 	assert.Contains(t, body, ">Release</button>")
 	assert.Contains(t, body, ">Escalate</button>")
-	assert.Contains(t, body, ">Cancel…</a>")
+	assert.Contains(t, body, ">Cancel</button>")
 }
 
 // TestClaimedTabLeaseIsAnExactInstantTheBrowserMakesRelative is how the FR's
@@ -140,8 +140,10 @@ func TestClaimedTabLeaseIsAnExactInstantTheBrowserMakesRelative(t *testing.T) {
 // TestClaimedRowCarriesTheObservedClaimIDOnEveryAction is the FR's "each row
 // carries the claim id it observed for its actions' guard": the row states it
 // once, and each of the three controls posts it back -- Release and Escalate
-// as a hidden field on their own forms, Cancel on the query of the
-// confirmation link its no-JS path follows.
+// as a hidden field on their own forms, and Cancel as a hidden field on BOTH
+// halves of its doubled control, so the htmx half posts it to the cancel route
+// and the no-JS half hands it to the confirmation page, whose own form posts
+// it on from there.
 func TestClaimedRowCarriesTheObservedClaimIDOnEveryAction(t *testing.T) {
 	f := newNeedsAttentionFixture(t)
 	row := claimedTabRow()
@@ -151,10 +153,12 @@ func TestClaimedRowCarriesTheObservedClaimIDOnEveryAction(t *testing.T) {
 	body := claimedTabPage(t, f)
 
 	assert.Contains(t, body, `data-krill-claim-id="`+observed+`"`, "the row states the claim it observed")
-	assert.Equal(t, 2, strings.Count(body, `name="expected_claim_id" value="`+observed+`"`),
-		"both inline forms (Release and Escalate) carry it as a hidden field")
-	assert.Contains(t, body, "expected_claim_id="+observed,
-		"the destructive verb's confirmation link carries it on its query")
+	assert.Equal(t, 3, strings.Count(body, `name="expected_claim_id" value="`+observed+`"`),
+		"all three controls (Release, Escalate and Cancel) carry it as a hidden field")
+	assert.Contains(t, body, `hx-post="/ops/tasks/`+row.TaskID.String()+`/cancel"`,
+		"Cancel's htmx half posts the cancel route")
+	assert.Contains(t, body, `action="/ops/tasks/`+row.TaskID.String()+`/cancel/confirm"`,
+		"and its no-JS half opens the confirmation page")
 }
 
 // ---------------------------------------------------------------------------
@@ -191,9 +195,9 @@ func TestClaimedDoneLaneRowOffersOnlyRelease(t *testing.T) {
 				assert.NotContains(t, body, ">Escalate</button>", "a Done-lane task offers no Escalate")
 			}
 			if tc.wantCancel {
-				assert.Contains(t, body, ">Cancel…</a>")
+				assert.Contains(t, body, ">Cancel</button>")
 			} else {
-				assert.NotContains(t, body, ">Cancel…</a>", "a Done-lane task offers no Cancel")
+				assert.NotContains(t, body, ">Cancel</button>", "a Done-lane task offers no Cancel")
 			}
 		})
 	}

@@ -28,6 +28,15 @@
 // the intervention moves a row between views (release removes it from
 // /ops/claimed) and a status code or a row-level swap would leave a stale
 // row behind.
+//
+// Cancel is the one exception to "one route, two modes", and deliberately:
+// it is irreversible, so its two branches are two routes. The htmx branch
+// is hx-confirm-then-post (a browser confirmation naming the task, then the
+// same 200-with-the-results-block as the other verbs), and the no-JS branch
+// is a GET to the confirmation PAGE, which posts nothing until its own form
+// is submitted. Both branches carry the id the acting row observed, so a
+// claim or escalation that changed since the row was read is refused on
+// either path.
 package main
 
 import (
@@ -166,7 +175,7 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			req.ExpectedEscalationID = &v
 		}
 
-		card := cancelConfirmData(taskID.String(), returnTo, "")
+		card := cancelConfirmData(taskID.String(), returnTo, "", cancelObservedFrom(r))
 
 		var resp *http.Response
 		if err := app.withKrillSession(r.Context(), func(ctx context.Context, sessionID store.SessionID) error {
@@ -214,10 +223,24 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 		status, message := interventionRejection(resp)
 		if isHtmxRequest(r) {
 			refusal := "krill rejected the " + actionLabel(action) + ". " + message
-			if action == actionCancel {
-				card.Error = refusal
-				renderFragment(w, r, pages.CancelConfirmCard(card))
-				return
+			// A refused cancel is answered into whichever of its two regions
+			// the request came from. The confirm card swaps ITSELF, so a
+			// refusal posted from the card re-renders the card -- rebuilt from
+			// freshly read state, never from the ids the refused request
+			// carried, because those are exactly the ids the store just
+			// refused. The row's control, by contrast, swaps the results
+			// block, so a refusal there is answered like the other three verbs:
+			// the view re-derived from fresh state with the refusal inline.
+			if action == actionCancel && !cancelRefusalFromTheRow(r) {
+				if fresh, ok := app.freshCancelConfirmData(r.Context(), taskID, returnTo, refusal); ok {
+					renderFragment(w, r, pages.CancelConfirmCard(fresh))
+					return
+				}
+				// The state a confirmation would re-offer could not be
+				// re-read, so re-offering one at all would be guessing at the
+				// guard. Say the view could not be reloaded instead, the same
+				// answer the three in-place verbs give when their view cannot
+				// be rebuilt.
 			}
 			app.renderInterventionResults(w, r, returnTo, refusal, "")
 			return
@@ -538,12 +561,18 @@ const expectedClaimIDParam = "expected_claim_id"
 // renderTaskActions renders the intervention controls for one console row, in
 // the order the verbs are passed. A non-destructive verb renders as an inline
 // doubled form carrying its own reason prompt; a destructive verb renders as
-// a link to its confirmation page. reason is the free-text rationale the four
-// ops record; scope and identity never appear in a form, because the write
-// resolves the operator's real (iss, sub) server-side from the gated krill
-// session (withKrillSession), not from anything the browser sent.
-func renderTaskActions(taskID, returnTo string, actions ...string) templ.Component {
-	return pages.TaskActions(taskActionControls(taskID, returnTo, actions...))
+// a doubled control whose htmx half confirms (hx-confirm, naming the task)
+// and posts in place, and whose no-JS half is a GET to the verb's
+// confirmation page. reason is the free-text rationale the four ops record;
+// scope and identity never appear in a form, because the write resolves the
+// operator's real (iss, sub) server-side from the gated krill session
+// (withKrillSession), not from anything the browser sent.
+//
+// title is what the destructive verb's confirmation names. It comes from the
+// row the operator is looking at, so "Cancel <title>?" cannot confirm a
+// different row than the one the operator read.
+func renderTaskActions(taskID, title, returnTo string, actions ...string) templ.Component {
+	return pages.TaskActions(taskActionControls(taskID, title, returnTo, actions...))
 }
 
 // renderClaimedTaskActions is renderTaskActions for a row that holds a
@@ -555,30 +584,48 @@ func renderTaskActions(taskID, returnTo string, actions ...string) templ.Compone
 // A row whose read observed no claim (a zero id) renders the plain unguarded
 // controls rather than carrying an all-zero uuid, which is not a claim any
 // write could match.
-func renderClaimedTaskActions(taskID string, claimID uuid.UUID, returnTo string, actions ...string) templ.Component {
-	controls := taskActionControls(taskID, returnTo, actions...)
+func renderClaimedTaskActions(taskID, title string, claimID uuid.UUID, returnTo string, actions ...string) templ.Component {
+	controls := taskActionControls(taskID, title, returnTo, actions...)
 	if claimID == uuid.Nil {
 		return pages.TaskActions(controls)
 	}
 	observed := claimID.String()
 	for i := range controls {
+		// Both halves carry it as the same hidden expected_claim_id input: the
+		// htmx half posts it to the verb, the no-JS half hands it to the
+		// confirmation page, which carries it on to the verb's own form.
 		controls[i].ObservedClaimID = observed
-		// The destructive verb is a LINK to its confirmation page, so its id
-		// rides the query that page and its no-JS form read it from; the
-		// other verbs are forms and carry it as a hidden field.
-		if controls[i].Kind == "confirm" {
-			controls[i].Action = withQueryParam(controls[i].Action, expectedClaimIDParam, observed)
-		}
+	}
+	return pages.TaskActions(controls)
+}
+
+// renderEscalatedTaskActions is renderTaskActions for an escalated row: the
+// same controls, each carrying the escalation id the row observed so Requeue
+// and Cancel are guarded against the escalation the operator actually saw.
+// It is the escalated counterpart of renderClaimedTaskActions, and the same
+// rule holds: the id is the store row's, never typed.
+//
+// A row whose read reported no escalation renders the plain unguarded
+// controls rather than an all-zero uuid, which is not an escalation any write
+// could match.
+func renderEscalatedTaskActions(taskID, title, escalationID, returnTo string, actions ...string) templ.Component {
+	controls := taskActionControls(taskID, title, returnTo, actions...)
+	if escalationID == "" {
+		return pages.TaskActions(controls)
+	}
+	for i := range controls {
+		controls[i].ObservedField = escalatedGuardField
+		controls[i].ObservedID = escalationID
 	}
 	return pages.TaskActions(controls)
 }
 
 // taskActionControls is the one builder of a row's verb controls: the four
 // verbs' labels and reason prompts, the route a form posts to, and the
-// confirmation link a destructive verb is reached through. Splitting it out
-// keeps one verb vocabulary while letting a row that observed a claim attach
-// it to every control it renders.
-func taskActionControls(taskID, returnTo string, actions ...string) []pages.TaskActionControl {
+// confirmation a destructive verb is reached through. Splitting it out keeps
+// one verb vocabulary while letting a row attach the claim or escalation id
+// it observed to every control it renders.
+func taskActionControls(taskID, title, returnTo string, actions ...string) []pages.TaskActionControl {
 	controls := make([]pages.TaskActionControl, 0, len(actions))
 	for _, action := range actions {
 		a, ok := interventionActions[action]
@@ -591,8 +638,16 @@ func taskActionControls(taskID, returnTo string, actions ...string) []pages.Task
 			ReturnTo:   returnTo,
 		}
 		if a.Destructive {
+			// The destructive verb's two halves are two routes: the htmx half
+			// POSTs the cancel after hx-confirm, and the no-JS half GETs the
+			// confirmation page, which posts nothing until its own form is
+			// submitted. A bare confirm route, not a pre-parameterised one:
+			// the browser drops an action's query string on a GET form, so
+			// return_to and the guard ride hidden inputs instead.
 			control.Kind = "confirm"
-			control.Action = cancelConfirmHref(taskID, returnTo)
+			control.Action = opsTaskActionBase + taskID + cancelConfirmSuffix
+			control.PostAction = opsTaskActionBase + taskID + "/" + action
+			control.Confirm = cancelConfirmMessage(title)
 		} else {
 			control.Kind = "form"
 			control.Action = opsTaskActionBase + taskID + "/" + action
@@ -602,28 +657,13 @@ func taskActionControls(taskID, returnTo string, actions ...string) []pages.Task
 	return controls
 }
 
-// withQueryParam sets one query parameter on a URL this package built,
-// preserving whatever the URL already carried. A URL that does not parse is
-// returned unchanged: every caller here spells its own route, so that is a
-// programming mistake rather than a runtime case, and dropping the control
-// would be worse than rendering it without one extra guard.
-func withQueryParam(rawURL, key, value string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	q := u.Query()
-	q.Set(key, value)
-	u.RawQuery = q.Encode()
-	return u.RequestURI()
-}
-
-// cancelConfirmHref builds the link to a task's cancel confirmation page,
-// carrying the view to return to as a query parameter.
-func cancelConfirmHref(taskID, returnTo string) string {
-	q := url.Values{}
-	q.Set("return_to", returnTo)
-	return opsTaskActionBase + taskID + cancelConfirmSuffix + "?" + q.Encode()
+// cancelConfirmMessage is the browser confirmation the destructive cancel
+// verb shows before it posts anything (FR 336335f1): it names the task, and
+// it states the consequence, because a cancel is the one intervention the task
+// can never be reopened from. It is declared once, so the copy cannot drift
+// between the rows that render it.
+func cancelConfirmMessage(title string) string {
+	return "Cancel " + title + "? It moves to Cancelled and cannot be claimed again."
 }
 
 // handleCancelConfirm renders the confirmation step for the destructive
@@ -638,23 +678,105 @@ func cancelConfirmHref(taskID, returnTo string) string {
 // This stays a GET page. Its card's form is doubled, so an htmx browser
 // posts the same route a no-JS browser does and gets the card back at 200
 // with a refusal inline, or HX-Redirect to the console view on success.
+//
+// The guard the acting row handed this page rides the query string, because
+// this page IS the no-JS half of that row's Cancel: it must carry the id the
+// row observed onto the card's form, or the confirm would post an unguarded
+// cancel and lose the guard the row rendered.
 func (app *App) handleCancelConfirm(w http.ResponseWriter, r *http.Request) {
 	taskID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "invalid task id: must be a UUID", http.StatusBadRequest)
 		return
 	}
-	app.renderShell(w, r, "Confirm cancel", opsPath, pages.CancelConfirmCard(cancelConfirmData(taskID.String(), interventionReturnTo(r), "")))
+	app.renderShell(w, r, "Confirm cancel", opsPath, pages.CancelConfirmCard(
+		cancelConfirmData(taskID.String(), interventionReturnTo(r), "", cancelObservedFrom(r))))
 }
 
-// cancelConfirmData builds the confirm card's view-model. It carries only
-// the task's id and the routes the form posts to -- never an identity,
-// which withKrillSession resolves server-side.
-func cancelConfirmData(taskID, returnTo, refusal string) pages.CancelConfirmData {
-	return pages.CancelConfirmData{
+// cancelObservedIDs is the observed-state guard a cancel request carries: the
+// claim or escalation id the acting row saw. At most one is set -- a claimed
+// row observed a claim, an escalated row an escalation, a ready task neither,
+// which is the one unguarded shape the FR names.
+type cancelObservedIDs struct {
+	claimID      string
+	escalationID string
+}
+
+// cancelObservedFrom reads that guard off a request, from the same hidden
+// inputs a row's control renders. Both the query string and a form body are
+// read, because the two halves of the control carry the ids in those two
+// places: the no-JS half hands them to the confirmation page in the query,
+// and that page's own form posts them as a body field.
+func cancelObservedFrom(r *http.Request) cancelObservedIDs {
+	return cancelObservedIDs{
+		claimID:      strings.TrimSpace(r.FormValue(expectedClaimIDParam)),
+		escalationID: strings.TrimSpace(r.FormValue(escalatedGuardField)),
+	}
+}
+
+// cancelRefusalFromTheRow reports whether a refused cancel was posted by a
+// console row's Cancel control rather than by the confirm card's own form.
+//
+// Both halves of a row's Cancel POST the same route, so the only thing that
+// tells the two origins apart is which region htmx was swapping: the row's
+// control targets the results block, while the card's form targets the card
+// itself. htmx sends the resolved target's id in HX-Target, so a request that
+// names the results block is the row's.
+func cancelRefusalFromTheRow(r *http.Request) bool {
+	return r.Header.Get("HX-Target") == pages.OpsResultsAnchor
+}
+
+// freshCancelConfirmData rebuilds the cancel-confirm card from the task's
+// CURRENT state rather than from the ids the refused request carried.
+//
+// A refusal means the state the acting row observed is not the state the
+// store now holds -- that is why the write was refused -- so rebuilding the
+// card from the request's own ids would re-offer the operator the very guard
+// that was just rejected. The card is instead built from a fresh read of the
+// task, carrying whatever claim or escalation it holds now, so the retry is
+// guarded against the state the operator is about to see (FR 336335f1).
+//
+// ok is false when the task could not be read; the caller then answers with
+// the reload warning rather than re-offering a confirmation built from no
+// fresh state at all.
+func (app *App) freshCancelConfirmData(ctx context.Context, taskID uuid.UUID, returnTo, refusal string) (pages.CancelConfirmData, bool) {
+	task, err := app.tasks.GetTaskByID(ctx, taskID)
+	if err != nil {
+		logger.Error("failed to re-read a task for a refused cancel", "task", taskID.String(), "error", err)
+		return pages.CancelConfirmData{}, false
+	}
+	// The fresh row's own claim or escalation is the guard the retry must
+	// carry. A row that holds neither -- a ready task -- is the one unguarded
+	// shape and carries nothing, exactly as an unguarded row's control does.
+	observed := cancelObservedIDs{}
+	if task.CurrentClaimID != nil {
+		observed.claimID = task.CurrentClaimID.String()
+	}
+	if task.CurrentEscalationID != nil {
+		observed.escalationID = task.CurrentEscalationID.String()
+	}
+	return cancelConfirmData(taskID.String(), returnTo, refusal, observed), true
+}
+
+// cancelConfirmData builds the confirm card's view-model. It carries the
+// task's id, the routes the form posts to, and the observed-state guard the
+// acting row handed it -- never an identity, which withKrillSession resolves
+// server-side.
+func cancelConfirmData(taskID, returnTo, refusal string, observed cancelObservedIDs) pages.CancelConfirmData {
+	card := pages.CancelConfirmData{
 		TaskID:   taskID,
 		Action:   opsTaskActionBase + taskID + "/" + actionCancel,
 		ReturnTo: returnTo,
 		Error:    refusal,
 	}
+	// A claim and an escalation are guarded under different api field names,
+	// so the one the row observed decides which field carries it.
+	if observed.claimID != "" {
+		card.ObservedClaimID = observed.claimID
+	}
+	if observed.escalationID != "" {
+		card.ObservedID = observed.escalationID
+		card.ObservedField = escalatedGuardField
+	}
+	return card
 }
