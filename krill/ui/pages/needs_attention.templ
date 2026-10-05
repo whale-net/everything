@@ -362,6 +362,10 @@ type ClaimedRow struct {
 	LeaseExpiresAt string
 	ClaimID        string
 	Actions        templ.Component
+	// Popovers is this row's reason popovers, rendered AFTER the table so no
+	// row contains a text input (FR 0cf360c5). Each popover's reason field
+	// and submit button name the form Actions rendered in this row.
+	Popovers templ.Component
 }
 
 // claimedTable is the Claimed tab's rows, in the order the read returned
@@ -421,6 +425,11 @@ templ claimedTable(rows []ClaimedRow) {
 				</tbody>
 			</table>
 		</div>
+		for _, row := range rows {
+			if row.Popovers != nil {
+				@row.Popovers
+			}
+		}
 	}
 }
 
@@ -482,6 +491,11 @@ type NeedsAttentionEscalatedRow struct {
 	// Actions is the row's intervention controls, built in package main
 	// from the observed escalation id.
 	Actions templ.Component
+
+	// Popovers is this row's reason popovers, rendered AFTER the table so no
+	// row contains a text input (FR 0cf360c5); each popover submits the form
+	// Actions rendered in this row.
+	Popovers templ.Component
 }
 
 // NeedsAttentionEscalatedData is the Escalated tab's view-model.
@@ -557,6 +571,11 @@ templ escalatedQueueTable(rows []NeedsAttentionEscalatedRow) {
 				</tbody>
 			</table>
 		</div>
+		for _, row := range rows {
+			if row.Popovers != nil {
+				@row.Popovers
+			}
+		}
 	}
 }
 

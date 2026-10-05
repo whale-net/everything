@@ -452,6 +452,9 @@ func newEscalatedRow(r store.EscalatedTaskRow) pages.EscalatedRow {
 		// absent here -- the task is already escalated -- and release has no
 		// active claim to force-close on this view.
 		Actions: renderTaskActions(r.TaskID.String(), r.Title, opsEscalatedPath, actionRequeue, actionCancel),
+		// The reason popovers for those same controls, rendered after the
+		// table so no row contains a text input (FR 0cf360c5).
+		Popovers: renderTaskActionPopovers(r.TaskID.String(), r.Title, opsEscalatedPath, actionRequeue, actionCancel),
 	}
 }
 

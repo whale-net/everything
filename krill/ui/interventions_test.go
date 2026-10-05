@@ -254,18 +254,26 @@ func TestCancelRendersAsAConfirmingControlNotAForm(t *testing.T) {
 
 // TestNonDestructiveVerbsRenderInlineForms requires release/requeue/escalate
 // to each render an inline form posting to its own route, carrying a return_to
-// and a reason field, each with a distinct per-verb reason placeholder.
+// field, with a distinct per-verb reason prompt. The prompt is no longer a
+// text input in the row (FR 0cf360c5): it lives in the control's reason
+// popover, which submits that same form through the form= attribute.
 func TestNonDestructiveVerbsRenderInlineForms(t *testing.T) {
 	taskID := uuid.NewString()
 	placeholders := map[string]string{}
 	for _, verb := range []string{"release", "requeue", "escalate"} {
 		t.Run(verb, func(t *testing.T) {
-			html := mustRenderComponent(renderTaskActions(taskID, taskTitle, "/ops/claimed", verb))
-			assert.Contains(t, html, "<form method=\"post\"")
-			assert.Contains(t, html, fmt.Sprintf(`action="/ops/tasks/%s/%s"`, taskID, verb))
-			assert.Contains(t, html, `name="return_to" value="/ops/claimed"`)
-			placeholders[verb] = placeholderOf(html)
-			assert.NotEmpty(t, placeholders[verb], "the form must prompt for a reason")
+			row := mustRenderComponent(renderTaskActions(taskID, taskTitle, "/ops/claimed", verb))
+			assert.Contains(t, row, "<form method=\"post\"")
+			assert.Contains(t, row, fmt.Sprintf(`action="/ops/tasks/%s/%s"`, taskID, verb))
+			assert.Contains(t, row, `name="return_to" value="/ops/claimed"`)
+			assert.NotContains(t, row, `<input type="text"`,
+				"no row control renders a text input: the reason lives in the popover")
+
+			popovers := mustRenderComponent(renderTaskActionPopovers(taskID, taskTitle, "/ops/claimed", verb))
+			assert.Contains(t, popovers, fmt.Sprintf(`type="text" name="reason" form="%s"`, taskActionFormID(taskID, verb)),
+				"the popover's reason field submits the row's own form")
+			placeholders[verb] = placeholderOf(popovers)
+			assert.NotEmpty(t, placeholders[verb], "the popover must prompt for a reason")
 		})
 	}
 	// The reason prompt is per-verb, not one shared string.

@@ -474,3 +474,103 @@ func TestNoJSReleaseFromTheClaimedTabReturnsToTheTab(t *testing.T) {
 	assert.Equal(t, observed, body[expectedClaimIDParam],
 		"the no-JS branch carries the same observed guard as the htmx one")
 }
+
+// ---------------------------------------------------------------------------
+// 6. the reason popover, not a text input in every row (FR 0cf360c5)
+// ---------------------------------------------------------------------------
+
+// tableSectionOf is the markup from the region's first <table to its close --
+// what "no row contains a text input" is about.
+func tableSectionOf(t *testing.T, markup string) string {
+	t.Helper()
+	i := strings.Index(markup, "<table")
+	require.GreaterOrEqual(t, i, 0, "the region renders a table")
+	j := strings.Index(markup[i:], "</table>")
+	require.GreaterOrEqual(t, j, 0, "the table is closed")
+	return markup[i : i+j+len("</table>")]
+}
+
+// tableRowMarkup returns every <tr>...</tr> run in markup.
+func tableRowMarkup(markup string) []string {
+	var out []string
+	rest := markup
+	for {
+		i := strings.Index(rest, "<tr")
+		if i < 0 {
+			return out
+		}
+		rest = rest[i:]
+		j := strings.Index(rest, "</tr>")
+		if j < 0 {
+			return out
+		}
+		out = append(out, rest[:j+len("</tr>")])
+		rest = rest[j+len("</tr>"):]
+	}
+}
+
+// popoverTargets returns every popovertarget attribute value in markup, the
+// popovers the row's action controls open.
+func popoverTargets(markup string) []string {
+	var out []string
+	const open = `popovertarget="`
+	rest := markup
+	for {
+		i := strings.Index(rest, open)
+		if i < 0 {
+			return out
+		}
+		rest = rest[i+len(open):]
+		j := strings.Index(rest, `"`)
+		if j < 0 {
+			return out
+		}
+		out = append(out, rest[:j])
+		rest = rest[j:]
+	}
+}
+
+// TestTabRowsCarryNoTextFieldAndTheirReasonPopoversSitOutsideTheTable is FR
+// 0cf360c5's shape at the region an operator actually reads: the rows of both
+// action tabs hold no text input, each action control's trigger opens a
+// popover the region renders, and every reason field sits OUTSIDE the table
+// (so a table of N rows adds no N inputs) while still naming a form that is in
+// a row.
+func TestTabRowsCarryNoTextFieldAndTheirReasonPopoversSitOutsideTheTable(t *testing.T) {
+	for _, tab := range []string{needsAttentionTabClaimed, needsAttentionTabEscalated} {
+		t.Run(tab, func(t *testing.T) {
+			f := newTabInterventionFixture(t)
+			f.tasks.claimed = []store.ClaimedTaskRow{tabClaimedRow()}
+			f.tasks.escalated = []store.EscalatedTaskRow{tabEscalatedRow()}
+
+			markup := f.region(t, tab)
+			table := tableSectionOf(t, markup)
+			assert.NotContains(t, table, `type="text"`, "no row contains a text input")
+			for _, row := range tableRowMarkup(table) {
+				assert.NotContains(t, row, `type="text"`,
+					"a row holds its hidden guard and return_to fields, never a text field")
+			}
+
+			// Every row trigger opens a popover the region renders OUTSIDE the
+			// table: the trigger's popovertarget names an element that appears
+			// after </table>, so the popover is the table's sibling, not a row's.
+			targets := popoverTargets(markup)
+			require.NotEmpty(t, targets, "each action control's trigger opens a reason popover")
+			closeTable := strings.Index(markup, "</table>")
+			for _, target := range targets {
+				at := strings.Index(markup, `id="`+target+`"`)
+				require.GreaterOrEqual(t, at, 0, "the popover %q the row's trigger names is rendered", target)
+				assert.Greater(t, at, closeTable, "the popover %q renders outside the table", target)
+			}
+
+			// The reason field itself is outside the table, and names a form
+			// that is inside one -- so the popover submits the row's own action.
+			reasonAt := strings.Index(markup, `type="text" name="reason"`)
+			require.GreaterOrEqual(t, reasonAt, 0, "the region renders the reason popover's field")
+			assert.Greater(t, reasonAt, closeTable, "the reason field renders after the table, never in a row")
+			formID := formAttr(t, markup[reasonAt:], "form")
+			assert.Contains(t, table, `id="`+formID+`"`,
+				"the popover's reason field names the form the row rendered")
+		})
+	}
+}
