@@ -236,7 +236,7 @@ func TestHandlerSuccessWithNoMessageRendersNoToast(t *testing.T) {
 	req.Header.Set("HX-Request", "true")
 	// return_to names a console tab, so the acted-on task id is never
 	// consulted; any id does.
-	app.renderInterventionResults(rec, req, uuid.Nil, "/ops/escalated", "", "")
+	app.renderInterventionResults(rec, req, uuid.Nil, "/ops/escalated", nil, "", "")
 
 	got := rec.Body.String()
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -266,8 +266,10 @@ func TestRefusedMutationShowsInlineAlertAndNoToast(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code, "a refusal is presented, not status-coded")
 	got := rec.Body.String()
-	assert.Contains(t, got, "task is already in the terminal Done lane",
-		"the api's own message reaches the operator")
+	assert.Contains(t, got, "The task is no longer in a state this action applies to",
+		"the refusal reaches the operator in krill's own words (FR c69a42b4)")
+	assert.NotContains(t, got, "krill/store:",
+		"and never as the store's own package-qualified text")
 	assert.Contains(t, got, `role="alert"`, "the refusal rides inline in the fragment")
 	assert.Contains(t, got, "alert-error", "a refusal is error severity")
 	assert.NotContains(t, got, `{"error"`, "the raw api JSON must not leak to the browser")
@@ -290,7 +292,10 @@ func TestRefusedNoJSMutationShowsNoToast(t *testing.T) {
 		url.Values{"reason": {"force"}, "return_to": {"/ops/escalated"}}, sessionCookie)
 
 	assert.Equal(t, http.StatusConflict, rec.Code, "api's status is relayed verbatim")
-	assert.Contains(t, rec.Body.String(), "task is already in the terminal Done lane")
+	assert.Contains(t, rec.Body.String(), "The task is no longer in a state this action applies to",
+		"the refusal is restated in krill's own words (FR c69a42b4)")
+	assert.NotContains(t, rec.Body.String(), "krill/store:",
+		"the store's own text reaches the log, never the page")
 	assert.Empty(t, toastCookie(rec), "a refusal arms no flash cookie")
 	assert.Equal(t, 0, countToasts(rec.Body.String()), "a refused post shows no toast")
 }

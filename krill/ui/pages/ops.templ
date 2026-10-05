@@ -246,6 +246,20 @@ type InterventionErrorData struct {
 	Heading  string
 	Detail   string
 	ReturnTo string
+	// BackLabel is the link's own text. Empty falls back to the console's
+	// label, so a caller that has nothing more specific to say still renders
+	// the link rather than a bare anchor.
+	BackLabel string
+}
+
+// interventionBackLabel is the link text back out of the rejection page: the
+// caller's own label when it has one ("Back to the tab" for a refusal posted
+// from a Needs attention row), and the console's otherwise.
+func interventionBackLabel(label string) string {
+	if label == "" {
+		return "Back to the console"
+	}
+	return label
 }
 
 // CancelConfirmData is the cancel-confirm card's data. Error carries a
@@ -705,7 +719,7 @@ templ InterventionError(d InterventionErrorData) {
 	<h2>{ d.Heading }</h2>
 	@htmxui.Alert(htmxui.AlertError, d.Detail, nil)
 	<p class="mt-4">
-		<a href={ templ.URL(d.ReturnTo) } class="link">Back to the console</a>
+		<a href={ templ.URL(d.ReturnTo) } class="link">{ interventionBackLabel(d.BackLabel) }</a>
 	</p>
 }
 

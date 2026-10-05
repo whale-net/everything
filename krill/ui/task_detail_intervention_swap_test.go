@@ -461,8 +461,10 @@ func TestDetailRefusalStaysInlineAndCarriesTheFreshGuard(t *testing.T) {
 		"the refusal rides in the region the operator acted from")
 	assert.Contains(t, got, `data-krill="task-action-error"`, "as an inline alert")
 	assert.Contains(t, got, `role="alert"`)
-	assert.Contains(t, got, store.ErrObservedStateMismatch.Error(),
-		"the guard's own refusal reaches the operator")
+	assert.Contains(t, got, "changed since the page was loaded",
+		"the guard's own refusal reaches the operator in krill's own words")
+	assert.NotContains(t, got, store.ErrObservedStateMismatch.Error(),
+		"never as the store's package-qualified text (FR c69a42b4)")
 	assert.NotContains(t, got, `data-krill="toast"`,
 		"a refusal is not a success: no toast is raised")
 
@@ -511,7 +513,9 @@ func TestDetailCancelRefusalIsNotTheConfirmationCard(t *testing.T) {
 	assert.Contains(t, got, `id="`+pages.TaskDetailAnchor+`"`,
 		"the refusal re-derives the region the Cancel came from")
 	assert.Contains(t, got, `data-krill="task-action-error"`)
-	assert.Contains(t, got, store.ErrObservedStateMismatch.Error())
+	assert.Contains(t, got, "changed since the page was loaded")
+	assert.NotContains(t, got, store.ErrObservedStateMismatch.Error(),
+		"no store text reaches the browser (FR c69a42b4)")
 	assert.NotContains(t, got, `id="`+pages.CancelConfirmAnchor+`"`,
 		"a detail Cancel's refusal must not be answered with the card's own re-render")
 }

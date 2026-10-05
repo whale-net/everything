@@ -183,18 +183,17 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			resp, err = app.writes.Write(ctx, sessionID, http.MethodPost, "tasks/"+taskID.String()+"/"+action, req)
 			return err
 		}); err != nil {
-			// The write never reached krill api. htmx still gets a 200 the
-			// operator can read -- a refusal rides inside the fragment,
-			// never in a status code a swap target would discard -- but it
-			// says exactly what the no-JS branch says, and the detail is
-			// logged rather than shown, so a transport error never leaks
-			// an internal URL into the page.
+			// The write never reached krill api, so nothing is attributed
+			// anywhere -- which is the correct outcome when the operator's
+			// identity could not be established. It takes the same route a
+			// refusal the store made does: a transport failure is a refusal
+			// too, and a bare http.Error would take the nav with it on
+			// exactly the page the operator most needs to navigate away
+			// from. The detail is logged rather than shown, so a transport
+			// error never leaks an internal URL into the page.
 			logger.Error("failed to issue an operator write", "error", err)
-			if isHtmxRequest(r) {
-				app.renderInterventionResults(w, r, taskID, returnTo, "the write could not be issued as the signed-in operator", "")
-				return
-			}
-			writeWriteError(w, err)
+			app.writeInterventionRefusal(w, r, taskID, action, returnTo,
+				interventionNotIssuedRefusal(), interventionNotIssuedStatus(err))
 			return
 		}
 
@@ -216,41 +215,39 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			return
 		}
 
-		// A rejection is api's own status and message. The no-JS browser
-		// reads it as a page in the shell, so the operator sees the same
-		// refusal a direct api caller would; the htmx browser reads it
-		// inline, because it is swapping a fragment and never sees a status.
+		// A rejection is api's own status and message, mapped once for all
+		// four verbs into krill's own wording (interventionRefusalOf): the
+		// api returns a store sentinel verbatim, and that text names a Go
+		// package rather than telling the operator anything. The no-JS
+		// browser reads the refusal as a page in the shell, at the status
+		// the failure earned; the htmx browser reads it inline, because it
+		// is swapping a fragment and never sees a status.
 		status, message := interventionRejection(resp)
-		if isHtmxRequest(r) {
-			refusal := "krill rejected the " + actionLabel(action) + ". " + message
-			// A refused cancel is answered into whichever of its two regions
-			// the request came from. The confirm card swaps ITSELF, so a
-			// refusal posted from the card re-renders the card -- rebuilt from
-			// freshly read state, never from the ids the refused request
-			// carried, because those are exactly the ids the store just
-			// refused. Every other origin -- a console row's control, or the
-			// task detail's -- swaps the view it acted from, so a refusal
-			// there is answered like the other three verbs: the view
-			// re-derived from fresh state with the refusal inline.
-			if action == actionCancel && cancelRefusalFromTheCard(r) {
-				if fresh, ok := app.freshCancelConfirmData(r.Context(), taskID, returnTo, refusal); ok {
-					renderFragment(w, r, pages.CancelConfirmCard(fresh))
-					return
-				}
-				// The state a confirmation would re-offer could not be
-				// re-read, so re-offering one at all would be guessing at the
-				// guard. Say the view could not be reloaded instead, the same
-				// answer the three in-place verbs give when their view cannot
-				// be rebuilt.
+		refusal := interventionRefusalOf(status, message)
+		logInterventionRefusal(action, status, refusal, message)
+
+		// A refused cancel is answered into whichever of its regions the
+		// request came from. The confirm card swaps ITSELF, so a refusal
+		// posted from the card re-renders the card -- rebuilt from freshly
+		// read state, never from the ids the refused request carried, because
+		// those are exactly the ids the store just refused. Every other origin
+		// -- a console row's control, whose swap target is the results block
+		// (cancelRefusalFromTheRow), or the task detail's, whose is the detail
+		// section -- swaps the view it acted from, so a refusal there is
+		// answered like the other three verbs: the view re-derived from fresh
+		// state with the refusal inline.
+		if isHtmxRequest(r) && action == actionCancel && !cancelRefusalFromTheRow(r) && cancelRefusalFromTheCard(r) {
+			if fresh, ok := app.freshCancelConfirmData(r.Context(), taskID, returnTo, refusal.message(action)); ok {
+				renderFragment(w, r, pages.CancelConfirmCard(fresh))
+				return
 			}
-			app.renderInterventionResults(w, r, taskID, returnTo, refusal, "")
-			return
+			// The state a confirmation would re-offer could not be re-read,
+			// so re-offering one at all would be guessing at the guard. Fall
+			// through to the shared answer, which says the view could not be
+			// reloaded -- the same answer the three in-place verbs give when
+			// their view cannot be rebuilt.
 		}
-		app.renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{
-			Heading:  "krill rejected the " + actionLabel(action) + ".",
-			Detail:   message,
-			ReturnTo: returnTo,
-		}), status)
+		app.writeInterventionRefusal(w, r, taskID, action, returnTo, refusal, status)
 	}
 }
 
@@ -284,7 +281,7 @@ func (app *App) renderInterventionSuccess(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, pages.CancelConfirmCard(card))
 		return
 	}
-	app.renderInterventionResults(w, r, taskID, card.ReturnTo, "", message)
+	app.renderInterventionResults(w, r, taskID, card.ReturnTo, nil, action, message)
 }
 
 // interventionSuccessMessage is the confirmation a successful
@@ -312,16 +309,22 @@ func interventionSuccessMessage(action string) string {
 	}
 }
 
-// interventionReloadFailure is the message a post-write re-derivation shows
-// when the region could not be rebuilt -- a read that failed, or a return_to
-// that names no view this binary serves. One wording for both: either way
-// the write may have landed and the view around it could not be re-read, and
-// the operator needs the same warning rather than a distinction between two
-// causes they can do nothing different about.
+// interventionReloadFailure is the message the SUCCESS path's re-derivation
+// shows when the region could not be rebuilt -- a read that failed, or a
+// return_to that names no view this binary serves. One wording for both:
+// either way the write landed and the view around it could not be re-read,
+// and the operator needs the same warning rather than a distinction between
+// two causes they can do nothing different about.
+//
+// It is the success path's sentence and only the success path's. A refused
+// intervention's failed re-read inherits the refusal's own wording instead
+// (interventionRefusal.reloadFailure), because "the intervention was
+// applied" stated after a refusal is the assumed success FR c69a42b4
+// forbids.
 const interventionReloadFailure = "The intervention was applied, but this view could not be reloaded."
 
 // renderInterventionResults re-reads the view the operator acted from and
-// writes its results at 200, with any message carried inline above the rows.
+// writes its results at 200, with any refusal carried inline above the rows.
 //
 // Which view is re-derived is decided by return_to, the address the acting
 // control carried, and there are two shapes of it: a console queue, whose
@@ -331,19 +334,30 @@ const interventionReloadFailure = "The intervention was applied, but this view c
 // address would serve is the region an intervention answers with, never a
 // second rendering path that could drift from it.
 //
-// message and toast are separate because they answer to opposite
-// outcomes: a refusal rides inline in message (it must stay on the page
-// until read) while a success rides in toast (it is transient). Callers
-// pass at most one of the two -- a response that is both a success and a
-// refusal does not exist, and giving it a way to be both would put a
-// dismissible toast next to the record of its own opposite.
+// refusal, when non-nil, is why the intervention did not take: it carries
+// the inline alert this region shows, and the sentence the region inherits
+// if the re-read itself fails. A nil refusal is the success path, whose
+// failed re-read may honestly say the write landed because it did. The
+// refusal rides inline (it must stay on the page until read) while a success
+// rides in toast (it is transient): an outcome stated inline must be true of
+// THIS response, so a refusal must never inherit the success path's "the
+// intervention was applied" -- that would be the assumed success the
+// requirement forbids, said adversarially loudly. Callers pass at most one
+// of the two -- a response that is both a success and a refusal does not
+// exist.
 //
 // taskID is the task the write acted on. A detail path names a task of its
 // own, and the re-derivation renders THAT task's fresh state; a return_to
 // naming a different task is refused below rather than answered with
 // another task's detail, whose own controls would then post an
 // intervention on a task the operator never chose.
-func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, taskID uuid.UUID, returnTo, message, toast string) {
+func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, taskID uuid.UUID, returnTo string, refusal *interventionRefusal, action, toast string) {
+	reloadFailure := interventionReloadFailure
+	message := ""
+	if refusal != nil {
+		reloadFailure = refusal.reloadFailure(action)
+		message = refusal.message(action)
+	}
 	ctx := r.Context()
 	if u, err := url.Parse(returnTo); err == nil {
 		if pid, tid, ok := productTaskDetailIDsOfPath(u.Path); ok {
@@ -356,10 +370,10 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 				// would post against that other task.
 				logger.Warn("intervention: return_to names a task other than the one acted on; rendering the reload warning",
 					"acted_on", taskID.String(), "return_to", returnTo)
-				renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
+				renderFragment(w, r, withToast(toast, pages.OpsInlineError(reloadFailure)))
 				return
 			}
-			app.renderTaskDetailRegion(w, r, pid, tid, u, message, toast)
+			app.renderTaskDetailRegion(w, r, pid, tid, u, message, reloadFailure, toast)
 			return
 		}
 	}
@@ -370,7 +384,7 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 		// reload warning keeps the swap target in place rather than
 		// rendering another view's rows under a path that never named them.
 		logger.Warn("intervention: return_to names no view; rendering the reload warning", "return_to", returnTo)
-		renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
+		renderFragment(w, r, withToast(toast, pages.OpsInlineError(reloadFailure)))
 		return
 	}
 	// The filter bar's sentence is built from the product's own containers,
@@ -381,11 +395,12 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 		needsAttentionFilterSentence(target.filter, containers), target.tab,
 		target.page, target.selfPath, app.clock(), message)
 	if err != nil {
-		// A read failure must not render as an empty view: the intervention
-		// itself may well have succeeded, and "nothing escalated" would be a
-		// confident, wrong answer. Say the view could not be reloaded instead.
+		// A read failure must not render as an empty view: "nothing
+		// escalated" would be a confident, wrong answer, and it would also
+		// silently stop the claimed tab's poll. Say the view could not be
+		// reloaded instead.
 		logger.Error("failed to reload the needs attention view after an intervention", "error", err)
-		renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
+		renderFragment(w, r, withToast(toast, pages.OpsInlineError(reloadFailure)))
 		return
 	}
 	renderFragment(w, r, withToast(toast, view.Results))
@@ -409,17 +424,23 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 // the operator was on, the Refresh button's own link and the controls'
 // return_to all come back unchanged.
 //
+// reloadFailure is the sentence a failed re-read shows. It is threaded in
+// rather than the success constant used directly, because an intervention
+// from the detail can be refused too: a refusal's failed re-read must say why
+// the action did not take, never the success path's "the intervention was
+// applied" (FR c69a42b4).
+//
 // ok false -- a task that can no longer be read, or one whose container is no
 // longer under the product's listing -- answers with the same reload warning
 // the queue branch uses, rather than rendering a detail that contradicts what
 // the write just did.
-func (app *App) renderTaskDetailRegion(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, self *url.URL, message, toast string) {
+func (app *App) renderTaskDetailRegion(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, self *url.URL, message, reloadFailure, toast string) {
 	ctx := r.Context()
 	page, ok := app.reloadTaskDetail(ctx, r, pid, tid, self)
 	if !ok {
 		logger.Error("failed to reload the task detail after an intervention",
 			"task", tid.String(), "product", pid.String())
-		renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
+		renderFragment(w, r, withToast(toast, pages.OpsInlineError(reloadFailure)))
 		return
 	}
 	page.ActionError = message
@@ -891,6 +912,20 @@ func cancelRefusalFromTheCard(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+// cancelRefusalFromTheRow reports whether a refused cancel was posted by a
+// console row's Cancel control rather than by the confirm card's own form or
+// the task detail's control.
+//
+// Both halves of a row's Cancel POST the same route, so the only thing that
+// tells the two origins apart is which region htmx was swapping: the row's
+// control targets the results block, while the card's form targets the card
+// itself and the detail's control its own section. htmx sends the resolved
+// target's id in HX-Target, so a request that names the results block is the
+// row's.
+func cancelRefusalFromTheRow(r *http.Request) bool {
+	return r.Header.Get("HX-Target") == pages.OpsResultsAnchor
 }
 
 // freshCancelConfirmData rebuilds the cancel-confirm card from the task's

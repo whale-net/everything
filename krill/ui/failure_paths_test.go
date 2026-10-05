@@ -297,7 +297,7 @@ func TestInterventionReReadFailureNeverLooksEmpty(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// The task the write acted on is irrelevant here: return_to names a
 	// console tab, so the re-derivation never consults it.
-	app.renderInterventionResults(rec, req, uuid.Nil, opsClaimedPath, "", "")
+	app.renderInterventionResults(rec, req, uuid.Nil, opsClaimedPath, nil, "", "")
 
 	out := rec.Body.String()
 	assert.NotContains(t, out, "No claimed tasks.",
