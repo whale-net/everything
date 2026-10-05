@@ -215,9 +215,11 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 	// the operator-facing half only -- the specific cause is logged, never
 	// rendered (transportFailureMessage).
 	var rejection *writeRejection
-	message := "Could not reach krill: " + transportFailureMessage(err)
+	var message string
 	if errors.As(err, &rejection) {
 		message = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+	} else {
+		message = "Could not reach krill: " + transportFailureMessage(err)
 	}
 
 	// The rail is re-read for EVERY refusal, not only the rejected-write
@@ -422,6 +424,31 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// A tick naming a question that is no longer open is refused HERE, not
+	// by krill. The store validates a resolve against the questions EVER
+	// opened in the session -- re-resolving an already-resolved one is a
+	// deliberate no-op, not a 400 -- so a stale tick posted as-is is
+	// accepted, the round is recorded, and the operator is told their
+	// resolve saved while it was silently dropped (FR 1942d934).
+	//
+	// The WHOLE round is refused: a partially applied one, where the text
+	// lands and the resolve does not, is worse than none.
+	if len(resolved) > 0 {
+		stale, staleErr := app.staleResolveTicks(r.Context(), id, resolved)
+		if staleErr != nil {
+			// The open set could not be read, so staleness cannot be ruled
+			// out. Refusing rather than posting: a second failed read costs
+			// the operator one retry, while posting blind reopens exactly
+			// the silent drop this check exists to prevent.
+			app.renderAnswerFormFailure(w, r, productID, id, staleErr, followUp, resolved)
+			return
+		}
+		if len(stale) > 0 {
+			app.renderAnswerFormFailure(w, r, productID, id, staleTickRejection(len(stale)), followUp, resolved)
+			return
+		}
+	}
+
 	// The revision_event schema (migration 008) has no free-text prose column,
 	// and FR 1ff1c1e9 forbids the answer from proposing or amending a
 	// Feature/Requirement entity -- which rules out entity_deltas[].summary_line,
@@ -478,6 +505,63 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 	}
 	flashSuccess(w, answerSuccessToast)
 	http.Redirect(w, r, designSessionPath(productID, id), http.StatusSeeOther)
+}
+
+// staleResolveTicks returns the ticked question ids the session does not
+// currently have OPEN, counting each id once.
+//
+// It reads the same accessor the rail is rendered from
+// (store.RevisionEventStore.ListOpenQuestions, the one list_open_questions
+// calls), so "open" means the same thing here as it does a few lines above on
+// the page the operator ticked the box on. The store's own validation is
+// deliberately NOT the oracle: it accepts an id resolved by any earlier round,
+// which is what makes the check necessary rather than redundant.
+func (app *App) staleResolveTicks(ctx context.Context, id uuid.UUID, ticked []string) ([]string, error) {
+	open, err := app.revisionEvents.ListOpenQuestions(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	isOpen := make(map[string]bool, len(open))
+	for _, q := range open {
+		isOpen[q.QuestionID] = true
+	}
+	seen := make(map[string]bool, len(ticked))
+	stale := make([]string, 0, len(ticked))
+	for _, qid := range ticked {
+		if isOpen[qid] || seen[qid] {
+			continue
+		}
+		seen[qid] = true
+		stale = append(stale, qid)
+	}
+	return stale, nil
+}
+
+// staleTickRejection is the operator-facing reason a round is refused
+// because one or more of its ticks names a question another round has closed
+// since the page was rendered.
+//
+// It names what happened rather than echoing the id: an operator who ticked a
+// box does not recognise "q-flag-store", but does recognise "already closed
+// since this page loaded". One and several read differently because they
+// call for different operator action -- one is a stray tick, several mean the
+// page is far enough out of date that its rail should not be trusted.
+//
+// The status is this binary's own conflict classification. krill sent no
+// status: the round never reached it, which is the whole point -- the store
+// would have accepted it and dropped the resolve.
+func staleTickRejection(stale int) *writeRejection {
+	if stale == 1 {
+		return &writeRejection{
+			status:  http.StatusConflict,
+			message: "A question you ticked has already been closed since this page loaded, so nothing was sent. It is no longer listed above -- send again to record the rest.",
+		}
+	}
+	return &writeRejection{
+		status: http.StatusConflict,
+		message: fmt.Sprintf("%d questions you ticked have already been closed since this page loaded, so nothing was sent. "+
+			"They are no longer listed above -- reload the page to see the questions still open.", stale),
+	}
 }
 
 // answerSuccessToast is the one message a submitted follow-up reports, on
