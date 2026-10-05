@@ -187,12 +187,18 @@ type CancelledTaskDeliveryRefWire struct {
 // krill/mcp/tools' list_cancelled_tasks tool can return this exact shape
 // rather than an MCP-local mirror (LB7).
 type CancelledTaskWire struct {
-	TaskID                string                       `json:"task_id"`
-	Title                 string                       `json:"title"`
-	DeliveryRef           CancelledTaskDeliveryRefWire `json:"delivery_ref"`
-	CancelledByActing     SubjectWire                  `json:"cancelled_by_acting"`
-	CancelledByOnBehalfOf SubjectWire                  `json:"cancelled_by_on_behalf_of"`
-	CancelledAt           time.Time                    `json:"cancelled_at"`
+	TaskID      string                       `json:"task_id"`
+	Title       string                       `json:"title"`
+	DeliveryRef CancelledTaskDeliveryRefWire `json:"delivery_ref"`
+	// CurrentLane is the lane the task sat in when it was cancelled --
+	// CancelTask leaves the lane where it was rather than routing it.
+	CurrentLane string `json:"current_lane"`
+	// Reason is the intervention's own optional free-text rationale, absent
+	// when the operator gave none.
+	Reason                *string      `json:"reason,omitempty"`
+	CancelledByActing     SubjectWire  `json:"cancelled_by_acting"`
+	CancelledByOnBehalfOf SubjectWire  `json:"cancelled_by_on_behalf_of"`
+	CancelledAt           time.Time    `json:"cancelled_at"`
 }
 
 // ToCancelledTaskWire converts one store.CancelledTaskRow to its wire
@@ -206,6 +212,8 @@ func ToCancelledTaskWire(row store.CancelledTaskRow) CancelledTaskWire {
 			Kind:  string(row.DeliveryRef.Kind),
 			Title: row.DeliveryRef.Title,
 		},
+		CurrentLane:           string(row.Lane),
+		Reason:                row.Reason,
 		CancelledByActing:     ToSubjectWire(row.CancelledByActing),
 		CancelledByOnBehalfOf: ToSubjectWire(row.CancelledByOnBehalfOf),
 		CancelledAt:           row.CancelledAt,

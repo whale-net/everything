@@ -60,21 +60,36 @@ type EscalatedRow struct {
 }
 
 // CancelledRow is one row of the cancelled-task view (newCancelledRow).
+//
+// TaskHref is the product-scoped detail link, built by the loader from
+// the read's own ConsoleFilter (empty on the scope-wide ops view, which
+// names no product). Lane and Reason are the lane the task was cancelled
+// out of and the optional intervention rationale; both come straight off
+// store.CancelledTaskRow.
 type CancelledRow struct {
 	TaskID     string
 	Title      string
+	TaskHref   string
 	Delivery   string
+	Lane       string
 	By         string
 	OnBehalfOf string
 	At         string
+	Reason     string
 }
 
 // NoteRow is one row of the open-notes view (newNoteRow). Target names
-// the note's target entity by id as well as title.
+// the note's target entity by id as well as title; TaskHref is its
+// product-scoped detail link when the target IS a task, and empty when
+// the target is a spec-axis entity (which has no task page to link to).
+// Status is the note's lifecycle status, from the store's own
+// enumeration.
 type NoteRow struct {
 	NoteID    string
 	Kind      string
+	Status    string
 	Target    string
+	TaskHref  string
 	CreatedAt string
 	Body      string
 }
