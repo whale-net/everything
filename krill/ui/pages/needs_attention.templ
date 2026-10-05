@@ -3,6 +3,7 @@ package pages
 import (
 	"strconv"
 
+"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
@@ -305,6 +306,253 @@ func needsAttentionTabSelected(active bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// ---------------------------------------------------------------------------
+// the Claimed tab's table (FR a149d28f)
+// ---------------------------------------------------------------------------
+
+// ClaimedRow is one row of the Claimed tab: the task, the milestone it
+// belongs to, its lane, who holds the claim and for whom, when the claim
+// was taken, when its lease lapses, and the actions legal for a claimed
+// task. Every field is a pre-formatted plain string built by newClaimedRow
+// in package main, so this file stays free of store reach-in and pointer
+// logic.
+//
+// ClaimedSince and LeaseExpiresAt are absolute RFC3339 instants, never a
+// relative "in 4 min". This is the one results block the page polls
+// (claimedPollAttrs, chosen by claimedPollingDue), and a fragment whose
+// bytes shifted between two polls for no state change would make every
+// poll a spurious change. The lease's relative form is derived in the
+// browser from the element's datetime instead (leaseCountdownScript,
+// krill/ui/templ_render.go), which is also what keeps the exact UTC
+// instant available on hover.
+//
+// ClaimID is the claim the row OBSERVED, read from the store row and
+// carried untouched. It is what the row's actions are guarded by: every
+// control posts it back as expected_claim_id, so a claim that changed
+// since the page loaded is refused rather than acted on.
+type ClaimedRow struct {
+	TaskID string
+	Title  string
+	// TaskHref is the product-scoped task detail URL. Empty when the read
+	// was not product-narrowed, in which case the title renders unlinked
+	// rather than pointing at a nil product.
+	TaskHref string
+	// Milestone is the row's delivery reference (a milestone or milepebble
+	// title, store.ClaimedTaskDeliveryRef).
+	Milestone      string
+	Lane           string
+	Claimant       string
+	ClaimedSince   string
+	LeaseExpiresAt string
+	ClaimID        string
+	Actions        templ.Component
+}
+
+// claimedTable is the Claimed tab's rows, in the order the read returned
+// them (soonest lease first).
+//
+// The lane renders through the shared TaskLaneBadge mapper the Tasks list,
+// the Board and the detail already use (FR de4d0e42), so one lane has one
+// colour everywhere.
+templ claimedTable(rows []ClaimedRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No claimed tasks.", "Nothing holds a claim in this scope right now.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm" data-krill="claimed-table">
+				<thead>
+					<tr>
+						<th>Task</th>
+						<th>Milestone</th>
+						<th>Lane</th>
+						<th>Claimant</th>
+						<th>Claimed since</th>
+						<th>Lease expires</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						// data-krill-claim-id is the claim this row observed:
+						// the same value its action controls post.
+						<tr class="hover" data-krill="claimed-row"
+							data-krill-task-id={ row.TaskID } data-krill-claim-id={ row.ClaimID }>
+							<td class="text-sm">
+								if row.TaskHref != "" {
+									<a href={ templ.URL(row.TaskHref) } class="link font-medium" data-krill="task-title">{ row.Title }</a>
+								} else {
+									<span data-krill="task-title">{ row.Title }</span>
+								}
+							</td>
+							<td class="text-sm" data-krill="task-milestone">{ row.Milestone }</td>
+							<td class="text-sm">@TaskLaneBadge(row.Lane)</td>
+							<td class="text-sm" data-krill="task-claimant">{ row.Claimant }</td>
+							<td class="text-sm">
+								<time datetime={ row.ClaimedSince } title={ row.ClaimedSince }>{ row.ClaimedSince }</time>
+							</td>
+							<td class="text-sm">
+								<time data-krill="task-lease" datetime={ row.LeaseExpiresAt } title={ row.LeaseExpiresAt }>{ row.LeaseExpiresAt }</time>
+							</td>
+							<td class="text-sm">
+								<div class="flex flex-wrap items-center gap-1">
+									if row.Actions != nil {
+										@row.Actions
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// ---------------------------------------------------------------------------
+// the Escalated tab's table (FR 772b044b)
+// ---------------------------------------------------------------------------
+//
+// The escalated queue's row shape is its own, not the ops console view's:
+// the operator's question here is "what is stuck, how far did it get, and
+// who do I need to talk to", which is the task, its milestone, its lane,
+// why it escalated, how many attempts it has burned, and when it happened.
+// The rows still come from the one store read (ListEscalatedTasks under the
+// same product filter the other tabs use), so the table cannot show a row
+// set list_escalated_tasks would not.
+
+// NeedsAttentionEscalatedRow is one row of the Escalated tab's table (FR
+// 772b044b). Every field is pre-formatted plain text built by
+// needsAttentionEscalatedRowOf in package main, so this file stays free of
+// store reach-in and pointer logic.
+type NeedsAttentionEscalatedRow struct {
+	// TaskID is the row's data-krill-task-id.
+	TaskID string
+
+	// Title links to the task's product-scoped detail; DetailHref is that
+	// address. The table is not scoped to a milestone, so the per-container
+	// detail URL would name the wrong one for every row but the first.
+	Title      string
+	DetailHref string
+
+	// ByLine is "by <acting> for <on behalf of>", the escalation's own
+	// subjects -- never the operator's, who is not part of this read.
+	ByLine string
+
+	// Milestone is the delivery reference's own title.
+	Milestone string
+
+	// Lane renders through the shared TaskLaneBadge, so this table cannot
+	// drift from the Tasks list, the Board or the detail.
+	Lane string
+
+	// Reason is the store's wire value; the badge renders its human
+	// wording through components.EscalationReasonLabel.
+	Reason string
+
+	// Attempts is the count against the cap, e.g. "2 of 3".
+	Attempts string
+
+	// EscalatedAt is the exact UTC instant, and EscalatedAtRelative its
+	// coarse age. The exact instant is the time element's datetime and
+	// title, so hovering answers "exactly when".
+	EscalatedAt         string
+	EscalatedAtRelative string
+
+	// EscalationID is the escalation the READ observed -- the id the row's
+	// actions are guarded against, taken from the row and never typed.
+	// Empty when the read reported none, which carries no guard.
+	EscalationID string
+
+	// Actions is the row's intervention controls, built in package main
+	// from the observed escalation id.
+	Actions templ.Component
+}
+
+// NeedsAttentionEscalatedData is the Escalated tab's view-model.
+type NeedsAttentionEscalatedData struct {
+	Rows       []NeedsAttentionEscalatedRow
+	NextHref   string
+	Error      string
+	Href       string
+	ReadFailed bool
+}
+
+// EscalatedQueueResults is the Escalated tab's results block. It shares
+// opsResults' swap target (the id every row action and the Refresh button
+// name) and its inline-refusal/next-page furniture, so the tab and the
+// console's other views answer a poll or an intervention the same way.
+templ EscalatedQueueResults(d NeedsAttentionEscalatedData) {
+	@opsResults(OpsResultsData{
+		Table:      escalatedQueueTable(d.Rows),
+		NextHref:   d.NextHref,
+		Error:      d.Error,
+		ReadFailed: d.ReadFailed,
+	})
+}
+
+// escalatedQueueTable is the escalated rows, or the empty state when the
+// queue is genuinely empty. The escalation id rides the row as a data
+// attribute so "which escalation did this row show" is answerable from the
+// markup the operator is looking at.
+templ escalatedQueueTable(rows []NeedsAttentionEscalatedRow) {
+	if len(rows) == 0 {
+		@htmxui.EmptyState("No escalated tasks.", "No task in this scope carries an active escalation.", "", "", nil)
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm" data-krill="escalated-table">
+				<thead>
+					<tr>
+						<th>Task</th>
+						<th>Milestone</th>
+						<th>Lane</th>
+						<th>Reason</th>
+						<th class="text-right">Attempts</th>
+						<th>Escalated</th>
+						<th class="text-right">Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover" data-krill="escalated-row" data-krill-task-id={ row.TaskID } data-krill-escalation-id={ row.EscalationID }>
+							<td class="text-sm">
+								<a href={ templ.URL(row.DetailHref) } class="link font-medium" data-krill="escalated-task-title">{ row.Title }</a>
+								<div class="text-sm text-base-content/70" data-krill="escalated-by">{ row.ByLine }</div>
+							</td>
+							<td class="text-sm" data-krill="escalated-milestone">{ row.Milestone }</td>
+							<td class="text-sm">
+								@TaskLaneBadge(row.Lane)
+							</td>
+							<td class="text-sm">
+								@escalatedReasonBadge(row.Reason)
+							</td>
+							<td class="text-sm text-right" data-krill="escalated-attempts">{ row.Attempts }</td>
+							<td class="text-sm">
+								<time data-krill="escalated-at" datetime={ row.EscalatedAt } title={ row.EscalatedAt }>{ row.EscalatedAtRelative }</time>
+							</td>
+							<td class="text-sm text-right">
+								<div class="flex flex-wrap items-center justify-end gap-1">
+									if row.Actions != nil {
+										@row.Actions
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// escalatedReasonBadge renders one escalation reason through the shared
+// reason vocabulary, so a reason added to the store later cannot render as
+// a blank badge.
+templ escalatedReasonBadge(reason string) {
+	{{ s := components.EscalationReasonStyle(reason) }}
+	@htmxui.Badge(components.EscalationReasonLabel(reason), s.Variant, s.Size, s.Soft,
+		templ.Attributes{"data-krill": "escalated-reason"})
 }
 
 // ---------------------------------------------------------------------------

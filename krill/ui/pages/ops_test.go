@@ -145,11 +145,12 @@ func TestSettledResultsCarryNoPollAttributes(t *testing.T) {
 func TestResultsBlockIsByteStableAcrossRenders(t *testing.T) {
 	data := ClaimedData{
 		Rows: []ClaimedRow{{
-			TaskID:       "t1",
-			Title:        "a settled claim",
-			ClaimedSince: "2026-01-01T00:00:00Z",
-			Lease:        "2026-01-02T03:04:05Z",
-			Claimant:     "https://kc alice (human)",
+			TaskID:         "t1",
+			Title:          "a settled claim",
+			Milestone:      "M5",
+			ClaimedSince:   "2026-01-01T00:00:00Z",
+			LeaseExpiresAt: "2026-01-02T03:04:05Z",
+			Claimant:       "by https://kc alice (human) for https://svc swarm",
 		}},
 		Href: "/ops/claimed",
 	}
@@ -163,9 +164,9 @@ func TestResultsBlockIsByteStableAcrossRenders(t *testing.T) {
 func TestClaimedTableRendersClaimedSince(t *testing.T) {
 	got := render(t, ClaimedResults(ClaimedData{
 		Rows: []ClaimedRow{{
-			TaskID:       "t1",
-			ClaimedSince: "2026-01-01T00:00:00Z",
-			Lease:        "2026-01-02T03:04:05Z",
+			TaskID:         "t1",
+			ClaimedSince:   "2026-01-01T00:00:00Z",
+			LeaseExpiresAt: "2026-01-02T03:04:05Z",
 		}},
 		Href: "/ops/claimed",
 	}))

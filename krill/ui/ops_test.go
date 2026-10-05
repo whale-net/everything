@@ -37,10 +37,18 @@ func TestNewClaimedRowCarriesBothClaimSubjects(t *testing.T) {
 		Title:              "t",
 		ClaimantActing:     store.Subject{Iss: "ai", Sub: "a", Kind: store.SubjectKindHuman},
 		ClaimantOnBehalfOf: store.Subject{Iss: "bi", Sub: "b", Kind: store.SubjectKindService},
-	})
+	}, uuid.Nil, opsClaimedPath)
 	assert.Equal(t, id.String(), row.TaskID)
-	assert.Equal(t, "ai a (human)", row.Claimant, "claimant's acting subject shows its kind")
-	assert.Equal(t, "bi b", row.OnBehalfOf, "the claim's on-behalf-of subject is presented too")
+	assert.Equal(t, "by ai a (human) for bi b", row.Claimant,
+		"the claimant column reads 'by <acting> for <on-behalf-of>'")
+
+	// A claim taken for nobody reads "by <acting>" rather than trailing a
+	// bare "for -": there is no on-behalf-of half to name.
+	sole := newClaimedRow(store.ClaimedTaskRow{
+		TaskID:         uuid.New(),
+		ClaimantActing: store.Subject{Iss: "ai", Sub: "a", Kind: store.SubjectKindHuman},
+	}, uuid.Nil, opsClaimedPath)
+	assert.Equal(t, "by ai a (human)", sole.Claimant)
 }
 
 // TestNewClaimedRowCarriesClaimedSinceThroughOpsTime pins the claimed
@@ -51,14 +59,15 @@ func TestNewClaimedRowCarriesBothClaimSubjects(t *testing.T) {
 func TestNewClaimedRowCarriesClaimedSinceThroughOpsTime(t *testing.T) {
 	claimedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	row := newClaimedRow(store.ClaimedTaskRow{
-		TaskID:           uuid.New(),
-		ClaimedAt:        claimedAt,
-		LeaseExpiresAt:   claimedAt.Add(time.Hour),
+		TaskID:             uuid.New(),
+		ClaimedAt:          claimedAt,
+		LeaseExpiresAt:     claimedAt.Add(time.Hour),
 		ClaimantActing:     store.Subject{Iss: "ai", Sub: "a", Kind: store.SubjectKindHuman},
 		ClaimantOnBehalfOf: store.Subject{Iss: "bi", Sub: "b"},
-	})
+	}, uuid.Nil, opsClaimedPath)
 	assert.Equal(t, "2026-01-02T03:04:05Z", row.ClaimedSince)
-	assert.NotEqual(t, row.ClaimedSince, row.Lease, "claimed-since and lease expiry are different instants and must not collapse")
+	assert.Equal(t, "2026-01-02T04:04:05Z", row.LeaseExpiresAt)
+	assert.NotEqual(t, row.ClaimedSince, row.LeaseExpiresAt, "claimed-since and lease expiry are different instants and must not collapse")
 }
 
 func TestNewEscalatedRowCarriesBothEscalatorSubjects(t *testing.T) {
