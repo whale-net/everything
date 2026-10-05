@@ -373,8 +373,10 @@ func TestTabRowsOfferOnlyTheLegalVerbs(t *testing.T) {
 // current the refusal comes back as an inline alert in the tab's region rather
 // than as a crash, an empty table or an assumed success.
 //
-// The operator-facing refusal RESPONSE contract (fresh ids and the rest) is
-// FR c69a42b4's, a separate task; this only asserts a refusal is presented.
+// The rest of the observer-facing refusal RESPONSE contract (the fresh ids,
+// the no-JS in-shell page, the transport path) is FR c69a42b4's; this asserts
+// the presented refusal, including that it is krill's own wording rather than
+// the store's.
 func TestObservedStateGuardRefusalStaysInline(t *testing.T) {
 	for _, tc := range []struct {
 		name, tab, verb, field string
@@ -402,8 +404,10 @@ func TestObservedStateGuardRefusalStaysInline(t *testing.T) {
 
 			require.Equal(t, http.StatusOK, rec.Code, "a guard refusal is presented, not status-coded")
 			got := rec.Body.String()
-			assert.Contains(t, got, store.ErrObservedStateMismatch.Error(),
-				"the guard's own refusal reaches the operator")
+			assert.Contains(t, got, "changed since the page was loaded",
+				"the guard's refusal reaches the operator in krill's own words (FR c69a42b4)")
+			assert.NotContains(t, got, store.ErrObservedStateMismatch.Error(),
+				"and never as the store's own package-qualified text")
 			assert.Contains(t, got, `role="alert"`, "and it rides inline in the fragment")
 			assert.NotContains(t, got, `data-krill="toast"`,
 				"a refusal is not a success: no toast is raised")

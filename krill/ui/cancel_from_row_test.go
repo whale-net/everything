@@ -477,7 +477,10 @@ func TestCancelCardRefusalIsRebuiltFromFreshState(t *testing.T) {
 
 	got := rec.Body.String()
 	require.Contains(t, got, `id="`+pages.CancelConfirmAnchor+`"`, "the card is re-rendered")
-	assert.Contains(t, got, store.ErrObservedStateMismatch.Error(), "the refusal is explained inline")
+	assert.Contains(t, got, "changed since the page was loaded",
+		"the refusal is explained inline in krill's own words (FR c69a42b4)")
+	assert.NotContains(t, got, store.ErrObservedStateMismatch.Error(),
+		"never as the store's own package-qualified text")
 
 	card := cancelCardForm(t, got, taskID)
 	claim, escalation := guardValues(card)
@@ -510,12 +513,16 @@ func TestCancelCardRefusalIsRebuiltFromFreshState(t *testing.T) {
 // destroy, id="ops-results"); a card-origin refusal re-renders the card (it must
 // NOT render a results region it never targeted).
 func TestCancelRefusalIsAnsweredIntoTheRegionItCameFrom(t *testing.T) {
-	refusal := store.ErrObservedStateMismatch.Error()
+	storeRefusal := store.ErrObservedStateMismatch.Error()
+	// The sentence the operator reads instead of the store's -- krill's own
+	// wording for a claim or escalation that changed since the page loaded
+	// (FR c69a42b4).
+	refusal := "changed since the page was loaded"
 
 	cancelRefusal := func(t *testing.T, target string) string {
 		t.Helper()
 		f := newCancelRowFixture(t)
-		f.api.rejectWrite(http.StatusConflict, `{"error":`+strconv.Quote(refusal)+`}`)
+		f.api.rejectWrite(http.StatusConflict, `{"error":`+strconv.Quote(storeRefusal)+`}`)
 
 		form := url.Values{
 			"reason":             {"force"},
