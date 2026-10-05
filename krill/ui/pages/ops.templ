@@ -168,6 +168,14 @@ type TaskActionControl struct {
 	Action     string
 	ReasonHint string
 	ReturnTo   string
+
+	// ObservedClaimID is the claim the ROW observed, when the row holds one.
+	// The control carries it -- as a hidden expected_claim_id field on the
+	// form, or on the confirmation link's query for the destructive verb --
+	// so the write's guard is checked against the claim the operator
+	// actually saw rather than against whatever is current when they act.
+	// Empty for a control with no claim to guard against.
+	ObservedClaimID string
 }
 
 // InterventionErrorData is the in-shell rejection page's data.
@@ -240,8 +248,18 @@ templ opsPageChrome(d OpsPageData) {
 // only while the state they watch is transient, and because this route's
 // own HX-Request response IS the same fragment, a settled view comes back
 // without them and the loop stops by itself. No client-side timer
-// bookkeeping, no separate refresh endpoint -- hx-get is /ops/claimed
-// itself, and the handler's HX-Request branch answers it.
+// bookkeeping, no separate refresh endpoint -- hx-get is the view's OWN
+// request URI (ClaimedData.Href, the path plus query the operator is on)
+// and the handler's HX-Request branch answers it.
+//
+// That it is d.Href and not a route constant is what lets the poll ride
+// the Needs attention page's Claimed tab (FR a149d28f): the polled
+// fragment carries the tab's own address -- ?tab=claimed, and whatever
+// paging the operator is on -- rather than a fixed /ops/claimed, so a poll
+// cannot move the operator to another tab or back to page one. On the tab
+// the poll names the results block as its target, so it receives that
+// block alone; the strip, its counts and the freshness stamp (whose
+// instant moves every read) stay out of the polled bytes.
 //
 // This is the one place krill's console has a genuine transient state: a
 // lease near expiry. The operator watches the row leave when the lease
@@ -502,6 +520,9 @@ templ TaskActions(controls []TaskActionControl) {
 				class="inline"
 			>
 				<input type="hidden" name="return_to" value={ c.ReturnTo } />
+				if c.ObservedClaimID != "" {
+					<input type="hidden" name="expected_claim_id" value={ c.ObservedClaimID } />
+				}
 				<input type="text" name="reason" placeholder={ c.ReasonHint } size="18" aria-label={ c.ReasonHint } />
 				<button type="submit" class="btn btn-ghost btn-xs">{ c.Label }</button>
 			</form>

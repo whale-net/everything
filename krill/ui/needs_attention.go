@@ -312,6 +312,13 @@ func (app *App) needsAttentionCount(ctx context.Context, scopeID, productID uuid
 // returnTo is the view a no-JS action form returns to, exactly as the
 // console's own rows spell it.
 func newClaimedRow(r store.ClaimedTaskRow, pid uuid.UUID, returnTo string) pages.ClaimedRow {
+	// A read that observed no claim (a zero id) carries none: an all-zero
+	// uuid is not a claim any write could be guarded against, so the row
+	// states nothing rather than stating a false id.
+	claimID := ""
+	if r.ClaimID != uuid.Nil {
+		claimID = r.ClaimID.String()
+	}
 	return pages.ClaimedRow{
 		TaskID:         r.TaskID.String(),
 		Title:          r.Title,
@@ -321,7 +328,7 @@ func newClaimedRow(r store.ClaimedTaskRow, pid uuid.UUID, returnTo string) pages
 		Claimant:       claimedBy(r.ClaimantActing, r.ClaimantOnBehalfOf),
 		ClaimedSince:   opsTime(r.ClaimedAt),
 		LeaseExpiresAt: opsTime(r.LeaseExpiresAt),
-		ClaimID:        r.ClaimID.String(),
+		ClaimID:        claimID,
 		Actions:        claimedRowActions(r, returnTo),
 	}
 }
@@ -371,7 +378,8 @@ func claimedRowVerbs(lane store.Lane) []string {
 }
 
 // claimedRowActions renders a claimed row's controls with the verbs legal
-// for its lane.
+// for its lane, each carrying the claim the row observed so the action's
+// guard is checked against the state the operator actually saw.
 func claimedRowActions(r store.ClaimedTaskRow, returnTo string) templ.Component {
-	return renderTaskActions(r.TaskID.String(), returnTo, claimedRowVerbs(r.CurrentLane)...)
+	return renderClaimedTaskActions(r.TaskID.String(), r.ClaimID, returnTo, claimedRowVerbs(r.CurrentLane)...)
 }

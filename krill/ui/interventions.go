@@ -368,6 +368,13 @@ func interventionReturnTo(r *http.Request) string {
 	return to
 }
 
+// expectedClaimIDParam is the field name a row's controls carry the claim
+// they observed under. It is the api's own wire name
+// (releaseTaskRequest.ExpectedClaimID's json tag, krill/api/handlers/
+// task_release.go), so the value a row posts is the value the api's guard
+// reads, with no translation in between.
+const expectedClaimIDParam = "expected_claim_id"
+
 // renderTaskActions renders the intervention controls for one console row, in
 // the order the verbs are passed. A non-destructive verb renders as an inline
 // doubled form carrying its own reason prompt; a destructive verb renders as
@@ -376,6 +383,42 @@ func interventionReturnTo(r *http.Request) string {
 // resolves the operator's real (iss, sub) server-side from the gated krill
 // session (withKrillSession), not from anything the browser sent.
 func renderTaskActions(taskID, returnTo string, actions ...string) templ.Component {
+	return pages.TaskActions(taskActionControls(taskID, returnTo, actions...))
+}
+
+// renderClaimedTaskActions is renderTaskActions for a row that holds a
+// claim: the same controls, each carrying the claim id the row observed so
+// the action is guarded against the state the operator actually saw. The
+// id comes from the store row the table rendered, never from typed input --
+// the operator cannot type it and cannot be asked to.
+//
+// A row whose read observed no claim (a zero id) renders the plain unguarded
+// controls rather than carrying an all-zero uuid, which is not a claim any
+// write could match.
+func renderClaimedTaskActions(taskID string, claimID uuid.UUID, returnTo string, actions ...string) templ.Component {
+	controls := taskActionControls(taskID, returnTo, actions...)
+	if claimID == uuid.Nil {
+		return pages.TaskActions(controls)
+	}
+	observed := claimID.String()
+	for i := range controls {
+		controls[i].ObservedClaimID = observed
+		// The destructive verb is a LINK to its confirmation page, so its id
+		// rides the query that page and its no-JS form read it from; the
+		// other verbs are forms and carry it as a hidden field.
+		if controls[i].Kind == "confirm" {
+			controls[i].Action = withQueryParam(controls[i].Action, expectedClaimIDParam, observed)
+		}
+	}
+	return pages.TaskActions(controls)
+}
+
+// taskActionControls is the one builder of a row's verb controls: the four
+// verbs' labels and reason prompts, the route a form posts to, and the
+// confirmation link a destructive verb is reached through. Splitting it out
+// keeps one verb vocabulary while letting a row that observed a claim attach
+// it to every control it renders.
+func taskActionControls(taskID, returnTo string, actions ...string) []pages.TaskActionControl {
 	controls := make([]pages.TaskActionControl, 0, len(actions))
 	for _, action := range actions {
 		a, ok := interventionActions[action]
@@ -396,7 +439,23 @@ func renderTaskActions(taskID, returnTo string, actions ...string) templ.Compone
 		}
 		controls = append(controls, control)
 	}
-	return pages.TaskActions(controls)
+	return controls
+}
+
+// withQueryParam sets one query parameter on a URL this package built,
+// preserving whatever the URL already carried. A URL that does not parse is
+// returned unchanged: every caller here spells its own route, so that is a
+// programming mistake rather than a runtime case, and dropping the control
+// would be worse than rendering it without one extra guard.
+func withQueryParam(rawURL, key, value string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	q.Set(key, value)
+	u.RawQuery = q.Encode()
+	return u.RequestURI()
 }
 
 // cancelConfirmHref builds the link to a task's cancel confirmation page,
