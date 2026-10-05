@@ -12,6 +12,12 @@
 // where they are -- the tab-specific shapes are separate requirements
 // (772b044b, a149d28f, b22e1d60) and separate tasks.
 //
+// The Escalated tab has since taken its own shape (772b044b,
+// needsAttentionEscalatedResults): its columns are the ones an operator
+// scans for a stuck task, and they are not the console view's. Its rows
+// still come from the one store read, so "the same rows" holds even where
+// "the same table" no longer does.
+//
 // The four legacy /ops URLs are retired into these tabs (krill/ui/routes.go
 // names each one's successor), so a bookmarked /ops/escalated link opens
 // the Escalated tab of the resolved product rather than a page of its own.
@@ -335,7 +341,7 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	// sentence, so the three cannot describe different containers.
 	containers := app.needsAttentionMilestoneContainers(r.Context(), product.ID)
 	results, err := app.needsAttentionResults(r.Context(), product.ID, filter,
-		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r))
+		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r), readAt)
 	if err != nil {
 		app.writeNeedsAttentionQueryError(w, r, product.ID, filter, containers, tab, err)
 		return
@@ -453,13 +459,22 @@ func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID
 // the matching console view's own component, so the tab and the console
 // view are one derivation (ops.go's four loaders) and one table.
 //
+//
 // filter is the filter bar's narrowing, applied to every tab's read: the
 // milestone selection rides on the store.ConsoleFilter all four reads take,
 // and the reason on ListEscalatedTasksParams' own field, which only the
 // escalated read has. filterLabel names those filters in the operator's
 // words, for the empty state a filtered tab renders instead of its generic
 // "No claimed tasks."
-func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string) (templ.Component, error) {
+//
+// The Escalated tab is the exception on row SHAPE: its columns are its own
+// (FR 772b044b, needsAttentionEscalatedResults below), because what the
+// operator scans there is not the console view's. Its rows are still the one
+// store read, narrowed by the same filter as every other tab.
+//
+// now is the request's read instant, so the escalated tab's relative
+// timestamps are judged against the same moment the freshness stamp reports.
+func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time) (templ.Component, error) {
 	console := filter.console(productID)
 	switch tab {
 	case needsAttentionTabClaimed:
@@ -490,15 +505,160 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 		}
 		return pages.NotesResults(d), nil
 	default:
-		d, err := app.escalatedResults(ctx, console, filter.Reason, page, selfPath)
+		d, err := app.needsAttentionEscalatedResults(ctx, productID, filter, page, selfPath, now)
 		if err != nil {
 			return nil, err
 		}
 		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "escalated tasks"); ok {
 			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
-		return pages.EscalatedResults(d), nil
+		return pages.EscalatedQueueResults(d), nil
 	}
+}
+
+// needsAttentionEscalatedResults reads one page of the Escalated tab (FR
+// 772b044b) and builds its own row contract.
+//
+// It is the one derivation of this tab's data, called by the tab's GET and
+// -- once the intervention path accepts this page's URL -- by a post-write
+// re-derivation, so neither can render a row set the other would not. The
+// read is ListEscalatedTasks under the same ConsoleFilter and reason narrowing
+// every other tab's read takes, so the tab's content matches
+// list_escalated_tasks for the same filters.
+//
+// productID is the page's scope and goes to both the read's narrowing and
+// each row's links, so a row cannot link into a different product than the
+// one it was read for.
+func (app *App) needsAttentionEscalatedResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, page store.PageParams, selfPath string, now time.Time) (pages.NeedsAttentionEscalatedData, error) {
+	scopeID, err := app.soleScopeID(ctx)
+	if err != nil {
+		return pages.NeedsAttentionEscalatedData{}, err
+	}
+	console := filter.console(productID)
+	result, err := app.tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: console,
+		Reason:        filter.Reason,
+		Page:          page,
+	})
+	if err != nil {
+		return pages.NeedsAttentionEscalatedData{}, err
+	}
+	rows := make([]pages.NeedsAttentionEscalatedRow, len(result.Items))
+	for i, row := range result.Items {
+		rows[i] = needsAttentionEscalatedRowOf(row, productID, selfPath, now)
+	}
+	return pages.NeedsAttentionEscalatedData{
+		Rows:     rows,
+		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
+		Href:     selfPath,
+	}, nil
+}
+
+// needsAttentionEscalatedRowOf builds one Escalated-tab row from the read's
+// own row.
+//
+// returnTo is the tab's own URL: the row's controls carry it so an
+// intervention knows which view to re-derive, and it is read back from the
+// request rather than rebuilt, so a paged or filtered tab returns to itself.
+//
+// now is the read instant, so relativeTime answers against the same clock
+// the freshness stamp does.
+func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID, returnTo string, now time.Time) pages.NeedsAttentionEscalatedRow {
+	return pages.NeedsAttentionEscalatedRow{
+		TaskID:     r.TaskID.String(),
+		Title:      r.Title,
+		DetailHref: productTaskDetailPath(productID, r.TaskID),
+		ByLine:     escalatedByLine(r),
+		Milestone:  r.DeliveryRef.Title,
+		Lane:       string(r.Lane),
+		Reason:     string(r.Reason),
+		// The count against the ATTEMPT cap, never the escalation's own
+		// CapValue: for a thrash-cap escalation that figure is the thrash
+		// cap, and labelling an attempt count with it would misreport every
+		// such row. There is no per-task cap column, so the package-wide
+		// default is the cap -- the same fallback taskAttemptsLabel makes
+		// for every other row (task_page.go).
+		Attempts:            taskAttemptsLabel(r.AttemptCount),
+		EscalatedAt:         r.EscalatedAt.UTC().Format(time.RFC3339),
+		EscalatedAtRelative: relativeTime(r.EscalatedAt, now),
+		EscalationID:        observedEscalationID(r),
+		Actions:             escalatedRowActions(r.TaskID.String(), observedEscalationID(r), string(r.Lane), returnTo),
+	}
+}
+
+// escalatedGuardField is the form field the Escalated tab's controls submit
+// their observed escalation id under. It is the api request body's own
+// field name (handlers.requeueTaskRequest.ExpectedEscalationID and
+// handlers.cancelTaskRequest.ExpectedEscalationID), so a submitted guard
+// reaches krill api unchanged rather than being renamed on the way through.
+const escalatedGuardField = "expected_escalation_id"
+
+// escalatedRowActions builds one escalated row's controls (FR 772b044b):
+// Requeue and Cancel, and never Release -- an escalated task holds no
+// claim, so there is nothing to force-close.
+//
+// Both controls carry the escalation id THIS row observed: Requeue as a
+// hidden form field, Cancel as a query parameter on its confirmation link,
+// since the destructive verb's control is a link rather than a form. The id
+// is taken from the row and never typed, so an escalation that changed
+// since the page loaded is refused against what the operator saw rather
+// than against whatever is current.
+//
+// A Done-lane task is offered no Cancel (FR af61631d): the task is
+// finished, and dead-lettering it is not an intervention this queue may
+// offer. Requeue stays, because returning a finished-but-escalated task to
+// claimable is the recovery the queue exists for.
+func escalatedRowActions(taskID, escalationID, lane, returnTo string) templ.Component {
+	requeue := interventionActions[actionRequeue]
+	controls := []pages.TaskActionControl{{
+		Kind:          "form",
+		Label:         requeue.Label,
+		ReasonHint:    requeue.ReasonHint,
+		Action:        opsTaskActionBase + taskID + "/" + actionRequeue,
+		ReturnTo:      returnTo,
+		ObservedField: escalatedGuardField,
+		ObservedID:    escalationID,
+	}}
+	if lane != string(store.LaneDone) {
+		cancel := interventionActions[actionCancel]
+		href := cancelConfirmHref(taskID, returnTo)
+		if escalationID != "" {
+			href += "&" + url.Values{escalatedGuardField: {escalationID}}.Encode()
+		}
+		controls = append(controls, pages.TaskActionControl{
+			Kind:     "confirm",
+			Label:    cancel.Label,
+			Action:   href,
+			ReturnTo: returnTo,
+		})
+	}
+	return pages.TaskActions(controls)
+}
+
+// observedEscalationID is the row's observed escalation id as a string,
+// empty when the read somehow reported none. An escalated row always
+// carries one (ListEscalatedTasks reads current_escalation_id IS NOT
+// NULL), and the empty spelling is what keeps a row that did not from
+// rendering a zero-UUID guard -- a guard that would refuse every action.
+func observedEscalationID(r store.EscalatedTaskRow) string {
+	if r.EscalationID == uuid.Nil {
+		return ""
+	}
+	return r.EscalationID.String()
+}
+
+// escalatedByLine is the escalation's own subjects, as the row's sub-line:
+// who escalated it, and who they were acting for when they did. A
+// subject-less side reads as "-" through opsActor/opsSubject, and an
+// escalation with no on-behalf-of states only the acting half rather than
+// "for -".
+func escalatedByLine(r store.EscalatedTaskRow) string {
+	by := opsActor(r.EscalatedByActing)
+	if of := opsSubject(r.EscalatedByOnBehalfOf); of != "-" {
+		return "by " + by + " for " + of
+	}
+	return "by " + by
 }
 
 // needsAttentionEmptyData is the empty state a filtered tab renders, or ok

@@ -186,6 +186,20 @@ type TaskActionControl struct {
 	Action     string
 	ReasonHint string
 	ReturnTo   string
+
+	// ObservedID is the id of the state this control's row observed, and
+	// the guard the write is checked against -- an escalated row's
+	// escalation id, a claimed row's claim id. A form control carries it
+	// as a hidden ObservedField input, so a state that changed since the
+	// page loaded is refused rather than acted on. Empty is unguarded,
+	// which is only right where the row observed nothing to guard.
+	ObservedID string
+
+	// ObservedField is the form field ObservedID is submitted under. It is
+	// the api request field's own name ("expected_escalation_id"), so the
+	// console forwards it to krill api unchanged rather than renaming it on
+	// the way through.
+	ObservedField string
 }
 
 // InterventionErrorData is the in-shell rejection page's data.
@@ -575,6 +589,9 @@ templ TaskActions(controls []TaskActionControl) {
 				class="inline"
 			>
 				<input type="hidden" name="return_to" value={ c.ReturnTo } />
+				if c.ObservedID != "" {
+					<input type="hidden" name={ c.ObservedField } value={ c.ObservedID } />
+				}
 				<input type="text" name="reason" placeholder={ c.ReasonHint } size="18" aria-label={ c.ReasonHint } />
 				<button type="submit" class="btn btn-ghost btn-xs">{ c.Label }</button>
 			</form>
