@@ -216,40 +216,37 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 			return
 		}
 
-		// A rejection is api's own status and message. The no-JS browser
-		// reads it as a page in the shell, so the operator sees the same
-		// refusal a direct api caller would; the htmx browser reads it
-		// inline, because it is swapping a fragment and never sees a status.
+		// A rejection is api's own status and message, mapped once for all
+		// four verbs into krill's own wording (interventionRefusalOf): the
+		// api returns a store sentinel verbatim, and that text names a Go
+		// package rather than telling the operator anything. The no-JS
+		// browser reads the refusal as a page in the shell, at the status
+		// the failure earned; the htmx browser reads it inline, because it
+		// is swapping a fragment and never sees a status.
 		status, message := interventionRejection(resp)
-		if isHtmxRequest(r) {
-			refusal := "krill rejected the " + actionLabel(action) + ". " + message
-			// A refused cancel is answered into whichever of its two regions
-			// the request came from. The confirm card swaps ITSELF, so a
-			// refusal posted from the card re-renders the card -- rebuilt from
-			// freshly read state, never from the ids the refused request
-			// carried, because those are exactly the ids the store just
-			// refused. The row's control, by contrast, swaps the results
-			// block, so a refusal there is answered like the other three verbs:
-			// the view re-derived from fresh state with the refusal inline.
-			if action == actionCancel && !cancelRefusalFromTheRow(r) {
-				if fresh, ok := app.freshCancelConfirmData(r.Context(), taskID, returnTo, refusal); ok {
-					renderFragment(w, r, pages.CancelConfirmCard(fresh))
-					return
-				}
-				// The state a confirmation would re-offer could not be
-				// re-read, so re-offering one at all would be guessing at the
-				// guard. Say the view could not be reloaded instead, the same
-				// answer the three in-place verbs give when their view cannot
-				// be rebuilt.
+		refusal := interventionRefusalOf(status, message)
+		logInterventionRefusal(action, status, refusal, message)
+
+		// A refused cancel is answered into whichever of its two regions the
+		// request came from. The confirm card swaps ITSELF, so a refusal
+		// posted from the card re-renders the card -- rebuilt from freshly
+		// read state, never from the ids the refused request carried, because
+		// those are exactly the ids the store just refused. The row's
+		// control, by contrast, swaps the results block, so a refusal there
+		// is answered like the other three verbs: the view re-derived from
+		// fresh state with the refusal inline.
+		if isHtmxRequest(r) && action == actionCancel && !cancelRefusalFromTheRow(r) {
+			if fresh, ok := app.freshCancelConfirmData(r.Context(), taskID, returnTo, refusal.message(action)); ok {
+				renderFragment(w, r, pages.CancelConfirmCard(fresh))
+				return
 			}
-			app.renderInterventionResults(w, r, returnTo, refusal, "")
-			return
+			// The state a confirmation would re-offer could not be re-read,
+			// so re-offering one at all would be guessing at the guard. Fall
+			// through to the shared answer, which says the view could not be
+			// reloaded -- the same answer the three in-place verbs give when
+			// their view cannot be rebuilt.
 		}
-		app.renderShellStatus(w, r, "Intervention rejected", opsPath, pages.InterventionError(pages.InterventionErrorData{
-			Heading:  "krill rejected the " + actionLabel(action) + ".",
-			Detail:   message,
-			ReturnTo: returnTo,
-		}), status)
+		app.writeInterventionRefusal(w, r, action, returnTo, refusal, status)
 	}
 }
 
