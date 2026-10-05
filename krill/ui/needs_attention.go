@@ -311,7 +311,57 @@ func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID,
 		EscalatedAt:         r.EscalatedAt.UTC().Format(time.RFC3339),
 		EscalatedAtRelative: relativeTime(r.EscalatedAt, now),
 		EscalationID:        observedEscalationID(r),
+		Actions:             escalatedRowActions(r.TaskID.String(), observedEscalationID(r), string(r.Lane), returnTo),
 	}
+}
+
+// escalatedGuardField is the form field the Escalated tab's controls submit
+// their observed escalation id under. It is the api request body's own
+// field name (handlers.requeueTaskRequest.ExpectedEscalationID and
+// handlers.cancelTaskRequest.ExpectedEscalationID), so a submitted guard
+// reaches krill api unchanged rather than being renamed on the way through.
+const escalatedGuardField = "expected_escalation_id"
+
+// escalatedRowActions builds one escalated row's controls (FR 772b044b):
+// Requeue and Cancel, and never Release -- an escalated task holds no
+// claim, so there is nothing to force-close.
+//
+// Both controls carry the escalation id THIS row observed: Requeue as a
+// hidden form field, Cancel as a query parameter on its confirmation link,
+// since the destructive verb's control is a link rather than a form. The id
+// is taken from the row and never typed, so an escalation that changed
+// since the page loaded is refused against what the operator saw rather
+// than against whatever is current.
+//
+// A Done-lane task is offered no Cancel (FR af61631d): the task is
+// finished, and dead-lettering it is not an intervention this queue may
+// offer. Requeue stays, because returning a finished-but-escalated task to
+// claimable is the recovery the queue exists for.
+func escalatedRowActions(taskID, escalationID, lane, returnTo string) templ.Component {
+	requeue := interventionActions[actionRequeue]
+	controls := []pages.TaskActionControl{{
+		Kind:          "form",
+		Label:         requeue.Label,
+		ReasonHint:    requeue.ReasonHint,
+		Action:        opsTaskActionBase + taskID + "/" + actionRequeue,
+		ReturnTo:      returnTo,
+		ObservedField: escalatedGuardField,
+		ObservedID:    escalationID,
+	}}
+	if lane != string(store.LaneDone) {
+		cancel := interventionActions[actionCancel]
+		href := cancelConfirmHref(taskID, returnTo)
+		if escalationID != "" {
+			href += "&" + url.Values{escalatedGuardField: {escalationID}}.Encode()
+		}
+		controls = append(controls, pages.TaskActionControl{
+			Kind:     "confirm",
+			Label:    cancel.Label,
+			Action:   href,
+			ReturnTo: returnTo,
+		})
+	}
+	return pages.TaskActions(controls)
 }
 
 // observedEscalationID is the row's observed escalation id as a string,
