@@ -174,9 +174,12 @@ type NotesData struct {
 }
 
 // TaskActionControl is one control on a console row: an inline form for a
-// non-destructive verb (Kind "form") or a link to a destructive verb's
-// confirmation page (Kind "confirm"). Populated by renderTaskActions in
-// package main, which owns the verb vocabulary; this file only renders.
+// non-destructive verb (Kind "form") or, for a destructive verb (Kind
+// "confirm"), a control whose two halves are two different routes -- the
+// htmx half posts the verb after hx-confirm, the no-JS half opens the
+// confirmation page that verb is reached through. Populated by
+// renderTaskActions in package main, which owns the verb vocabulary; this
+// file only renders.
 type TaskActionControl struct {
 	Kind       string
 	Label      string
@@ -184,10 +187,22 @@ type TaskActionControl struct {
 	ReasonHint string
 	ReturnTo   string
 
+	// PostAction is the htmx half's route: the verb's own POST, which the
+	// browser issues only after accepting Confirm. It is set for a
+	// destructive control, whose no-JS half is a GET to Action (the
+	// confirmation page) because nothing may post to the destructive route
+	// without an explicit confirmation. A non-destructive control leaves it
+	// empty and posts Action on both halves.
+	PostAction string
+
+	// Confirm is the hx-confirm copy the destructive control shows before it
+	// posts anything. It names the task, so the operator confirms the row
+	// they meant rather than the row that happens to be at that position.
+	Confirm string
+
 	// ObservedClaimID is the claim the ROW observed, when the row holds one.
-	// The control carries it -- as a hidden expected_claim_id field on the
-	// form, or on the confirmation link's query for the destructive verb --
-	// so the write's guard is checked against the claim the operator
+	// The control carries it as a hidden expected_claim_id field, on both
+	// halves, so the write's guard is checked against the claim the operator
 	// actually saw rather than against whatever is current when they act.
 	// Empty for a control with no claim to guard against.
 	ObservedClaimID string
@@ -216,11 +231,27 @@ type InterventionErrorData struct {
 
 // CancelConfirmData is the cancel-confirm card's data. Error carries a
 // refusal to present inline when the card is re-rendered after one.
+//
+// The observed-state guard fields are the same ones TaskActionControl
+// carries, for the same reason: the card's form is the no-JavaScript half of
+// a row's Cancel, so it posts the id the row observed and a claim or
+// escalation that changed since the row was read is refused. At most one of
+// ObservedClaimID and ObservedID is set -- a claimed row observed a claim, an
+// escalated row an escalation, a ready task neither.
 type CancelConfirmData struct {
 	TaskID   string
 	Action   string
 	ReturnTo string
 	Error    string
+
+	// ObservedClaimID is the claim the acting row observed, submitted as the
+	// api's own expected_claim_id field.
+	ObservedClaimID string
+
+	// ObservedID is the escalation the acting row observed, submitted under
+	// ObservedField (the api request field's own name).
+	ObservedID    string
+	ObservedField string
 }
 
 // ---------------------------------------------------------------------------
@@ -528,15 +559,21 @@ templ notesTable(rows []NoteRow) {
 // ---------------------------------------------------------------------------
 
 // TaskActions renders the intervention controls for one console row. A
-// non-destructive verb is an inline form carrying its own reason prompt; a
-// destructive verb is a plain link to its confirmation page, so nothing
-// posts until the operator confirms on the next page.
+// non-destructive verb is an inline doubled form carrying its own reason
+// prompt; a destructive verb is a doubled control whose two halves are two
+// routes -- htmx confirms (hx-confirm) and posts the verb in place, while a
+// no-JS browser submits the same form as a GET to the verb's confirmation
+// page. Nothing posts to the destructive route without an explicit
+// confirmation either way; the difference is only which confirmation the
+// browser gets.
 //
-// Every form is doubled -- method="post" + action= AND hx-post +
-// hx-target + hx-swap (htmxui ARCHITECTURE §9: the <form> element and its
-// hx-* attributes stay app-owned). A no-JS browser takes exactly the
-// branch it took before, so the 303 it gets back is unchanged; an htmx
-// browser gets the view's results block re-derived in place at 200.
+// Both halves are doubled in the same sense as the non-destructive form
+// (htmxui ARCHITECTURE §9: the <form> element and its hx-* attributes stay
+// app-owned): the no-JS half is method="get" + action= the confirmation
+// page, the htmx half is hx-post the verb + hx-target + hx-swap. The
+// observed-state ids ride hidden inputs, so both halves carry the id the row
+// observed -- to the confirmation page as query parameters, to the verb as
+// body fields.
 templ TaskActions(controls []TaskActionControl) {
 	for _, c := range controls {
 		if c.Kind == "form" {
@@ -559,7 +596,24 @@ templ TaskActions(controls []TaskActionControl) {
 				<button type="submit" class="btn btn-ghost btn-xs">{ c.Label }</button>
 			</form>
 		} else {
-			<a href={ templ.URL(c.Action) } class="btn btn-error btn-xs">{ c.Label }…</a>
+			<form
+				method="get"
+				action={ templ.URL(c.Action) }
+				hx-post={ c.PostAction }
+				hx-target={ "#" + opsResultsID }
+				hx-swap="outerHTML"
+				hx-confirm={ c.Confirm }
+				class="inline"
+			>
+				<input type="hidden" name="return_to" value={ c.ReturnTo } />
+				if c.ObservedClaimID != "" {
+					<input type="hidden" name="expected_claim_id" value={ c.ObservedClaimID } />
+				}
+				if c.ObservedID != "" {
+					<input type="hidden" name={ c.ObservedField } value={ c.ObservedID } />
+				}
+				<button type="submit" class="btn btn-error btn-xs">{ c.Label }</button>
+			</form>
 		}
 	}
 }
@@ -622,6 +676,12 @@ templ InterventionError(d InterventionErrorData) {
 // a refusal re-renders this same card at 200 with the reason inline --
 // the operator's typed rationale stays on screen instead of vanishing
 // behind a status code.
+//
+// It also carries the observed-state guard the acting row handed it, as
+// hidden inputs on its form: this card IS the no-JavaScript half of a row's
+// Cancel, so the id the row observed has to survive the round trip through
+// this page for the eventual POST to be guarded against the state the
+// operator saw.
 templ CancelConfirmCard(d CancelConfirmData) {
 	<div id={ cancelConfirmID } class="card bg-base-100 border-2 border-error/40 shadow-md">
 		<div class="card-body">
@@ -641,6 +701,12 @@ templ CancelConfirmCard(d CancelConfirmData) {
 				class="mt-4"
 			>
 				<input type="hidden" name="return_to" value={ d.ReturnTo } />
+				if d.ObservedClaimID != "" {
+					<input type="hidden" name="expected_claim_id" value={ d.ObservedClaimID } />
+				}
+				if d.ObservedID != "" {
+					<input type="hidden" name={ d.ObservedField } value={ d.ObservedID } />
+				}
 				<label class="form-control" for="reason">
 					<span class="label-text">Reason (required):</span>
 					<textarea id="reason" name="reason" rows="3" cols="48" required class="textarea textarea-bordered"></textarea>
