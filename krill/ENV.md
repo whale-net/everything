@@ -147,7 +147,7 @@ migration `006_mcpauth_credential`).
 | Variable | Default | Description |
 |----------|---------|--------------|
 | `KRILL_UI_ADDR` | `:8080` | Address `ui`'s HTTP surface listens on. |
-| `AUTH_MODE` | `none` | `none` (dev-only synthetic user, no Keycloak) or `oidc` (real Keycloak sign-in). |
+| `AUTH_MODE` | `none` | `none` (dev-only synthetic user, no Keycloak) or `oidc` (real Keycloak sign-in). Under `none` the synthetic operator resolves to the dev identity (`krill-dev` / `dev-operator`, the pair api's own dev token resolves to), so identity-bearing surfaces — **`/account/credentials` in full: list, mint, and revoke** — are exercisable locally with no Keycloak. `oidc` is unchanged: a session that does not resolve still yields no identity. |
 | `KRILL_OIDC_ISSUER` | `""` | Keycloak realm issuer URL. Required when `AUTH_MODE=oidc`. |
 | `KRILL_OIDC_CLIENT_ID` / `KRILL_OIDC_CLIENT_SECRET` | `""` | Keycloak client credentials. Required when `AUTH_MODE=oidc`. |
 | `KRILL_DEV_API_TOKEN` | `""` | Dev only; honored only under `AUTH_MODE=none`. Forwarded to api as the bearer for writes; must equal api's `KRILL_DEV_AUTH_TOKEN`. |

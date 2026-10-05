@@ -256,6 +256,12 @@ go_test(
     embed = [":ui_lib"],
     deps = [
         "//krill/api/handlers",
+        # The dev-identity tests assert the UI's dev pair against api's own
+        # dev-token constants and decode it through the one Encode/Decode,
+        # so a local read and a local write are pinned to the same identity
+        # rather than to two restatements of it.
+        "//krill/api/authdoor",
+        "//krill/identity",
         # The credentials handler tests resolve the caller's realm roles
         # through the same RoleConfig api's reader gate uses, so the page's
         # reader gate is checked against the one rule rather than a copy.
