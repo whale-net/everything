@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/krill/slice"
@@ -559,6 +560,54 @@ func (app *App) handleProductTaskDetail(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// taskInterventionStateOf reads the state a task's intervention legality is
+// decided from: the same view-level reading the Needs attention rows make of
+// their own row, taken from the task the detail loaded. The states are
+// mutually exclusive and the terminal one wins -- a cancelled task carries no
+// intervention whatever else the row says -- then an escalation, then a live
+// claim, and otherwise the task is ready.
+func taskInterventionStateOf(t store.Task) taskInterventionState {
+	switch {
+	case t.CancelledAt != nil:
+		return taskInterventionCancelled
+	case t.CurrentEscalationID != nil:
+		return taskInterventionEscalated
+	case t.CurrentClaimID != nil:
+		return taskInterventionClaimed
+	default:
+		return taskInterventionReady
+	}
+}
+
+// taskDetailActions renders the detail's intervention controls (FR af61631d)
+// from the ONE shared legality predicate, so the detail and the Needs
+// attention rows cannot drift into two readings of which verbs a state
+// offers. It returns nil when the predicate offers none, which the view model
+// renders as no callout at all.
+//
+// Each control carries what THIS page observed -- the claim id for Release,
+// Escalate and Cancel on a claimed task, the escalation id for Requeue and
+// Cancel on an escalated one, and neither on a ready task -- taken from the
+// task the page loaded and never from typed input, so a claim or escalation
+// that changed since the read is refused against the state the operator
+// actually saw.
+func taskDetailActions(t store.Task, returnTo string) templ.Component {
+	state := taskInterventionStateOf(t)
+	verbs := legalInterventions(state, t.CurrentLane)
+	if len(verbs) == 0 {
+		return nil
+	}
+	taskID := t.ID.String()
+	switch state {
+	case taskInterventionClaimed:
+		return renderClaimedTaskActions(taskID, t.Title, *t.CurrentClaimID, returnTo, verbs...)
+	case taskInterventionEscalated:
+		return renderEscalatedTaskActions(taskID, t.Title, t.CurrentEscalationID.String(), returnTo, verbs...)
+	default:
+		return renderTaskActions(taskID, t.Title, returnTo, verbs...)
+	}
+}
+
 // serveTaskDetail is the one read-and-render both detail routes share:
 // resolve the task, refuse it unless container says this URL's answer, then
 // compose and serve. That resolver is the only thing the two routes disagree
@@ -655,6 +704,13 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 	// rather than failing (FR 7e463e31).
 	page.Tab = taskDetailTabOf(r)
 	page.Tabs = taskDetailTabsOf(r.URL.Path, page.Tab, page.Notes, page.NotesError, page.Deps, page.DepsError)
+	// The detail's own actions are bound to the shared legality predicate
+	// (FR af61631d). return_to is this page's own address -- path AND query,
+	// so the tab survives the round trip -- and it is validated on the way
+	// back by the same guard every other return path goes through
+	// (interventionReturnTo), so a detail-page control can never be pointed
+	// off-site or at a path this binary does not serve.
+	page.Actions = taskDetailActions(task, r.URL.RequestURI())
 	// A tab click and a Refresh are the same route asked for different
 	// things. HX-Target is what tells them apart: the tabs target the
 	// panel region, the Refresh button targets the whole detail section.

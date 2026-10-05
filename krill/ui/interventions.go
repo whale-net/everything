@@ -455,6 +455,36 @@ func needsAttentionProductOfPath(path string) (uuid.UUID, bool) {
 	return pid, true
 }
 
+// productTaskDetailOfPath returns the product a product-scoped task detail
+// path is scoped to, when the path is exactly one of this binary's own:
+// /products/{pid}/tasks/{tid} (the route main.go registers for
+// handleProductTaskDetail). Any other shape -- a different sub-page, a
+// missing or malformed task id, a trailing segment -- answers false, so a
+// detail page's return path is honoured only when it is a page this binary
+// actually serves.
+func productTaskDetailOfPath(path string) (uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(path, productsPath+"/")
+	if !ok {
+		return uuid.Nil, false
+	}
+	rawPID, suffix, ok := strings.Cut(rest, "/")
+	if !ok {
+		return uuid.Nil, false
+	}
+	rawTID, ok := strings.CutPrefix(suffix, strings.TrimPrefix(tasksSuffix, "/")+"/")
+	if !ok || rawTID == "" || strings.Contains(rawTID, "/") {
+		return uuid.Nil, false
+	}
+	pid, err := uuid.Parse(rawPID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	if _, err := uuid.Parse(rawTID); err != nil {
+		return uuid.Nil, false
+	}
+	return pid, true
+}
+
 // legacyOpsTab is the Needs attention tab a retired ops console URL becomes
 // (routes.go's legacyURLs), or ok false for a path that was never one of the
 // console's views. The console root names no queue of its own, so it is the
@@ -503,12 +533,15 @@ func interventionRejection(resp *http.Response) (int, string) {
 }
 
 // interventionReturnTo is the view a successful intervention returns to,
-// read from the form's return_to field. Two of this binary's own path
+// read from the form's return_to field. Three of this binary's own path
 // shapes are honored, and nothing else: the ops console's own paths
-// (/ops/...), and a product-scoped Needs attention tab
+// (/ops/...), a product-scoped Needs attention tab
 // (/products/{pid}/needs-attention), which is where every row control now
-// posts from so the operator lands back on the tab they acted from.
-// Anything unrecognized (or absent) falls back to the ops root.
+// posts from so the operator lands back on the tab they acted from, and a
+// product-scoped task detail (/products/{pid}/tasks/{tid}), which is where
+// the detail page's own controls post from so they land back on the detail
+// rather than on a queue (FR af61631d). Anything unrecognized (or absent)
+// falls back to the ops root.
 func interventionReturnTo(r *http.Request) string {
 	fallback := opsPath
 	to := strings.TrimSpace(r.FormValue("return_to"))
@@ -530,7 +563,9 @@ func interventionReturnTo(r *http.Request) string {
 	//   - Matching at segment boundaries rejects "/opsarchive", which
 	//     shares the raw prefix but is not a view this binary serves, and
 	//     the same boundary rule is what admits a Needs attention tab URL
-	//     without admitting "/products/{pid}/needs-attention/anything".
+	//     or a task detail URL without admitting
+	//     "/products/{pid}/needs-attention/anything" or
+	//     "/products/{pid}/tasks/{tid}/anything".
 	//
 	// None of these is an open-redirect defence on its own: the value is
 	// only ever used as a same-origin Location or HX-Redirect. They are
@@ -545,7 +580,9 @@ func interventionReturnTo(r *http.Request) string {
 	}
 	if u.Path != opsPath && !strings.HasPrefix(u.Path, opsPath+"/") {
 		if _, ok := needsAttentionProductOfPath(u.Path); !ok {
-			return fallback
+			if _, ok := productTaskDetailOfPath(u.Path); !ok {
+				return fallback
+			}
 		}
 	}
 	return to

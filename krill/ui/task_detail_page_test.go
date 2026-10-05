@@ -914,18 +914,25 @@ func TestTaskDetailFragmentShapeAndReadOnly(t *testing.T) {
 	assert.Contains(t, frag, `data-krill="refresh"`)
 	assert.Contains(t, frag, `hx-get="`+taskDetailPath(f.pid, f.mid, task.ID)+`"`)
 
-	// The read-only assertions are about THIS page's surface, which is the
-	// whole fragment for an htmx request and the detail region inside
-	// <main> for a page. The chrome around it is not the page's: the
-	// sidebar's Product switcher is a form of its own, and asserting
-	// against the whole document would make this page's read-only contract
-	// depend on whether the switcher happens to have anything to pick.
+	// The read-only assertions are about the parts of THIS page that stay
+	// read-only: the tab panel and the properties rail. The page as a whole
+	// is no longer read-only -- its actions callout carries the intervention
+	// controls (FR af61631d) -- so pinning the whole fragment would assert
+	// the opposite of what this milestone delivers. The callout is excluded
+	// from each region below and asserted on its own.
+	//
+	// The chrome around the page is still not the page's: the sidebar's
+	// Product switcher is a form of its own, and asserting against the whole
+	// document would make this page's read-only contract depend on whether
+	// the switcher happens to have anything to pick.
 	region := regionBetween(t, full, `data-krill="task-detail"`, "</main>")
 	for _, body := range []string{frag, region} {
-		assert.NotContains(t, body, "<form")
-		assert.NotContains(t, body, "hx-post")
-		assert.NotContains(t, body, "hx-put")
-		assert.NotContains(t, body, "hx-delete")
-		assert.NotContains(t, body, `hx-trigger="every`)
+		readOnly := regionBetween(t, body, `data-krill="task-panel-body"`, `</aside>`)
+		assert.NotContains(t, readOnly, "<form")
+		assert.NotContains(t, readOnly, "hx-post")
+		assert.NotContains(t, readOnly, "hx-put")
+		assert.NotContains(t, readOnly, "hx-delete")
+		assert.NotContains(t, readOnly, `hx-trigger="every`)
 	}
+	assert.Contains(t, frag, `data-krill="task-actions"`)
 }

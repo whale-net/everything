@@ -290,6 +290,15 @@ type TaskDetailPage struct {
 	BoardPath     string
 	ContainerName string
 
+	// Actions is the task's intervention controls, built in package main
+	// from the ONE shared legality predicate (krill/ui/intervention_legality.go):
+	// the detail offers exactly the verbs the Needs attention rows offer for
+	// the same state and lane, and no verb a state forbids. It is nil when no
+	// verb is legal -- a cancelled task, or a ready one in the Done lane --
+	// and a nil component renders no callout at all rather than an empty
+	// Actions box claiming there is nothing to do.
+	Actions templ.Component
+
 	// Tab is the resolved tab key -- one of the four constants above, and
 	// never a raw ?tab= value: the handler resolves an unknown one to
 	// overview before the view model sees it, so a component never has to
@@ -336,6 +345,7 @@ templ TaskDetail(page TaskDetailPage) {
 			<a href={ templ.URL(page.TasksPath) } class="link link-primary" data-krill="tasks-link">Back to { page.ContainerName } tasks</a>
 			<a href={ templ.URL(page.BoardPath) } class="link link-primary ml-2" data-krill="board-link">Board</a>
 		</p>
+		@taskActionsCallout(page)
 		<div class="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="task-detail-frame">
 			<section class="min-w-0 space-y-4" data-krill="task-detail-main">
 				@taskLaneSteps(page.Steps)
@@ -347,6 +357,27 @@ templ TaskDetail(page TaskDetailPage) {
 			</aside>
 		</div>
 	</section>
+}
+
+// taskActionsCallout is the detail's actions region: the intervention
+// controls legal for the task's state, inside the section a post-action
+// re-render swaps so the header, the rail and this callout move together
+// (FR af61631d).
+//
+// It renders NOTHING when no verb is legal. A cancelled task offers no
+// action, and an empty "Actions" box beside it would read as a control that
+// failed to render rather than as the terminal state the task is in.
+templ taskActionsCallout(page TaskDetailPage) {
+	if page.Actions != nil {
+		<div class="mt-4 card bg-base-100 border border-base-300" data-krill="task-actions">
+			<div class="card-body gap-2 p-4">
+				<h2 class="card-title text-sm font-semibold">Actions</h2>
+				<div class="flex flex-wrap items-center gap-2">
+					@page.Actions
+				</div>
+			</div>
+		</div>
+	}
 }
 
 // taskPropertiesCard is the rail's properties card: one label/value row per

@@ -285,9 +285,12 @@ func TestTaskDetailFullFragmentIsStillOneSection(t *testing.T) {
 		assert.NotContains(t, frag, outside,
 			"%s is outside the swap region and must not travel with the panel", outside)
 	}
-	// The read-only contract still holds on a tabbed page: the tab strip
-	// is four links, not four forms.
-	for _, body := range []string{frag, region} {
+	// The read-only contract still holds on a tabbed page's READ-ONLY
+	// regions: the panel and the rail carry links and no form. The page's
+	// actions callout is its one write surface (FR af61631d) and sits
+	// outside both, so it is excluded rather than pinned absent.
+	panelAndRail := regionBetween(t, region, `data-krill="task-panel-body"`, `</aside>`)
+	for _, body := range []string{frag, panelAndRail} {
 		assert.NotContains(t, body, "<form")
 		assert.NotContains(t, body, "hx-post")
 	}
