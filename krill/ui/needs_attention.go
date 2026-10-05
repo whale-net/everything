@@ -346,19 +346,27 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 		app.writeNeedsAttentionQueryError(w, r, product.ID, filter, containers, tab, err)
 		return
 	}
-	results := view.Results
 
 	// The results block alone: the claimed tab's poll and the Refresh
 	// button both name it, and neither may take the strip with it. The
 	// freshness stamp rides with the strip for that reason as well: its
 	// instant moves on every read, and a polled fragment owes byte-stable
-	// bytes for unchanged state.
+	// bytes for unchanged state. Neither the strip nor the footer is in this
+	// fragment, so the tab counts are not read on this branch -- the
+	// always-on poll must not re-count every queue every few seconds.
 	if htmx && !needsAttentionPanelSwap(r) {
-		renderFragment(w, r, results)
+		renderFragment(w, r, view.Results)
 		return
 	}
 
-	d := app.needsAttentionPage(r, product.ID, filter, containers, tab, readAt, results, view.Paging)
+	// The strip is read once here and shared: its badge for the active tab
+	// is also the paging footer's total, so the two cannot disagree, and the
+	// count reads happen only on the responses that render the strip.
+	tabs := app.needsAttentionTabs(r.Context(), product.ID, tab, filter)
+	total, hasTotal := needsAttentionActiveTotal(tabs, tab)
+
+	d := app.needsAttentionPage(r, filter, containers, tab, readAt, tabs, view.Results,
+		needsAttentionFooter(view.Shown, total, hasTotal, view.NextHref))
 	if htmx {
 		renderFragment(w, r, pages.NeedsAttention(d))
 		return
@@ -386,8 +394,12 @@ func (app *App) writeNeedsAttentionQueryError(w http.ResponseWriter, r *http.Req
 
 	if isHtmxRequest(r) {
 		if needsAttentionPanelSwap(r) {
+			// The strip survives the refusal, so its counts are read for the
+			// re-rendered panel. The footer is nil: a rejected read produced no
+			// rows to foot, and a refusal must never wear a table's summary.
+			tabs := app.needsAttentionTabs(r.Context(), productID, tab, filter)
 			renderFragment(w, r, pages.NeedsAttention(
-				app.needsAttentionPage(r, productID, filter, containers, tab, app.clock(), failure, nil)))
+				app.needsAttentionPage(r, filter, containers, tab, app.clock(), tabs, failure, nil)))
 			return
 		}
 		renderFragment(w, r, failure)
@@ -399,10 +411,13 @@ func (app *App) writeNeedsAttentionQueryError(w http.ResponseWriter, r *http.Req
 
 // needsAttentionPage is the one assembly of the page's view model, so the
 // success and failure answers cannot describe different strips. readAt is
-// the instant the freshness stamp reports as when this view was read.
-func (app *App) needsAttentionPage(r *http.Request, productID uuid.UUID, filter needsAttentionFilter, containers []taskContainer, tab string, readAt time.Time, results templ.Component, paging *pages.NeedsAttentionPaging) pages.NeedsAttentionData {
+// the instant the freshness stamp reports as when this view was read, tabs is
+// the strip the caller already read (so its counts and the footer's total are
+// one read), and paging is the active tab's footer, nil where a refusal left
+// no table to foot.
+func (app *App) needsAttentionPage(r *http.Request, filter needsAttentionFilter, containers []taskContainer, tab string, readAt time.Time, tabs []pages.NeedsAttentionTab, results templ.Component, paging *pages.NeedsAttentionPaging) pages.NeedsAttentionData {
 	return pages.NeedsAttentionData{
-		Tabs:            app.needsAttentionTabs(r.Context(), productID, tab, filter),
+		Tabs:            tabs,
 		Tab:             tab,
 		UpdatedAt:       readAt.UTC().Format(time.RFC3339),
 		UpdatedRelative: relativeTime(readAt, app.clock()),
@@ -457,16 +472,20 @@ func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID
 	return taskContainersOf(listing)
 }
 
-// needsAttentionTabView is one tab read's whole answer: the results to
-// render, and -- when the read produced a pageable table -- the footer that
-// states how much of the filtered set is on screen (FR 7f10bd5d).
+// needsAttentionTabView is one tab read's answer: the results to render, plus
+// the two facts a paging footer needs about the table inside them -- how many
+// rows it rendered and where its following page lives (FR 7f10bd5d).
 //
-// Paging is nil where there is no table to foot: a filter that excluded
-// every row renders the tab's filtered-empty state instead, and a tab that
-// genuinely holds nothing is a whole answer rather than a truncated page.
+// The footer itself is not built here. The total it needs is the tab badge's
+// own count read, which the strip supplies only on the responses that render
+// the strip (a tab click or a full page, never the results-only poll), so the
+// caller pairs this answer with the strip's figure. Shown is 0 where the tab
+// rendered no table (its filtered-empty or genuinely-empty state), and the
+// caller foots nothing in that case.
 type needsAttentionTabView struct {
-	Results templ.Component
-	Paging  *pages.NeedsAttentionPaging
+	Results  templ.Component
+	Shown    int
+	NextHref string
 }
 
 // needsAttentionResults reads the selected tab's rows and renders them with
@@ -488,9 +507,10 @@ type needsAttentionTabView struct {
 // now is the request's read instant, so the escalated tab's relative
 // timestamps are judged against the same moment the freshness stamp reports.
 //
-// The answer pairs each table with its paging footer (FR 7f10bd5d), so the
-// region that renders both cannot show a footer for a table it did not
-// render.
+// The answer carries the facts a footer needs about the table it rendered
+// (FR 7f10bd5d) rather than a footer itself: the total belongs to the strip's
+// per-tab count read, which is taken only where the strip is rendered, so the
+// caller pairs this answer's Shown and NextHref with that figure.
 func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time) (needsAttentionTabView, error) {
 	console := filter.console(productID)
 	switch tab {
@@ -503,8 +523,9 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
 		return needsAttentionTabView{
-			Results: pages.ClaimedResults(d),
-			Paging:  needsAttentionPagingOf(len(d.Rows), 0, false, d.NextHref),
+			Results:  pages.ClaimedResults(d),
+			Shown:    len(d.Rows),
+			NextHref: d.NextHref,
 		}, nil
 	case needsAttentionTabCancelled:
 		d, err := app.cancelledResults(ctx, console, page, selfPath)
@@ -515,8 +536,9 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
 		return needsAttentionTabView{
-			Results: pages.CancelledResults(d),
-			Paging:  needsAttentionPagingOf(len(d.Rows), 0, false, d.NextHref),
+			Results:  pages.CancelledResults(d),
+			Shown:    len(d.Rows),
+			NextHref: d.NextHref,
 		}, nil
 	case needsAttentionTabNotes:
 		d, err := app.openNotesResults(ctx, console, page, selfPath)
@@ -527,8 +549,9 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
 		return needsAttentionTabView{
-			Results: pages.NotesResults(d),
-			Paging:  needsAttentionPagingOf(len(d.Rows), 0, false, d.NextHref),
+			Results:  pages.NotesResults(d),
+			Shown:    len(d.Rows),
+			NextHref: d.NextHref,
 		}, nil
 	default:
 		d, err := app.needsAttentionEscalatedResults(ctx, productID, filter, page, selfPath, now)
@@ -539,10 +562,45 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
 		return needsAttentionTabView{
-			Results: pages.EscalatedQueueResults(d),
-			Paging:  needsAttentionPagingOf(len(d.Rows), 0, false, d.NextHref),
+			Results:  pages.EscalatedQueueResults(d),
+			Shown:    len(d.Rows),
+			NextHref: d.NextHref,
 		}, nil
 	}
+}
+
+// needsAttentionFooter builds one tab's paging footer (FR 7f10bd5d) from the
+// table that tab rendered and the count the strip already read for it.
+//
+// A tab that rendered no table -- its filtered-empty state, or a genuinely
+// empty queue's own empty state -- gets no footer: an empty read is a whole
+// answer, not a truncated page, and "Showing 0 of 0" under an empty state
+// would be furniture for a table that does not exist.
+//
+// total is the figure on the active tab's badge (needsAttentionActiveTotal),
+// so the footer and the badge are one store read for one filter set; hasTotal
+// is false where that read failed, and the footer then names only what is on
+// screen rather than rendering an unreadable count as a confident zero.
+func needsAttentionFooter(shown, total int, hasTotal bool, nextHref string) *pages.NeedsAttentionPaging {
+	if shown == 0 {
+		return nil
+	}
+	return needsAttentionPagingOf(shown, total, hasTotal, nextHref)
+}
+
+// needsAttentionActiveTotal reads the resolved tab's figure off the strip the
+// page already built. The badge and the footer are the same question -- how
+// many rows this tab's filters match -- answered by the same store read, so
+// the strip supplies the footer's total rather than a second count that could
+// disagree with it. hasTotal is false when that count could not be read,
+// which the footer renders by naming only what is on screen.
+func needsAttentionActiveTotal(tabs []pages.NeedsAttentionTab, tab string) (int, bool) {
+	for _, t := range tabs {
+		if t.Key == tab {
+			return t.Count, t.HasCount
+		}
+	}
+	return 0, false
 }
 
 // needsAttentionPagingOf builds the active tab's footer (FR 7f10bd5d) from
