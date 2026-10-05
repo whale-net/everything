@@ -114,6 +114,26 @@ func countToasts(body string) int {
 	return strings.Count(body, `data-krill="toast"`)
 }
 
+// alertMessageOf extracts the EXACT text an alert rendered under marker (the
+// htmx toast or the no-JS flash). htmxui.Alert renders its message as the
+// content of a <span class="text-sm">, so reading that span is what makes
+// "exactly this string" assertable: a Contains check would pass on
+// "Claim released." or "Task requeued; it is claimable again." just as well,
+// and the FR names its three confirmations as exact strings.
+func alertMessageOf(t *testing.T, body, marker string) string {
+	t.Helper()
+	i := strings.Index(body, marker)
+	require.GreaterOrEqual(t, i, 0, "no element carries %s", marker)
+	rest := body[i:]
+	const open = `<span class="text-sm">`
+	j := strings.Index(rest, open)
+	require.GreaterOrEqual(t, j, 0, "the alert carries no message span")
+	rest = rest[j+len(open):]
+	k := strings.Index(rest, `</span>`)
+	require.GreaterOrEqual(t, k, 0, "the message span is not closed")
+	return rest[:k]
+}
+
 // ---------------------------------------------------------------------------
 // 1. a success naming a message shows exactly one toast
 // ---------------------------------------------------------------------------
@@ -140,7 +160,8 @@ func TestSuccessfulMutationShowsOneToastInTheHost(t *testing.T) {
 			require.Equal(t, http.StatusOK, rec.Code)
 			got := rec.Body.String()
 			assert.Equal(t, 1, countToasts(got), "exactly one toast per successful mutation")
-			assert.Contains(t, got, tc.message, "the toast states the verb's own confirmation")
+			assert.Equal(t, tc.message, alertMessageOf(t, got, `data-krill="toast"`),
+				"the toast states the verb's own confirmation, exactly")
 			assert.Contains(t, got, `hx-swap-oob="beforeend"`,
 				"the toast is appended to the host, not swapped in as the host")
 			assert.Contains(t, got, `id="`+components.ToastHostID+`"`,
@@ -314,8 +335,8 @@ func TestNoJSFormPostLandsOnSuccessAlert(t *testing.T) {
 	landing := jar.get(mux, "/ops/claimed", sessionCookie)
 	require.Equal(t, http.StatusOK, landing.Code)
 	body := landing.Body.String()
-	assert.Contains(t, body, "Task escalated",
-		"the landing page states the same message the toast would have shown")
+	assert.Equal(t, "Task escalated", alertMessageOf(t, body, `data-krill="toast-flash"`),
+		"the landing page states the same message the toast would have shown, exactly")
 	assert.Contains(t, body, `data-krill="toast-flash"`)
 	assert.Contains(t, body, "alert-success", "the no-JS rendering is success severity")
 	assert.Contains(t, body, `role="status"`, "htmxui.Alert derives the role from the variant")
