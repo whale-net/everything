@@ -36,6 +36,23 @@ func (legacyTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasks
 	return 0, nil
 }
 
+// The other three queues' counts, which the Needs attention page the ops
+// URLs now redirect into reads for its tab badges. Zero is what an empty
+// queue really holds, so the walk still sees a page rendering content
+// rather than a page degraded by a failing read
+// (TestPreRedesignURLsRenderNoReadFailure is the other half of that).
+func (legacyTasks) CountClaimedTasks(context.Context, store.ListClaimedTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (legacyTasks) CountCancelledTasks(context.Context, store.ListCancelledTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (legacyTasks) CountOpenNotes(context.Context, store.ListOpenNotesParams) (int, error) {
+	return 0, nil
+}
+
 func (legacyTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
 	return store.Page[store.ClaimedTaskRow]{}, nil
 }

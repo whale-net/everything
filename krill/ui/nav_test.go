@@ -94,11 +94,11 @@ func mountSelfServeStubs(mux *http.ServeMux) {
 // is the shell's promise: every one of these is a real page.
 func requiredAreas(pid uuid.UUID) []string {
 	return []string{
-		opsPath,                            // Work: Needs attention
-		designProductSessionsPath(pid),     // Design
-		productPath(pid),                   // Spec: Capabilities
-		productHref(pid, milestonesSuffix), // Delivery: Milestones
-		credentialsPath,                    // Admin
+		productHref(pid, needsAttentionSuffix), // Work: Needs attention
+		designProductSessionsPath(pid),         // Design
+		productPath(pid),                       // Spec: Capabilities
+		productHref(pid, milestonesSuffix),     // Delivery: Milestones
+		credentialsPath,                        // Admin
 	}
 }
 
@@ -121,10 +121,17 @@ func TestNavExposesRequiredAreas(t *testing.T) {
 // shellPagePaths is every shell page, spelled out as literals rather than
 // derived from a production table, so a route dropped from the table
 // cannot shrink what this walks and pass.
+//
+// The five pre-redesign ops paths are kept in the list rather than replaced
+// by the Needs attention URL alone: they are still routes an operator has
+// bookmarked, and this walk follows their redirect, so a retirement that
+// dropped one of them would fail here as a 404 rather than reading as
+// "the page moved".
 func shellPagePaths(pid uuid.UUID) []string {
 	return []string{
 		"/",
 		productHref(pid, overviewSuffix),
+		productHref(pid, needsAttentionSuffix),
 		opsPath, opsClaimedPath, opsEscalatedPath, opsCancelledPath, opsNotesPath,
 		designPath, designProductSessionsPath(pid),
 		specPath, specProductsPath, productPath(pid), decisionsPath(pid),
@@ -205,8 +212,16 @@ func TestActiveLinkPerRoute(t *testing.T) {
 	}{
 		{path: "/", wantActive: "Overview"},
 		{path: productHref(pid, overviewSuffix), wantActive: "Overview"},
-		{path: opsPath, wantActive: "Needs attention"},
-		{path: opsClaimedPath, wantActive: "Needs attention"},
+		{path: productHref(pid, needsAttentionSuffix), wantActive: "Needs attention"},
+		// The pre-redesign ops URLs are the Need attention page's tabs now,
+		// so the walk follows the hop the way a browser does and asks what
+		// the operator lands on -- the same question the per-container URLs
+		// below already answer.
+		{path: opsPath, wantActive: "Needs attention", redirect: true},
+		{path: opsClaimedPath, wantActive: "Needs attention", redirect: true},
+		{path: opsEscalatedPath, wantActive: "Needs attention", redirect: true},
+		{path: opsCancelledPath, wantActive: "Needs attention", redirect: true},
+		{path: opsNotesPath, wantActive: "Needs attention", redirect: true},
 		{path: designProductSessionsPath(pid), wantActive: "Design sessions"},
 		{path: productPath(pid), wantActive: "Capabilities"},
 		{path: decisionsPath(pid), wantActive: "Decisions"},
@@ -332,7 +347,25 @@ func (*navTasks) ListOpenNotes(context.Context, store.ListOpenNotesParams) (stor
 	return store.Page[store.OpenNoteRow]{}, nil
 }
 
+// CountEscalatedTasks is both the sidebar's badge read and the Escalated
+// tab's count. Zero: no badge and an empty escalated queue, which is honest
+// for a fixture whose subject is navigation.
 func (*navTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
+}
+
+// The other three tabs' count reads, which the Needs attention page makes
+// on every one of its URLs -- including the five pre-redesign ops URLs this
+// walk follows. Zero, for the same reason as the escalated count.
+func (*navTasks) CountClaimedTasks(context.Context, store.ListClaimedTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (*navTasks) CountCancelledTasks(context.Context, store.ListCancelledTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (*navTasks) CountOpenNotes(context.Context, store.ListOpenNotesParams) (int, error) {
 	return 0, nil
 }
 
@@ -969,32 +1002,23 @@ func TestShellRoutesDoNotCollideWithSelfServe(t *testing.T) {
 	}
 }
 
-// TestOpsConsoleReadRoutesRegistered pins the ops console's four read
-// views: each is a real registered route under the ops prefix (so it is
-// not a 404), each keeps the Needs-attention item lit, and the ops root
-// links to every one.
-func TestOpsConsoleReadRoutesRegistered(t *testing.T) {
+// TestOpsConsoleURLsAreRegisteredAndRedirect pins that the five ops console
+// URLs are still real registrations -- an operator's bookmark must not 404 --
+// and that each answers a redirect rather than a page of its own.
+//
+// Where they redirect to, and that the page there shows the matching tab, is
+// needs_attention_test.go's TestNeedsAttentionOpsURLsResolveToTheirMatchingTab:
+// this file walks the sidebar, and that one owns the cutover's destination.
+func TestOpsConsoleURLsAreRegisteredAndRedirect(t *testing.T) {
 	mux := navMux(t)
 
-	for _, path := range []string{opsClaimedPath, opsEscalatedPath, opsCancelledPath, opsNotesPath} {
-		if !strings.HasPrefix(path, opsPath+"/") {
-			t.Errorf("read view %s is not under the ops prefix %s", path, opsPath)
+	for _, path := range []string{opsPath, opsClaimedPath, opsEscalatedPath, opsCancelledPath, opsNotesPath} {
+		if _, pattern := mux.Handler(httptest.NewRequest(http.MethodGet, path, nil)); pattern == "" {
+			t.Errorf("ops URL %s is not registered: a bookmark would 404", path)
+			continue
 		}
-		_, pattern := mux.Handler(httptest.NewRequest(http.MethodGet, path, nil))
-		if pattern == "" {
-			t.Errorf("ops read view %s is not registered", path)
-		}
-		if marked := activeLabels(fetch(t, mux, path).Body.String()); len(marked) != 1 || marked[0] != "Needs attention" {
-			t.Errorf("ops read view %s marked %v active, want [Needs attention]", path, marked)
-		}
-	}
-
-	// The ops root indexes the views, so an operator can reach every one
-	// from /ops.
-	opsRoot := fetch(t, mux, opsPath).Body.String()
-	for _, path := range []string{opsClaimedPath, opsEscalatedPath, opsCancelledPath, opsNotesPath} {
-		if !strings.Contains(opsRoot, `href="`+path+`"`) {
-			t.Errorf("ops root does not link to %s", path)
+		if rec := fetch(t, mux, path); rec.Code != http.StatusFound {
+			t.Errorf("GET %s = %d, want 302: the Needs attention tab replaces this page", path, rec.Code)
 		}
 	}
 }

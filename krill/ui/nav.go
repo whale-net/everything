@@ -350,6 +350,15 @@ func navGroupTable(t navTargets) []navGroup {
 	tasks := productHref(t.Product, tasksSuffix)
 	board := productHref(t.Product, boardSuffix)
 
+	// Needs attention is the product's own page now (FR 5fd47f4d). It used
+	// to link at the pre-redesign /ops root, which is a 302 into this very
+	// page -- so leaving the href there would make every operator pay a
+	// silent redirect hop to reach the queue they clicked, and the sidebar
+	// would mark nothing once they arrived. The old path is kept as the
+	// AltPath for the reason Tasks and Milestones keep theirs: a render
+	// whose URL still carries it is then marked correctly too.
+	needsAttention := productHref(t.Product, needsAttentionSuffix)
+
 	return []navGroup{
 		{Title: "", Items: []navItem{
 			// The home page is the Overview, and so is the product's own
@@ -358,7 +367,7 @@ func navGroupTable(t navTargets) []navGroup {
 			{Label: "Overview", Href: overview, Path: overview, AltPath: "/", Exact: true},
 		}},
 		{Title: "Work", Items: []navItem{
-			{Label: "Needs attention", Href: opsPath, Path: opsPath, Badge: t.Escalated},
+			{Label: "Needs attention", Href: needsAttention, Path: needsAttention, AltPath: opsPath, Badge: t.Escalated},
 			{Label: "Tasks", Href: tasks, Path: tasks, AltPath: product + "/milestones/*/tasks"},
 			{Label: "Board", Href: board, Path: board, AltPath: product + "/milestones/*/board"},
 		}},

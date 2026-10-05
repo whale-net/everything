@@ -19,30 +19,7 @@ templ NoProductsInScope() {
 	</section>
 }
 
-// ProductPlaceholderData is the body a product-scoped prefix serves until
-// the area's own page ships: the product's own row, so the page names
-// which product a copied link resolved to, and the sub-path that was
-// asked for.
-type ProductPlaceholderData struct {
-	Product ProductHeader
-	Area    string
-}
-
-// ProductPlaceholder is the standing-in body for a product-scoped sub-path
-// whose real page has not shipped yet. It resolves the product (so an
-// out-of-scope link is already an in-shell 404 by this point) and says
-// so, which is what makes the prefixes safe to register ahead of the
-// pages behind them.
-templ ProductPlaceholder(d ProductPlaceholderData) {
-	<section data-krill="product-placeholder">
-		<h2 class="text-xl font-semibold" data-krill="page-title">{ d.Product.Name }</h2>
-		if d.Product.Vision != "" {
-			<p class="mt-1 text-sm text-base-content/70 max-w-3xl">{ d.Product.Vision }</p>
-		}
-		<p class="mt-3 text-sm text-base-content/70">
-			This area has no redesigned page yet. The product in the URL is
-			resolved and checked against your scope; its content arrives in a
-			later phase.
-		</p>
-	</section>
-}
+// The product-scoped placeholder that used to stand here is gone: every
+// product-scoped sub-path serves its own page now, the last being the
+// Needs attention prefix (fr 5fd47f4d). NoProductsInScope above remains the
+// empty-scope answer every un-prefixed resolver renders.

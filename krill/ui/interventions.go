@@ -276,7 +276,7 @@ func interventionSuccessMessage(action string) string {
 func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request, returnTo, message, toast string) {
 	ctx := r.Context()
 	if returnTo == opsEscalatedPath {
-		d, err := app.escalatedResults(ctx, store.PageParams{}, returnTo)
+		d, err := app.escalatedResults(ctx, store.ConsoleFilter{}, store.PageParams{}, returnTo)
 		if err != nil {
 			logger.Error("failed to reload the escalated view after an intervention", "error", err)
 			// A read failure must not render as an empty view: the
@@ -290,7 +290,7 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, withToast(toast, pages.EscalatedResults(d)))
 		return
 	}
-	d, err := app.claimedResults(ctx, store.PageParams{}, returnTo)
+	d, err := app.claimedResults(ctx, store.ConsoleFilter{}, store.PageParams{}, returnTo)
 	if err != nil {
 		logger.Error("failed to reload the claimed view after an intervention", "error", err)
 		d = pages.ClaimedData{Href: returnTo, Error: "The intervention was applied, but this view could not be reloaded.", ReadFailed: true}

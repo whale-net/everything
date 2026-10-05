@@ -1,0 +1,160 @@
+package pages
+
+import "strconv"
+
+// The Needs attention page (FR 5fd47f4d): the tab strip and the one
+// results region every tab swaps.
+//
+// It is to the four ops console queues what SpecTabs is to the four spec
+// pages: the strip lives INSIDE the swap region rather than beside it, so
+// a tab click's response is one root element carrying the re-marked strip
+// and the new table together. A strip that were its own target would need
+// the fragment to carry two top-level nodes, and htmx's outerHTML inserts
+// every top-level node into the target -- so each click would splice a
+// duplicate strip into the page (see pages/spec_tabs.templ, which applies
+// the same rule).
+//
+// The results inside the region are the console's own: ClaimedResults,
+// EscalatedResults, CancelledResults and NotesResults from ops.templ,
+// carrying the ops-results id every row swap and the claimed tab's poll
+// already target. This file adds only the strip around them.
+
+// NeedsAttentionAnchor is the DOM id of the swap region: the hx-target
+// every tab names, and the id the served fragment's ROOT must carry.
+// Without it on the root, htmx deletes the element it was asked to replace
+// and every later tab click is a no-op that never reaches the server.
+const NeedsAttentionAnchor = "krill-needs-attention-panel"
+
+// NeedsAttentionTab is one tab: the address it navigates to, whether it is
+// the one being shown, and its count.
+//
+// HasCount is separate from Count because a count that could not be read
+// is not a zero: the badge is rendered only when a figure was actually
+// read, so an unreadable queue shows nothing rather than a confident 0.
+type NeedsAttentionTab struct {
+	Key    string
+	Label  string
+	Href   string
+	Active bool
+
+	// Count is the tab's queue size under this tab's filters, meaningful
+	// only when HasCount.
+	Count    int
+	HasCount bool
+}
+
+// NeedsAttentionData is the page's view model: the strip, the tab the
+// request resolved to, the freshness stamp, the way back to the view's own
+// address, and the results region itself.
+type NeedsAttentionData struct {
+	Tabs []NeedsAttentionTab
+
+	// Tab is the resolved tab key, and the page's own statement of which
+	// one is showing -- so a test (and a reader) never has to infer it
+	// from which link carries the active class.
+	Tab string
+
+	// UpdatedAt is the exact UTC instant the page's data was read, and
+	// UpdatedRelative its age at render time. The exact instant is the
+	// element's title and datetime, so hovering answers "exactly when"
+	// with or without the head script; the relative form is what renders
+	// server-side, so the page says something readable either way.
+	UpdatedAt       string
+	UpdatedRelative string
+
+	// RefreshHref is the view's own request URI. The manual refresh's
+	// hx-get re-requests the tab the operator is on, page and filters
+	// included, rather than a fixed route.
+	RefreshHref string
+
+	// Results is the selected tab's table, or its inline refusal.
+	Results templ.Component
+}
+
+// NeedsAttention renders the strip and the active tab's results, both
+// inside the one region every tab swaps. The rest of the page -- shell,
+// nav, product switcher -- sits outside it and is never re-derived by a
+// tab click.
+templ NeedsAttention(d NeedsAttentionData) {
+	<div id={ NeedsAttentionAnchor } data-krill="needs-attention" data-krill-tab={ d.Tab }>
+		<div class="flex flex-wrap items-center justify-between gap-4">
+			@needsAttentionTabStrip(d.Tabs)
+			<div class="flex items-center gap-2">
+				@needsAttentionFreshness(d)
+				if d.RefreshHref != "" {
+					<button
+						type="button"
+						class="btn btn-ghost btn-sm"
+						hx-get={ d.RefreshHref }
+						hx-target={ "#" + opsResultsID }
+						hx-swap="outerHTML"
+					>Refresh</button>
+				}
+			</div>
+		</div>
+		<div class="mt-4" data-krill="needs-attention-results">
+			@d.Results
+		</div>
+	</div>
+}
+
+// needsAttentionFreshness is the header's "Updated N ago" stamp: the
+// relative age as the visible text, with the exact instant carried in the
+// datetime, the title and the data-krill-updated-at hook, so hovering
+// answers "exactly when".
+//
+// The server renders the relative form (relativeTime, in package main) so
+// the page reads correctly with JavaScript off, and the head's
+// relativeAgeScript re-derives "Updated N ago" from the attribute so the
+// stamp ages between swaps instead of freezing at the read.
+templ needsAttentionFreshness(d NeedsAttentionData) {
+	<time class="text-sm text-base-content/70" data-krill="needs-attention-updated-at"
+		data-krill-updated-at={ d.UpdatedAt } datetime={ d.UpdatedAt } title={ d.UpdatedAt }>
+		Updated { d.UpdatedRelative }
+	</time>
+}
+
+// needsAttentionTabStrip is the tablist: four real links, each carrying
+// the htmx attributes that swap the region in place and push the tab's own
+// URL, and each labelled with its count. Without JavaScript a tab click
+// still navigates to the same address, so the tab is never reachable only
+// through a script.
+//
+// aria-selected is emitted on every tab rather than only the active one,
+// because an omitted aria-selected on a role="tab" leaves its state
+// undefined rather than false.
+templ needsAttentionTabStrip(tabs []NeedsAttentionTab) {
+	<div role="tablist" class="tabs tabs-border" data-krill="needs-attention-tabs">
+		for _, t := range tabs {
+			<a role="tab" href={ templ.URL(t.Href) }
+				class={ needsAttentionTabClasses(t.Active) }
+				aria-selected={ needsAttentionTabSelected(t.Active) }
+				hx-get={ templ.URL(t.Href) }
+				hx-target={ "#" + NeedsAttentionAnchor }
+				hx-swap="outerHTML"
+				hx-push-url="true"
+				data-krill="needs-attention-tab" data-krill-tab={ t.Key }>
+				{ t.Label }
+				if t.HasCount {
+					<span class="badge badge-sm" data-krill="needs-attention-count" data-krill-tab={ t.Key }>{ strconv.Itoa(t.Count) }</span>
+				}
+			</a>
+		}
+	</div>
+}
+
+// needsAttentionTabClasses is one tab's daisyUI class, so the strip carries
+// exactly one active marking whichever tab the URL resolved to.
+func needsAttentionTabClasses(active bool) string {
+	if active {
+		return "tab tab-active"
+	}
+	return "tab"
+}
+
+func needsAttentionTabSelected(active bool) string {
+	if active {
+		return "true"
+	}
+	return "false"
+}
