@@ -68,11 +68,27 @@ func (productScopeTasks) ListEscalatedTasks(context.Context, store.ListEscalated
 	return store.Page[store.EscalatedTaskRow]{}, nil
 }
 
-// CountEscalatedTasks is the chrome's Needs-attention badge read, which
-// every shell page renders. It is separate from the List method above on
-// purpose: the badge's figure must never be capped at a page size, so the
-// store gives it a dedicated count read rather than reusing the list.
+// CountEscalatedTasks is the chrome's Needs-attention badge read AND the
+// Needs attention page's Escalated tab count, which every shell page renders
+// and the ops URLs now redirect into. It is separate from the List method
+// above on purpose: the badge's figure must never be capped at a page size,
+// so the store gives it a dedicated count read rather than reusing the list.
 func (productScopeTasks) CountEscalatedTasks(context.Context, store.ListEscalatedTasksParams) (int, error) {
+	return 0, nil
+}
+
+// The other three tabs' counts, read by the Needs attention page the ops
+// URLs redirect into. Zero: this fixture's subject is which product a URL
+// resolves to, not what any queue holds.
+func (productScopeTasks) CountClaimedTasks(context.Context, store.ListClaimedTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (productScopeTasks) CountCancelledTasks(context.Context, store.ListCancelledTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (productScopeTasks) CountOpenNotes(context.Context, store.ListOpenNotesParams) (int, error) {
 	return 0, nil
 }
 
@@ -135,6 +151,30 @@ func fetchWith(t *testing.T, mux *http.ServeMux, target string, cookies ...*http
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
+}
+
+// followWith is fetchWith through any redirect, which is what a browser does
+// with an un-prefixed link now: the ops URLs resolve a product and 302 into
+// the product-scoped Needs attention page, and THAT page is what records the
+// last-viewed product and renders the chrome. A test asserting on an
+// un-prefixed page's product resolution therefore has to ask the page the
+// operator actually lands on, or it reads the 302's empty body.
+func followWith(t *testing.T, mux *http.ServeMux, target string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	const maxHops = 5
+	for range maxHops {
+		rec := fetchWith(t, mux, target, cookies...)
+		if rec.Code != http.StatusFound && rec.Code != http.StatusMovedPermanently {
+			return rec
+		}
+		next := rec.Header().Get("Location")
+		if next == "" {
+			t.Fatalf("%s redirected with no Location", target)
+		}
+		target = next
+	}
+	t.Fatalf("%s redirected more than %d times", target, maxHops)
+	return nil
 }
 
 // A product-scoped URL resolves the product it names and renders inside
@@ -223,7 +263,11 @@ func TestUnprefixedURLResolvesFirstProductInScope(t *testing.T) {
 
 	for _, target := range []string{"/", opsEscalatedPath} {
 		t.Run(target, func(t *testing.T) {
-			rec := fetch(t, mux, target)
+			// /ops/escalated is a redirect into the product-scoped Needs
+			// attention page now, so the product it resolves is recorded by
+			// the page the operator lands on -- which is what a browser
+			// asking this question actually sees.
+			rec := followWith(t, mux, target)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", rec.Code)
@@ -546,7 +590,7 @@ func TestEveryUnprefixedPageResolvesARecordedProduct(t *testing.T) {
 		credentialsPath,
 	} {
 		t.Run(target, func(t *testing.T) {
-			rec := fetch(t, mux, target)
+			rec := followWith(t, mux, target)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", rec.Code)
@@ -570,7 +614,7 @@ func TestUnprefixedPageHonoursAnInScopeCookie(t *testing.T) {
 
 	for _, target := range []string{"/", opsEscalatedPath} {
 		t.Run(target, func(t *testing.T) {
-			rec := fetchWith(t, mux, target,
+			rec := followWith(t, mux, target,
 				&http.Cookie{Name: lastViewedProductCookie, Value: last.String()})
 
 			if rec.Code != http.StatusOK {
@@ -593,7 +637,7 @@ func TestStaleCookieFallsBackOnEveryUnprefixedPage(t *testing.T) {
 
 	for _, target := range []string{"/", opsEscalatedPath, credentialsPath} {
 		t.Run(target, func(t *testing.T) {
-			rec := fetchWith(t, mux, target,
+			rec := followWith(t, mux, target,
 				&http.Cookie{Name: lastViewedProductCookie, Value: gone.String()})
 
 			if rec.Code != http.StatusOK {
@@ -612,7 +656,7 @@ func TestUnreadableCookieFallsBackToFirstProductInScope(t *testing.T) {
 	current := uuid.New()
 	mux := productScopeMux(t, store.Product{ID: current, Name: "product B"})
 
-	rec := fetchWith(t, mux, opsEscalatedPath,
+	rec := followWith(t, mux, opsEscalatedPath,
 		&http.Cookie{Name: lastViewedProductCookie, Value: "not-a-uuid"})
 
 	if rec.Code != http.StatusOK {
@@ -688,7 +732,10 @@ func TestHtmxFragmentSwapDoesNotRecordALastViewedProduct(t *testing.T) {
 	first := uuid.New()
 	mux := productScopeMux(t, store.Product{ID: first, Name: "product A"})
 
-	req := httptest.NewRequest(http.MethodGet, opsEscalatedPath, nil)
+	// The Needs attention page, which is where an htmx swap now happens:
+	// the pre-redesign ops URLs answer a redirect whatever header they
+	// carry, so the page-view/swap distinction lives on the page itself.
+	req := httptest.NewRequest(http.MethodGet, productHref(first, needsAttentionSuffix), nil)
 	req.Header.Set("HX-Request", "true")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -714,7 +761,7 @@ func TestAPrefixedLinkCarriesTheProductToTheNextLegacyPage(t *testing.T) {
 	)
 
 	linked := fetch(t, mux, productHref(a, milestonesSuffix))
-	followed := fetchWith(t, mux, opsEscalatedPath, lastViewedCookie(t, linked))
+	followed := followWith(t, mux, opsEscalatedPath, lastViewedCookie(t, linked))
 
 	if got := lastViewedCookie(t, followed).Value; got != a.String() {
 		t.Errorf("legacy page after a linked one resolved %s, want the linked product %s", got, a)

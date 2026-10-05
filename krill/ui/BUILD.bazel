@@ -209,6 +209,7 @@ go_test(
         "credentials_test.go",
         "credentials_revoke_test.go",
         "legacy_urls_test.go",
+        "needs_attention_test.go",
         "spec_page_test.go",
         "spec_tabs_test.go",
         "spec_capabilities_test.go",

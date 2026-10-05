@@ -132,6 +132,23 @@ func (*overviewCounter) ListClaimedTasks(context.Context, store.ListClaimedTasks
 	return store.Page[store.ClaimedTaskRow]{}, nil
 }
 
+// The Needs attention page's other three tabs' counts: the walk in
+// TestToastHostLandsOutsideMain follows the pre-redesign ops URLs into that
+// page, so a fixture that only modelled the Overview's own reads would
+// panic there. Zero, which is a real answer for a fixture whose subject is
+// the chrome.
+func (*overviewCounter) CountClaimedTasks(context.Context, store.ListClaimedTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (*overviewCounter) CountCancelledTasks(context.Context, store.ListCancelledTasksParams) (int, error) {
+	return 0, nil
+}
+
+func (*overviewCounter) CountOpenNotes(context.Context, store.ListOpenNotesParams) (int, error) {
+	return 0, nil
+}
+
 // CountConsoleOverview is the stat tiles' read. These tests are about the
 // header, so the tiles' figures are a constant zero here -- which renders
 // four tiles reading "0" rather than leaving the strip out, and keeps the
