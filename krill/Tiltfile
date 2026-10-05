@@ -268,14 +268,23 @@ spec:
     )
     print("🔌 mcp forwarded to http://localhost:8084/mcp/spec")
 
-# ui: krill's barebones operator web UI (krill/ui/main.go) -- exists
-# solely to give mcpauth's `/authorize` endpoint a SignInURL to redirect
-# a not-yet-signed-in caller to. Keycloak sign-in is real
-# (Authenticator.RequireAuth guards the one app route), but AUTH_MODE
+# ui: krill's operator web UI (krill/ui/main.go) -- the operator nav
+# shell plus mcpauth's `/authorize` endpoint, which needs a SignInURL to
+# redirect a not-yet-signed-in caller to. Keycloak sign-in is real
+# (Authenticator.RequireAuth guards the app routes), but AUTH_MODE
 # defaults to "none" here for local dev with no Keycloak realm running,
 # same precedent as whagent_net/Tiltfile's own `ui` block -- set
 # AUTH_MODE=oidc plus KRILL_OIDC_* in a local .env to exercise a real
 # sign-in flow against a Keycloak instance of your own.
+#
+# Under AUTH_MODE=none the synthetic operator resolves to the dev identity
+# (krill-dev / dev-operator -- the pair api's own dev token resolves to,
+# see krill/ui/identity.go), so the whole credential surface at
+# /account/credentials is exercisable here: the list, the create blade and
+# its once-only token alert, a duplicate-name refusal, and the revoke
+# confirm all run against the local database. A validator pass should
+# drive that walkthrough here rather than reporting the surface
+# unexercisable.
 if get_env_bool('ENABLE_KRILL_UI', default='true'):
     k8s_yaml(blob("""
 apiVersion: v1

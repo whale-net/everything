@@ -926,3 +926,109 @@ func TestEmptyState_ForwardsAttrs(t *testing.T) {
 		t.Errorf("expected the attrs escape hatch to be forwarded, got %q", body)
 	}
 }
+
+// --- CancelAttrs: the opt-in in-place cancel (krill's revoke dismiss) ------
+
+// CancelAttrs rides on the anchor CancelHref already renders, so the two
+// halves of a doubled control share one element: the href for a browser
+// without JavaScript, the hx-get/hx-target/hx-swap for one with it. The
+// cancel stays a link, and a cancel that needs htmx to work at all is the
+// failure this primitive exists to avoid.
+func TestConfirm_CancelAttrsForwardedOntoTheCancelLink(t *testing.T) {
+	body := render(t, Confirm(ConfirmProps{
+		Intent:      ConfirmDestructive,
+		SubmitLabel: "Revoke",
+		CancelHref:  "/account/credentials/abc",
+		CancelLabel: "Dismiss",
+		CancelAttrs: templ.Attributes{
+			"hx-get":    "/account/credentials/abc",
+			"hx-target": "#krill-credential-revoke-abc",
+			"hx-swap":   "outerHTML",
+		},
+	}, nil))
+
+	if !strings.Contains(body, `href="/account/credentials/abc"`) {
+		t.Errorf("CancelHref must still be the no-JS destination, got %q", body)
+	}
+	for _, want := range []string{
+		`hx-get="/account/credentials/abc"`,
+		`hx-target="#krill-credential-revoke-abc"`,
+		`hx-swap="outerHTML"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %s forwarded onto the cancel link, got %q", want, body)
+		}
+	}
+	if !hasClass(body, "btn-secondary") {
+		t.Errorf("the cancel link must keep Confirm's own chrome, got %q", body)
+	}
+}
+
+// CancelAttrs is opt-in, and the four other products' call sites leave it
+// unset. These two goldens pin the rendering those call sites get, byte for
+// byte: the inline cancel case, and the danger-zone card chrome with every
+// other field populated. A change to the action row, the zone wrapper, the
+// button classes, or the attribute ORDER shows up here as a diff rather
+// than as a surprise in app_registry, manmanv2 or whagent_net.
+func TestConfirm_DefaultRenderingIsUnchangedWhenCancelAttrsIsUnset(t *testing.T) {
+	inline := render(t, Confirm(ConfirmProps{
+		Intent:      ConfirmNeutral,
+		SubmitLabel: "Promote for real",
+		CancelHref:  "/environments/prod",
+	}, nil))
+	const wantInline = `<div class="flex gap-2 justify-end mt-4"><a href="/environments/prod" class="btn btn-secondary">Cancel</a> <button type="submit" class="btn btn-primary" title="">Promote for real</button></div>`
+	if inline != wantInline {
+		t.Errorf("default rendering changed with CancelAttrs unset:\n got %q\nwant %q", inline, wantInline)
+	}
+
+	zone := render(t, Confirm(ConfirmProps{
+		Intent:         ConfirmDestructive,
+		ZoneTitle:      "⚠️ Danger Zone",
+		Summary:        "nope",
+		SubmitLabel:    "Archive prod",
+		CancelHref:     "/back",
+		CancelLabel:    "Never mind",
+		Disabled:       true,
+		DisabledReason: "why",
+	}, nil))
+	const wantZone = `<div class="card bg-base-100 border-2 border-error/40 shadow-md"><div class="bg-error/10 px-6 py-4 border-b-2 border-error/40 rounded-t-box"><h3 class="text-lg font-semibold text-error">⚠️ Danger Zone</h3></div><div class="card-body"><p class="text-sm opacity-70 mb-2">nope</p><div class="flex gap-2 justify-end mt-4"><a href="/back" class="btn btn-secondary">Never mind</a> <button type="submit" class="btn btn-error btn-disabled" disabled title="why">Archive prod</button></div></div></div>`
+	if zone != wantZone {
+		t.Errorf("default rendering changed with CancelAttrs unset:\n got %q\nwant %q", zone, wantZone)
+	}
+}
+
+// An empty (not nil) CancelAttrs is the same as unset: the caller who
+// builds the map conditionally must not get an attribute rendered for a
+// decision it never made.
+func TestConfirm_EmptyCancelAttrsRendersAsUnset(t *testing.T) {
+	withEmpty := render(t, Confirm(ConfirmProps{
+		Intent:      ConfirmNeutral,
+		SubmitLabel: "Promote for real",
+		CancelHref:  "/environments/prod",
+		CancelAttrs: templ.Attributes{},
+	}, nil))
+	if strings.Contains(withEmpty, "hx-") {
+		t.Errorf("an empty CancelAttrs must render no attribute, got %q", withEmpty)
+	}
+	if !strings.Contains(withEmpty, `<a href="/environments/prod" class="btn btn-secondary">Cancel</a>`) {
+		t.Errorf("the cancel link must render unchanged, got %q", withEmpty)
+	}
+}
+
+// CancelAttrs is the cancel's escape hatch, not a second one: with no
+// CancelHref there is no cancel to put attributes on, so the affordance is
+// still omitted entirely rather than rendered as a href-less, inert link.
+func TestConfirm_CancelAttrsWithoutCancelHrefStillRendersNoCancel(t *testing.T) {
+	body := render(t, Confirm(ConfirmProps{
+		Intent:      ConfirmDestructive,
+		SubmitLabel: "Archive prod",
+		CancelAttrs: templ.Attributes{"hx-get": "/account/credentials/abc"},
+	}, nil))
+
+	if strings.Contains(body, "btn-secondary") {
+		t.Errorf("no CancelHref means no cancel affordance, CancelAttrs included, got %q", body)
+	}
+	if strings.Contains(body, "hx-get") {
+		t.Errorf("CancelAttrs must not conjure a cancel control on its own, got %q", body)
+	}
+}

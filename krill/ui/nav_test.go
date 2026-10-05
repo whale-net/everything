@@ -11,6 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/api/authdoor"
+	"github.com/whale-net/everything/krill/identity"
+	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/ui/components"
@@ -47,6 +50,11 @@ func newTestApp(t *testing.T) *App {
 		tasks:          chromeTaskCounter{},
 		designSessions: navStubDesignSessions{},
 		revisionEvents: navStubRevisionEvents{},
+		// Under AUTH_MODE=none the dev operator's identity resolves, so a
+		// shell walk that reaches the credentials page really does call the
+		// store -- it must be a fake, as every other reader the shell
+		// touches already is.
+		credentials: &fakeCredentials{},
 	}
 }
 
@@ -1271,11 +1279,20 @@ func (f *fakeCredentials) List(context.Context, string) ([]auth.Credential, erro
 }
 
 // An unresolvable identity must still answer 200 with the error inline and
-// must not mint anything: htmx does not swap on an error status.
+// must not mint anything: htmx does not swap on an error status. The
+// unresolvable case is the deployed one -- a session that yields no pair --
+// so devAuth is off; under AUTH_MODE=none the dev pair always resolves and
+// there is nothing to refuse.
 func TestCredentialsMint_UnresolvedIdentityRendersInlineError(t *testing.T) {
 	app := newTestApp(t)
 	store := &fakeCredentials{}
 	app.credentials = store
+	app.devAuth = false
+	// A reader passes the route gate on its roles alone; with no issuer
+	// configured the identity it would attribute a write with does not
+	// resolve, which is the refusal under test.
+	app.roles = server.RoleConfig{ReaderRole: "krill-reader"}
+	app.sessionRoles = func(*http.Request) ([]string, error) { return []string{"krill-reader"}, nil }
 	mux := http.NewServeMux()
 	app.mountShellRoutes(mux)
 
@@ -1296,5 +1313,128 @@ func TestCredentialsMint_UnresolvedIdentityRendersInlineError(t *testing.T) {
 	}
 	if strings.Contains(body, "<html") {
 		t.Error("htmx request got the full page, want a bare fragment")
+	}
+}
+
+// AUTH_MODE=none has no Keycloak session to read, and an empty issuer to
+// encode, so before devAuth carried the dev pair every identity-bearing page
+// -- credentials above all -- refused locally. The pair it resolves to is
+// api's own dev-token pair, asserted against api's constants rather than
+// restated here: two half-invented identities would be exactly the bug.
+func TestDevAuth_ResolvesTheDevPair(t *testing.T) {
+	app := newTestApp(t)
+
+	iss, sub, ok := app.operatorIdentity(httptest.NewRequest(http.MethodGet, "/", nil))
+	if !ok {
+		t.Fatal("AUTH_MODE=none resolved no identity, want the dev pair")
+	}
+	if iss != authdoor.DevIssuer || sub != authdoor.DevSubject {
+		t.Errorf("pair = (%q, %q), want api's own (%q, %q)", iss, sub, authdoor.DevIssuer, authdoor.DevSubject)
+	}
+
+	// The same pair must come back encoded, since that is the form the
+	// credential store is keyed by -- a read filed under anything else
+	// would never find what a write filed under the pair did.
+	encoded, ok := app.operatorEncodedIdentity(httptest.NewRequest(http.MethodGet, "/", nil))
+	if !ok {
+		t.Fatal("AUTH_MODE=none resolved no encoded identity, want the dev pair encoded")
+	}
+	decodedIss, decodedSub, err := identity.Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode(%q): %v", encoded, err)
+	}
+	if decodedIss != authdoor.DevIssuer || decodedSub != authdoor.DevSubject {
+		t.Errorf("decoded = (%q, %q), want (%q, %q)", decodedIss, decodedSub, authdoor.DevIssuer, authdoor.DevSubject)
+	}
+}
+
+// The dev user mints as an operator, the persona api resolves for the same
+// dev token. Without this the credentials page loads but its own primary
+// action is dead: htmxauth's dev user carries AllRoles, which names no
+// configured realm role, so ResolvePersona would refuse it.
+func TestDevAuth_MintsAsTheOperatorApiResolvesForItsDevToken(t *testing.T) {
+	app := newTestApp(t)
+	// Configured realm roles a real deployment would set; the dev user holds
+	// neither, so only the dev branch can resolve a persona here.
+	app.roles = server.RoleConfig{OperatorRole: "krill-operator", ReaderRole: "krill-reader"}
+
+	persona, ok := app.operatorPersona(httptest.NewRequest(http.MethodGet, "/", nil))
+	if !ok {
+		t.Fatal("AUTH_MODE=none resolved no persona, want the operator")
+	}
+	if persona != server.PersonaSwarmOperator {
+		t.Errorf("persona = %q, want %q", persona, server.PersonaSwarmOperator)
+	}
+}
+
+// The dev branch is reachable only under AUTH_MODE=none. With devAuth off
+// and no issuer configured -- a misconfigured or tampered OIDC deployment --
+// the caller still gets no Subject: the dev path must not become a fallback
+// that invents an identity for a session that failed to resolve.
+func TestOperatorIdentity_DevAuthOffStillRefuses(t *testing.T) {
+	app := newTestApp(t)
+	app.devAuth = false
+
+	if _, _, ok := app.operatorIdentity(httptest.NewRequest(http.MethodGet, "/", nil)); ok {
+		t.Error("devAuth off with no issuer resolved an identity, want none")
+	}
+	if _, ok := app.operatorEncodedIdentity(httptest.NewRequest(http.MethodGet, "/", nil)); ok {
+		t.Error("devAuth off with no issuer resolved an encoded identity, want none")
+	}
+	if _, ok := app.operatorSubject(httptest.NewRequest(http.MethodGet, "/", nil)); ok {
+		t.Error("devAuth off with no issuer resolved a Subject, want none")
+	}
+	if _, ok := app.operatorPersona(httptest.NewRequest(http.MethodGet, "/", nil)); ok {
+		t.Error("devAuth off resolved a persona, want none")
+	}
+}
+
+// With devAuth off the persona is still ResolvePersona over the session's
+// roles: a reader mints as a reader, and an identity holding neither
+// configured role is refused. The dev branch must not have replaced this.
+func TestOperatorPersona_ResolvesFromSessionRolesWhenDevAuthOff(t *testing.T) {
+	app := newTestApp(t)
+	app.devAuth = false
+	app.roles = server.RoleConfig{OperatorRole: "krill-operator", ReaderRole: "krill-reader"}
+
+	app.sessionRoles = func(*http.Request) ([]string, error) { return []string{"krill-reader"}, nil }
+	if persona, ok := app.operatorPersona(httptest.NewRequest(http.MethodGet, "/", nil)); !ok || persona != server.PersonaReader {
+		t.Errorf("reader persona = (%q, %v), want (%q, true)", persona, ok, server.PersonaReader)
+	}
+	app.sessionRoles = func(*http.Request) ([]string, error) { return []string{"krill-operator"}, nil }
+	if persona, ok := app.operatorPersona(httptest.NewRequest(http.MethodGet, "/", nil)); !ok || persona != server.PersonaSwarmOperator {
+		t.Errorf("operator persona = (%q, %v), want (%q, true)", persona, ok, server.PersonaSwarmOperator)
+	}
+	app.sessionRoles = func(*http.Request) ([]string, error) { return []string{"krill-nobody"}, nil }
+	if _, ok := app.operatorPersona(httptest.NewRequest(http.MethodGet, "/", nil)); ok {
+		t.Error("a role that maps to no persona resolved one, want refusal")
+	}
+}
+
+// The credentials page is the surface this fix exists for, so it is asserted
+// end to end under the auth mode local dev actually runs: 200, no identity
+// error, and the store reached under the dev pair. A walk that only checked
+// the status would have passed on the refusing page too.
+func TestDevAuth_CredentialsPageRenders(t *testing.T) {
+	store := &fakeCredentials{now: credentialsNow, listed: []auth.Credential{{
+		ID: uuid.New(), Name: "local mcp client", CreatedAt: credentialsNow.Add(-time.Hour),
+	}}}
+	app := newTestApp(t)
+	app.credentials = store
+	app.now = func() time.Time { return credentialsNow }
+	mux := http.NewServeMux()
+	app.mountShellRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, credentialsPath, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "Could not resolve your identity") {
+		t.Errorf("credentials page refused the dev operator: %s", body)
+	}
+	if !strings.Contains(body, "local mcp client") {
+		t.Errorf("credentials page did not reach the store and list its rows: %s", body)
 	}
 }

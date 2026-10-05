@@ -226,11 +226,13 @@ func TestUIWrite_ReaderForbiddenSurfaced(t *testing.T) {
 }
 
 // Under the dev stack requireOperator forwards the static dev token and
-// dev identity without any session; with no dev token it still 401s.
+// dev identity without any session; with no dev token it still 401s, so a
+// dev identity never becomes a way to write unidentifiably.
 func TestRequireOperator_DevToken(t *testing.T) {
 	idp := newFakeIDP(t, testOperatorSub)
 	authenticator, _ := newSignedInOperator(t, idp)
 	app := newTestApp(t, authenticator, idp.server.URL, "http://api.invalid")
+	app.devAuth = true
 	app.devAPIToken = "dev-secret"
 
 	var gotToken string

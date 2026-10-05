@@ -33,10 +33,16 @@ const credentialsIssuer = "https://krill.test/realms/krill"
 // real gate and the real routes over a fake store, with the caller's realm
 // roles resolving to the reader -- a reader may manage their own
 // credentials, so the mint path is reachable at all.
+//
+// devAuth is off because a configured issuer is exactly what makes this the
+// AUTH_MODE=oidc deployment: devAuth IS AUTH_MODE=none, and there is no
+// issuer to configure in that mode. A test that wants the dev pair uses
+// newTestApp's default and says so -- see newDevCredentialsApp.
 func newCredentialsApp(t *testing.T, store *fakeCredentials) (*App, *http.ServeMux) {
 	t.Helper()
 	app := newTestApp(t)
 	app.credentials = store
+	app.devAuth = false
 	app.oidcIssuer = credentialsIssuer
 	app.roles = server.RoleConfig{ReaderRole: "krill-reader"}
 	app.sessionRoles = func(*http.Request) ([]string, error) { return []string{"krill-reader"}, nil }

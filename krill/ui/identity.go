@@ -8,6 +8,13 @@
 // A caller whose session, issuer, or subject does not resolve gets no
 // Subject at all -- never a synthetic or dev-only one -- so a deployed UI
 // has no identity to attribute a write with, and the write cannot happen.
+//
+// The one exception is AUTH_MODE=none, where devAuth is true and there is
+// no Keycloak session to resolve in the first place: the pair is the fixed
+// dev pair below, which is exactly what api resolves for its own dev token,
+// so a local read and a local write attribute the same operator. That
+// branch is unreachable for AUTH_MODE=oidc, so no real, misconfigured, or
+// tampered OIDC session can ever reach it.
 package main
 
 import (
@@ -16,15 +23,28 @@ import (
 
 	"github.com/whale-net/everything/krill/apiclient"
 	"github.com/whale-net/everything/krill/identity"
+	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/store"
 )
 
 // operatorIdentity reads the request's Keycloak session and returns the
 // operator's real (iss, sub) pair. ok is false for a missing, tampered, or
-// expired session, and for the AuthModeNone dev user (its fixed issuer
-// config leaves identity.Encode with an empty iss) -- there is no real pair
-// to report without a configured issuer.
+// expired session -- a deployed UI with no resolvable identity has nothing
+// to attribute a write with, so the write must not happen.
+//
+// Under AUTH_MODE=none (app.devAuth) there is no Keycloak session: the
+// authenticator hands back a synthetic dev user and the configured issuer is
+// empty, so the encode below would always refuse and every identity-bearing
+// page -- credentials above all -- would be unusable in local dev. That mode
+// has exactly one pair it can honestly report, the one api's own dev token
+// resolves to (authdoor.DevIssuer/DevSubject), so it is returned here
+// verbatim: the same (iss, sub) a local write is already attributed to, so
+// reads and writes agree. app.devAuth is set from the auth mode alone and is
+// false for AUTH_MODE=oidc, so this branch can never serve a real session.
 func (app *App) operatorIdentity(r *http.Request) (iss, sub string, ok bool) {
+	if app.devAuth {
+		return devIdentity()
+	}
 	user, err := app.auth.CurrentUser(r)
 	if err != nil {
 		return "", "", false
@@ -64,11 +84,46 @@ func (app *App) operatorEncodedIdentity(r *http.Request) (string, bool) {
 	return encoded, true
 }
 
+// operatorPersona is the persona the resolved operator mints a credential
+// under. It is resolved separately from the (iss, sub) pair on purpose:
+// identity says who, persona says what they may do.
+//
+// Under AUTH_MODE=none the synthetic dev user carries htmxauth.AllRoles,
+// which names no configured realm role, so ResolvePersona would refuse every
+// dev mint. The dev operator is instead the swarm operator outright --
+// exactly what api resolves for the same dev token (authdoor's resolve), so
+// a credential minted here is authorized the same way it would be verified
+// there. For AUTH_MODE=oidc this is ResolvePersona unchanged, and an
+// identity holding neither configured role still resolves no persona.
+func (app *App) operatorPersona(r *http.Request) (server.Persona, bool) {
+	if app.devAuth {
+		return server.PersonaSwarmOperator, true
+	}
+	roles, err := app.requestRoles(r)
+	if err != nil {
+		return "", false
+	}
+	return app.roles.ResolvePersona(roles)
+}
+
 // Identity api's dev token resolves to (authdoor.DevIssuer/DevSubject).
 const (
 	devIssuer  = "krill-dev"
 	devSubject = "dev-operator"
 )
+
+// devIdentity is the one (iss, sub) pair AUTH_MODE=none can report. The two
+// constants are api's own dev-token halves (authdoor.DevIssuer/DevSubject),
+// so a local read and a local write resolve to the same identity rather than
+// two half-invented ones. The encode is the same gate a real pair passes, so
+// a dev pair that stopped being encodable would be reported as no identity
+// at all rather than a malformed one.
+func devIdentity() (iss, sub string, ok bool) {
+	if _, err := identity.Encode(devIssuer, devSubject); err != nil {
+		return "", "", false
+	}
+	return devIssuer, devSubject, true
+}
 
 // operatorSubjectContextKey is the unexported context key
 // withOperatorSubject/OperatorSubjectFromContext share.
@@ -96,9 +151,17 @@ func OperatorSubjectFromContext(ctx context.Context) (store.Subject, bool) {
 // resolve.
 func (app *App) requireOperator(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if app.devAPIToken != "" {
-			// AUTH_MODE=none dev stack: forward the static dev token api accepts.
-			subject := store.Subject{Iss: devIssuer, Sub: devSubject, Kind: store.SubjectKindHuman}
+		if app.devAuth {
+			// AUTH_MODE=none dev stack: the operator is the dev pair and the
+			// token api accepts is the static one. With no dev token there is
+			// nothing api would authenticate, so the write still refuses --
+			// a dev identity must not become a way to write unidentifiably.
+			iss, sub, ok := devIdentity()
+			if !ok || app.devAPIToken == "" {
+				http.Error(w, "unresolved operator identity", http.StatusUnauthorized)
+				return
+			}
+			subject := store.Subject{Iss: iss, Sub: sub, Kind: store.SubjectKindHuman}
 			ctx := apiclient.WithUserToken(withOperatorSubject(r.Context(), subject), app.devAPIToken)
 			next(w, r.WithContext(ctx))
 			return
