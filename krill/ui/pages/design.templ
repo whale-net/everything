@@ -204,6 +204,10 @@ type OpenQuestionRow struct {
 // for the title attribute. Both are empty when the krill_session row could
 // not be read, which is rendered as an absent "Opened by" line rather than
 // a blank or invented one.
+//
+// OpenedByKrillSessionID is the session's PROVENANCE -- the krill session it
+// was opened through -- and is deliberately not what the properties card's
+// copy chip carries; the chip is ID, this page's own subject.
 type DesignSessionDetailPage struct {
 	ID                     string
 	ProductID              string
@@ -750,13 +754,25 @@ templ designSessionEventTypeBadge(eventType string) {
 }
 
 // designSessionPropertiesCard is the rail's properties card: who opened the
-// session, and the krill session it was opened through.
+// session, and the design session's own id.
 //
 // The id is the copy chip the whole app shares -- same data-krill hook, same
 // data attribute, same head script -- so the clipboard behaviour is the one
 // already in use on the task detail, the milestone detail and the spec
 // blade. The chip shows the first eight characters with the whole value on
 // hover and in the clipboard, which is what a UUID read at a glance needs.
+//
+// Which id the chip carries is the whole of this card's naming: page.ID, the
+// design session's own id, the one this page is ABOUT and the one the URL
+// addresses. It is NOT opened_by_krill_session_id -- a chip whose label,
+// aria-label and data-krill hook all say "design session" while carrying the
+// krill session is how the two came to be confused in the first place.
+//
+// The krill session is not lost by that: it renders as its own "Krill
+// session" row below the chip, which is what FR d8146d9e asks for ("Opened
+// by ... plus the krill session it was opened through") and what
+// get_design_session returns. Two ids, two rows, neither standing in for
+// the other -- collapsing them was the defect.
 //
 // A session whose krill_session row could not be read shows the id chip and
 // NO "Opened by" line. The card does not offer an input to supply one: the
@@ -774,21 +790,36 @@ templ designSessionPropertiesCard(page DesignSessionDetailPage) {
 				</div>
 			}
 			<div>
-				<dt class="text-base-content/70">Krill session</dt>
+				<dt class="text-base-content/70">Design session</dt>
 				<dd data-krill="design-session-id">
 					// The app's own id chip: disabled until the head script
 					// binds it, so a control that cannot work never looks
 					// live. It sits in a <dd> because that is the scope the
-					// shared script looks in.
+					// shared script looks in. It carries page.ID -- the
+					// design session this page is about -- so the value an
+					// operator copies is the id the URL addresses.
 					<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
 						aria-label="Copy design session id" data-krill="copy-task-id"
-						data-task-id={ page.OpenedByKrillSessionID }
+						data-task-id={ page.ID }
 						disabled title="Copying the id needs JavaScript">
-						{ sessionChipText(page.OpenedByKrillSessionID) }
+						{ sessionChipText(page.ID) }
 					</button>
 					<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
 				</dd>
 			</div>
+			if page.OpenedByKrillSessionID != "" {
+				// FR d8146d9e's "Opened by ... plus the krill session it
+				// was opened through", as its OWN row rather than as the
+				// chip's value: get_design_session returns both ids, the
+				// page renders both, and neither is asked to impersonate
+				// the other. Rendered even with no "Opened by" line above,
+				// because the design_session row holds this id whether or
+				// not the krill_session behind it could be read.
+				<div>
+					<dt class="text-base-content/70">Krill session</dt>
+					<dd class="font-mono text-sm break-all" data-krill="design-session-opened-by-krill-session">{ page.OpenedByKrillSessionID }</dd>
+				</div>
+			}
 		</dl>
 	</section>
 }
