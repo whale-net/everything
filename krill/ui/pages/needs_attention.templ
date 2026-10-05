@@ -166,7 +166,7 @@ templ NeedsAttention(d NeedsAttentionData) {
 						type="button"
 						class="btn btn-ghost btn-sm"
 						hx-get={ d.RefreshHref }
-						hx-target={ "#" + opsResultsID }
+						hx-target={ "#" + OpsResultsAnchor }
 						hx-swap="outerHTML"
 					>Refresh</button>
 				}
@@ -243,11 +243,11 @@ templ needsAttentionFilterBar(d NeedsAttentionData) {
 // two the same way would tell an operator a filter excluded everything
 // when in fact nothing could be read.
 //
-// It carries opsResultsID because it is what the results block swaps to:
+// It carries OpsResultsAnchor because it is what the results block swaps to:
 // without the id the region's own target would be deleted and the next
 // Refresh would no-op.
 templ NeedsAttentionFilteredEmpty(d NeedsAttentionEmptyData) {
-	<div id={ opsResultsID } data-krill="needs-attention-empty">
+	<div id={ OpsResultsAnchor } data-krill="needs-attention-empty">
 		@htmxui.EmptyState(d.Headline, d.Detail, "", "", nil)
 	</div>
 }

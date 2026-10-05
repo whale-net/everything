@@ -26,7 +26,7 @@ import (
 func TestOpsInlineErrorCarriesItsSwapTarget(t *testing.T) {
 	out := renderBody(t, OpsInlineError("Failed to load console data. Try again."))
 
-	assert.Contains(t, out, `id="`+opsResultsID+`"`,
+	assert.Contains(t, out, `id="`+OpsResultsAnchor+`"`,
 		"the error fragment is swapped into the results block; without the id htmx deletes the target and every later Refresh is a no-op that never reaches the server")
 	assert.Contains(t, out, "Failed to load console data")
 	assert.Equal(t, 1, strings.Count(out, "alert-error"), "exactly one message, not a duplicate")

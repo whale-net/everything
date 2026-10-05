@@ -223,10 +223,24 @@ func (app *App) handleTaskIntervention(action string) http.HandlerFunc {
 		status, message := interventionRejection(resp)
 		if isHtmxRequest(r) {
 			refusal := "krill rejected the " + actionLabel(action) + ". " + message
-			if action == actionCancel {
-				card.Error = refusal
-				renderFragment(w, r, pages.CancelConfirmCard(card))
-				return
+			// A refused cancel is answered into whichever of its two regions
+			// the request came from. The confirm card swaps ITSELF, so a
+			// refusal posted from the card re-renders the card -- rebuilt from
+			// freshly read state, never from the ids the refused request
+			// carried, because those are exactly the ids the store just
+			// refused. The row's control, by contrast, swaps the results
+			// block, so a refusal there is answered like the other three verbs:
+			// the view re-derived from fresh state with the refusal inline.
+			if action == actionCancel && !cancelRefusalFromTheRow(r) {
+				if fresh, ok := app.freshCancelConfirmData(r.Context(), taskID, returnTo, refusal); ok {
+					renderFragment(w, r, pages.CancelConfirmCard(fresh))
+					return
+				}
+				// The state a confirmation would re-offer could not be
+				// re-read, so re-offering one at all would be guessing at the
+				// guard. Say the view could not be reloaded instead, the same
+				// answer the three in-place verbs give when their view cannot
+				// be rebuilt.
 			}
 			app.renderInterventionResults(w, r, returnTo, refusal, "")
 			return
@@ -698,6 +712,50 @@ func cancelObservedFrom(r *http.Request) cancelObservedIDs {
 		claimID:      strings.TrimSpace(r.FormValue(expectedClaimIDParam)),
 		escalationID: strings.TrimSpace(r.FormValue(escalatedGuardField)),
 	}
+}
+
+// cancelRefusalFromTheRow reports whether a refused cancel was posted by a
+// console row's Cancel control rather than by the confirm card's own form.
+//
+// Both halves of a row's Cancel POST the same route, so the only thing that
+// tells the two origins apart is which region htmx was swapping: the row's
+// control targets the results block, while the card's form targets the card
+// itself. htmx sends the resolved target's id in HX-Target, so a request that
+// names the results block is the row's.
+func cancelRefusalFromTheRow(r *http.Request) bool {
+	return r.Header.Get("HX-Target") == pages.OpsResultsAnchor
+}
+
+// freshCancelConfirmData rebuilds the cancel-confirm card from the task's
+// CURRENT state rather than from the ids the refused request carried.
+//
+// A refusal means the state the acting row observed is not the state the
+// store now holds -- that is why the write was refused -- so rebuilding the
+// card from the request's own ids would re-offer the operator the very guard
+// that was just rejected. The card is instead built from a fresh read of the
+// task, carrying whatever claim or escalation it holds now, so the retry is
+// guarded against the state the operator is about to see (FR 336335f1).
+//
+// ok is false when the task could not be read; the caller then answers with
+// the reload warning rather than re-offering a confirmation built from no
+// fresh state at all.
+func (app *App) freshCancelConfirmData(ctx context.Context, taskID uuid.UUID, returnTo, refusal string) (pages.CancelConfirmData, bool) {
+	task, err := app.tasks.GetTaskByID(ctx, taskID)
+	if err != nil {
+		logger.Error("failed to re-read a task for a refused cancel", "task", taskID.String(), "error", err)
+		return pages.CancelConfirmData{}, false
+	}
+	// The fresh row's own claim or escalation is the guard the retry must
+	// carry. A row that holds neither -- a ready task -- is the one unguarded
+	// shape and carries nothing, exactly as an unguarded row's control does.
+	observed := cancelObservedIDs{}
+	if task.CurrentClaimID != nil {
+		observed.claimID = task.CurrentClaimID.String()
+	}
+	if task.CurrentEscalationID != nil {
+		observed.escalationID = task.CurrentEscalationID.String()
+	}
+	return cancelConfirmData(taskID.String(), returnTo, refusal, observed), true
 }
 
 // cancelConfirmData builds the confirm card's view-model. It carries the

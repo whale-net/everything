@@ -48,8 +48,8 @@ func claimedTabPage(t *testing.T, f *needsAttentionFixture) string {
 }
 
 // claimedResultsBlockID is the id the claimed results block carries, spelled
-// once so the polls these tests issue name the same target the markup does
-// (the pages package's own opsResultsID is unexported to package main).
+// as a literal here so the polls these tests issue name the target the
+// markup renders independently of the production constant.
 const claimedResultsBlockID = "ops-results"
 
 // claimedTabPoll is one poll of the tab: an htmx request naming the results

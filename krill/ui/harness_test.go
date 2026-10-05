@@ -429,10 +429,11 @@ func writeTestJSON(w http.ResponseWriter, status int, v any) {
 
 // fakeFragmentTasks is the minimum console-query surface a mutation handler
 // needs: after a write, the handler re-derives the whole results block of
-// the view the operator acted from, which means re-reading it. It embeds
-// store.TaskStore so any other List method the re-derivation ever grew would
-// nil-panic rather than pass unnoticed -- these tests must not depend on
-// store surface the console does not use.
+// the view the operator acted from, which means re-reading it, and a refused
+// cancel re-reads the task itself to rebuild its confirmation from fresh
+// state. It embeds store.TaskStore so any other method the handlers ever grew
+// would nil-panic rather than pass unnoticed -- these tests must not depend
+// on store surface the console does not use.
 type fakeFragmentTasks struct {
 	store.TaskStore
 
@@ -440,6 +441,17 @@ type fakeFragmentTasks struct {
 	// escalated is distinct from claimed so a test can tell which view the
 	// re-derivation actually read.
 	escalated []store.EscalatedTaskRow
+
+	// task is what GetTaskByID answers with: the freshly read state a refused
+	// cancel rebuilds its confirmation from (FR 336335f1). Its zero value is
+	// a task holding neither a claim nor an escalation, the unguarded shape.
+	task store.Task
+}
+
+// GetTaskByID is the fresh read a refused cancel's re-rendered confirmation
+// is rebuilt from, in place of the ids the refused request carried.
+func (f *fakeFragmentTasks) GetTaskByID(context.Context, uuid.UUID) (store.Task, error) {
+	return f.task, nil
 }
 
 func (f *fakeFragmentTasks) ListClaimedTasks(context.Context, store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {

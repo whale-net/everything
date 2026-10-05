@@ -28,16 +28,23 @@ import (
 // the identity resolution, the store paging rule, and the open-redirect
 // guard are krill's rules, not presentation.
 
-// opsResultsID is the stable id every read view's results block carries.
+// OpsResultsAnchor is the stable id every read view's results block carries.
 // It is the swap target for the row interventions' hx-post and for the
 // manual Refresh button, and the poll's own "this" target resolves to it.
 // One constant rather than a per-view generated id, so it is also
 // byte-stable across a polled fragment's renders.
-const opsResultsID = "ops-results"
+//
+// Exported because a handler outside this package has to recognize the
+// region in HX-Target: a row's Cancel swaps the results block while the
+// confirm card's own form swaps the card, and that is the only thing that
+// tells the two refusal origins apart (interventions.go).
+const OpsResultsAnchor = "ops-results"
 
-// cancelConfirmID is the stable id of the cancel-confirm card, and the
-// hx-target of that card's own doubled form.
-const cancelConfirmID = "cancel-confirm"
+// CancelConfirmAnchor is the stable id of the cancel-confirm card, and the
+// hx-target of that card's own doubled form. Exported for the same reason
+// OpsResultsAnchor is: the card is the other region a refused cancel can be
+// answered into, named by HX-Target rather than by the path.
+const CancelConfirmAnchor = "cancel-confirm"
 
 // ---------------------------------------------------------------------------
 // view models
@@ -263,7 +270,7 @@ type CancelConfirmData struct {
 // the block is being re-derived after a refused intervention, the rows
 // themselves, and the next-page link.
 templ opsResults(d OpsResultsData) {
-	<div id={ opsResultsID } { d.Poll... }>
+	<div id={ OpsResultsAnchor } { d.Poll... }>
 		if d.Error != "" {
 			@htmxui.Alert(htmxui.AlertError, d.Error, nil)
 		}
@@ -292,7 +299,7 @@ templ opsPageChrome(d OpsPageData) {
 				type="button"
 				class="btn btn-ghost btn-sm"
 				hx-get={ d.RefreshHref }
-				hx-target={ "#" + opsResultsID }
+				hx-target={ "#" + OpsResultsAnchor }
 				hx-swap="outerHTML"
 			>Refresh</button>
 		}
@@ -581,7 +588,7 @@ templ TaskActions(controls []TaskActionControl) {
 				method="post"
 				action={ templ.URL(c.Action) }
 				hx-post={ c.Action }
-				hx-target={ "#" + opsResultsID }
+				hx-target={ "#" + OpsResultsAnchor }
 				hx-swap="outerHTML"
 				class="inline"
 			>
@@ -600,7 +607,7 @@ templ TaskActions(controls []TaskActionControl) {
 				method="get"
 				action={ templ.URL(c.Action) }
 				hx-post={ c.PostAction }
-				hx-target={ "#" + opsResultsID }
+				hx-target={ "#" + OpsResultsAnchor }
 				hx-swap="outerHTML"
 				hx-confirm={ c.Confirm }
 				class="inline"
@@ -633,7 +640,7 @@ templ TaskActions(controls []TaskActionControl) {
 // console freezes with no network evidence that anything was attempted.
 // Carrying the id keeps the block refreshable after an error.
 templ OpsInlineError(message string) {
-	<div id={ opsResultsID } data-krill="ops-inline-error">
+	<div id={ OpsResultsAnchor } data-krill="ops-inline-error">
 		@htmxui.Alert(htmxui.AlertError, message, nil)
 	</div>
 }
@@ -672,7 +679,7 @@ templ InterventionError(d InterventionErrorData) {
 // CancelConfirmCard is the confirmation step for the destructive cancel
 // verb: a GET page, and the hx-target of its own doubled form.
 //
-// The card carries cancelConfirmID so the form can swap it in place, and
+// The card carries CancelConfirmAnchor so the form can swap it in place, and
 // a refusal re-renders this same card at 200 with the reason inline --
 // the operator's typed rationale stays on screen instead of vanishing
 // behind a status code.
@@ -683,7 +690,7 @@ templ InterventionError(d InterventionErrorData) {
 // this page for the eventual POST to be guarded against the state the
 // operator saw.
 templ CancelConfirmCard(d CancelConfirmData) {
-	<div id={ cancelConfirmID } class="card bg-base-100 border-2 border-error/40 shadow-md">
+	<div id={ CancelConfirmAnchor } class="card bg-base-100 border-2 border-error/40 shadow-md">
 		<div class="card-body">
 			<h2 class="card-title">Cancel task { d.TaskID }?</h2>
 			<p class="text-sm">
@@ -696,7 +703,7 @@ templ CancelConfirmCard(d CancelConfirmData) {
 				method="post"
 				action={ templ.URL(d.Action) }
 				hx-post={ d.Action }
-				hx-target={ "#" + cancelConfirmID }
+				hx-target={ "#" + CancelConfirmAnchor }
 				hx-swap="outerHTML"
 				class="mt-4"
 			>
