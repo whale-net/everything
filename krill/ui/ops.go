@@ -385,12 +385,18 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 // every escalated task and its escalation_reason, equivalent to
 // list_escalated_tasks / GET /console/escalated, under the same filter
 // contract claimedResults documents.
-func (app *App) escalatedResults(ctx context.Context, filter store.ConsoleFilter, page store.PageParams, selfPath string) (pages.EscalatedData, error) {
+//
+// reason is the read's optional escalation-reason narrowing, the one
+// narrowing ConsoleFilter does not carry (ListEscalatedTasksParams' own
+// field). nil keeps every reason -- what the ops console's own view asks
+// for, since it offers no reason control; the Needs attention page's
+// Escalated tab passes the filter bar's selection.
+func (app *App) escalatedResults(ctx context.Context, filter store.ConsoleFilter, reason *store.EscalationReason, page store.PageParams, selfPath string) (pages.EscalatedData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.EscalatedData{}, err
 	}
-	result, err := app.tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filter, Page: page})
+	result, err := app.tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filter, Reason: reason, Page: page})
 	if err != nil {
 		return pages.EscalatedData{}, err
 	}
@@ -441,7 +447,7 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.escalatedResults(r.Context(), store.ConsoleFilter{}, page, opsSelfPath(r))
+	d, err := app.escalatedResults(r.Context(), store.ConsoleFilter{}, nil, page, opsSelfPath(r))
 	if err != nil {
 		app.writeOpsQueryError(w, r, err)
 		return
