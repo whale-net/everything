@@ -12,6 +12,12 @@
 // where they are -- the tab-specific shapes are separate requirements
 // (772b044b, a149d28f, b22e1d60) and separate tasks.
 //
+// The Escalated tab has since taken its own shape (772b044b,
+// needsAttentionEscalatedResults): its columns are the ones an operator
+// scans for a stuck task, and they are not the console view's. Its rows
+// still come from the one store read, so "the same rows" holds even where
+// "the same table" no longer does.
+//
 // The four legacy /ops URLs are retired into these tabs (krill/ui/routes.go
 // names each one's successor), so a bookmarked /ops/escalated link opens
 // the Escalated tab of the resolved product rather than a page of its own.
@@ -133,7 +139,7 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	// second, later time.Now() would report an age the rows it describes
 	// were never read at.
 	readAt := app.clock()
-	results, err := app.needsAttentionResults(r.Context(), product.ID, tab, page, opsSelfPath(r))
+	results, err := app.needsAttentionResults(r.Context(), product.ID, tab, page, opsSelfPath(r), readAt)
 	if err != nil {
 		app.writeNeedsAttentionQueryError(w, r, product.ID, tab, err)
 		return
@@ -205,7 +211,16 @@ func (app *App) needsAttentionPage(r *http.Request, productID uuid.UUID, tab str
 // needsAttentionResults reads the selected tab's rows and renders them with
 // the matching console view's own component, so the tab and the console
 // view are one derivation (ops.go's four loaders) and one table.
-func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, tab string, page store.PageParams, selfPath string) (templ.Component, error) {
+//
+// The Escalated tab is the exception: its row shape is its own (FR
+// 772b044b, needsAttentionEscalatedResults below), because the columns the
+// operator scans there are not the console view's. Its rows are still the
+// one store read.
+//
+// now is the request's read instant, so the escalated tab's relative
+// timestamps are judged against the same moment the freshness stamp
+// reports.
+func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, tab string, page store.PageParams, selfPath string, now time.Time) (templ.Component, error) {
 	filter := store.ConsoleFilter{ProductID: &productID}
 	switch tab {
 	case needsAttentionTabClaimed:
@@ -227,12 +242,101 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 		}
 		return pages.NotesResults(d), nil
 	default:
-		d, err := app.escalatedResults(ctx, filter, page, selfPath)
+		d, err := app.needsAttentionEscalatedResults(ctx, productID, page, selfPath, now)
 		if err != nil {
 			return nil, err
 		}
-		return pages.EscalatedResults(d), nil
+		return pages.EscalatedQueueResults(d), nil
 	}
+}
+
+// needsAttentionEscalatedResults reads one page of the Escalated tab (FR
+// 772b044b) and builds its own row contract.
+//
+// It is the one derivation of this tab's data, called by the tab's GET and
+// -- once the intervention path accepts this page's URL -- by a post-write
+// re-derivation, so neither can render a row set the other would not. The
+// read is ListEscalatedTasks under the product narrowing the whole page is
+// scoped to, so the tab's content matches list_escalated_tasks for the same
+// filters.
+func (app *App) needsAttentionEscalatedResults(ctx context.Context, productID uuid.UUID, page store.PageParams, selfPath string, now time.Time) (pages.NeedsAttentionEscalatedData, error) {
+	scopeID, err := app.soleScopeID(ctx)
+	if err != nil {
+		return pages.NeedsAttentionEscalatedData{}, err
+	}
+	result, err := app.tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+		ScopeID:       scopeID,
+		ConsoleFilter: store.ConsoleFilter{ProductID: &productID},
+		Page:          page,
+	})
+	if err != nil {
+		return pages.NeedsAttentionEscalatedData{}, err
+	}
+	rows := make([]pages.NeedsAttentionEscalatedRow, len(result.Items))
+	for i, row := range result.Items {
+		rows[i] = needsAttentionEscalatedRowOf(row, productID, selfPath, now)
+	}
+	return pages.NeedsAttentionEscalatedData{
+		Rows:     rows,
+		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
+		Href:     selfPath,
+	}, nil
+}
+
+// needsAttentionEscalatedRowOf builds one Escalated-tab row from the read's
+// own row.
+//
+// returnTo is the tab's own URL: the row's controls carry it so an
+// intervention knows which view to re-derive, and it is read back from the
+// request rather than rebuilt, so a paged or filtered tab returns to itself.
+//
+// now is the read instant, so relativeTime answers against the same clock
+// the freshness stamp does.
+func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID, returnTo string, now time.Time) pages.NeedsAttentionEscalatedRow {
+	return pages.NeedsAttentionEscalatedRow{
+		TaskID:     r.TaskID.String(),
+		Title:      r.Title,
+		DetailHref: productTaskDetailPath(productID, r.TaskID),
+		ByLine:     escalatedByLine(r),
+		Milestone:  r.DeliveryRef.Title,
+		Lane:       string(r.Lane),
+		Reason:     string(r.Reason),
+		// The count against the ATTEMPT cap, never the escalation's own
+		// CapValue: for a thrash-cap escalation that figure is the thrash
+		// cap, and labelling an attempt count with it would misreport every
+		// such row. There is no per-task cap column, so the package-wide
+		// default is the cap -- the same fallback taskAttemptsLabel makes
+		// for every other row (task_page.go).
+		Attempts:            taskAttemptsLabel(r.AttemptCount),
+		EscalatedAt:         r.EscalatedAt.UTC().Format(time.RFC3339),
+		EscalatedAtRelative: relativeTime(r.EscalatedAt, now),
+		EscalationID:        observedEscalationID(r),
+	}
+}
+
+// observedEscalationID is the row's observed escalation id as a string,
+// empty when the read somehow reported none. An escalated row always
+// carries one (ListEscalatedTasks reads current_escalation_id IS NOT
+// NULL), and the empty spelling is what keeps a row that did not from
+// rendering a zero-UUID guard -- a guard that would refuse every action.
+func observedEscalationID(r store.EscalatedTaskRow) string {
+	if r.EscalationID == uuid.Nil {
+		return ""
+	}
+	return r.EscalationID.String()
+}
+
+// escalatedByLine is the escalation's own subjects, as the row's sub-line:
+// who escalated it, and who they were acting for when they did. A
+// subject-less side reads as "-" through opsActor/opsSubject, and an
+// escalation with no on-behalf-of states only the acting half rather than
+// "for -".
+func escalatedByLine(r store.EscalatedTaskRow) string {
+	by := opsActor(r.EscalatedByActing)
+	if of := opsSubject(r.EscalatedByOnBehalfOf); of != "-" {
+		return "by " + by + " for " + of
+	}
+	return "by " + by
 }
 
 // needsAttentionTabs builds the strip: the four tabs, each at its own
