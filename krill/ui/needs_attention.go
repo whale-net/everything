@@ -340,12 +340,13 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	// strip's links, the filter bar's options and the empty state's
 	// sentence, so the three cannot describe different containers.
 	containers := app.needsAttentionMilestoneContainers(r.Context(), product.ID)
-	results, err := app.needsAttentionResults(r.Context(), product.ID, filter,
+	view, err := app.needsAttentionResults(r.Context(), product.ID, filter,
 		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r), readAt)
 	if err != nil {
 		app.writeNeedsAttentionQueryError(w, r, product.ID, filter, containers, tab, err)
 		return
 	}
+	results := view.Results
 
 	// The results block alone: the claimed tab's poll and the Refresh
 	// button both name it, and neither may take the strip with it. The
@@ -357,7 +358,7 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d := app.needsAttentionPage(r, product.ID, filter, containers, tab, readAt, results)
+	d := app.needsAttentionPage(r, product.ID, filter, containers, tab, readAt, results, view.Paging)
 	if htmx {
 		renderFragment(w, r, pages.NeedsAttention(d))
 		return
@@ -386,7 +387,7 @@ func (app *App) writeNeedsAttentionQueryError(w http.ResponseWriter, r *http.Req
 	if isHtmxRequest(r) {
 		if needsAttentionPanelSwap(r) {
 			renderFragment(w, r, pages.NeedsAttention(
-				app.needsAttentionPage(r, productID, filter, containers, tab, app.clock(), failure)))
+				app.needsAttentionPage(r, productID, filter, containers, tab, app.clock(), failure, nil)))
 			return
 		}
 		renderFragment(w, r, failure)
@@ -399,7 +400,7 @@ func (app *App) writeNeedsAttentionQueryError(w http.ResponseWriter, r *http.Req
 // needsAttentionPage is the one assembly of the page's view model, so the
 // success and failure answers cannot describe different strips. readAt is
 // the instant the freshness stamp reports as when this view was read.
-func (app *App) needsAttentionPage(r *http.Request, productID uuid.UUID, filter needsAttentionFilter, containers []taskContainer, tab string, readAt time.Time, results templ.Component) pages.NeedsAttentionData {
+func (app *App) needsAttentionPage(r *http.Request, productID uuid.UUID, filter needsAttentionFilter, containers []taskContainer, tab string, readAt time.Time, results templ.Component, paging *pages.NeedsAttentionPaging) pages.NeedsAttentionData {
 	return pages.NeedsAttentionData{
 		Tabs:            app.needsAttentionTabs(r.Context(), productID, tab, filter),
 		Tab:             tab,
@@ -408,6 +409,7 @@ func (app *App) needsAttentionPage(r *http.Request, productID uuid.UUID, filter 
 		RefreshHref:     r.URL.RequestURI(),
 		Filter:          app.needsAttentionFilterBar(r, filter, containers, tab),
 		Results:         results,
+		Paging:          paging,
 	}
 }
 
@@ -455,10 +457,21 @@ func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID
 	return taskContainersOf(listing)
 }
 
+// needsAttentionTabView is one tab read's whole answer: the results to
+// render, and -- when the read produced a pageable table -- the footer that
+// states how much of the filtered set is on screen (FR 7f10bd5d).
+//
+// Paging is nil where there is no table to foot: a filter that excluded
+// every row renders the tab's filtered-empty state instead, and a tab that
+// genuinely holds nothing is a whole answer rather than a truncated page.
+type needsAttentionTabView struct {
+	Results templ.Component
+	Paging  *pages.NeedsAttentionPaging
+}
+
 // needsAttentionResults reads the selected tab's rows and renders them with
 // the matching console view's own component, so the tab and the console
 // view are one derivation (ops.go's four loaders) and one table.
-//
 //
 // filter is the filter bar's narrowing, applied to every tab's read: the
 // milestone selection rides on the store.ConsoleFilter all four reads take,
@@ -474,46 +487,106 @@ func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID
 //
 // now is the request's read instant, so the escalated tab's relative
 // timestamps are judged against the same moment the freshness stamp reports.
-func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time) (templ.Component, error) {
+//
+// The answer pairs each table with its paging footer (FR 7f10bd5d), so the
+// region that renders both cannot show a footer for a table it did not
+// render.
+func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time) (needsAttentionTabView, error) {
 	console := filter.console(productID)
 	switch tab {
 	case needsAttentionTabClaimed:
 		d, err := app.claimedResults(ctx, console, page, selfPath)
 		if err != nil {
-			return nil, err
+			return needsAttentionTabView{}, err
 		}
 		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "claimed tasks"); ok {
-			return pages.NeedsAttentionFilteredEmpty(empty), nil
+			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
-		return pages.ClaimedResults(d), nil
+		return needsAttentionTabView{
+			Results: pages.ClaimedResults(d),
+			Paging:  needsAttentionPagingOf(len(d.Rows), 0, false, d.NextHref),
+		}, nil
 	case needsAttentionTabCancelled:
 		d, err := app.cancelledResults(ctx, console, page, selfPath)
 		if err != nil {
-			return nil, err
+			return needsAttentionTabView{}, err
 		}
 		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "cancelled tasks"); ok {
-			return pages.NeedsAttentionFilteredEmpty(empty), nil
+			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
-		return pages.CancelledResults(d), nil
+		return needsAttentionTabView{
+			Results: pages.CancelledResults(d),
+			Paging:  needsAttentionPagingOf(len(d.Rows), 0, false, d.NextHref),
+		}, nil
 	case needsAttentionTabNotes:
 		d, err := app.openNotesResults(ctx, console, page, selfPath)
 		if err != nil {
-			return nil, err
+			return needsAttentionTabView{}, err
 		}
 		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "open notes"); ok {
-			return pages.NeedsAttentionFilteredEmpty(empty), nil
+			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
-		return pages.NotesResults(d), nil
+		return needsAttentionTabView{
+			Results: pages.NotesResults(d),
+			Paging:  needsAttentionPagingOf(len(d.Rows), 0, false, d.NextHref),
+		}, nil
 	default:
 		d, err := app.needsAttentionEscalatedResults(ctx, productID, filter, page, selfPath, now)
 		if err != nil {
-			return nil, err
+			return needsAttentionTabView{}, err
 		}
 		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "escalated tasks"); ok {
-			return pages.NeedsAttentionFilteredEmpty(empty), nil
+			return needsAttentionTabView{Results: pages.NeedsAttentionFilteredEmpty(empty)}, nil
 		}
-		return pages.EscalatedQueueResults(d), nil
+		return needsAttentionTabView{
+			Results: pages.EscalatedQueueResults(d),
+			Paging:  needsAttentionPagingOf(len(d.Rows), 0, false, d.NextHref),
+		}, nil
 	}
+}
+
+// needsAttentionPagingOf builds the active tab's footer (FR 7f10bd5d) from
+// one tab read's own page: how many rows it rendered, the total the
+// matching count read answered for the SAME filters, and the address of the
+// following page the store issued a token for.
+//
+// total is meaningful only when hasTotal: the total comes from the tab's own
+// Count* read taken with the identical params the rows were read with, and a
+// count that could not be read leaves hasTotal false so the footer names
+// only what is on screen rather than rendering an unreadable count as a
+// confident zero -- the rule the tab badges already follow.
+//
+// Previous is rendered disabled rather than linked: the store's keyset
+// paging issues tokens forward only, so no address for the preceding page
+// exists in this layer. Guessing one would land the operator on a page they
+// did not ask for -- the failure this whole footer exists to prevent -- so
+// the control says why it is inert and the browser's Back button remains the
+// way back.
+func needsAttentionPagingOf(shown, total int, hasTotal bool, nextHref string) *pages.NeedsAttentionPaging {
+	paging := &pages.NeedsAttentionPaging{
+		Shown:    shown,
+		Total:    total,
+		HasTotal: hasTotal,
+		Summary:  needsAttentionPagingSummary(shown, total, hasTotal),
+		PrevNote: "This list pages forward only, so there is no previous page to link to. " +
+			"Use the browser's Back button, or change a filter to start again from the first page.",
+		NextHref: nextHref,
+	}
+	if nextHref == "" {
+		paging.NextNote = "This is the last page: every task matching these filters is already shown."
+	}
+	return paging
+}
+
+// needsAttentionPagingSummary is the footer's one sentence. With a total it
+// reads "Showing X of Y tasks"; without one -- a count that could not be
+// read -- it names only what is on screen rather than inventing a total or
+// silently reading as if the page were complete.
+func needsAttentionPagingSummary(shown, total int, hasTotal bool) string {
+	if !hasTotal {
+		return fmt.Sprintf("Showing %d tasks", shown)
+	}
+	return fmt.Sprintf("Showing %d of %d tasks", shown, total)
 }
 
 // needsAttentionEscalatedResults reads one page of the Escalated tab (FR
