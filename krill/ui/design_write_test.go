@@ -21,11 +21,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1501,7 +1503,7 @@ func acceptAnswerRounds(t *testing.T, env *designWriteEnv) {
 		var round struct {
 			OpenQuestionsDelta struct {
 				Opened   []wireOpenedQuestion `json:"opened"`
-				Resolved []string              `json:"resolved"`
+				Resolved []string             `json:"resolved"`
 			} `json:"open_questions_delta"`
 		}
 		if err := json.Unmarshal(req.Body, &round); err != nil {
@@ -2080,4 +2082,274 @@ func TestDesignWrite_Answer_FormIsDoubled(t *testing.T) {
 	// issues the request, so the form would look frozen.
 	assert.Contains(t, html, `id="`+pages.DesignSessionRoundAnchor+`"`,
 		"the form's hx-target must resolve on the page it is served into")
+}
+
+// ---------------------------------------------------------------------------
+// refusal text: krill's storage-layer vocabulary never reaches an operator,
+// and an ordinary refusal is not logged as a failure
+// ---------------------------------------------------------------------------
+
+// storeValidationJSON is the body api's appendRevisionEventHandler writes for
+// a store.ErrInvalidRevisionEvent, spelled the way
+// validateResolvedQuestionsOpened spells it. The format string is duplicated
+// here on purpose: a store reword fails this test loudly rather than
+// silently degrading the translation to its generic refusal.
+func storeValidationJSON(cause string) string {
+	return fmt.Sprintf(`{"error":%q}`, store.ErrInvalidRevisionEvent.Error()+": "+cause)
+}
+
+// captureDesignWriteLogs redirects this package's logger into a buffer for
+// the duration of the test and returns it, so a test can assert on what an
+// operator's log would have said. The defect this pins is a LOG, not a
+// string, so it has to be read off the logger rather than off the page.
+func captureDesignWriteLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := logger
+	logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	t.Cleanup(func() { logger = prev })
+	return &buf
+}
+
+// errorLogLines returns the captured log lines logged at ERROR. The TEXT
+// handler writes level=ERROR, which is what makes "exactly one ERROR" a
+// countable claim rather than a reading of the whole buffer.
+func errorLogLines(buf *bytes.Buffer) []string {
+	var out []string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, "level=ERROR") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// refusalAlertText returns the "Not saved: ..." alert's own text. The leak
+// assertions read it rather than the whole document, because the page's own
+// chrome legitimately says "revision events" about the timeline: an
+// assertion over the whole body would be measuring an unrelated string and
+// would pass or fail for the wrong reason.
+func refusalAlertText(t *testing.T, body string) string {
+	t.Helper()
+	m := regexp.MustCompile(`<span class="text-sm">(Not saved: [^<]*)</span>`).FindStringSubmatch(body)
+	require.NotNil(t, m,
+		"a refusal must render as an inline alert stating its reason: %s", body)
+	return m[1]
+}
+
+// TestDesignWrite_StoreValidationRejection_RendersNoStoreText is FR
+// 1942d934's "no store text" clause, against the leak that started it: a
+// store.ErrInvalidRevisionEvent reached the operator verbatim, naming an
+// internal package, the storage layer's `open_questions_delta` vocabulary,
+// and "revision event".
+//
+// The round gets past the UI's own staleness check because the READ and the
+// WRITE disagree: the question is in the rail the operator ticked from, but
+// no revision event ever opened it -- a lagging read replica, or any drift
+// between the two clients. That is precisely the case where krill's own
+// validation is still the oracle, so the store's sentence is what this UI
+// receives, and translating it is the only thing standing between the
+// storage layer and the operator.
+func TestDesignWrite_StoreValidationRejection_RendersNoStoreText(t *testing.T) {
+	const cause = `open_questions_delta.resolved names "q-flag-store", which was never opened in this session`
+
+	for _, hx := range []bool{false, true} {
+		name := "no-JS"
+		if hx {
+			name = "htmx"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newDesignWriteEnv(t)
+			// A question the rail offers but no round ever opened, so the
+			// UI's staleness check passes and krill's own validation is
+			// what refuses.
+			env.Events.addOpen(env.SessionID, store.OpenQuestion{
+				QuestionID: testClosedQuestion, Text: testClosedQuestionText,
+				Blocking: true, OpenedAtSeqNo: 9,
+			})
+			env.API.onRequest(func(req recordedRequest) (int, string) {
+				if req.Path == "/sessions/init" {
+					return 0, ""
+				}
+				return http.StatusBadRequest, storeValidationJSON(cause)
+			})
+
+			rec := postForm(env.Mux, env.answerPath(), url.Values{
+				"follow_up": {"Use the flag table."},
+				"resolve":   {testClosedQuestion},
+			}, hx, env.Cookie)
+			body := rec.Body.String()
+			require.Equal(t, http.StatusOK, rec.Code,
+				"a refusal still answers 200 so htmx swaps at all: %s", body)
+			alert := refusalAlertText(t, body)
+
+			// The status is kept: it is part of what the operator is told.
+			assert.Contains(t, alert, "400:", "api's status is kept on the refusal")
+			// The reason is actionable and names the question as the
+			// operator's own form sent it.
+			assert.Contains(t, alert, testClosedQuestion,
+				"the operator is told WHICH question krill turned away, in the id their own tick sent")
+			assert.Contains(t, alert, "reload the page",
+				"and what to do about it")
+
+			assert.NotContains(t, alert, "krill/store", "an internal package path is not operator text")
+			assert.NotContains(t, alert, "open_questions_delta", "storage-layer vocabulary is not operator text")
+			assert.NotContains(t, alert, "revision event", "storage-layer vocabulary is not operator text")
+			assert.NotContains(t, alert, cause,
+				"the store's sentence is replaced, never quoted alongside a translation")
+			assert.NotContains(t, alert, store.ErrInvalidRevisionEvent.Error()+":",
+				"and not the sentinel's own wording either")
+		})
+	}
+}
+
+// TestDesignWrite_UnknownStoreValidation_DegradesToAGenericRefusal is the
+// default half of the translation. A cause nobody mapped is still a cause
+// this UI must not narrate: falling through to the raw string would put the
+// leak back the moment store adds a validation rule, which is exactly the
+// drift a generic refusal is here to absorb.
+func TestDesignWrite_UnknownStoreValidation_DegradesToAGenericRefusal(t *testing.T) {
+	const futureCause = `entity_deltas change "retired" is not created|updated`
+
+	for _, hx := range []bool{false, true} {
+		name := "no-JS"
+		if hx {
+			name = "htmx"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newDesignWriteEnv(t)
+			env.API.onRequest(func(req recordedRequest) (int, string) {
+				if req.Path == "/sessions/init" {
+					return 0, ""
+				}
+				return http.StatusBadRequest, storeValidationJSON(futureCause)
+			})
+
+			rec := postForm(env.Mux, env.answerPath(), url.Values{
+				"follow_up": {"Use the flag table."},
+				"resolve":   {testClosedQuestion},
+			}, hx, env.Cookie)
+			body := rec.Body.String()
+			require.Equal(t, http.StatusOK, rec.Code, "a refusal still answers 200: %s", body)
+			alert := refusalAlertText(t, body)
+
+			assert.Contains(t, alert, "400:")
+			assert.NotContains(t, alert, store.ErrInvalidRevisionEvent.Error(),
+				"an unmapped store cause must not fall through to the raw string")
+			assert.NotContains(t, alert, "entity_deltas")
+			assert.NotContains(t, alert, futureCause)
+		})
+	}
+}
+
+// TestDesignWrite_Refusal_LogsNoError is the log half of the rule: an
+// ordinary refusal is HANDLED CONTROL FLOW (AGENTS.md), and krill answered it
+// -- logging ERROR "design write failed before reaching krill" for a write
+// that reached krill and was correctly refused is a false alarm in on-call's
+// face. The sibling ordering bug was computing transportFailureMessage into
+// the `message` default on the line BEFORE testing errors.As, so the ERROR
+// fired on the rejection branch too.
+func TestDesignWrite_Refusal_LogsNoError(t *testing.T) {
+	t.Run("store validation rejection", func(t *testing.T) {
+		env := newDesignWriteEnv(t)
+		env.Events.addOpen(env.SessionID, store.OpenQuestion{
+			QuestionID: testClosedQuestion, Text: testClosedQuestionText,
+			Blocking: true, OpenedAtSeqNo: 9,
+		})
+		env.API.onRequest(func(req recordedRequest) (int, string) {
+			if req.Path == "/sessions/init" {
+				return 0, ""
+			}
+			return http.StatusBadRequest, storeValidationJSON(
+				`open_questions_delta.resolved names "q-flag-store", which was never opened in this session`)
+		})
+		logs := captureDesignWriteLogs(t)
+
+		env.submitAnswer(url.Values{"follow_up": {"Use the flag table."}, "resolve": {testClosedQuestion}})
+
+		assert.Empty(t, errorLogLines(logs),
+			"a refusal krill answered is handled control flow, not an ERROR:\n%s", logs.String())
+	})
+
+	t.Run("refusal this UI raised itself", func(t *testing.T) {
+		env := newDesignWriteEnv(t)
+		logs := captureDesignWriteLogs(t)
+
+		// A stale tick: refused before krill was ever asked.
+		env.Events.resolveOne(env.SessionID, testClosedQuestion)
+		env.submitAnswer(url.Values{"follow_up": {"Use the flag table."}, "resolve": {testClosedQuestion}})
+
+		assert.Empty(t, errorLogLines(logs),
+			"a refusal this UI raised is handled control flow, not an ERROR:\n%s", logs.String())
+	})
+
+	t.Run("empty round refused before krill", func(t *testing.T) {
+		env := newDesignWriteEnv(t)
+		logs := captureDesignWriteLogs(t)
+
+		env.submitAnswer(url.Values{})
+
+		assert.Empty(t, errorLogLines(logs),
+			"an empty submission is handled control flow, not an ERROR:\n%s", logs.String())
+	})
+
+	t.Run("refused open", func(t *testing.T) {
+		env := newDesignWriteEnv(t)
+		env.API.onRequest(func(req recordedRequest) (int, string) {
+			if req.Path == "/sessions/init" {
+				return 0, ""
+			}
+			return http.StatusBadRequest, `{"error":"product not found"}`
+		})
+		logs := captureDesignWriteLogs(t)
+
+		env.submitOpen(url.Values{"opening_submission": {"Operators need a rollback story."}})
+
+		assert.Empty(t, errorLogLines(logs),
+			"renderOpenFormFailure carries the same rule and must not log either:\n%s", logs.String())
+	})
+}
+
+// TestDesignWrite_TransportFailure_LogsExactlyOneError is the other half:
+// suppressing the refusal's ERROR must not silence a genuine failure. A write
+// that never reached krill IS an ERROR, and exactly one line says so -- more
+// than one would mean the reason is being logged twice for one failure.
+func TestDesignWrite_TransportFailure_LogsExactlyOneError(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	env.API.server.Close() // the whole api is gone; the mint fails first
+	logs := captureDesignWriteLogs(t)
+
+	env.submitAnswer(url.Values{"follow_up": {"Use the flag table."}, "resolve": {testClosedQuestion}})
+
+	lines := errorLogLines(logs)
+	require.Len(t, lines, 1,
+		"a write that never reached krill is a genuine failure, logged exactly once:\n%s", logs.String())
+	assert.Contains(t, lines[0], "design write failed before reaching krill",
+		"and it says what actually happened, rather than blaming a refusal")
+}
+
+// TestDesignWrite_OpenForm_StoreValidationIsAlsoTranslated holds the
+// new-session blade to the same rule. The blade cannot provoke a
+// revision-event validation today, but it renders a refusal through the
+// same operatorRejectionText, and a second render site is exactly where a
+// raw-string pass-through would creep back in.
+func TestDesignWrite_OpenForm_StoreValidationIsAlsoTranslated(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	env.API.onRequest(func(req recordedRequest) (int, string) {
+		if req.Path == "/sessions/init" {
+			return 0, ""
+		}
+		return http.StatusBadRequest, storeValidationJSON(
+			`open_questions_delta.resolved names "q-flag-store", which was never opened in this session`)
+	})
+
+	rec := env.submitOpen(url.Values{"opening_submission": {"Operators need a rollback story."}})
+	body := rec.Body.String()
+	require.Equal(t, http.StatusOK, rec.Code, "a refusal still answers 200 with the blade: %s", body)
+
+	assert.Contains(t, body, "400:")
+	alert := refusalAlertText(t, body)
+	assert.NotContains(t, alert, "krill/store")
+	assert.NotContains(t, alert, "open_questions_delta")
+	assert.Contains(t, body, "Operators need a rollback story.", "the typed text survives")
 }

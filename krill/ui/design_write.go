@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,8 +96,9 @@ type createdRevisionEvent struct {
 
 // writeRejection is a non-2xx response from api: a rejected write (unknown
 // product, unopened question id, malformed id) is a normal outcome, not a
-// failure of this binary, so its status and api's own named message are
-// carried here and relayed to the browser verbatim.
+// failure of this binary, so its status and api's own message are carried
+// here as received. The message reaches an operator through
+// operatorRejectionText, never raw.
 type writeRejection struct {
 	status  int
 	message string
@@ -136,6 +138,77 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 	return nil
 }
 
+// ── refusal text ────────────────────────────────────────────────────────────
+
+// operatorRejectionText renders a *writeRejection for an operator: its
+// status, kept, and a reason the operator can act on.
+//
+// WHERE this translation lives is a deliberate choice, and the alternative
+// was weighed. api hands the store's own error string to every client --
+// appendRevisionEventHandler's writeJSONError(w, 400, err.Error()) -- and the
+// MCP append_revision_event tool is contractually required to surface that
+// same string verbatim, so api's error body is a contract other tools read.
+// Rewriting it in api's handler would fix every consumer at once, at the
+// price of changing that shared surface for all of them. Translating here
+// leaves api honest for programmatic clients and rewrites only the text a
+// human is shown, which is the half that was actually leaking.
+//
+// That leaves one consequence to own: the match is on the store sentinel's
+// own text, because over HTTP an error arrives as a string and there is no
+// errors.As to run. So a store validation failure gets a sentence of its own
+// here, and anything unrecognised degrades to a generic refusal rather than
+// falling through to the raw string -- a new sentinel added to
+// validateNewRevisionEvent must not start reaching operators by being
+// unrecognised. api's own named messages (an unusable id, a malformed body)
+// and this binary's own rejections are already written for a reader, so they
+// pass through.
+func operatorRejectionText(rejection *writeRejection) string {
+	cause, isStoreValidation := strings.CutPrefix(rejection.message, store.ErrInvalidRevisionEvent.Error()+": ")
+	if !isStoreValidation {
+		return fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+	}
+
+	if id, ok := neverOpenedQuestionID(cause); ok {
+		// The id is quoted the operator's own form sent it as, because it
+		// is the only handle on the problem: a question that was never
+		// opened is not in the rail, so the operator cannot otherwise see
+		// which submission krill turned away.
+		return fmt.Sprintf("%d: Question %s was never opened in this session, so nothing was sent. "+
+			"It is not one of the open questions listed above -- reload the page to see the questions still open.",
+			rejection.status, id)
+	}
+
+	return fmt.Sprintf("%d: krill could not accept this round, so nothing was sent. "+
+		"Reload the page to see this session's current state, then try again.", rejection.status)
+}
+
+// neverOpenedQuestionID pulls the question id out of the one revision-event
+// validation cause this surface can actually provoke: a resolve naming a
+// question no round in the session ever opened (open_questions.go's
+// validateResolvedQuestionsOpened). It mirrors the store's format string
+// rather than its wording -- a store reword degrades to the generic refusal
+// in operatorRejectionText, which is safe, where a store reformat would
+// silently stop matching.
+func neverOpenedQuestionID(cause string) (string, bool) {
+	const (
+		head = "open_questions_delta.resolved names "
+		tail = ", which was never opened in this session"
+	)
+	rest, ok := strings.CutPrefix(cause, head)
+	if !ok {
+		return "", false
+	}
+	quoted, ok := strings.CutSuffix(rest, tail)
+	if !ok {
+		return "", false
+	}
+	id, err := strconv.Unquote(quoted)
+	if err != nil {
+		return "", false
+	}
+	return id, true
+}
+
 // renderOpenFormFailure hands the new-session blade back after a refused
 // write, with the operator's opening text preserved so a refusal is never a
 // data-loss event (FR 4304fe60).
@@ -146,17 +219,19 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 // told about. The no-JS path gets the same blade inside the shell, never a
 // bare http.StatusText page.
 //
-// A *writeRejection is shown inline as api's own status + named message.
-// Anything else (no resolved operator, unresolvable scope, unreachable api)
-// never reached krill at all, so it gets the operator-facing half only --
-// the specific cause is logged, never rendered (transportFailureMessage).
+// A *writeRejection is shown inline as api's status plus an
+// operator-readable reason (operatorRejectionText) -- never the store's own
+// error string. Anything else (no resolved operator, unresolvable scope,
+// unreachable api) never reached krill at all, so it gets the
+// operator-facing half only -- the specific cause is logged, never rendered
+// (transportFailureMessage).
 func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, productID uuid.UUID, opening string, err error) {
 	blade := app.newDesignSessionBlade(r, productID)
 	blade.OpeningSubmission = opening
 
 	var rejection *writeRejection
 	if errors.As(err, &rejection) {
-		blade.Error = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+		blade.Error = operatorRejectionText(rejection)
 	} else {
 		blade.Error = "Could not reach krill: " + transportFailureMessage(err)
 	}
@@ -210,14 +285,21 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// The reason, in the one sentence rule the two failure shapes share: a
-	// rejection that reached krill shows api's own status and named
-	// message, and anything else never reached krill at all, so it gets
-	// the operator-facing half only -- the specific cause is logged, never
-	// rendered (transportFailureMessage).
+	// rejection that reached krill shows api's status plus an
+	// operator-readable reason (operatorRejectionText), and anything else
+	// never reached krill at all, so it gets the operator-facing half only
+	// -- the specific cause is logged, never rendered
+	// (transportFailureMessage).
+	//
+	// errors.As is tested FIRST, and that ordering is load-bearing:
+	// transportFailureMessage logs at ERROR, so computing it on the way to
+	// a default -- before the rejection test -- logs "krill could not be
+	// reached" for a call that was answered, correctly, by krill. An
+	// ordinary refusal is handled control flow and logs nothing.
 	var rejection *writeRejection
 	var message string
 	if errors.As(err, &rejection) {
-		message = fmt.Sprintf("%d: %s", rejection.status, rejection.message)
+		message = operatorRejectionText(rejection)
 	} else {
 		message = "Could not reach krill: " + transportFailureMessage(err)
 	}
