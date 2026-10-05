@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/a-h/templ"
@@ -591,6 +592,13 @@ func taskInterventionStateOf(t store.Task) taskInterventionState {
 // task the page loaded and never from typed input, so a claim or escalation
 // that changed since the read is refused against the state the operator
 // actually saw.
+//
+// Two things differ from a Needs attention row's controls, and both are the
+// FR's: they swap the detail SECTION rather than a queue's results block, so
+// the header, the rail and this callout move together; and an escalated
+// task's Requeue is rendered as the primary action. Nothing else about the
+// verbs -- their order, their guards, their confirmation -- is the detail's
+// own invention.
 func taskDetailActions(t store.Task, returnTo string) templ.Component {
 	state := taskInterventionStateOf(t)
 	verbs := legalInterventions(state, t.CurrentLane)
@@ -598,43 +606,45 @@ func taskDetailActions(t store.Task, returnTo string) templ.Component {
 		return nil
 	}
 	taskID := t.ID.String()
+	opts := taskActionOptions{target: pages.TaskDetailAnchor}
 	switch state {
 	case taskInterventionClaimed:
-		return renderClaimedTaskActions(taskID, t.Title, *t.CurrentClaimID, returnTo, verbs...)
+		return renderClaimedTaskActionsWith(opts, taskID, t.Title, *t.CurrentClaimID, returnTo, verbs...)
 	case taskInterventionEscalated:
-		return renderEscalatedTaskActions(taskID, t.Title, t.CurrentEscalationID.String(), returnTo, verbs...)
+		opts.primary = actionRequeue
+		return renderEscalatedTaskActionsWith(opts, taskID, t.Title, t.CurrentEscalationID.String(), returnTo, verbs...)
 	default:
-		return renderTaskActions(taskID, t.Title, returnTo, verbs...)
+		return renderTaskActionsWith(opts, taskID, t.Title, returnTo, verbs...)
 	}
 }
 
-// serveTaskDetail is the one read-and-render both detail routes share:
-// resolve the task, refuse it unless container says this URL's answer, then
-// compose and serve. That resolver is the only thing the two routes disagree
-// on, so the reads that build the page cannot drift between them.
-func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, container func(store.Task) (taskContainer, bool)) {
-	ctx := r.Context()
-	task, err := app.tasks.GetTaskByID(ctx, tid)
+// taskDetailContainerOf resolves the container a task sits under, against the
+// product's own delivery listing -- the same rule handleProductTaskDetail
+// applies, so a task from another product (or from a container the product no
+// longer lists) is not this page's answer. A delivery read that fails is a
+// false, not a guess.
+func (app *App) taskDetailContainerOf(ctx context.Context, pid uuid.UUID, task store.Task) (taskContainer, bool) {
+	listing, err := app.spec.Delivery(ctx, pid, nil)
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
-			logger.Error("task read failed", "task", tid.String(), "error", err)
-			app.renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
-				Title:    "Could not load the task",
-				Detail:   "The task could not be read. See the logs.",
-				BackHref: productHref(pid, tasksSuffix),
-				BackText: "Back to tasks",
-			})
-			return
-		}
-		app.renderProductTaskDetailNotFound(w, r, pid)
-		return
+		logger.Error("task detail: delivery listing read failed", "product", pid.String(), "error", err)
+		return taskContainer{}, false
 	}
-	c, found := container(task)
-	if !found {
-		app.renderProductTaskDetailNotFound(w, r, pid)
-		return
-	}
+	return resolveTaskContainer(listing, task.MilestoneID)
+}
 
+// taskDetailViewFor composes the detail view from reads the caller has
+// already resolved: the task, its container, and self -- the address the page
+// is being served at.
+//
+// self is a parameter rather than read off r because the two callers reach
+// here from different requests: a GET serves the page at its own address,
+// while an intervention re-derives it from the POST to the verb's route and
+// only knows the page's address from the control's return_to. Everything the
+// page bakes its address into -- the Refresh button, the tab strip's hrefs,
+// the actions' return_to -- reads self, so a re-derived section and a
+// reloaded one are the same markup.
+func (app *App) taskDetailViewFor(ctx context.Context, r *http.Request, pid uuid.UUID, task store.Task, c taskContainer, self *url.URL) pages.TaskDetailPage {
+	tid := task.ID
 	in := taskDetailInputs{Task: task, DepTasks: map[uuid.UUID]store.Task{}}
 	in.Deps, in.DepsErr = app.tasks.ListDependencies(ctx, task.ScopeID, tid)
 	if in.DepsErr != nil {
@@ -697,20 +707,51 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 	// the page was LOADED with -- not the tab the operator is on. The
 	// button takes the tab from the panel region at press time instead
 	// (see the refresh button's hx-include).
-	page.Path = r.URL.Path
-	// The tab is resolved from the URL, and the strip is built over the
+	page.Path = self.Path
+	// The tab is resolved from the address, and the strip is built over the
 	// page's own path with it applied -- so a tab survives a reload, a
 	// shared link and Back, and an unknown value renders the Overview
 	// rather than failing (FR 7e463e31).
-	page.Tab = taskDetailTabOf(r)
-	page.Tabs = taskDetailTabsOf(r.URL.Path, page.Tab, page.Notes, page.NotesError, page.Deps, page.DepsError)
+	page.Tab = taskDetailTabOf(&http.Request{URL: self})
+	page.Tabs = taskDetailTabsOf(self.Path, page.Tab, page.Notes, page.NotesError, page.Deps, page.DepsError)
 	// The detail's own actions are bound to the shared legality predicate
 	// (FR af61631d). return_to is this page's own address -- path AND query,
 	// so the tab survives the round trip -- and it is validated on the way
 	// back by the same guard every other return path goes through
 	// (interventionReturnTo), so a detail-page control can never be pointed
 	// off-site or at a path this binary does not serve.
-	page.Actions = taskDetailActions(task, r.URL.RequestURI())
+	page.Actions = taskDetailActions(task, self.RequestURI())
+	return page
+}
+
+// serveTaskDetail is the one read-and-render both detail routes share:
+// resolve the task, refuse it unless container says this URL's answer, then
+// compose and serve. That resolver is the only thing the two routes disagree
+// on, so the reads that build the page cannot drift between them.
+func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, container func(store.Task) (taskContainer, bool)) {
+	ctx := r.Context()
+	task, err := app.tasks.GetTaskByID(ctx, tid)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			logger.Error("task read failed", "task", tid.String(), "error", err)
+			app.renderSpecStatus(w, r, http.StatusInternalServerError, pages.StatusPage{
+				Title:    "Could not load the task",
+				Detail:   "The task could not be read. See the logs.",
+				BackHref: productHref(pid, tasksSuffix),
+				BackText: "Back to tasks",
+			})
+			return
+		}
+		app.renderProductTaskDetailNotFound(w, r, pid)
+		return
+	}
+	c, found := container(task)
+	if !found {
+		app.renderProductTaskDetailNotFound(w, r, pid)
+		return
+	}
+
+	page := app.taskDetailViewFor(ctx, r, pid, task, c, r.URL)
 	// A tab click and a Refresh are the same route asked for different
 	// things. HX-Target is what tells them apart: the tabs target the
 	// panel region, the Refresh button targets the whole detail section.

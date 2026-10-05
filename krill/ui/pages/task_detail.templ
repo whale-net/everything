@@ -299,6 +299,13 @@ type TaskDetailPage struct {
 	// Actions box claiming there is nothing to do.
 	Actions templ.Component
 
+	// ActionError names a refused intervention inline (FR c69a42b4). It is
+	// set only on a detail region re-derived after a refusal, so it is empty
+	// on the first render of the page: a refusal is never an empty region,
+	// and an alert that appeared on every load would be read past exactly
+	// when it means something.
+	ActionError string
+
 	// Tab is the resolved tab key -- one of the four constants above, and
 	// never a raw ?tab= value: the handler resolves an unknown one to
 	// overview before the view model sees it, so a component never has to
@@ -345,6 +352,7 @@ templ TaskDetail(page TaskDetailPage) {
 			<a href={ templ.URL(page.TasksPath) } class="link link-primary" data-krill="tasks-link">Back to { page.ContainerName } tasks</a>
 			<a href={ templ.URL(page.BoardPath) } class="link link-primary ml-2" data-krill="board-link">Board</a>
 		</p>
+		@taskActionError(page)
 		@taskActionsCallout(page)
 		<div class="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="task-detail-frame">
 			<section class="min-w-0 space-y-4" data-krill="task-detail-main">
@@ -357,6 +365,18 @@ templ TaskDetail(page TaskDetailPage) {
 			</aside>
 		</div>
 	</section>
+}
+
+// taskActionError is the inline alert naming a refused intervention on the
+// detail region re-derived from fresh state (FR c69a42b4). It renders
+// nothing when no refusal is being presented, so the page's own first
+// render carries no alert at all.
+templ taskActionError(page TaskDetailPage) {
+	if page.ActionError != "" {
+		<div class="mt-4" data-krill="task-action-error">
+			@htmxui.Alert(htmxui.AlertError, page.ActionError, nil)
+		</div>
+	}
 }
 
 // taskActionsCallout is the detail's actions region: the intervention

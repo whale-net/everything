@@ -426,6 +426,11 @@ Every mutating form carries **`method` + `action` *and* `hx-post` +
       hx-target="#ops-results" hx-swap="outerHTML">
 ```
 
+The target is the region the control sits on: a Needs attention row swaps
+`#ops-results`, a task detail's own controls swap `#krill-task-detail`
+(FR af61631d, via `TaskActionControl.Target`). A control that named a region
+it does not sit in would replace that region with a page it never described.
+
 The no-JS branch is the old behaviour verbatim — a 303 back to the
 originating view on success, an in-shell error page on refusal. That is
 why the existing `StatusSeeOther` + `Location` assertions in
@@ -1043,14 +1048,18 @@ page's own tab handling enforces. `RawQuery` is never forwarded wholesale.
 **The frame is built before its contents.** Top to bottom: a breadcrumb
 (product → milestone → milepebble when the task sits on one → the task's
 own title, the only crumb with no href), the title as the page's one `h1`
-with the task's state badges beside it, then
+with the task's state badges beside it, the links back to the container's
+Tasks and Board, the inline refusal alert when one is being presented, the
+Actions callout, then
 `grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]` — a main column and
 `<aside data-krill="task-properties-rail">`. Both regions are filled: the
 main column carries the facet tab strip (Overview / Notes / Dependencies /
 Spec slice) described below, and the rail carries its two cards.
-`page.Path` is set from `r.URL.Path`
-after the render, not from `taskDetailPath`, so Refresh re-requests whichever
-URL actually served the page.
+`page.Path` and the actions' `return_to` are set from the address the page
+is *served at* (the `self` parameter of `taskDetailViewFor`), not from
+`r.URL`, so Refresh re-requests whichever URL actually served the page — and
+a region re-derived after an intervention, whose request is the verb's own
+POST, keeps the tab it was on.
 
 **The rail owns each property exactly once.** It is two cards: a
 `Properties` card and a `Depends on` card. The properties card is a `<dl>`
@@ -1160,9 +1169,10 @@ Three rules carry the rest of the behaviour:
   so both paths land on the same branch: select the chip's own text and say
   "Could not copy. The id is selected - press Ctrl+C." The next Ctrl+C
   works, and the operator is never left believing the id is gone.
-- **Nothing is sent to krill.** The copy writes to the operator's own
-  clipboard. There is no form, no `hx-post` and no operator route on this
-  path — the page is read-only.
+- **Nothing is sent to krill by the copy path itself.** The copy writes to
+  the operator's own clipboard: no form, no `hx-post` and no operator route
+  is involved. (The page's one write surface is the Actions callout
+  described below.)
 
 It composes `GetTaskByID`, `ListDependencies`, `ListNotesForTask`, the
 current claim row, the task's most recent claim row when it holds none, the
@@ -1177,8 +1187,74 @@ escalation read costs the page the instant and nothing else, and a failed
 last-claim read costs it only the "last held by" clause — both are logged at
 `WARN` because the page still renders. A failed `GetClaimByID` costs the row
 the holder name and nothing else, and is also logged at `WARN`. The region carries
-`data-krill-claim-id` / `data-krill-lease-expires-at` for later
-claim-guarded writes; it has no form or `hx-post`.
+`data-krill-claim-id` / `data-krill-lease-expires-at` for the claim-guarded
+writes its Actions callout renders (FR af61631d). Everything **except** that
+callout is still read-only: the tab panel and the properties rail carry
+links and no form, which is what the two P2b read-only tests pin (they
+assert over `task-panel-body`..`</aside>`, the regions this milestone adds
+no write to, and assert the callout's own presence separately).
+
+#### The detail's own interventions (FR af61631d)
+
+The detail's Actions callout (`data-krill="task-actions"`, inside
+`#krill-task-detail`) offers the verbs legal for the task's state, and it is
+the page's one write surface. It is **not** a second legality table:
+`taskDetailActions` reads the loaded task as the shared predicate's
+view-level state (`taskInterventionStateOf` → cancelled > escalated > claimed
+> ready) and renders whatever `legalInterventions(state, lane)` returns,
+through the same `renderClaimedTaskActionsWith` / `renderEscalatedTaskActionsWith`
+/ `renderTaskActionsWith` the Needs attention rows use. So Escalated offers
+Requeue + Cancel, Claimed offers Release + Escalate + Cancel, Ready offers
+Escalate + Cancel, Cancelled offers nothing (nil `Actions`, so **no callout at
+all**), Release is never offered on an escalated task, and a Done-lane task is
+offered neither Escalate nor Cancel — the subtraction lives in
+`legalInterventions`, not here.
+
+Two things the detail changes, both passed as `taskActionOptions`:
+`Target` is `pages.TaskDetailAnchor`, so the control swaps the **whole
+section** rather than a queue's results block; and, on an escalated task,
+`Primary` names `actionRequeue`, which renders that one button `btn-primary`
+instead of the `btn-ghost` every row's verbs are. The rows pass the zero
+value and are unchanged.
+
+Each control carries what the page observed — the claim id for Release /
+Escalate / Cancel on a claimed task, the escalation id for Requeue / Cancel
+on an escalated one, neither on a ready task — under the api's own field
+names (`expected_claim_id`, `expected_escalation_id`), taken from the task
+the page read and never from typed input. The posted route is the same
+`POST /ops/tasks/{id}/{verb}` the rows use, so a detail-page intervention and
+a row intervention are one state transition and one attribution; no operator
+identity is in the form, because `withKrillSession` mints scope and both
+subjects server-side. Cancel is the same doubled control the rows render:
+`hx-confirm` naming the task on the htmx half, a GET to the existing
+`/ops/tasks/{id}/cancel/confirm` page as the no-JS half.
+
+**On success the whole section is re-derived, with a toast.**
+`renderInterventionResults` dispatches on `return_to`: a Needs attention tab
+re-derives its results block as before, and a
+`/products/{pid}/tasks/{tid}` path takes the new
+`renderTaskDetailRegion` branch, which re-reads the task and recomposes
+`pages.TaskDetail` — header, rail and callout together — from
+`taskDetailViewFor`. That shared builder is also what the GET uses, so a
+re-derived section and a reloaded one are the same markup; it takes the
+page's own address as a parameter, because the re-derivation's request is the
+verb's POST and only `return_to` knows which page the operator was on.
+Escalating a claimed task therefore shows the incremented attempts and no
+claim, because those come off the fresh read. Cancel is the one verb that
+**navigates** rather than swaps — `renderInterventionSuccess` sets
+`HX-Redirect` to `card.ReturnTo` — and must stay that way: it is the only
+verb whose htmx post originates on the confirm card.
+
+A refusal rides the same region as an inline alert (`TaskDetailPage.ActionError`,
+`data-krill="task-action-error"`) per FR c69a42b4, and is empty on the
+page's first render. Which refusal shape a refused Cancel gets is decided by
+`cancelRefusalFromTheCard`: htmx names the resolved target's bare id in
+`HX-Target` (no leading `#`) and omits the header when the target is the
+posting element itself, so "no header, or `cancel-confirm`" is the card
+(rebuild the card from fresh state) and every other origin — a row's results
+block, or the detail's section — re-derives the view it acted from. A failed
+re-read answers with the same reload warning the queue branch uses rather
+than a confident, wrong render.
 
 #### The facet tabs: `?tab=` and the in-place swap (FR 7e463e31)
 
