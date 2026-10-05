@@ -40,6 +40,10 @@ Use these levels consistently across all code (Go, Python, etc.) — they signal
 
 Do not log expected/handled control flow at WARNING or ERROR — reserve those for genuine deviations or failures.
 
+## Observability
+
+Every long-running Go service (server, worker, UI, MCP) calls `logging.Configure` with `EnableOTLP: true` and `EnableTracing: true`, and runs `logging.Shutdown` on every exit path, including before `os.Exit`. Both flags default to off, and a missing one fails silently: `otelhttp`/`otelgrpc` wrappers record to a no-op tracer and the service is absent from Grafana. MCP servers also need per-tool-call spans from `libs/go/mcpobs`. Before adding or reviewing a `main.go` or an MCP server, load the `architecture-observability` skill.
+
 ## Effective Subagent Usage
 
 Prompt-cache read cost per turn grows with a session's own turn count (roughly 9x higher in 300-500 turn sessions vs. under-50-turn sessions, measured across this account's history) — every turn re-sends and re-reads the full prior transcript, so cost compounds as a session's transcript grows. Subagents are one of the two effective levers against this (the other is starting a fresh session); use them to keep the *main* session's turn count down, not as an end in themselves.

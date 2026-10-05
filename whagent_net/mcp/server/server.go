@@ -13,6 +13,9 @@ package server
 
 import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpobs"
 )
 
 // Implementation identifies this MCP server to connecting clients (e.g.
@@ -33,5 +36,7 @@ var Implementation = &mcp.Implementation{
 func New() *mcp.Server {
 	srv := mcp.NewServer(Implementation, nil)
 	srv.AddReceivingMiddleware(AuthMiddleware())
+	// Added last, so it runs outermost: each tool call is its own trace.
+	srv.AddReceivingMiddleware(mcpobs.ToolCallMiddleware(logging.Tracer("whagent_net/mcp"), logging.Get("whagent_net/mcp/tools"), nil))
 	return srv
 }

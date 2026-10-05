@@ -116,3 +116,16 @@ func targetID(reg *Registry, name string, args json.RawMessage) string {
 	}
 	return ""
 }
+
+// ToolCallCaller is the mcpobs caller attribute: the persona of a caller
+// authenticated at the HTTP layer, if any.
+func ToolCallCaller(req mcp.Request) (string, string, bool) {
+	extra := req.GetExtra()
+	if extra == nil {
+		return "", "", false
+	}
+	if c := callerFromExtra(extra.TokenInfo); c != nil {
+		return "persona", c.Persona.String(), true
+	}
+	return "", "", false
+}
