@@ -724,6 +724,7 @@ func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID,
 		EscalatedAtRelative: relativeTime(r.EscalatedAt, now),
 		EscalationID:        observedEscalationID(r),
 		Actions:             escalatedRowActions(r.TaskID.String(), r.Title, observedEscalationID(r), r.Lane, returnTo),
+		Popovers:            escalatedRowPopovers(r.TaskID.String(), r.Title, r.Lane, returnTo),
 	}
 }
 
@@ -747,6 +748,15 @@ const escalatedGuardField = "expected_escalation_id"
 // whatever is current.
 func escalatedRowActions(taskID, title, escalationID string, lane store.Lane, returnTo string) templ.Component {
 	return renderEscalatedTaskActions(taskID, title, escalationID, returnTo,
+		legalInterventions(taskInterventionEscalated, lane)...)
+}
+
+// escalatedRowPopovers is escalatedRowActions' other half (FR 0cf360c5): the
+// reason popovers for the same legal verbs, rendered after the table rather
+// than in the row. It calls the same legality predicate, so the two halves
+// offer exactly the same verbs.
+func escalatedRowPopovers(taskID, title string, lane store.Lane, returnTo string) templ.Component {
+	return renderTaskActionPopovers(taskID, title, returnTo,
 		legalInterventions(taskInterventionEscalated, lane)...)
 }
 
@@ -967,6 +977,7 @@ func newClaimedRow(r store.ClaimedTaskRow, pid uuid.UUID, returnTo string) pages
 		LeaseExpiresAt: opsTime(r.LeaseExpiresAt),
 		ClaimID:        claimID,
 		Actions:        claimedRowActions(r, returnTo),
+		Popovers:       claimedRowPopovers(r, returnTo),
 	}
 }
 
@@ -1003,5 +1014,14 @@ func claimedBy(acting, onBehalfOf store.Subject) string {
 // against the state the operator actually saw.
 func claimedRowActions(r store.ClaimedTaskRow, returnTo string) templ.Component {
 	return renderClaimedTaskActions(r.TaskID.String(), r.Title, r.ClaimID, returnTo,
+		legalInterventions(taskInterventionClaimed, r.CurrentLane)...)
+}
+
+// claimedRowPopovers is claimedRowActions' other half (FR 0cf360c5): the
+// reason popovers for the same legal verbs, rendered after the table rather
+// than in the row. It calls the same legality predicate, so the two halves
+// offer exactly the same verbs.
+func claimedRowPopovers(r store.ClaimedTaskRow, returnTo string) templ.Component {
+	return renderTaskActionPopovers(r.TaskID.String(), r.Title, returnTo,
 		legalInterventions(taskInterventionClaimed, r.CurrentLane)...)
 }

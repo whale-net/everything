@@ -620,11 +620,32 @@ func renderEscalatedTaskActions(taskID, title, escalationID, returnTo string, ac
 	return pages.TaskActions(controls)
 }
 
+// renderTaskActionPopovers renders the reason popovers for the same controls
+// renderTaskActions renders in the row (FR 0cf360c5). The two are separate
+// components because they must render in two places: the triggers inside the
+// row's actions cell, the popovers OUTSIDE the table, so no row contains a
+// text input. They are built from the same taskActionControls, so the
+// popover's reason field and submit button name exactly the form the row
+// rendered, guards and all.
+//
+// It takes the same arguments as renderTaskActions and derives the same ids,
+// so a caller cannot render a popover for a control the row does not have.
+func renderTaskActionPopovers(taskID, title, returnTo string, actions ...string) templ.Component {
+	return pages.TaskActionPopovers(taskActionControls(taskID, title, returnTo, actions...))
+}
+
 // taskActionControls is the one builder of a row's verb controls: the four
 // verbs' labels and reason prompts, the route a form posts to, and the
 // confirmation a destructive verb is reached through. Splitting it out keeps
 // one verb vocabulary while letting a row attach the claim or escalation id
 // it observed to every control it renders.
+//
+// It also derives the three ids that pair a row's in-row form with the reason
+// popover outside the table (FR 0cf360c5): FormID is the form the popover's
+// input and submit button name through form=, PopoverID is the popover the
+// row's trigger opens, and ReasonID labels the input. They are a pure
+// function of the task id and the verb, so the row's triggers and its
+// popovers -- built by two separate calls -- always agree on them.
 func taskActionControls(taskID, title, returnTo string, actions ...string) []pages.TaskActionControl {
 	controls := make([]pages.TaskActionControl, 0, len(actions))
 	for _, action := range actions {
@@ -636,6 +657,9 @@ func taskActionControls(taskID, title, returnTo string, actions ...string) []pag
 			Label:      a.Label,
 			ReasonHint: a.ReasonHint,
 			ReturnTo:   returnTo,
+			FormID:     taskActionFormID(taskID, action),
+			PopoverID:  taskActionPopoverID(taskID, action),
+			ReasonID:   taskActionReasonID(taskID, action),
 		}
 		if a.Destructive {
 			// The destructive verb's two halves are two routes: the htmx half
@@ -648,13 +672,31 @@ func taskActionControls(taskID, title, returnTo string, actions ...string) []pag
 			control.Action = opsTaskActionBase + taskID + cancelConfirmSuffix
 			control.PostAction = opsTaskActionBase + taskID + "/" + action
 			control.Confirm = cancelConfirmMessage(title)
+			control.SubmitLabel = "Confirm cancel"
 		} else {
 			control.Kind = "form"
 			control.Action = opsTaskActionBase + taskID + "/" + action
+			control.SubmitLabel = a.Label
 		}
 		controls = append(controls, control)
 	}
 	return controls
+}
+
+// The three id shapes that pair one row control with its reason popover. They
+// are namespaced by the task id and the verb so two rows -- or two verbs on
+// one row -- never collide, and they are spelled the same wherever they are
+// derived, so the row's form and its popover cannot drift apart.
+func taskActionFormID(taskID, action string) string {
+	return "krill-action-form-" + taskID + "-" + action
+}
+
+func taskActionPopoverID(taskID, action string) string {
+	return "krill-reason-popover-" + taskID + "-" + action
+}
+
+func taskActionReasonID(taskID, action string) string {
+	return taskActionPopoverID(taskID, action) + "-reason"
 }
 
 // cancelConfirmMessage is the browser confirmation the destructive cancel
