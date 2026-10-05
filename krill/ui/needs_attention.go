@@ -334,7 +334,8 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	// strip's links, the filter bar's options and the empty state's
 	// sentence, so the three cannot describe different containers.
 	containers := app.needsAttentionMilestoneContainers(r.Context(), product.ID)
-	results, err := app.needsAttentionResults(r.Context(), product.ID, tab, page, opsSelfPath(r))
+	results, err := app.needsAttentionResults(r.Context(), product.ID, filter,
+		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r))
 	if err != nil {
 		app.writeNeedsAttentionQueryError(w, r, product.ID, filter, containers, tab, err)
 		return
@@ -451,34 +452,71 @@ func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID
 // needsAttentionResults reads the selected tab's rows and renders them with
 // the matching console view's own component, so the tab and the console
 // view are one derivation (ops.go's four loaders) and one table.
-func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, tab string, page store.PageParams, selfPath string) (templ.Component, error) {
-	filter := store.ConsoleFilter{ProductID: &productID}
+//
+// filter is the filter bar's narrowing, applied to every tab's read: the
+// milestone selection rides on the store.ConsoleFilter all four reads take,
+// and the reason on ListEscalatedTasksParams' own field, which only the
+// escalated read has. filterLabel names those filters in the operator's
+// words, for the empty state a filtered tab renders instead of its generic
+// "No claimed tasks."
+func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string) (templ.Component, error) {
+	console := filter.console(productID)
 	switch tab {
 	case needsAttentionTabClaimed:
-		d, err := app.claimedResults(ctx, filter, page, selfPath)
+		d, err := app.claimedResults(ctx, console, page, selfPath)
 		if err != nil {
 			return nil, err
+		}
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "claimed tasks"); ok {
+			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
 		return pages.ClaimedResults(d), nil
 	case needsAttentionTabCancelled:
-		d, err := app.cancelledResults(ctx, filter, page, selfPath)
+		d, err := app.cancelledResults(ctx, console, page, selfPath)
 		if err != nil {
 			return nil, err
+		}
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "cancelled tasks"); ok {
+			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
 		return pages.CancelledResults(d), nil
 	case needsAttentionTabNotes:
-		d, err := app.openNotesResults(ctx, filter, page, selfPath)
+		d, err := app.openNotesResults(ctx, console, page, selfPath)
 		if err != nil {
 			return nil, err
+		}
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "open notes"); ok {
+			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
 		return pages.NotesResults(d), nil
 	default:
-		d, err := app.escalatedResults(ctx, filter, page, selfPath)
+		d, err := app.escalatedResults(ctx, console, filter.Reason, page, selfPath)
 		if err != nil {
 			return nil, err
 		}
+		if empty, ok := needsAttentionEmptyData(len(d.Rows), filter, filterLabel, "escalated tasks"); ok {
+			return pages.NeedsAttentionFilteredEmpty(empty), nil
+		}
 		return pages.EscalatedResults(d), nil
 	}
+}
+
+// needsAttentionEmptyData is the empty state a filtered tab renders, or ok
+// false when the tab's own table (with its generic empty state) is the
+// right answer.
+//
+// Two conditions, both required: the read came back empty, and a filter is
+// in force. An empty tab with no filter is the queue genuinely being
+// empty, which the tab's own "No escalated tasks." already says honestly;
+// naming filters that are not in force would invent a cause for it.
+func needsAttentionEmptyData(rows int, filter needsAttentionFilter, filterLabel, queue string) (pages.NeedsAttentionEmptyData, bool) {
+	if rows > 0 || !filter.narrows() {
+		return pages.NeedsAttentionEmptyData{}, false
+	}
+	return pages.NeedsAttentionEmptyData{
+		Headline: "No " + queue + " match these filters.",
+		Detail:   "Filtering by " + filterLabel + ". Clear a filter to see the whole queue.",
+	}, true
 }
 
 // needsAttentionTabs builds the strip: the four tabs, each at its own
@@ -509,7 +547,7 @@ func (app *App) needsAttentionTabs(ctx context.Context, productID uuid.UUID, act
 			Active: key == active,
 		}
 		if scopeErr == nil {
-			count, err := app.needsAttentionCount(ctx, scopeID, productID, key)
+			count, err := app.needsAttentionCount(ctx, scopeID, productID, filter, key)
 			if err != nil {
 				logger.Warn("needs attention: tab count unreadable, omitting the badge",
 					"tab", key, "product", productID, "error", err)
@@ -523,20 +561,21 @@ func (app *App) needsAttentionTabs(ctx context.Context, productID uuid.UUID, act
 }
 
 // needsAttentionCount reads one tab's count through the params type the
-// matching list read takes, narrowed to the same product, so the count and
-// the list are the same question asked of the same store query
+// matching list read takes, narrowed the SAME way -- the same
+// ConsoleFilter, and for the escalated queue the same reason -- so the
+// count and the list are the same question asked of the same store query
 // (store.CountClaimedTasks shares its FROM/JOIN/WHERE with
 // ListClaimedTasks, and so on for the other three).
-func (app *App) needsAttentionCount(ctx context.Context, scopeID, productID uuid.UUID, tab string) (int, error) {
-	filter := store.ConsoleFilter{ProductID: &productID}
+func (app *App) needsAttentionCount(ctx context.Context, scopeID, productID uuid.UUID, filter needsAttentionFilter, tab string) (int, error) {
+	console := filter.console(productID)
 	switch tab {
 	case needsAttentionTabClaimed:
-		return app.tasks.CountClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		return app.tasks.CountClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: console})
 	case needsAttentionTabCancelled:
-		return app.tasks.CountCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		return app.tasks.CountCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: console})
 	case needsAttentionTabNotes:
-		return app.tasks.CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: filter})
+		return app.tasks.CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: console})
 	default:
-		return app.tasks.CountEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filter})
+		return app.tasks.CountEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: console, Reason: filter.Reason})
 	}
 }
