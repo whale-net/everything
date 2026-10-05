@@ -202,9 +202,15 @@ templ needsAttentionCancelledTable(rows []CancelledRow) {
 				<tbody>
 					for _, row := range rows {
 						<tr class="hover" data-krill="needs-attention-cancelled-row">
-							<td class="text-sm">{ row.Title }</td>
+							<td class="text-sm">
+								if row.TaskHref != "" {
+									<a href={ templ.URL(row.TaskHref) } class="link font-medium" data-krill="needs-attention-task-link">{ row.Title }</a>
+								} else {
+									{ row.Title }
+								}
+							</td>
 							<td class="text-sm">{ row.Delivery }</td>
-							<td class="text-sm">{ row.Lane }</td>
+							<td class="text-sm">@TaskLaneBadge(row.Lane)</td>
 							<td class="text-sm">{ row.By }</td>
 							<td class="text-sm">{ row.OnBehalfOf }</td>
 							<td class="text-sm">{ row.At }</td>
@@ -254,11 +260,21 @@ templ needsAttentionNotesTable(rows []NoteRow) {
 				<tbody>
 					for _, row := range rows {
 						<tr class="hover" data-krill="needs-attention-note-row">
-							<td class="text-sm">{ row.Target }</td>
-							<td class="text-sm">{ row.Kind }</td>
-							<td class="text-sm">{ row.Status }</td>
+							<td class="text-sm">
+								if row.TaskHref != "" {
+									<a href={ templ.URL(row.TaskHref) } class="link font-medium" data-krill="needs-attention-task-link">{ row.Target }</a>
+								} else {
+									{ row.Target }
+								}
+							</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Kind, htmxui.BadgeInfo, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "needs-attention-note-kind"})
+							</td>
+							<td class="text-sm">
+								@htmxui.Badge(row.Status, htmxui.BadgeGhost, htmxui.BadgeSizeSM, true, templ.Attributes{"data-krill": "needs-attention-note-status"})
+							</td>
 							<td class="text-sm">{ row.CreatedAt }</td>
-							<td class="text-sm">{ row.Body }</td>
+							<td class="text-sm krill-md">@templ.Raw(renderMarkdown(row.Body))</td>
 						</tr>
 					}
 				</tbody>
