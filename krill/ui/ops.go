@@ -143,13 +143,20 @@ func (app *App) writeConsoleQueryError(w http.ResponseWriter, r *http.Request, t
 // consoleQueryError maps a console read's store error onto the status and
 // the operator-facing message the response carries.
 //
-// A cross-scope or malformed continuation token is the caller's error
-// (400), never a genuine store failure (500), and neither branch hands the
-// operator the store's own text: a sentinel error's message is a Go
-// package-qualified string dating an internal package, and a genuine
-// failure can carry a connection string. The operator gets krill's own
-// wording either way, and on-call humans still get the real error from the
-// logger.
+// A rejected continuation token is the caller's error (400), never a
+// genuine store failure (500): the store names that rejection with three
+// sentinels -- ErrTokenScopeMismatch for a token issued under another
+// scope, ErrTokenFilterMismatch for one issued under a different filter
+// set (the tab and its milestone/reason selections now bind the token), and
+// ErrInvalidContinuationToken for one that does not decode at all. All three
+// are the operator's own bad input and get the same wording, so the page
+// does not tell them which internal check fired.
+//
+// Neither branch hands the operator the store's own text: a sentinel
+// error's message is a Go package-qualified string naming an internal
+// package, and a genuine failure can carry a connection string. The
+// operator gets krill's own wording either way, and on-call humans still
+// get the real error from the logger.
 //
 // It is a function rather than a branch inside the writer because a page
 // with more than one response shape -- Needs attention's panel fragment,
@@ -158,7 +165,9 @@ func (app *App) writeConsoleQueryError(w http.ResponseWriter, r *http.Request, t
 // that could disagree about which failures are the caller's.
 func consoleQueryError(err error) (int, string) {
 	switch {
-	case errors.Is(err, store.ErrTokenScopeMismatch), errors.Is(err, store.ErrInvalidContinuationToken):
+	case errors.Is(err, store.ErrTokenScopeMismatch),
+		errors.Is(err, store.ErrTokenFilterMismatch),
+		errors.Is(err, store.ErrInvalidContinuationToken):
 		// The caller's own bad token; saying which input is wrong is
 		// useful, and saying the store's package path is not.
 		return http.StatusBadRequest,

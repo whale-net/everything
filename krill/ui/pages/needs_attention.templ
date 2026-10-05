@@ -100,6 +100,17 @@ type NeedsAttentionData struct {
 
 	// Results is the selected tab's table, or its inline refusal.
 	Results templ.Component
+
+	// Paging is the active tab's table footer (FR 7f10bd5d): how much of the
+	// filtered set is on screen, the total the matching count read answered
+	// for the SAME filters, and the two controls that move between pages.
+	//
+	// Nil where there is no pageable table to foot -- a filter that excluded
+	// every row (the tab renders its filtered-empty state instead), or a read
+	// that failed and never produced rows. A table with a footer that guessed
+	// its own total would be the silently truncated one this FR rules out, so
+	// the footer rides only where a table rode.
+	Paging *NeedsAttentionPaging
 }
 
 // NeedsAttentionFilterBar is the filter bar's view model: the two selects'
@@ -168,6 +179,9 @@ templ NeedsAttention(d NeedsAttentionData) {
 		<div class="mt-4" data-krill="needs-attention-results">
 			@d.Results
 		</div>
+		if d.Paging != nil {
+			@NeedsAttentionPagingFooter(*d.Paging)
+		}
 	</div>
 }
 
@@ -556,6 +570,88 @@ templ escalatedReasonBadge(reason string) {
 }
 
 // ---------------------------------------------------------------------------
+// the tab paging footer (FR 7f10bd5d)
+// ---------------------------------------------------------------------------
+
+// NeedsAttentionPaging is the active tab's table footer (FR 7f10bd5d): how
+// much of the filtered set is on screen, the total the store answered for
+// the SAME filters the rows were read with, and the two controls that move
+// through the pages.
+//
+// Shown, Total and HasTotal are separate on purpose. Total is the count the
+// matching Count* read answered for the identical params the rows were read
+// with, so the footer and the table above it cannot describe different
+// filter sets; Shown is how many rows this page actually rendered; and
+// HasTotal keeps a count that could not be read distinct from a confident
+// zero -- the same rule the tab badges follow (NeedsAttentionTab.HasCount),
+// so an unreadable count is never rendered as "of 0".
+type NeedsAttentionPaging struct {
+	// Shown is how many rows this page rendered.
+	Shown int
+
+	// Total is the count read for this page's filters -- the whole set
+	// behind the rows, however many pages that is. Meaningful only when
+	// HasTotal.
+	Total    int
+	HasTotal bool
+
+	// Summary is the footer's sentence, built in Go from Shown and Total so
+	// the markup is one string rather than text interleaved with numbers: a
+	// templ-generated comment between adjacent text and an expression would
+	// split "Showing 25 of 100" into pieces no reader -- and no assertion --
+	// sees whole.
+	Summary string
+
+	// PrevHref is the preceding page, empty when none can be named. The
+	// store's keyset paging issues tokens forward only -- a token names a
+	// position to resume AFTER, and nothing in this layer names the position
+	// before the one being shown -- so in practice this is empty and
+	// Previous renders disabled (see PrevNote).
+	PrevHref string
+
+	// NextHref is the following page, empty on the last one. The store
+	// issues a token exactly when a row remained beyond this page, so its
+	// presence IS the existence of a following page rather than a guess from
+	// comparing Shown against Total.
+	NextHref string
+
+	// PrevNote and NextNote are the disabled control's title: they say WHY
+	// the control is inert, so an operator reaching for it is not left to
+	// conclude the control is broken.
+	PrevNote string
+	NextNote string
+}
+
+// NeedsAttentionPagingFooter is the active tab's table footer: the explicit
+// "Showing X of Y" and the two controls that move between pages, each
+// rendered as an explicitly DISABLED control at its end rather than omitted
+// (FR 7f10bd5d).
+//
+// A control that vanished at the end would read as a rendering bug; one
+// that is always present and titles why it is inert is the honest shape. The
+// control that can move is a real <a>, not a swap-only button: a page
+// position is a URL, and a URL is what a reload, a shared link and the
+// browser's own Back button all have to agree with.
+templ NeedsAttentionPagingFooter(p NeedsAttentionPaging) {
+	<div class="mt-3 flex flex-wrap items-center justify-between gap-2" data-krill="needs-attention-paging">
+		<span class="text-sm text-base-content/70" data-krill="paging-summary">{ p.Summary }</span>
+		<div class="flex items-center gap-2">
+			if p.PrevHref != "" {
+				<a href={ templ.URL(p.PrevHref) } class="btn btn-ghost btn-sm" data-krill="paging-previous">Previous</a>
+			} else {
+				<button type="button" class="btn btn-ghost btn-sm" disabled data-krill="paging-previous"
+					title={ p.PrevNote }>Previous</button>
+			}
+			if p.NextHref != "" {
+				<a href={ templ.URL(p.NextHref) } class="btn btn-ghost btn-sm" data-krill="paging-next">Next</a>
+			} else {
+				<button type="button" class="btn btn-ghost btn-sm" disabled data-krill="paging-next"
+					title={ p.NextNote }>Next</button>
+			}
+		</div>
+	</div>
+}
+
 // cancelled tab (FR b22e1d60)
 // ---------------------------------------------------------------------------
 
