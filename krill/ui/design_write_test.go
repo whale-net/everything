@@ -154,6 +154,12 @@ type writeSurfaceEvents struct {
 	mu            sync.Mutex
 	bySession     map[uuid.UUID][]store.RevisionEvent
 	openQuestions map[uuid.UUID][]store.OpenQuestion
+
+	// openQuestionsErr fails only the OPEN-QUESTION read, so a test can
+	// reach the case where the staleness check cannot rule a tick either
+	// way. It is separate from the session read's error so the two degrade
+	// independently, as they do in the real store.
+	openQuestionsErr error
 }
 
 func (f *writeSurfaceEvents) Append(context.Context, store.NewRevisionEvent) (store.RevisionEvent, error) {
@@ -169,6 +175,9 @@ func (f *writeSurfaceEvents) ListBySession(_ context.Context, id uuid.UUID) ([]s
 func (f *writeSurfaceEvents) ListOpenQuestions(_ context.Context, id uuid.UUID) ([]store.OpenQuestion, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.openQuestionsErr != nil {
+		return nil, f.openQuestionsErr
+	}
 	return f.openQuestions[id], nil
 }
 
@@ -225,6 +234,14 @@ func (f *writeSurfaceEvents) resolveOne(id uuid.UUID, questionID string) {
 		}
 	}
 	f.openQuestions[id] = kept
+}
+
+// addOpen seeds one more question into the open set without appending an
+// event, so a test can drive the case where several ticks are stale at once.
+func (f *writeSurfaceEvents) addOpen(id uuid.UUID, q store.OpenQuestion) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.openQuestions[id] = append(f.openQuestions[id], q)
 }
 
 // ---------------------------------------------------------------------------
@@ -1462,13 +1479,100 @@ func TestDesignWrite_RefusedAnswer_KeepsTextAndTicks(t *testing.T) {
 	}
 }
 
-// TestDesignWrite_StaleAnswer_RefusedWithAFreshlyReadRail is the stale-tick
-// case: the operator ticked a question that some other round has resolved
-// since the page was rendered, so krill refuses the write. The rail in the
-// refusal must come from a FRESH read, which means the resolved question is
-// not offered as a box to tick again -- while the operator's own text
-// survives, because that is still theirs.
-func TestDesignWrite_StaleAnswer_RefusedWithAFreshlyReadRail(t *testing.T) {
+// acceptAnswerRounds makes the fake api's revision-event endpoint behave the
+// way the real one does: it ACCEPTS the round, 201, and applies it to the read
+// side.
+//
+// It is the default for every write test and the load-bearing half of the
+// stale-tick ones. The store validates a resolve against the questions EVER
+// opened in the session, deliberately not the currently-open subset, so
+// re-resolving a question an earlier round already closed is a no-op the
+// store accepts rather than a refusal it emits (store
+// validateResolvedQuestionsOpened; krill/api/handlers' own test
+// TestAppendRevisionEventHandler_ReopenPreviouslyResolvedQuestion_Succeeds).
+// A fake that answered 409 here would certify a refusal the real stack cannot
+// produce.
+func acceptAnswerRounds(t *testing.T, env *designWriteEnv) {
+	t.Helper()
+	env.API.onRequest(func(req recordedRequest) (int, string) {
+		if !strings.HasSuffix(req.Path, "/revision-events") {
+			return 0, ""
+		}
+		var round struct {
+			OpenQuestionsDelta struct {
+				Opened   []wireOpenedQuestion `json:"opened"`
+				Resolved []string              `json:"resolved"`
+			} `json:"open_questions_delta"`
+		}
+		if err := json.Unmarshal(req.Body, &round); err != nil {
+			t.Errorf("fake api could not read the answer body: %v", err)
+		}
+		opened := make([]store.OpenQuestionOpened, 0, len(round.OpenQuestionsDelta.Opened))
+		for _, o := range round.OpenQuestionsDelta.Opened {
+			opened = append(opened, store.OpenQuestionOpened{QuestionID: o.QuestionID, Blocking: o.Blocking, Text: o.Text})
+		}
+		env.Events.applyAnswer(env.SessionID, store.RevisionEvent{
+			SessionID: env.SessionID,
+			EventType: store.EventTypeAnswer,
+			OpenQuestionsDelta: store.OpenQuestionsDelta{
+				Opened:   opened,
+				Resolved: round.OpenQuestionsDelta.Resolved,
+			},
+		})
+		return http.StatusCreated, `{"id":"` + uuid.NewString() + `","seq_no":9}`
+	})
+}
+
+// answerWriteRequests is every recorded api request that is a follow-up
+// round, i.e. everything but the session init. Counted rather than extracted
+// so a test can say "no round was posted" without having to describe a body
+// that was never sent.
+func answerWriteRequests(api *fakeAPI) []recordedRequest {
+	var writes []recordedRequest
+	for _, req := range api.recorded() {
+		if strings.HasSuffix(req.Path, "/revision-events") {
+			writes = append(writes, req)
+		}
+	}
+	return writes
+}
+
+// staleTickHarness seeds two extra questions and closes them, so a test can
+// tick several boxes that are all stale at once -- the "several read
+// differently" case staleTickRejection branches on.
+const (
+	testSecondStaleQuestion = "q-timeout"
+	testThirdStaleQuestion  = "q-naming"
+)
+
+// staleTickRejectionMessageFor is the operator-facing sentence a refusal with
+// n stale ticks carries. It is spelled out here rather than reaching into the
+// production constant, so a reworded alert is a deliberate change to this
+// expectation and not something a test silently follows.
+func staleTickRejectionMessageFor(n int) string {
+	if n == 1 {
+		return "409: A question you ticked has already been closed since this page loaded, " +
+			"so nothing was sent. It is no longer listed above -- send again to record the rest."
+	}
+	return fmt.Sprintf("409: %d questions you ticked have already been closed since this page loaded, "+
+		"so nothing was sent. They are no longer listed above -- reload the page to see the questions still open.", n)
+}
+
+// TestDesignWrite_StaleAnswer_RefusedByTheUIWithAFreshlyReadRail is the
+// stale-tick case: the operator ticked a question some other round resolved
+// after the page was rendered.
+//
+// The fake api here is the real stack's shape -- it ACCEPTS the round (see
+// acceptAnswerRounds), because the store accepts an already-resolved id by
+// design. So the refusal asserted here cannot have come from krill: it is
+// proven by the fake recording NO revision-event post at all, which is the
+// UI's own pre-post validation talking. The previous version of this test
+// stubbed a 409 and passed without ever exercising that check.
+//
+// The rail in the refusal comes from a FRESH read, so the closed question is
+// not offered as a box to tick again, while the operator's own text survives,
+// because that is still theirs.
+func TestDesignWrite_StaleAnswer_RefusedByTheUIWithAFreshlyReadRail(t *testing.T) {
 	for _, hx := range []bool{false, true} {
 		name := "no-JS"
 		if hx {
@@ -1476,12 +1580,7 @@ func TestDesignWrite_StaleAnswer_RefusedWithAFreshlyReadRail(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			env := newDesignWriteEnv(t)
-			env.API.onRequest(func(req recordedRequest) (int, string) {
-				if strings.HasSuffix(req.Path, "/revision-events") {
-					return http.StatusConflict, `{"error":"question ` + testClosedQuestion + ` is not open"}`
-				}
-				return 0, ""
-			})
+			acceptAnswerRounds(t, env)
 			// Resolved by another round after the page was rendered.
 			env.Events.resolveOne(env.SessionID, testClosedQuestion)
 			const followUp = "It should read the postgres flag table."
@@ -1493,7 +1592,15 @@ func TestDesignWrite_StaleAnswer_RefusedWithAFreshlyReadRail(t *testing.T) {
 			body := rec.Body.String()
 			require.Equal(t, http.StatusOK, rec.Code, body)
 			assertFollowUpErrorShown(t, body)
-			assert.Contains(t, body, "409: question "+testClosedQuestion+" is not open")
+			assert.Contains(t, body, staleTickRejectionMessageFor(1))
+
+			// The refusal is the UI's, not the fake's: nothing was posted,
+			// so krill had no chance to accept it and drop the resolve.
+			assert.Empty(t, answerWriteRequests(env.API),
+				"a stale tick must be refused before the round is posted: the store accepts an already-resolved id, so posting it is the silent drop this check exists to prevent")
+
+			// And no success is claimed for a round that did not land.
+			assertNoSuccessConfirmation(t, rec, hx)
 
 			// The rail is freshly read: a question krill no longer has
 			// open is not offered for answering again.
@@ -1506,8 +1613,254 @@ func TestDesignWrite_StaleAnswer_RefusedWithAFreshlyReadRail(t *testing.T) {
 				"the operator's text survives a stale-tick refusal")
 			if hx {
 				assert.Contains(t, body, `id="`+pages.DesignSessionRoundAnchor+`"`)
+			} else {
+				assertInShell(t, body)
 			}
 		})
+	}
+}
+
+// TestDesignWrite_StoreWouldHaveAcceptedTheStaleRound is the control that
+// makes the test above mean something: it hands the fake api the very body
+// the UI refused to send, and the fake -- modelling store
+// validateResolvedQuestionsOpened, which validates against questions ever
+// opened rather than currently open -- accepts it.
+//
+// Without this, "the fake no longer returns 409" would be an unfalsifiable
+// claim about a stub nobody checks. With it, the stale-tick refusal is
+// demonstrably the UI's doing, because the round the UI withheld is one the
+// real stack takes.
+func TestDesignWrite_StoreWouldHaveAcceptedTheStaleRound(t *testing.T) {
+	env := newDesignWriteEnv(t)
+	acceptAnswerRounds(t, env)
+	env.Events.resolveOne(env.SessionID, testClosedQuestion)
+
+	postForm(env.Mux, env.answerPath(), url.Values{
+		"follow_up": {"a stale tick and some text"},
+		"resolve":   {testClosedQuestion},
+	}, false, env.Cookie)
+
+	// The UI held the round back...
+	assert.Empty(t, answerWriteRequests(env.API), "the UI must not post a round carrying a stale tick")
+
+	// ...and had it posted, the store would have taken it: 201, with the
+	// already-resolved question silently a no-op. That is the outcome this
+	// refusal exists to prevent, so it is asserted rather than assumed.
+	direct := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost,
+		env.API.server.URL+"/design-sessions/"+env.SessionID.String()+"/revision-events",
+		strings.NewReader(`{"event_type":"answer","entity_deltas":[],"open_questions_delta":{"opened":[],"resolved":["`+testClosedQuestion+`"]}}`))
+	req.Header.Set("Content-Type", "application/json")
+	env.API.server.Config.Handler.ServeHTTP(direct, req)
+	assert.Equal(t, http.StatusCreated, direct.Code,
+		"the real stack accepts an already-resolved id, which is exactly why the UI has to refuse it")
+}
+
+// TestDesignWrite_SeveralStaleTicks_RefuseTheWholeRound is the several case:
+// two ticks, both closed since the page loaded. The refusal reads differently
+// from a single stale tick -- several mean the page's rail is far enough out
+// of date that it should not be trusted, so the operator is told to reload
+// rather than to just send again -- and nothing is posted, so the round is
+// never half applied.
+func TestDesignWrite_SeveralStaleTicks_RefuseTheWholeRound(t *testing.T) {
+	for _, hx := range []bool{false, true} {
+		name := "no-JS"
+		if hx {
+			name = "htmx"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newDesignWriteEnv(t)
+			acceptAnswerRounds(t, env)
+			env.Events.addOpen(env.SessionID, store.OpenQuestion{QuestionID: testSecondStaleQuestion, Text: "what is the timeout?", OpenedAtSeqNo: 1})
+			env.Events.resolveOne(env.SessionID, testClosedQuestion)
+			env.Events.resolveOne(env.SessionID, testSecondStaleQuestion)
+			const followUp = "Two of these were answered while I was writing."
+
+			rec := postForm(env.Mux, env.answerPath(), url.Values{
+				"follow_up": {followUp},
+				"resolve":   {testClosedQuestion, testSecondStaleQuestion},
+			}, hx, env.Cookie)
+			body := rec.Body.String()
+
+			require.Equal(t, http.StatusOK, rec.Code, body)
+			assertFollowUpErrorShown(t, body)
+			assert.Contains(t, body, staleTickRejectionMessageFor(2))
+			assert.NotContains(t, body, staleTickRejectionMessageFor(1),
+				"two stale ticks must not read as one")
+			assert.Empty(t, answerWriteRequests(env.API),
+				"a partially applied round is worse than none: no round is posted when any tick is stale")
+			assertNoSuccessConfirmation(t, rec, hx)
+			assert.Contains(t, body, ">"+followUp+"</textarea>", "the typed text survives")
+		})
+	}
+}
+
+// TestDesignWrite_MixedFreshAndStaleTicks_RefuseTheWholeRound is the mixed
+// case, and the one that would be most tempting to half-apply: one tick is
+// genuinely open, the other was closed since the page loaded.
+//
+// The fresh tick does NOT get the operator's round. A round that recorded the
+// text and the fresh resolve while dropping the stale one is the silent,
+// partial write the whole check exists to prevent, and the operator would be
+// told it saved. So the whole round is refused, the typed text and the fresh
+// tick come back intact, and the stale question is gone from the freshly-read
+// rail.
+func TestDesignWrite_MixedFreshAndStaleTicks_RefuseTheWholeRound(t *testing.T) {
+	for _, hx := range []bool{false, true} {
+		name := "no-JS"
+		if hx {
+			name = "htmx"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newDesignWriteEnv(t)
+			acceptAnswerRounds(t, env)
+			// Only the first is stale; testKeptQuestion is still open.
+			env.Events.resolveOne(env.SessionID, testClosedQuestion)
+			const followUp = "The other one is fine, this one was answered already."
+
+			rec := postForm(env.Mux, env.answerPath(), url.Values{
+				"follow_up": {followUp},
+				"resolve":   {testClosedQuestion, testKeptQuestion},
+			}, hx, env.Cookie)
+			body := rec.Body.String()
+
+			require.Equal(t, http.StatusOK, rec.Code, body)
+			assertFollowUpErrorShown(t, body)
+			assert.Contains(t, body, staleTickRejectionMessageFor(1))
+			assert.Empty(t, answerWriteRequests(env.API),
+				"the fresh tick must not buy the round a pass: a stale tick refuses it whole")
+			assertNoSuccessConfirmation(t, rec, hx)
+
+			assert.Contains(t, body, ">"+followUp+"</textarea>", "the typed text survives")
+			assert.True(t, resolveBoxChecked(t, body, testKeptQuestion),
+				"FR 1942d934: the still-open tick the operator made survives the refusal, so a resubmit does not lose it")
+			rail := pageSectionOf(t, body, regionOpenQuestion, regionSessionProps)
+			assert.NotContains(t, rail, testClosedQuestion,
+				"the stale question is gone from a freshly-read rail")
+		})
+	}
+}
+
+// TestDesignWrite_FreshTickPostsNormally is the negative control for every
+// refusal above: a tick naming a question that is genuinely still open posts
+// as it always did. Without it, "every tick is stale" would satisfy the same
+// assertions as "the check is right".
+//
+// It is also the case that keeps the check honest in the other direction: the
+// validation reads the same open set the rail is rendered from, and a tick
+// that is in it must pass through untouched -- resolve id, follow-up text,
+// opened question, 303, flash, all unchanged.
+func TestDesignWrite_FreshTickPostsNormally(t *testing.T) {
+	for _, hx := range []bool{false, true} {
+		name := "no-JS"
+		if hx {
+			name = "htmx"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newDesignWriteEnv(t)
+			acceptAnswerRounds(t, env)
+			// A DIFFERENT question was closed since the page loaded: the
+			// operator's own tick is on one that is still open, so the
+			// stale one must not refuse their round.
+			env.Events.resolveOne(env.SessionID, testClosedQuestion)
+			const followUp = "It should read the postgres flag table."
+
+			rec := postForm(env.Mux, env.answerPath(), url.Values{
+				"follow_up": {followUp},
+				"resolve":   {testKeptQuestion},
+			}, hx, env.Cookie)
+			body := rec.Body.String()
+
+			if hx {
+				require.Equal(t, http.StatusOK, rec.Code, body)
+				assert.NotContains(t, body, `data-krill="design-session-follow-up-error"`,
+					"a round whose ticks are all still open must not be refused")
+				assert.Contains(t, body, answerSuccessToast)
+			} else {
+				require.Equal(t, http.StatusSeeOther, rec.Code, body)
+			}
+
+			writes := answerWriteRequests(env.API)
+			require.Len(t, writes, 1, "a fresh tick must still post exactly one round")
+			round := decodeAnswerRound(t, writes[0].Body)
+			assert.Equal(t, []string{testKeptQuestion}, round.OpenQuestionsDelta.Resolved,
+				"the posted round carries the operator's tick, unchanged")
+			require.Len(t, round.OpenQuestionsDelta.Opened, 1)
+			assert.Equal(t, followUp, round.OpenQuestionsDelta.Opened[0].Text,
+				"the typed follow-up is still the round's durable record")
+
+			// And it took effect: the freshly-read rail has lost the
+			// question the round closed. Only the htmx half has a rail to
+			// read -- a no-JS success navigates (303), so its outcome is
+			// whatever the page it lands on renders.
+			if hx {
+				rail := pageSectionOf(t, body, regionOpenQuestion, regionSessionProps)
+				assert.NotContains(t, rail, testKeptQuestion,
+					"the question this round closed must leave the rail")
+			}
+		})
+	}
+}
+
+// TestDesignWrite_UnreadableOpenSetRefusesRatherThanPostsBlind covers the
+// case the staleness check cannot decide: krill's open-question read fails,
+// so a tick might be stale and might not.
+//
+// It refuses rather than posting. The alternative -- post and let the store
+// accept -- is precisely the silent drop this check exists to prevent, and
+// the operator would be told the round saved. The refusal costs them a retry;
+// posting blind costs them a resolve they believed they had made. The cause
+// is logged, never rendered, and the typed text and ticks still come back.
+func TestDesignWrite_UnreadableOpenSetRefusesRatherThanPostsBlind(t *testing.T) {
+	for _, hx := range []bool{false, true} {
+		name := "no-JS"
+		if hx {
+			name = "htmx"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newDesignWriteEnv(t)
+			acceptAnswerRounds(t, env)
+			env.Events.openQuestionsErr = fmt.Errorf("pq: could not connect to the krill database")
+			const followUp = "It should read the postgres flag table."
+
+			rec := postForm(env.Mux, env.answerPath(), url.Values{
+				"follow_up": {followUp},
+				"resolve":   {testKeptQuestion},
+			}, hx, env.Cookie)
+			body := rec.Body.String()
+
+			require.Equal(t, http.StatusOK, rec.Code, body)
+			assertFollowUpErrorShown(t, body)
+			assert.Contains(t, body, "Could not reach krill: the request did not complete.")
+			assert.NotContains(t, body, "could not connect to the krill database",
+				"the cause is logged, never rendered")
+			assert.Empty(t, answerWriteRequests(env.API),
+				"a round whose ticks could not be checked must not be posted blind")
+			assertNoSuccessConfirmation(t, rec, hx)
+			assert.Contains(t, body, ">"+followUp+"</textarea>", "the typed text survives")
+			assert.Contains(t, body, `data-krill="degraded-resolve"`,
+				"with no readable rail, the ticked ids ride as hidden inputs rather than being lost")
+			assert.Contains(t, body, `name="resolve" value="`+testKeptQuestion+`"`,
+				"the operator's tick survives, so a retry does not silently drop it")
+		})
+	}
+}
+
+// assertNoSuccessConfirmation fails if a refusal claimed the round landed: a
+// flash cookie on the no-JS path, an HX-Redirect, or the success toast inside
+// the htmx fragment. The stale-tick refusal must be a refusal in every
+// observable way, not only in its status.
+func assertNoSuccessConfirmation(t *testing.T, rec *httptest.ResponseRecorder, hx bool) {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		assert.NotEqual(t, toastCookieName, c.Name,
+			"a refused round must not arm the success flash: the operator would be told it saved")
+	}
+	assert.Empty(t, rec.Header().Get("HX-Redirect"),
+		"a refusal must not navigate away, in either mode")
+	if hx {
+		assert.NotContains(t, rec.Body.String(), answerSuccessToast,
+			"a refused round must not toast a success")
 	}
 }
 
