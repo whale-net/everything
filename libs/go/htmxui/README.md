@@ -113,7 +113,11 @@ Each is a `.templ` component in `libs/go/htmxui`, daisyUI-classes-only
   children slot for the typed-confirmation/explicit-acknowledge control,
   `Disabled`/`DisabledReason`, `CancelHref`). The `<form>` element itself
   stays app-owned; `submitAttrs` forwards onto the submit `<button>` (e.g.
-  an `hx-post` target).
+  an `hx-post` target), and `CancelAttrs` forwards onto the cancel `<a>`
+  that `CancelHref` renders — the opt-in that lets a caller put both halves
+  of a doubled cancel on one element (`CancelHref`'s href for the no-JS
+  destination, `hx-get`/`hx-target`/`hx-swap` for the in-place one). Unset
+  renders no attribute, so the four pre-existing call sites are unaffected.
 - **`Alert(variant AlertVariant, message string, attrs templ.Attributes)`**
   (`alert.templ`) — the shared flash / inline-message box. `AlertVariant`
   covers `AlertInfo`/`AlertSuccess`/`AlertWarning`/`AlertError`, and the

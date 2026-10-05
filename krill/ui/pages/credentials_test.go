@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/a-h/templ"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -259,12 +260,20 @@ func TestCredentialRevokeRegion_ConfirmNamesTheCredentialAndTheConsequence(t *te
 
 	// The action row is Confirm's, not this page's: its submit is the
 	// error variant a destructive intent renders, beside a dismiss link.
+	// CancelAttrs is passed here too, because the assertion is that the row
+	// is the one Confirm renders from these props -- so the props have to be
+	// the ones the page actually passes.
 	confirm := renderBody(t, htmxui.Confirm(htmxui.ConfirmProps{
 		Intent:      htmxui.ConfirmDestructive,
 		Summary:     "Revoke ci runner? Clients using it lose access immediately.",
 		SubmitLabel: "Revoke",
 		CancelHref:  "/account/credentials/a",
 		CancelLabel: "Dismiss",
+		CancelAttrs: templ.Attributes{
+			"hx-get":    "/account/credentials/a",
+			"hx-target": "#" + CredentialRevokeRegionID("a"),
+			"hx-swap":   "outerHTML",
+		},
 	}, nil))
 	assert.Contains(t, body, confirm, "the action row must be htmxui.Confirm's own markup")
 
@@ -339,4 +348,26 @@ func TestAreaIndex_EmptyListRendersTheHeadingAlone(t *testing.T) {
 
 	assert.Contains(t, body, "Ops console")
 	assert.NotContains(t, body, "<ul")
+}
+
+// The dismiss is a doubled control on one anchor: the href is the no-JS
+// destination, and the hx-get/hx-target/hx-swap are the in-place one, so
+// cancelling swaps the row back rather than navigating the page away from
+// the table it was asked in. The swap targets the row's OWN region --
+// putting the row at rest back where the question was, which is also the
+// only target the next Revoke has.
+func TestCredentialRevokeRegion_DismissSwapsTheRowBackInPlace(t *testing.T) {
+	body := renderBody(t, CredentialRevokeRegion(revokeRow("a", "ci runner")))
+
+	assert.Contains(t, body, `href="/account/credentials/a"`,
+		"the no-JS path still follows a real link")
+	assert.Contains(t, body, `hx-get="/account/credentials/a"`,
+		"an htmx browser's dismissal asks the same route rather than navigating")
+	assert.Contains(t, body, `hx-target="#`+CredentialRevokeRegionID("a")+`"`,
+		"the row goes back into its own region, not over the whole list")
+	assert.Contains(t, body, `hx-swap="outerHTML"`,
+		"the region's id must survive the swap or the next Revoke has no target")
+	assert.Contains(t, body, ">Dismiss<")
+	assert.NotContains(t, body, "<script",
+		"the in-place dismiss is server-rendered markup, not a scripted state flip")
 }

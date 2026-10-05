@@ -343,3 +343,91 @@ func topLevelElements(t *testing.T, body string) []string {
 	}
 	return tags
 }
+
+// Dismissing swaps the row back in place: this drives the ACTUAL dismiss
+// control the served confirmation carries -- its hx-get and hx-target read
+// off the rendered anchor, not restated here -- and asserts the answer is
+// a fragment whose root is the row's own region, holding the row at rest.
+//
+// The no full-page navigation part is the fragment itself: what htmx
+// receives is the row region and nothing else, so the document around it
+// (the table, the other rows, the scroll position) is never re-rendered.
+// The href on the same anchor is still there for a browser with no
+// JavaScript, which follows it and lands on the same row at rest.
+func TestRevoke_DismissSwapsTheRowBackInPlace(t *testing.T) {
+	_, mux, store, id := credentialsRevokeApp(t)
+	idStr := id.String()
+
+	asked := credentialsRevokeGet(t, mux, credentialRevokePath(idStr), true)
+	require.Equal(t, http.StatusOK, asked.Code)
+
+	// The one dismiss control the confirmation rendered, located by its
+	// label so a control that stopped rendering entirely fails here rather
+	// than passing on an absent match.
+	dismisses := findAll(asked.Body.String(), func(n *html.Node) bool {
+		return n.Type == html.ElementNode && n.Data == "a" &&
+			strings.TrimSpace(textContent(n)) == "Dismiss"
+	})
+	require.Len(t, dismisses, 1, "the confirmation must render exactly one dismiss control")
+
+	dismiss := dismisses[0]
+	require.Equal(t, credentialRowPath(idStr), attr(dismiss, "href"),
+		"the no-JS path still follows a real link to the row")
+	require.Equal(t, credentialRowPath(idStr), attr(dismiss, "hx-get"),
+		"an htmx browser's dismissal asks the same route")
+	require.Equal(t, "#"+pages.CredentialRevokeRegionID(idStr), attr(dismiss, "hx-target"),
+		"the row goes back into its own region, not over the list")
+	require.Equal(t, "outerHTML", attr(dismiss, "hx-swap"),
+		"the region's own id must survive the swap, or the next Revoke has no target")
+
+	// Follow that control exactly as htmx would.
+	rec := credentialsRevokeGet(t, mux, attr(dismiss, "hx-get"), true)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+
+	assert.Empty(t, store.revokedIDs, "dismissing must not reach the store")
+	assert.NotContains(t, body, "<html", "the swapped response is a fragment, not a page")
+	assert.Equal(t, []string{"div"}, topLevelElements(t, body),
+		"the fragment must be exactly the swap target it replaces")
+	assert.Equal(t, pages.CredentialRevokeRegionID(idStr),
+		attr(mustParseRoot(t, body), "id"),
+		"the fragment's root must carry the very id being replaced")
+	assert.Contains(t, body, `data-krill="credential-revoke"`, "the row is back at rest")
+	assert.NotContains(t, body, `data-krill="credential-revoke-form"`)
+	assert.NotContains(t, body, "Clients using it lose access immediately.")
+}
+
+// mustParseRoot parses a served fragment and returns its single root
+// element, failing the test if it does not have exactly one.
+func mustParseRoot(t *testing.T, body string) *html.Node {
+	t.Helper()
+	nodes, err := html.ParseFragment(strings.NewReader(body), &html.Node{
+		Type: html.ElementNode, Data: "body", DataAtom: atom.Body,
+	})
+	require.NoError(t, err)
+	var roots []*html.Node
+	for _, n := range nodes {
+		if n.Type == html.ElementNode {
+			roots = append(roots, n)
+		}
+	}
+	require.Len(t, roots, 1, "the fragment must have exactly one root element")
+	return roots[0]
+}
+
+// textContent concatenates an element's own text, which is how a test finds
+// a control by its label without depending on how the label is nested.
+func textContent(n *html.Node) string {
+	var sb strings.Builder
+	var walk func(*html.Node)
+	walk = func(cur *html.Node) {
+		if cur.Type == html.TextNode {
+			sb.WriteString(cur.Data)
+		}
+		for c := cur.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return sb.String()
+}
