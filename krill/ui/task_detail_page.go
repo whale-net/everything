@@ -580,11 +580,11 @@ func taskInterventionStateOf(t store.Task) taskInterventionState {
 	}
 }
 
-// taskDetailActions renders the detail's intervention controls (FR af61631d)
-// from the ONE shared legality predicate, so the detail and the Needs
-// attention rows cannot drift into two readings of which verbs a state
+// taskDetailControls is the ONE builder of the detail's intervention controls
+// (FR af61631d) from the shared legality predicate, so the detail and the
+// Needs attention rows cannot drift into two readings of which verbs a state
 // offers. It returns nil when the predicate offers none, which the view model
-// renders as no callout at all.
+// renders as no callout and no popovers at all.
 //
 // Each control carries what THIS page observed -- the claim id for Release,
 // Escalate and Cancel on a claimed task, the escalation id for Requeue and
@@ -599,23 +599,71 @@ func taskInterventionStateOf(t store.Task) taskInterventionState {
 // task's Requeue is rendered as the primary action. Nothing else about the
 // verbs -- their order, their guards, their confirmation -- is the detail's
 // own invention.
-func taskDetailActions(t store.Task, returnTo string) templ.Component {
+//
+// The controls are built ONCE here and rendered twice: the triggers in the
+// callout (taskDetailActions) and the reason popovers beside them
+// (taskDetailActionPopovers, FR 0cf360c5). Deriving the popovers from a verb
+// set of their own would let a trigger point at a popover id that is never
+// rendered -- the dead-button regression this builder exists to prevent.
+func taskDetailControls(t store.Task, returnTo string) []pages.TaskActionControl {
 	state := taskInterventionStateOf(t)
 	verbs := legalInterventions(state, t.CurrentLane)
 	if len(verbs) == 0 {
 		return nil
 	}
-	taskID := t.ID.String()
 	opts := taskActionOptions{target: pages.TaskDetailAnchor}
+	if state == taskInterventionEscalated {
+		opts.primary = actionRequeue
+	}
+	controls := taskActionControls(opts, t.ID.String(), t.Title, returnTo, verbs...)
 	switch state {
 	case taskInterventionClaimed:
-		return renderClaimedTaskActionsWith(opts, taskID, t.Title, *t.CurrentClaimID, returnTo, verbs...)
+		// A claimed task holds its claim id; all-zero is no claim any write
+		// could match, so a row that somehow read one stays unguarded rather
+		// than carrying it (the same rule renderClaimedTaskActions applies).
+		if id := *t.CurrentClaimID; id != uuid.Nil {
+			observed := id.String()
+			for i := range controls {
+				// Both halves carry it as the same hidden expected_claim_id
+				// input: the htmx half posts it to the verb, the no-JS half
+				// hands it to the confirmation page, which carries it on to
+				// the verb's own form.
+				controls[i].ObservedClaimID = observed
+			}
+		}
 	case taskInterventionEscalated:
-		opts.primary = actionRequeue
-		return renderEscalatedTaskActionsWith(opts, taskID, t.Title, t.CurrentEscalationID.String(), returnTo, verbs...)
-	default:
-		return renderTaskActionsWith(opts, taskID, t.Title, returnTo, verbs...)
+		observed := t.CurrentEscalationID.String()
+		for i := range controls {
+			controls[i].ObservedField = escalatedGuardField
+			controls[i].ObservedID = observed
+		}
 	}
+	return controls
+}
+
+// taskDetailActions renders the detail's intervention controls: the trigger
+// half of taskDetailControls. It is nil when the predicate offers no verb,
+// which the view model renders as no callout at all.
+func taskDetailActions(t store.Task, returnTo string) templ.Component {
+	controls := taskDetailControls(t, returnTo)
+	if controls == nil {
+		return nil
+	}
+	return pages.TaskActions(controls)
+}
+
+// taskDetailActionPopovers renders the reason popovers for the detail's
+// controls (FR 0cf360c5): one per control, whose optional reason field and
+// submit button name exactly the form taskDetailActions rendered for the same
+// verb, so a reason typed here reaches the handler on both the htmx and the
+// no-JS path. It is nil exactly when the actions are, so no trigger is left
+// pointing at an id the page does not render.
+func taskDetailActionPopovers(t store.Task, returnTo string) templ.Component {
+	controls := taskDetailControls(t, returnTo)
+	if controls == nil {
+		return nil
+	}
+	return pages.TaskActionPopovers(controls)
 }
 
 // taskDetailContainerOf resolves the container a task sits under, against the
@@ -721,6 +769,10 @@ func (app *App) taskDetailViewFor(ctx context.Context, r *http.Request, pid uuid
 	// (interventionReturnTo), so a detail-page control can never be pointed
 	// off-site or at a path this binary does not serve.
 	page.Actions = taskDetailActions(task, self.RequestURI())
+	// The matching reason popovers (FR 0cf360c5). Not setting them is the
+	// defect this pairing guards: every control's trigger opens its popover,
+	// so a page without them has dead buttons and no optional reason.
+	page.Popovers = taskDetailActionPopovers(task, self.RequestURI())
 	return page
 }
 

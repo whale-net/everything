@@ -387,10 +387,13 @@ func TestTaskDetailNoJSConfirmationCarriesTheObservedGuard(t *testing.T) {
 	require.Contains(t, confirm, cancelConfirmSuffix)
 
 	// What the browser submits when the no-JS half is a GET form: the
-	// control's own hidden inputs become the query string.
+	// control's own hidden inputs become the query string, and the popover's
+	// reason field rides along through form= (FR 0cf360c5).
+	const reason = "cancelled after the review"
 	path := confirm +
 		"?return_to=" + url.QueryEscape(hiddenValueIn(t, region, "return_to")) +
-		"&" + expectedClaimIDParam + "=" + url.QueryEscape(hiddenValueIn(t, region, expectedClaimIDParam))
+		"&" + expectedClaimIDParam + "=" + url.QueryEscape(hiddenValueIn(t, region, expectedClaimIDParam)) +
+		"&reason=" + url.QueryEscape(reason)
 
 	// The confirmation route production mounts, behind the same operator
 	// gate; only the id and the guard are what this asserts, so the fixture
@@ -410,6 +413,8 @@ func TestTaskDetailNoJSConfirmationCarriesTheObservedGuard(t *testing.T) {
 	assert.Contains(t, card, `type="hidden" name="return_to" value="`+
 		hiddenValueIn(t, region, "return_to")+`"`,
 		"and the path back to the detail, so the cancel lands where the operator acted")
+	assert.Contains(t, card, ">"+reason+"</textarea>",
+		"the detail's reason reaches the no-JS confirm page and is pre-filled, not silently dropped")
 }
 
 // ---------------------------------------------------------------------------
@@ -479,19 +484,28 @@ func headOfLine(s string) string {
 // states mark none -- and, because the same builder renders the console's
 // rows, this is also where "the detail's Primary flag did not leak into the
 // rows' rendering" is observable: a row's control names no region either.
+//
+// The callout carries two halves now that the reason lives in a popover
+// (FR 0cf360c5): the trigger controls, then the popovers they open. The
+// primary contract is about the CONTROLS -- the buttons the operator reads on
+// the page -- so the count is taken over the trigger half. A popover's submit
+// is the dialog's own primary (btn-primary btn-sm), not a second control; it
+// is asserted separately, so scoping the count does not leave it unexamined.
 func TestTaskDetailRequeueIsThePrimaryControlOnAnEscalatedTask(t *testing.T) {
 	escalationID := uuid.New()
 
 	f := newDetailFixture(t)
 	task := f.add(escalatedDetailTask("an escalated task", escalationID, store.LaneTesting))
 	region := detailActionsOf(t, f.mustFragTask(t, task))
+	triggers, popovers := splitAtReasonPopovers(t, region)
+	require.NotEmpty(t, popovers, "an escalated detail renders the popovers its triggers open")
 
-	assert.Equal(t, 1, strings.Count(region, "btn-primary"),
+	assert.Equal(t, 1, strings.Count(triggers, "btn-primary"),
 		"exactly one verb is the state's primary action")
-	assert.Contains(t, region, `hx-post="`+opsTaskActionBase+task.ID.String()+`/`+actionRequeue+`"`)
+	assert.Contains(t, triggers, `hx-post="`+opsTaskActionBase+task.ID.String()+`/`+actionRequeue+`"`)
 	// The Requeue form, and only it, carries the filled button.
-	assert.Contains(t, region, "btn-primary btn-xs")
-	assert.Contains(t, region, "btn-error btn-xs")
+	assert.Contains(t, triggers, "btn-primary btn-xs")
+	assert.Contains(t, triggers, "btn-error btn-xs")
 
 	for _, tc := range []struct {
 		name string
@@ -504,8 +518,23 @@ func TestTaskDetailRequeueIsThePrimaryControlOnAnEscalatedTask(t *testing.T) {
 			f := newDetailFixture(t)
 			task := f.add(tc.task)
 			region := detailActionsOf(t, f.mustFragTask(t, task))
-			assert.NotContains(t, region, "btn-primary",
+			triggers, _ := splitAtReasonPopovers(t, region)
+			assert.NotContains(t, triggers, "btn-primary",
 				"only the escalated state's Requeue is primary; every other verb is the ghost button the rows use")
 		})
 	}
+}
+
+// splitAtReasonPopovers splits the actions callout into its trigger half and
+// its popover half, at the first popover element. The split is anchored on the
+// popover marker (which the shared TaskActionPopovers always renders), and it
+// backs up to the element boundary so the trigger half is whole markup rather
+// than a fragment cut mid-tag.
+func splitAtReasonPopovers(t *testing.T, region string) (triggers, popovers string) {
+	t.Helper()
+	i := strings.Index(region, `data-krill="reason-popover"`)
+	require.GreaterOrEqual(t, i, 0, "the callout renders no reason popover:\n%s", region)
+	start := strings.LastIndex(region[:i], "<div")
+	require.GreaterOrEqual(t, start, 0, "the reason popover's element does not start before its marker")
+	return region[:start], region[start:]
 }

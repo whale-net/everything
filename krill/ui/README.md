@@ -1199,16 +1199,15 @@ no write to, and assert the callout's own presence separately).
 The detail's Actions callout (`data-krill="task-actions"`, inside
 `#krill-task-detail`) offers the verbs legal for the task's state, and it is
 the page's one write surface. It is **not** a second legality table:
-`taskDetailActions` reads the loaded task as the shared predicate's
+`taskDetailControls` reads the loaded task as the shared predicate's
 view-level state (`taskInterventionStateOf` → cancelled > escalated > claimed
-> ready) and renders whatever `legalInterventions(state, lane)` returns,
-through the same `renderClaimedTaskActionsWith` / `renderEscalatedTaskActionsWith`
-/ `renderTaskActionsWith` the Needs attention rows use. So Escalated offers
-Requeue + Cancel, Claimed offers Release + Escalate + Cancel, Ready offers
-Escalate + Cancel, Cancelled offers nothing (nil `Actions`, so **no callout at
-all**), Release is never offered on an escalated task, and a Done-lane task is
-offered neither Escalate nor Cancel — the subtraction lives in
-`legalInterventions`, not here.
+> ready) and builds the controls `legalInterventions(state, lane)` allows,
+from the same `taskActionControls` the Needs attention rows build theirs with.
+So Escalated offers Requeue + Cancel, Claimed offers Release + Escalate +
+Cancel, Ready offers Escalate + Cancel, Cancelled offers nothing (nil
+`Actions`, so **no callout at all**), Release is never offered on an escalated
+task, and a Done-lane task is offered neither Escalate nor Cancel — the
+subtraction lives in `legalInterventions`, not here.
 
 Two things the detail changes, both passed as `taskActionOptions`:
 `Target` is `pages.TaskDetailAnchor`, so the control swaps the **whole
@@ -1216,6 +1215,16 @@ section** rather than a queue's results block; and, on an escalated task,
 `Primary` names `actionRequeue`, which renders that one button `btn-primary`
 instead of the `btn-ghost` every row's verbs are. The rows pass the zero
 value and are unchanged.
+
+The callout also carries the reason popovers (FR 0cf360c5). `taskDetailControls`
+builds one control set and the page renders it twice: `taskDetailActions` as
+the triggers, `taskDetailActionPopovers` as the popovers they open, both
+inside `data-krill="task-actions"`. The detail has no table to keep a text
+input out of, so its popovers sit beside the controls rather than after a
+table as the rows' do — and keeping them inside the callout keeps the callout
+the page's one write surface. It is also why they ride the swapped section: a
+re-render rebuilds the popovers with the controls, so no trigger is left
+pointing at an id the page no longer carries.
 
 Each control carries what the page observed — the claim id for Release /
 Escalate / Cancel on a claimed task, the escalation id for Requeue / Cancel

@@ -405,6 +405,12 @@ func TestDetailEscalateShowsTheFreshAttemptsAndNoClaim(t *testing.T) {
 	swapped := swapRegionBetween(t, got, `data-krill="task-actions"`, `data-krill="task-detail-frame"`)
 	assert.Equal(t, []string{actionRequeue, actionCancel}, swapOfferedVerbs(t, swapped),
 		"the callout must offer the escalated state's verbs, not the ones the page was loaded with")
+	// And the reason popovers are rebuilt with it, one per fresh control. The
+	// response replaced the whole section, so popovers left outside it would
+	// be orphaned against ids the swap deleted -- the triggers re-rendered
+	// here would open nothing.
+	assert.Equal(t, 2, strings.Count(swapped, `data-krill="reason-popover"`),
+		"the swapped callout must carry a reason popover for each of its fresh controls")
 
 	// The intervention itself: the same route the rows use, carrying the id
 	// the page observed and nothing about the operator.
@@ -414,6 +420,8 @@ func TestDetailEscalateShowsTheFreshAttemptsAndNoClaim(t *testing.T) {
 	require.NoError(t, json.Unmarshal(write.Body, &body))
 	assert.Equal(t, f.claimID.String(), body[expectedClaimIDParam],
 		"the write is guarded by the claim the page observed")
+	assert.Equal(t, "needs a human", body["reason"],
+		"the reason the detail's popover carries reaches the api's intervention body")
 	for k := range body {
 		assert.Contains(t, []string{"reason", expectedClaimIDParam, escalatedGuardField}, k,
 			"a form carries the action's own argument and the observed guard; nothing else")

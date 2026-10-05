@@ -241,6 +241,7 @@ go_test(
         "task_page_test.go",
         "task_detail_page_test.go",
         "task_detail_actions_test.go",
+        "task_detail_reason_popover_test.go",
         "task_detail_slice_test.go",
         "task_detail_rail_test.go",
 "task_detail_panels_test.go",

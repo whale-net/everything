@@ -299,6 +299,15 @@ type TaskDetailPage struct {
 	// Actions box claiming there is nothing to do.
 	Actions templ.Component
 
+	// Popovers is the reason popovers for those controls (FR 0cf360c5),
+	// rendered inside the same callout as Actions. A control's trigger points
+	// its popovertarget at one of these ids, so without them the button opens
+	// nothing and the optional reason is lost. It is nil exactly when Actions
+	// is -- no verbs, no callout, no popovers -- and it is rendered inside the
+	// section the controls swap, so a post-action re-render rebuilds it with
+	// fresh ids rather than leaving the triggers pointing at orphans.
+	Popovers templ.Component
+
 	// ActionError names a refused intervention inline (FR c69a42b4). It is
 	// set only on a detail region re-derived after a refusal, so it is empty
 	// on the first render of the page: a refusal is never an empty region,
@@ -387,6 +396,13 @@ templ taskActionError(page TaskDetailPage) {
 // It renders NOTHING when no verb is legal. A cancelled task offers no
 // action, and an empty "Actions" box beside it would read as a control that
 // failed to render rather than as the terminal state the task is in.
+//
+// The reason popovers ride here too, after the controls (FR 0cf360c5): each
+// control's trigger opens its popover by id, so a trigger whose popover is
+// not rendered is a dead button and an operator who clicks it loses the
+// optional reason. Keeping them inside the callout also keeps the callout
+// the page's ONE write surface -- every write affordance the page has, the
+// triggers and the popover submits both, sits in this one region.
 templ taskActionsCallout(page TaskDetailPage) {
 	if page.Actions != nil {
 		<div class="mt-4 card bg-base-100 border border-base-300" data-krill="task-actions">
@@ -395,6 +411,7 @@ templ taskActionsCallout(page TaskDetailPage) {
 				<div class="flex flex-wrap items-center gap-2">
 					@page.Actions
 				</div>
+				@page.Popovers
 			</div>
 		</div>
 	}
