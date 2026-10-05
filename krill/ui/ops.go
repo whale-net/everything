@@ -100,7 +100,13 @@ func (app *App) soleScopeID(ctx context.Context) (uuid.UUID, error) {
 	return scope.ID, nil
 }
 
-// writeOpsQueryError maps a console query's store error onto the
+// writeOpsQueryError is writeConsoleQueryError for the ops console's own
+// pages, which are titled "Ops console".
+func (app *App) writeOpsQueryError(w http.ResponseWriter, r *http.Request, err error) {
+	app.writeConsoleQueryError(w, r, "Ops console", err)
+}
+
+// writeConsoleQueryError maps a console query's store error onto the
 // response: a cross-scope or malformed continuation token is the
 // caller's error (400), never a genuine store failure (500).
 //
@@ -121,7 +127,10 @@ func (app *App) soleScopeID(ctx context.Context) (uuid.UUID, error) {
 // A browser gets the same message inside the shell, at the status the
 // error earns. A bare http.Error would answer text/plain with no nav, on
 // exactly the page the operator most needs to navigate away from.
-func (app *App) writeOpsQueryError(w http.ResponseWriter, r *http.Request, err error) {
+//
+// title is the page's own name, so the in-shell answer names the page the
+// operator was on rather than the console area it came from.
+func (app *App) writeConsoleQueryError(w http.ResponseWriter, r *http.Request, title string, err error) {
 	status := http.StatusInternalServerError
 	message := "Failed to load console data. Try again."
 	switch {
@@ -138,7 +147,7 @@ func (app *App) writeOpsQueryError(w http.ResponseWriter, r *http.Request, err e
 		renderFragment(w, r, pages.OpsInlineError(message))
 		return
 	}
-	app.renderShellStatus(w, r, "Ops console", opsActivePath(r), pages.OpsQueryError(message, opsRecoveryPath(r)), status)
+	app.renderShellStatus(w, r, title, opsActivePath(r), pages.OpsQueryError(message, opsRecoveryPath(r)), status)
 }
 
 // opsActivePath is the path the nav marks active for a console page. The
@@ -170,19 +179,38 @@ func opsRecoveryPath(r *http.Request) string {
 	return r.URL.Path + "?" + q.Encode()
 }
 
-// opsNextHref builds a view's "next page" link, carrying the page size
-// forward and the store-issued token as page_token. Empty when the page
-// carried no token (the last page), so the view shows no next link.
-func opsNextHref(path, nextToken string, pageSize int) string {
+// opsNextHref builds a view's "next page" link from the view's own
+// request URI -- path plus query -- carrying the page size forward and the
+// store-issued token as page_token. Empty when the page carried no token
+// (the last page), so the view shows no next link.
+//
+// It takes the request URI rather than a bare route constant because the
+// same builder serves the ops console's own pages and the Needs attention
+// tabs, which live at different URLs and carry their own query (a tab, a
+// page size). A link rebuilt from a route constant would silently drop
+// whichever of those the URL had -- and following it would take the
+// operator to another tab's first page rather than their own next one.
+func opsNextHref(selfPath, nextToken string, pageSize int) string {
 	if nextToken == "" {
 		return ""
 	}
-	q := url.Values{}
+	u, err := url.Parse(selfPath)
+	if err != nil || u.Path == "" {
+		u = &url.URL{Path: selfPath}
+	}
+	q := u.Query()
 	if pageSize > 0 {
 		q.Set(opsPageSizeParam, strconv.Itoa(pageSize))
+	} else {
+		// An absent or zero page size is the store's default, which the
+		// link spells by leaving the parameter out rather than by writing
+		// "page_size=0" -- a value the parser reads as the same default
+		// but a reader would misread as a page of no rows.
+		q.Del(opsPageSizeParam)
 	}
 	q.Set(opsPageTokenParam, nextToken)
-	return path + "?" + q.Encode()
+	u.RawQuery = q.Encode()
+	return u.RequestURI()
 }
 
 // isHtmxRequest reports whether this request came from htmx rather than a
@@ -269,13 +297,20 @@ func claimedPollingDue(rows []store.ClaimedTaskRow, now time.Time) bool {
 //
 // It is the single derivation of this view's data: the GET handler, the
 // poll, and the intervention handlers' post-write re-derivation all call
-// it, so none of them can render a view the others would not.
-func (app *App) claimedResults(ctx context.Context, page store.PageParams, selfPath string) (pages.ClaimedData, error) {
+// it, so none of them can render a view the others would not. The Needs
+// attention page's Claimed tab calls it too, with the product narrowing
+// that page is scoped to -- the tab and the console view are the same
+// rows derived the same way, never two implementations that could
+// disagree.
+//
+// filter is the read's own narrowing: empty for the ops console's
+// scope-wide view, the current product for a Needs attention tab.
+func (app *App) claimedResults(ctx context.Context, filter store.ConsoleFilter, page store.PageParams, selfPath string) (pages.ClaimedData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.ClaimedData{}, err
 	}
-	result, err := app.tasks.ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, Page: page})
+	result, err := app.tasks.ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, ConsoleFilter: filter, Page: page})
 	if err != nil {
 		return pages.ClaimedData{}, err
 	}
@@ -285,7 +320,7 @@ func (app *App) claimedResults(ctx context.Context, page store.PageParams, selfP
 	}
 	return pages.ClaimedData{
 		Rows:     rows,
-		NextHref: opsNextHref(opsClaimedPath, result.NextToken, page.PageSize),
+		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
 		Href:     selfPath,
 		Polling:  claimedPollingDue(result.Items, time.Now()),
 	}, nil
@@ -319,7 +354,7 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.claimedResults(r.Context(), page, opsSelfPath(r))
+	d, err := app.claimedResults(r.Context(), store.ConsoleFilter{}, page, opsSelfPath(r))
 	if err != nil {
 		app.writeOpsQueryError(w, r, err)
 		return
@@ -338,13 +373,14 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 
 // escalatedResults reads one page of the escalated-task view (FR5):
 // every escalated task and its escalation_reason, equivalent to
-// list_escalated_tasks / GET /console/escalated.
-func (app *App) escalatedResults(ctx context.Context, page store.PageParams, selfPath string) (pages.EscalatedData, error) {
+// list_escalated_tasks / GET /console/escalated, under the same filter
+// contract claimedResults documents.
+func (app *App) escalatedResults(ctx context.Context, filter store.ConsoleFilter, page store.PageParams, selfPath string) (pages.EscalatedData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.EscalatedData{}, err
 	}
-	result, err := app.tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, Page: page})
+	result, err := app.tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: filter, Page: page})
 	if err != nil {
 		return pages.EscalatedData{}, err
 	}
@@ -354,7 +390,7 @@ func (app *App) escalatedResults(ctx context.Context, page store.PageParams, sel
 	}
 	return pages.EscalatedData{
 		Rows:     rows,
-		NextHref: opsNextHref(opsEscalatedPath, result.NextToken, page.PageSize),
+		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
 		Href:     selfPath,
 	}, nil
 }
@@ -395,7 +431,7 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.escalatedResults(r.Context(), page, opsSelfPath(r))
+	d, err := app.escalatedResults(r.Context(), store.ConsoleFilter{}, page, opsSelfPath(r))
 	if err != nil {
 		app.writeOpsQueryError(w, r, err)
 		return
@@ -413,13 +449,14 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // cancelledResults reads one page of the cancelled-task view (FR10),
-// equivalent to list_cancelled_tasks / GET /console/cancelled.
-func (app *App) cancelledResults(ctx context.Context, page store.PageParams, selfPath string) (pages.CancelledData, error) {
+// equivalent to list_cancelled_tasks / GET /console/cancelled, under the
+// same filter contract claimedResults documents.
+func (app *App) cancelledResults(ctx context.Context, filter store.ConsoleFilter, page store.PageParams, selfPath string) (pages.CancelledData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.CancelledData{}, err
 	}
-	result, err := app.tasks.ListCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, Page: page})
+	result, err := app.tasks.ListCancelledTasks(ctx, store.ListCancelledTasksParams{ScopeID: scopeID, ConsoleFilter: filter, Page: page})
 	if err != nil {
 		return pages.CancelledData{}, err
 	}
@@ -429,7 +466,7 @@ func (app *App) cancelledResults(ctx context.Context, page store.PageParams, sel
 	}
 	return pages.CancelledData{
 		Rows:     rows,
-		NextHref: opsNextHref(opsCancelledPath, result.NextToken, page.PageSize),
+		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
 		Href:     selfPath,
 	}, nil
 }
@@ -452,7 +489,7 @@ func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.cancelledResults(r.Context(), page, opsSelfPath(r))
+	d, err := app.cancelledResults(r.Context(), store.ConsoleFilter{}, page, opsSelfPath(r))
 	if err != nil {
 		app.writeOpsQueryError(w, r, err)
 		return
@@ -471,13 +508,14 @@ func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 
 // openNotesResults reads one page of the open-notes view (FR12): every
 // task note still in an open lifecycle status, equivalent to
-// list_open_notes / GET /console/notes.
-func (app *App) openNotesResults(ctx context.Context, page store.PageParams, selfPath string) (pages.NotesData, error) {
+// list_open_notes / GET /console/notes, under the same filter contract
+// claimedResults documents.
+func (app *App) openNotesResults(ctx context.Context, filter store.ConsoleFilter, page store.PageParams, selfPath string) (pages.NotesData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
 		return pages.NotesData{}, err
 	}
-	result, err := app.tasks.ListOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, Page: page})
+	result, err := app.tasks.ListOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: filter, Page: page})
 	if err != nil {
 		return pages.NotesData{}, err
 	}
@@ -487,7 +525,7 @@ func (app *App) openNotesResults(ctx context.Context, page store.PageParams, sel
 	}
 	return pages.NotesData{
 		Rows:     rows,
-		NextHref: opsNextHref(opsNotesPath, result.NextToken, page.PageSize),
+		NextHref: opsNextHref(selfPath, result.NextToken, page.PageSize),
 		Href:     selfPath,
 	}, nil
 }
@@ -519,7 +557,7 @@ func (app *App) handleOpenNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	d, err := app.openNotesResults(r.Context(), page, opsSelfPath(r))
+	d, err := app.openNotesResults(r.Context(), store.ConsoleFilter{}, page, opsSelfPath(r))
 	if err != nil {
 		app.writeOpsQueryError(w, r, err)
 		return

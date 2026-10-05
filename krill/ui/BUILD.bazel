@@ -18,6 +18,7 @@ go_library(
         "overview_page.go",
         "overview_tiles.go",
         "ops.go",
+        "needs_attention.go",
         "routes.go",
         "product_scope.go",
         "product_switcher.go",

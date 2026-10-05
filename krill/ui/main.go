@@ -579,7 +579,11 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	// The legacy prefixes above stay registered alongside these; the task
 	// that retires them owns the redirects.
 	mux.HandleFunc("GET "+productPathPrefix+overviewSuffix, app.readerRoute(app.handleProductOverview))
-	mux.HandleFunc("GET "+productPathPrefix+needsAttentionSuffix, app.readerRoute(app.handleProductPlaceholder))
+	// Needs attention is the product-scoped page the four legacy /ops queues
+	// retire into (FR 5fd47f4d); it replaces the placeholder that used to
+	// stand here. The five /ops URLs themselves stay registered in
+	// legacyURLs as redirects.
+	mux.HandleFunc("GET "+productPathPrefix+needsAttentionSuffix, app.readerRoute(app.handleNeedsAttention))
 	// Tasks and Board are two views of one scope (FR ab5f4936): each has
 	// its own handler, both over the product-wide task read layer
 	// (product_task_scope.go, product_task_page.go).
