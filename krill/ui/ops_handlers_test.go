@@ -151,37 +151,46 @@ const aFixedTimeStr = "2026-01-02T03:04:05Z"
 // 1. data parity -- each view renders the fields the console wire carries
 // ---------------------------------------------------------------------------
 
-func TestClaimedViewRendersConsoleFields(t *testing.T) {
+// TestClaimedViewRendersTheTabsRowFields pins the claimed view's data. The
+// view IS the Needs attention page's Claimed tab (FR a149d28f) -- the tab
+// and this route derive one view-model and render one table -- so its row
+// is that FR's contract: the task and its milestone, the lane badge, "by
+// <claimant> for <on-behalf-of>", the claimed-since instant, the lease
+// expiry as an exact instant whose relative form the browser derives, and
+// the claim id the row observed for its actions' guard.
+//
+// The route is un-prefixed, so the read carries no product narrowing and
+// the title renders unlinked; the product-scoped tab's own test covers the
+// detail link (krill/ui/claimed_tab_test.go).
+func TestClaimedViewRendersTheTabsRowFields(t *testing.T) {
 	taskID := uuid.New()
-	sessionID := uuid.New()
+	claimID := uuid.New()
 	tasks := &fakeOpsTasks{claimedPage: store.Page[store.ClaimedTaskRow]{
 		Items: []store.ClaimedTaskRow{{
 			TaskID:             taskID,
 			Title:              "Fix the widget",
 			DeliveryRef:        store.ClaimedTaskDeliveryRef{Kind: store.MilestoneKindMilestone, Title: "M6"},
-			ClaimantSessionID:  store.SessionID(sessionID),
 			ClaimantActing:     store.Subject{Iss: "https://kc", Sub: "alice", Kind: store.SubjectKindHuman},
 			ClaimantOnBehalfOf: store.Subject{Iss: "https://svc", Sub: "swarm"},
 			CurrentLane:        store.LaneTesting,
-			LeaseExpiresAt:     aFixedTime,
-			AttemptCount:       3,
+			ClaimedAt:          aFixedTime,
+			LeaseExpiresAt:     aFixedTime.Add(time.Hour),
+			ClaimID:            claimID,
 		}},
 	}}
 	rec := serve(newOpsApp(tasks).handleClaimedTasks, opsClaimedPath)
 	got := body(t, rec)
 
-	// task id + title, delivery ref, claim session id, both claimant
-	// subject pairs (acting shows its kind, on-behalf-of does not), lane,
-	// lease expiry, and attempt count -- the full ClaimedTaskWire shape.
-	assert.Contains(t, got, taskID.String())
-	assert.Contains(t, got, "Fix the widget")
-	assert.Contains(t, got, "milestone: M6")
-	assert.Contains(t, got, sessionID.String(), "claimant's session id is rendered")
-	assert.Contains(t, got, "https://kc alice (human)", "acting subject shows its kind")
-	assert.Contains(t, got, "https://svc swarm", "on_behalf_of subject is rendered")
+	assert.Contains(t, got, "Fix the widget", "the task title is rendered")
+	assert.Contains(t, got, "M6", "the milestone is rendered")
+	assert.Contains(t, got, "by https://kc alice (human) for https://svc swarm",
+		"the claimant reads 'by <acting> for <on-behalf-of>', the acting half with its kind")
 	assert.Contains(t, got, "Testing", "current lane is rendered")
-	assert.Contains(t, got, aFixedTimeStr, "lease expiry is rendered")
-	assert.Contains(t, got, "3", "attempt count is rendered")
+	assert.Contains(t, got, aFixedTimeStr, "claimed-since is rendered")
+	assert.Contains(t, got, aFixedTime.Add(time.Hour).Format(time.RFC3339),
+		"the lease expiry is rendered as an exact instant")
+	assert.Contains(t, got, `data-krill-claim-id="`+claimID.String()+`"`,
+		"the row carries the claim id it observed")
 }
 
 func TestEscalatedViewRendersConsoleFields(t *testing.T) {

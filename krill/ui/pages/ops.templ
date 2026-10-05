@@ -1,15 +1,19 @@
 package pages
 
 import (
-	"strconv"
-
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// This file holds every page body the ops console renders: the four
-// read views (claimed / escalated / cancelled / notes) and the four task
-// interventions' affordances (the row controls, the rejection page, the
-// cancel-confirm card).
+// This file holds the ops console's page bodies: three of its four read
+// views (escalated / cancelled / notes) and the four task interventions'
+// affordances (the row controls, the rejection page, the cancel-confirm
+// card).
+//
+// The claimed view's rows are not here. The Claimed tab of the Needs
+// attention page is that view's one rendering (FR a149d28f), so its row
+// view-model and its table live beside that page in
+// krill/ui/pages/needs_attention.templ; this file keeps the shared results
+// furniture and the page chrome the claimed view composes with.
 //
 // Each read view is one route in two modes. The results *fragment* is
 // what a polled/swapped response carries -- no chrome, always HTTP 200 --
@@ -38,28 +42,6 @@ const cancelConfirmID = "cancel-confirm"
 // ---------------------------------------------------------------------------
 // view models
 // ---------------------------------------------------------------------------
-
-// ClaimedRow is one row of the claimed-task view. Every field is a
-// pre-formatted plain string built by newClaimedRow in package main, so
-// this file stays free of store reach-in and pointer logic.
-//
-// Lease and ClaimedSince are absolute RFC3339 instants, never a relative
-// "in 3m": the results block is polled (see claimedPollAttrs), and a
-// fragment whose bytes shifted between two polls for no state change
-// would defeat the whole point of the poll.
-type ClaimedRow struct {
-	TaskID       string
-	Title        string
-	Delivery     string
-	Session      string
-	Claimant     string
-	OnBehalfOf   string
-	Lane         string
-	ClaimedSince string
-	Lease        string
-	Attempts     int
-	Actions      templ.Component
-}
 
 // EscalatedRow is one row of the escalated-task view (newEscalatedRow).
 type EscalatedRow struct {
@@ -187,6 +169,14 @@ type TaskActionControl struct {
 	ReasonHint string
 	ReturnTo   string
 
+	// ObservedClaimID is the claim the ROW observed, when the row holds one.
+	// The control carries it -- as a hidden expected_claim_id field on the
+	// form, or on the confirmation link's query for the destructive verb --
+	// so the write's guard is checked against the claim the operator
+	// actually saw rather than against whatever is current when they act.
+	// Empty for a control with no claim to guard against.
+	ObservedClaimID string
+
 	// ObservedID is the id of the state this control's row observed, and
 	// the guard the write is checked against -- an escalated row's
 	// escalation id, a claimed row's claim id. A form control carries it
@@ -272,8 +262,18 @@ templ opsPageChrome(d OpsPageData) {
 // only while the state they watch is transient, and because this route's
 // own HX-Request response IS the same fragment, a settled view comes back
 // without them and the loop stops by itself. No client-side timer
-// bookkeeping, no separate refresh endpoint -- hx-get is /ops/claimed
-// itself, and the handler's HX-Request branch answers it.
+// bookkeeping, no separate refresh endpoint -- hx-get is the view's OWN
+// request URI (ClaimedData.Href, the path plus query the operator is on)
+// and the handler's HX-Request branch answers it.
+//
+// That it is d.Href and not a route constant is what lets the poll ride
+// the Needs attention page's Claimed tab (FR a149d28f): the polled
+// fragment carries the tab's own address -- ?tab=claimed, and whatever
+// paging the operator is on -- rather than a fixed /ops/claimed, so a poll
+// cannot move the operator to another tab or back to page one. On the tab
+// the poll names the results block as its target, so it receives that
+// block alone; the strip, its counts and the freshness stamp (whose
+// instant moves every read) stay out of the polled bytes.
 //
 // This is the one place krill's console has a genuine transient state: a
 // lease near expiry. The operator watches the row leave when the lease
@@ -313,61 +313,6 @@ templ ClaimedPage(d ClaimedData) {
 		RefreshHref: d.Href,
 		Results:     ClaimedResults(d),
 	})
-}
-
-templ claimedTable(rows []ClaimedRow) {
-	if len(rows) == 0 {
-		@htmxui.EmptyState("No claimed tasks.", "Nothing holds a claim in this scope right now.", "", "", nil)
-	} else {
-		<div class="overflow-x-auto">
-			<table class="table table-sm">
-				<thead>
-					<tr>
-						<th>Task</th>
-						<th>Delivery</th>
-						<th>Claimant</th>
-						<th>On behalf of</th>
-						<th>Lane</th>
-						<th>Claimed since</th>
-						<th>Lease expires</th>
-						<th>Attempts</th>
-						<th>Actions</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, row := range rows {
-						<tr class="hover">
-							<td class="text-sm">
-								{ row.TaskID }
-								<br />
-								{ row.Title }
-							</td>
-							<td class="text-sm">{ row.Delivery }</td>
-							<td class="text-sm">
-								{ row.Claimant }
-								<br />
-								<small class="text-base-content/60">session { row.Session }</small>
-							</td>
-							<td class="text-sm">{ row.OnBehalfOf }</td>
-							<td class="text-sm">
-								@htmxui.Badge(row.Lane, laneVariant(row.Lane), htmxui.BadgeSizeSM, true, nil)
-							</td>
-							<td class="text-sm">{ row.ClaimedSince }</td>
-							<td class="text-sm">{ row.Lease }</td>
-							<td class="text-sm">{ strconv.Itoa(row.Attempts) }</td>
-							<td class="text-sm">
-								<div class="flex flex-wrap items-center gap-1">
-									if row.Actions != nil {
-										@row.Actions
-									}
-								</div>
-							</td>
-						</tr>
-					}
-				</tbody>
-			</table>
-		</div>
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +534,9 @@ templ TaskActions(controls []TaskActionControl) {
 				class="inline"
 			>
 				<input type="hidden" name="return_to" value={ c.ReturnTo } />
+				if c.ObservedClaimID != "" {
+					<input type="hidden" name="expected_claim_id" value={ c.ObservedClaimID } />
+				}
 				if c.ObservedID != "" {
 					<input type="hidden" name={ c.ObservedField } value={ c.ObservedID } />
 				}

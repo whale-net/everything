@@ -739,3 +739,92 @@ func (app *App) needsAttentionCount(ctx context.Context, scopeID, productID uuid
 		return app.tasks.CountEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: console, Reason: filter.Reason})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// the Claimed tab's rows (FR a149d28f)
+// ---------------------------------------------------------------------------
+
+// newClaimedRow builds one Claimed tab row from the store's claimed-task
+// row (store.ClaimedTaskRow), which is the one read every field here comes
+// from -- nothing is derived from a second query, so the row and
+// list_claimed_tasks cannot disagree.
+//
+// pid is the product the read was narrowed to; it is what the task's detail
+// link is spelled against, and uuid.Nil (a read with no product narrowing,
+// such as the retired console view) leaves the title unlinked rather than
+// inventing a product id.
+//
+// returnTo is the view a no-JS action form returns to, exactly as the
+// console's own rows spell it.
+func newClaimedRow(r store.ClaimedTaskRow, pid uuid.UUID, returnTo string) pages.ClaimedRow {
+	// A read that observed no claim (a zero id) carries none: an all-zero
+	// uuid is not a claim any write could be guarded against, so the row
+	// states nothing rather than stating a false id.
+	claimID := ""
+	if r.ClaimID != uuid.Nil {
+		claimID = r.ClaimID.String()
+	}
+	return pages.ClaimedRow{
+		TaskID:         r.TaskID.String(),
+		Title:          r.Title,
+		TaskHref:       claimedTaskHref(pid, r.TaskID),
+		Milestone:      r.DeliveryRef.Title,
+		Lane:           string(r.CurrentLane),
+		Claimant:       claimedBy(r.ClaimantActing, r.ClaimantOnBehalfOf),
+		ClaimedSince:   opsTime(r.ClaimedAt),
+		LeaseExpiresAt: opsTime(r.LeaseExpiresAt),
+		ClaimID:        claimID,
+		Actions:        claimedRowActions(r, returnTo),
+	}
+}
+
+// claimedTaskHref is the product-scoped detail URL for a claimed task, the
+// same address the product-wide Tasks table's rows link to. An unresolved
+// product (uuid.Nil) yields no link at all.
+func claimedTaskHref(pid, taskID uuid.UUID) string {
+	if pid == uuid.Nil {
+		return ""
+	}
+	return productTaskDetailPath(pid, taskID)
+}
+
+// claimedBy renders a claim's holder the way the tab's claimant column
+// reads it: "by <acting> for <on-behalf-of>" (the FR's own wording). The
+// on-behalf-of half is dropped when the claim names none -- a claim taken
+// for nobody reads "by worker-3", never "by worker-3 for -".
+//
+// The acting subject keeps its kind ("(human)"/"(service)") for the reason
+// opsActor gives: an operator scanning for who is holding a claim needs to
+// tell a person from a service, and the on-behalf-of subject does not carry
+// that question (opsSubject's rule).
+func claimedBy(acting, onBehalfOf store.Subject) string {
+	by := "by " + opsActor(acting)
+	if forWhom := opsSubject(onBehalfOf); forWhom != "-" {
+		by += " for " + forWhom
+	}
+	return by
+}
+
+// claimedRowVerbs is the intervention legality of a claimed row, which is
+// task detail's own: Release is always offered (the task holds a claim),
+// while Escalate and Cancel are not offered on a task in the Done lane --
+// a finished task is neither flagged for attention nor dead-lettered,
+// whichever lane it reached Done from.
+//
+// One function rather than a condition inside the row builder, so the
+// order the FR names the verbs in ("Release, Escalate and Cancel") is
+// stated once.
+func claimedRowVerbs(lane store.Lane) []string {
+	verbs := []string{actionRelease}
+	if lane == store.LaneDone {
+		return verbs
+	}
+	return append(verbs, actionEscalate, actionCancel)
+}
+
+// claimedRowActions renders a claimed row's controls with the verbs legal
+// for its lane, each carrying the claim the row observed so the action's
+// guard is checked against the state the operator actually saw.
+func claimedRowActions(r store.ClaimedTaskRow, returnTo string) templ.Component {
+	return renderClaimedTaskActions(r.TaskID.String(), r.ClaimID, returnTo, claimedRowVerbs(r.CurrentLane)...)
+}
