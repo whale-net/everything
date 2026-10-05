@@ -52,6 +52,13 @@ type needsAttentionTasks struct {
 
 	listFilters  []store.ConsoleFilter
 	countFilters map[string][]store.ConsoleFilter
+
+	// listReasons and countReasons keep the escalated read's own reason
+	// narrowing -- ListEscalatedTasksParams' field rather than the
+	// ConsoleFilter -- so a test can assert the reason filter reached both
+	// the list and the count (FR 6369e312).
+	listReasons  []*store.EscalationReason
+	countReasons map[string][]*store.EscalationReason
 }
 
 // recordList and recordCount keep what the page asked for, which is what
@@ -67,6 +74,17 @@ func (s *needsAttentionTasks) recordCount(tab string, f store.ConsoleFilter) {
 	s.countFilters[tab] = append(s.countFilters[tab], f)
 }
 
+func (s *needsAttentionTasks) recordListReason(reason *store.EscalationReason) {
+	s.listReasons = append(s.listReasons, reason)
+}
+
+func (s *needsAttentionTasks) recordCountReason(tab string, reason *store.EscalationReason) {
+	if s.countReasons == nil {
+		s.countReasons = map[string][]*store.EscalationReason{}
+	}
+	s.countReasons[tab] = append(s.countReasons[tab], reason)
+}
+
 func (s *needsAttentionTasks) ListClaimedTasks(_ context.Context, p store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
 	s.recordList(p.ConsoleFilter)
 	return store.Page[store.ClaimedTaskRow]{Items: s.claimed}, nil
@@ -74,6 +92,7 @@ func (s *needsAttentionTasks) ListClaimedTasks(_ context.Context, p store.ListCl
 
 func (s *needsAttentionTasks) ListEscalatedTasks(_ context.Context, p store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
 	s.recordList(p.ConsoleFilter)
+	s.recordListReason(p.Reason)
 	return store.Page[store.EscalatedTaskRow]{Items: s.escalated}, nil
 }
 
@@ -94,6 +113,7 @@ func (s *needsAttentionTasks) CountClaimedTasks(_ context.Context, p store.ListC
 
 func (s *needsAttentionTasks) CountEscalatedTasks(_ context.Context, p store.ListEscalatedTasksParams) (int, error) {
 	s.recordCount(needsAttentionTabEscalated, p.ConsoleFilter)
+	s.recordCountReason(needsAttentionTabEscalated, p.Reason)
 	return s.count(needsAttentionTabEscalated)
 }
 
