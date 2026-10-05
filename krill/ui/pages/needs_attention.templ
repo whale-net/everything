@@ -3,8 +3,29 @@ package pages
 import (
 	"strconv"
 
-	"github.com/whale-net/everything/krill/ui/components"
+"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// The filter bar's query parameters. They live here rather than in
+// //krill/ui because this file is what writes them: the selects below
+// submit these names, and //krill/ui aliases them for the parse -- one
+// spelling, so a filtered link and the request it re-issues agree.
+//
+// The names are the ones krill api's console views read
+// (api/handlers/console.go's milestoneIDQueryParam / reasonQueryParam), so
+// a filter set has one spelling whether the operator's browser or an MCP
+// client follows it.
+const (
+	// NeedsAttentionTabQueryParam names the selected tab.
+	NeedsAttentionTabQueryParam = "tab"
+	// NeedsAttentionMilestoneQueryParam names the milestone or milepebble
+	// filter: a milestone_ref id of either kind, which the store's
+	// ConsoleFilter narrows on.
+	NeedsAttentionMilestoneQueryParam = "milestone_id"
+	// NeedsAttentionReasonQueryParam names the escalation-reason filter,
+	// offered on the Escalated tab alone.
+	NeedsAttentionReasonQueryParam = "reason"
 )
 
 // The Needs attention page (FR 5fd47f4d): the tab strip and the one
@@ -72,8 +93,51 @@ type NeedsAttentionData struct {
 	// included, rather than a fixed route.
 	RefreshHref string
 
+	// Filter is the page's filter bar: the milestone select every tab
+	// shares, the reason select the Escalated tab adds, and the sentence
+	// the Open notes tab carries while a milestone narrows it.
+	Filter NeedsAttentionFilterBar
+
 	// Results is the selected tab's table, or its inline refusal.
 	Results templ.Component
+}
+
+// NeedsAttentionFilterBar is the filter bar's view model: the two selects'
+// options, each marking the value this request resolved to, and the
+// Open-notes-only notice a milestone filter turns on.
+type NeedsAttentionFilterBar struct {
+	// Path is the page's own URL: the form's action and its hx-get, so the
+	// no-JavaScript submit and the in-place swap ask for the same query.
+	Path string
+
+	// Milestones are the milestone select's options, "All milestones"
+	// first. Each value is a milestone_ref id -- a milestone or one of its
+	// milepebbles -- which is exactly what store.ConsoleFilter narrows on.
+	Milestones []NeedsAttentionFilterOption
+
+	// Reasons are the reason select's options, "Any reason" first. Empty
+	// when ShowReason is off.
+	Reasons []NeedsAttentionFilterOption
+
+	// ShowReason reveals the reason select. It is offered on the Escalated
+	// tab alone: it is the one queue whose rows carry a reason.
+	ShowReason bool
+
+	// Notice is the Open notes tab's sentence when a milestone filter is
+	// in force. A note attached to a spec-axis entity has no delivery
+	// container, so a milestone filter excludes it outright
+	// (store.ListOpenNotesParams' own rule) and the tab has to say so
+	// rather than let the operator read the shortfall as all there is.
+	Notice string
+}
+
+// NeedsAttentionFilterOption is one option of the filter bar's selects.
+// Value is the wire value the URL carries (empty for a select's "all"
+// default), Label what the operator reads.
+type NeedsAttentionFilterOption struct {
+	Value    string
+	Label    string
+	Selected bool
 }
 
 // NeedsAttention renders the strip and the active tab's results, both
@@ -97,10 +161,90 @@ templ NeedsAttention(d NeedsAttentionData) {
 				}
 			</div>
 		</div>
+		@needsAttentionFilterBar(d)
+		if d.Filter.Notice != "" {
+			<p class="mt-2 text-sm text-base-content/70" data-krill="needs-attention-notes-notice">{ d.Filter.Notice }</p>
+		}
 		<div class="mt-4" data-krill="needs-attention-results">
 			@d.Results
 		</div>
 	</div>
+}
+
+// needsAttentionFilterBar is the page's filter bar: a plain GET form whose
+// submits are the whole of the state, so a reload, a shared link and a
+// no-JavaScript submit all land on the same filters. htmx is layered on top
+// -- hx-get onto the same path, targeting the panel's own anchor -- so a
+// selection changes the table in place without the working case depending
+// on JavaScript.
+//
+// The tab rides as a hidden field because the form's query is what the URL
+// becomes: without it, changing a filter would silently drop the operator
+// onto the default tab. page_token deliberately does not ride: a filter
+// change is a different read, whose token the store would refuse.
+templ needsAttentionFilterBar(d NeedsAttentionData) {
+	<form method="get" action={ templ.URL(d.Filter.Path) } class="mt-3 flex flex-wrap items-end gap-3"
+		data-krill="needs-attention-filters"
+		hx-get={ templ.URL(d.Filter.Path) }
+		hx-target={ "#" + NeedsAttentionAnchor }
+		hx-swap="outerHTML"
+		hx-trigger="change, submit"
+		hx-push-url="true">
+		<input type="hidden" name={ NeedsAttentionTabQueryParam } value={ d.Tab } />
+		<label class="fieldset">
+			<span class="fieldset-legend">Milestone</span>
+			<select name={ NeedsAttentionMilestoneQueryParam } class="select select-sm"
+				aria-label="Milestone" data-krill="needs-attention-milestone-select">
+				for _, o := range d.Filter.Milestones {
+					<option value={ o.Value } selected?={ o.Selected } data-krill-milestone-option={ o.Value }>
+						{ o.Label }
+					</option>
+				}
+			</select>
+		</label>
+		if d.Filter.ShowReason {
+			<label class="fieldset">
+				<span class="fieldset-legend">Reason</span>
+				<select name={ NeedsAttentionReasonQueryParam } class="select select-sm"
+					aria-label="Reason" data-krill="needs-attention-reason-select">
+					for _, o := range d.Filter.Reasons {
+						<option value={ o.Value } selected?={ o.Selected } data-krill-reason-option={ o.Value }>
+							{ o.Label }
+						</option>
+					}
+				</select>
+			</label>
+		}
+		<button type="submit" class="btn btn-primary btn-sm" data-krill="needs-attention-apply">Apply</button>
+	</form>
+}
+
+// NeedsAttentionFilteredEmpty is the tab's empty state when a filter
+// excluded every row: it names the filters in force, so "no rows" reads as
+// "nothing matched these filters" rather than as a scope with no work.
+//
+// It is a DIFFERENT shape from the read-failed state (ops.templ's
+// OpsInlineError): that one reports a read that could not be answered,
+// this one reports a read that was answered with nothing. Rendering the
+// two the same way would tell an operator a filter excluded everything
+// when in fact nothing could be read.
+//
+// It carries opsResultsID because it is what the results block swaps to:
+// without the id the region's own target would be deleted and the next
+// Refresh would no-op.
+templ NeedsAttentionFilteredEmpty(d NeedsAttentionEmptyData) {
+	<div id={ opsResultsID } data-krill="needs-attention-empty">
+		@htmxui.EmptyState(d.Headline, d.Detail, "", "", nil)
+	</div>
+}
+
+// NeedsAttentionEmptyData is that empty state's two sentences.
+type NeedsAttentionEmptyData struct {
+	// Headline names the queue and the filters in force.
+	Headline string
+	// Detail is the one sentence telling the operator which control to
+	// change.
+	Detail string
 }
 
 // needsAttentionFreshness is the header's "Updated N ago" stamp: the
