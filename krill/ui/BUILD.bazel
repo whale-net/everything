@@ -213,6 +213,7 @@ go_test(
         "legacy_urls_test.go",
         "needs_attention_test.go",
         "needs_attention_filter_test.go",
+        "needs_attention_paging_test.go",
         "claimed_tab_test.go",
         "intervention_legality_test.go",
         "spec_page_test.go",

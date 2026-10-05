@@ -100,10 +100,10 @@ func (f *tabInterventionFixture) tabPath(tab string) string {
 // same function the tab's GET and the post-write re-derivation both call.
 func (f *tabInterventionFixture) region(t *testing.T, tab string) string {
 	t.Helper()
-	results, err := f.app.needsAttentionResults(context.Background(), f.pid,
+	view, err := f.app.needsAttentionResults(context.Background(), f.pid,
 		needsAttentionFilter{}, "", tab, store.PageParams{}, f.tabPath(tab), f.app.clock(), "")
 	require.NoError(t, err)
-	return mustRenderComponent(results)
+	return mustRenderComponent(view.Results)
 }
 
 // tabClaimedRow is one claimed task whose guard the row must carry.

@@ -326,7 +326,7 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 	// exactly as the tab's GET builds it, so a filtered-empty tab reads back
 	// the same filters whichever request emptied it.
 	containers := app.needsAttentionMilestoneContainers(ctx, target.productID)
-	results, err := app.needsAttentionResults(ctx, target.productID, target.filter,
+	view, err := app.needsAttentionResults(ctx, target.productID, target.filter,
 		needsAttentionFilterSentence(target.filter, containers), target.tab,
 		target.page, target.selfPath, app.clock(), message)
 	if err != nil {
@@ -337,7 +337,7 @@ func (app *App) renderInterventionResults(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, withToast(toast, pages.OpsInlineError(interventionReloadFailure)))
 		return
 	}
-	renderFragment(w, r, withToast(toast, results))
+	renderFragment(w, r, withToast(toast, view.Results))
 }
 
 // interventionReturnTarget is the Needs attention view a successful
