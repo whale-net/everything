@@ -501,7 +501,7 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
 		d.Error = message
-		return pages.CancelledResults(d), nil
+		return pages.NeedsAttentionCancelledResults(d), nil
 	case needsAttentionTabNotes:
 		d, err := app.openNotesResults(ctx, console, page, selfPath)
 		if err != nil {
@@ -511,7 +511,7 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 			return pages.NeedsAttentionFilteredEmpty(empty), nil
 		}
 		d.Error = message
-		return pages.NotesResults(d), nil
+		return pages.NeedsAttentionNotesResults(d), nil
 	default:
 		d, err := app.needsAttentionEscalatedResults(ctx, productID, filter, page, selfPath, now)
 		if err != nil {
@@ -747,6 +747,84 @@ func (app *App) needsAttentionCount(ctx context.Context, scopeID, productID uuid
 		return app.tasks.CountOpenNotes(ctx, store.ListOpenNotesParams{ScopeID: scopeID, ConsoleFilter: console})
 	default:
 		return app.tasks.CountEscalatedTasks(ctx, store.ListEscalatedTasksParams{ScopeID: scopeID, ConsoleFilter: console, Reason: filter.Reason})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cancelled and open-notes row shapes
+// ---------------------------------------------------------------------------
+
+// The Cancelled and Open notes tabs' view-models (FR b22e1d60), moved out
+// of the ops console's own loaders (krill/ui/ops.go) because the tab --
+// not the console -- is what their columns are specified against now. The
+// two loaders still call these constructors, so there is one shape per
+// row kind rather than a tab copy that could drift from the console's.
+
+// productTaskLinkOf is the product-scoped task-detail link a row's title
+// points at, or "" when the read named no product.
+//
+// The ops console's own views read scope-wide (a nil ConsoleFilter
+// ProductID), so they have no product to build a link from and render
+// unlinked; a Needs attention tab always carries the product it is
+// scoped to, so its rows link. The page is derived from the same filter
+// the store read was narrowed by, so a link can never name a product the
+// row did not come from.
+func productTaskLinkOf(pid *uuid.UUID, tid uuid.UUID) string {
+	if pid == nil {
+		return ""
+	}
+	return productTaskDetailPath(*pid, tid)
+}
+
+// newCancelledRow builds one Cancelled tab row (FR b22e1d60): the task
+// and its detail link, the milestone it was cancelled under, the lane it
+// was cancelled out of, who cancelled it and when, and the intervention's
+// optional reason.
+func newCancelledRow(r store.CancelledTaskRow, taskHref string) pages.CancelledRow {
+	reason := ""
+	if r.Reason != nil {
+		reason = *r.Reason
+	}
+	return pages.CancelledRow{
+		TaskID:     r.TaskID.String(),
+		Title:      r.Title,
+		TaskHref:   taskHref,
+		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
+		Lane:       string(r.Lane),
+		By:         opsActor(r.CancelledByActing),
+		OnBehalfOf: opsSubject(r.CancelledByOnBehalfOf),
+		At:         opsTime(r.CancelledAt),
+		Reason:     reason,
+	}
+}
+
+// newNoteRow builds one Open notes tab row (FR b22e1d60).
+//
+// targetHref is set by the caller only for a task-targeted note, so a
+// note on a spec-axis entity is never given a link it has no page for.
+// Status is read from the store's own lifecycle enumeration rather than
+// spelled as a literal: ListOpenNotes is defined as "every note still at
+// NoteLifecycleStatusNoted", so that is the one status this view can
+// carry, and it says so by naming the constant.
+func newNoteRow(r store.OpenNoteRow, taskHref string) pages.NoteRow {
+	// Exactly one of TaskContext/EntityContext is set (task_note's own
+	// exactly-one-target CHECK), so at most one branch fills Target. The
+	// target's id is rendered next to its title so the row names the same
+	// entity the note points at, not just its human label.
+	target := "-"
+	if r.TaskContext != nil {
+		target = "task: " + r.TaskContext.Title + " (" + r.TaskContext.TaskID.String() + ")"
+	} else if r.EntityContext != nil {
+		target = string(r.EntityContext.EntityKind) + ": " + r.EntityContext.Title + " (" + r.EntityContext.EntityID.String() + ")"
+	}
+	return pages.NoteRow{
+		NoteID:    r.NoteID.String(),
+		Kind:      string(r.Kind),
+		Status:    string(store.NoteLifecycleStatusNoted),
+		Target:    target,
+		TaskHref:  taskHref,
+		CreatedAt: opsTime(r.CreatedAt),
+		Body:      r.Body,
 	}
 }
 

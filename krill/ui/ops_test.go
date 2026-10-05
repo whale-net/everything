@@ -80,26 +80,41 @@ func TestNewEscalatedRowCarriesBothEscalatorSubjects(t *testing.T) {
 }
 
 func TestNewCancelledRowCarriesBothCancellerSubjects(t *testing.T) {
+	reason := "superseded by the new plan"
 	row := newCancelledRow(store.CancelledTaskRow{
+		Lane:                  store.LaneImplementation,
+		Reason:                &reason,
 		CancelledByActing:     store.Subject{Iss: "ai", Sub: "a", Kind: store.SubjectKindHuman},
 		CancelledByOnBehalfOf: store.Subject{Iss: "bi", Sub: "b"},
-	})
+	}, "")
 	assert.Equal(t, "ai a (human)", row.By)
 	assert.Equal(t, "bi b", row.OnBehalfOf)
+	assert.Equal(t, "Implementation", row.Lane, "the row carries the lane it was cancelled out of")
+	assert.Equal(t, reason, row.Reason, "a given reason reaches the row")
+	assert.Empty(t, row.TaskHref, "a read that named no product leaves the title unlinked")
+}
+
+func TestNewCancelledRowOmitsAnAbsentReason(t *testing.T) {
+	row := newCancelledRow(store.CancelledTaskRow{TaskID: uuid.New()}, "/products/p/tasks/t")
+	assert.Empty(t, row.Reason, "a cancellation with no rationale shows no reason")
+	assert.Equal(t, "/products/p/tasks/t", row.TaskHref, "a product-scoped read links the task")
 }
 
 func TestNewNoteRowNamesTargetByID(t *testing.T) {
 	// The target column carries the target's id, not just its human
 	// label, so a note row names the same entity the note points at.
 	taskID := uuid.New()
-	task := newNoteRow(store.OpenNoteRow{TaskContext: &store.OpenNoteTaskContext{TaskID: taskID, Title: "a task"}})
+	task := newNoteRow(store.OpenNoteRow{TaskContext: &store.OpenNoteTaskContext{TaskID: taskID, Title: "a task"}}, "/products/p/tasks/"+taskID.String())
 	assert.Contains(t, task.Target, taskID.String())
 	assert.Contains(t, task.Target, "a task")
+	assert.Equal(t, "/products/p/tasks/"+taskID.String(), task.TaskHref, "a task-targeted note links to the task")
+	assert.Equal(t, string(store.NoteLifecycleStatusNoted), task.Status, "the status comes from the store's enumeration")
 
 	entityID := uuid.New()
-	entity := newNoteRow(store.OpenNoteRow{EntityContext: &store.OpenNoteEntityContext{EntityID: entityID, Title: "a req"}})
+	entity := newNoteRow(store.OpenNoteRow{EntityContext: &store.OpenNoteEntityContext{EntityID: entityID, Title: "a req"}}, "")
 	assert.Contains(t, entity.Target, entityID.String())
 	assert.Contains(t, entity.Target, "a req")
+	assert.Empty(t, entity.TaskHref, "a spec-entity note has no task page to link to")
 }
 
 // TestClaimedPollingDueOnlyFiresNearExpiry covers the rule that decides
