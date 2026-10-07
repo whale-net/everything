@@ -40,3 +40,16 @@ def passes_content_filter(text: str) -> bool:
         if re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", lowered):
             return False
     return True
+
+
+def output_refusal(text: str, member_names: Iterable[str]) -> Optional[str]:
+    """Reason code the text must not be posted, or None when every check passes."""
+    if not text.strip():
+        return "empty"
+    if find_mention(text):
+        return "mention"
+    if find_member_name(text, member_names):
+        return "member_name"
+    if not passes_content_filter(text):
+        return "content_filter"
+    return None
