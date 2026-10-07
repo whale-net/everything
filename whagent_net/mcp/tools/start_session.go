@@ -19,14 +19,17 @@ type StartSessionInput struct {
 	AgentID       string `json:"agent_id" jsonschema:"The agent definition to start a session from"`
 	FirstTurn     string `json:"first_turn,omitempty" jsonschema:"Optional first turn to send once the session has started; omit to start the session with no turn queued yet"`
 	ModelOverride string `json:"model_override,omitempty" jsonschema:"Optional model id overriding the agent definition's default; rejected with FAILED_PRECONDITION if the provider catalogue does not serve it (FR5)"`
+	PinnedContext string `json:"pinned_context,omitempty" jsonschema:"Optional system-level context shown to the model on every turn after the agent definition prompt; max 32,000 UTF-8 bytes (bytes, not characters) and must be valid UTF-8; immutable for the session; never a transcript event. The text stays in the calling parent's own transcript as this tool argument."`
 }
 
 // StartSessionOutput is start_session's structured result: the started
 // session's id and current state, mirroring pb.Session's caller-relevant
 // fields.
 type StartSessionOutput struct {
-	SessionID string `json:"session_id" jsonschema:"The started session's id, as a UUID string"`
-	State     string `json:"state" jsonschema:"The session's current state (see SessionState)"`
+	SessionID            string `json:"session_id" jsonschema:"The started session's id, as a UUID string"`
+	State                string `json:"state" jsonschema:"The session's current state (see SessionState)"`
+	PinnedContextPresent bool   `json:"pinned_context_present" jsonschema:"True when the session was started with a pinned context; the text itself is never returned"`
+	PinnedContextBytes   int32  `json:"pinned_context_bytes" jsonschema:"UTF-8 byte length of the session's pinned context; 0 when none"`
 }
 
 // startSessionTool holds the SessionService client this tool is a
@@ -39,9 +42,9 @@ type StartSessionOutput struct {
 // resolveGrantTokenForAgent), for the browser-OAuth2 path only -- see
 // dispatch.go's own doc comment for the manual-token-path no-op case.
 type startSessionTool struct {
-	client         pb.SessionServiceClient
+	client        pb.SessionServiceClient
 	scopeResolver ScopeResolver
-	grant          GrantSource
+	grant         GrantSource
 }
 
 // RegisterStartSession registers the start_session tool on srv.
@@ -49,7 +52,7 @@ func RegisterStartSession(srv *mcp.Server, client pb.SessionServiceClient, scope
 	t := &startSessionTool{client: client, scopeResolver: scopeResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "start_session",
-		Description: "Start a new whagent-net agent session, optionally sending its first turn. Returns once the session has started -- see send_turn for how a later turn's completion is observed.",
+		Description: "Start a new whagent-net agent session, optionally sending its first turn. The definition system prompt (and pinned context) is charged against the context budget in both search and bulk modes, reducing kept history for long-prompt definitions. Returns once the session has started -- see send_turn for how a later turn's completion is observed.",
 	}, t.call)
 }
 
@@ -80,6 +83,9 @@ func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, i
 	if in.ModelOverride != "" {
 		startReq.ModelOverride = &in.ModelOverride
 	}
+	if in.PinnedContext != "" {
+		startReq.PinnedContext = &in.PinnedContext
+	}
 
 	startResp, err := t.client.StartSession(ctx, startReq)
 	if err != nil {
@@ -89,8 +95,10 @@ func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, i
 
 	if in.FirstTurn == "" {
 		return nil, StartSessionOutput{
-			SessionID: sess.GetSessionId(),
-			State:     sessionStateString(sess.GetState()),
+			SessionID:            sess.GetSessionId(),
+			State:                sessionStateString(sess.GetState()),
+			PinnedContextPresent: sess.GetPinnedContextPresent(),
+			PinnedContextBytes:   sess.GetPinnedContextBytes(),
 		}, nil
 	}
 
@@ -106,7 +114,9 @@ func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, i
 	}
 
 	return nil, StartSessionOutput{
-		SessionID: sess.GetSessionId(),
-		State:     sessionStateString(turnResp.GetSession().GetState()),
+		SessionID:            sess.GetSessionId(),
+		State:                sessionStateString(turnResp.GetSession().GetState()),
+		PinnedContextPresent: sess.GetPinnedContextPresent(),
+		PinnedContextBytes:   sess.GetPinnedContextBytes(),
 	}, nil
 }

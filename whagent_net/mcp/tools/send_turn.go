@@ -20,8 +20,10 @@ type SendTurnInput struct {
 // turn completes, so State here reflects acceptance, not completion; a
 // caller reads completion via read_transcript/get_session.
 type SendTurnOutput struct {
-	SessionID string `json:"session_id" jsonschema:"The session id this turn was sent to"`
-	State     string `json:"state" jsonschema:"The session's state immediately after the turn was accepted -- not necessarily the state once the turn finishes"`
+	SessionID            string `json:"session_id" jsonschema:"The session id this turn was sent to"`
+	State                string `json:"state" jsonschema:"The session's state immediately after the turn was accepted -- not necessarily the state once the turn finishes"`
+	PinnedContextPresent bool   `json:"pinned_context_present" jsonschema:"True when the session was started with a pinned context; the text itself is never returned"`
+	PinnedContextBytes   int32  `json:"pinned_context_bytes" jsonschema:"UTF-8 byte length of the session's pinned context; 0 when none"`
 }
 
 // sendTurnTool holds the SessionService client this tool is a
@@ -34,9 +36,9 @@ type SendTurnOutput struct {
 // browser-OAuth2 path only -- see dispatch.go's own doc comment for the
 // manual-token-path no-op case.
 type sendTurnTool struct {
-	client         pb.SessionServiceClient
+	client        pb.SessionServiceClient
 	scopeResolver ScopeResolver
-	grant          GrantSource
+	grant         GrantSource
 }
 
 // RegisterSendTurn registers the send_turn tool on srv.
@@ -75,8 +77,10 @@ func (t *sendTurnTool) call(ctx context.Context, req *mcp.CallToolRequest, in Se
 	}
 
 	out := SendTurnOutput{
-		SessionID: in.SessionID,
-		State:     sessionStateString(resp.GetSession().GetState()),
+		SessionID:            in.SessionID,
+		State:                sessionStateString(resp.GetSession().GetState()),
+		PinnedContextPresent: resp.GetSession().GetPinnedContextPresent(),
+		PinnedContextBytes:   resp.GetSession().GetPinnedContextBytes(),
 	}
 	result := &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{

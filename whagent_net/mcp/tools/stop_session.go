@@ -17,8 +17,10 @@ type StopSessionInput struct {
 // state after being signalled to stop (SESSION_STATE_STOPPED once the
 // signal has been processed).
 type StopSessionOutput struct {
-	SessionID string `json:"session_id" jsonschema:"The stopped session's id"`
-	State     string `json:"state" jsonschema:"The session's state after the stop signal"`
+	SessionID            string `json:"session_id" jsonschema:"The stopped session's id"`
+	State                string `json:"state" jsonschema:"The session's state after the stop signal"`
+	PinnedContextPresent bool   `json:"pinned_context_present" jsonschema:"True when the session was started with a pinned context; the text itself is never returned"`
+	PinnedContextBytes   int32  `json:"pinned_context_bytes" jsonschema:"UTF-8 byte length of the session's pinned context; 0 when none"`
 }
 
 // stopSessionTool holds the SessionService client this tool is a
@@ -31,9 +33,9 @@ type StopSessionOutput struct {
 // browser-OAuth2 path only -- see dispatch.go's own doc comment for the
 // manual-token-path no-op case.
 type stopSessionTool struct {
-	client         pb.SessionServiceClient
+	client        pb.SessionServiceClient
 	scopeResolver ScopeResolver
-	grant          GrantSource
+	grant         GrantSource
 }
 
 // RegisterStopSession registers the stop_session tool on srv.
@@ -64,7 +66,9 @@ func (t *stopSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in
 	}
 
 	return nil, StopSessionOutput{
-		SessionID: in.SessionID,
-		State:     sessionStateString(resp.GetSession().GetState()),
+		SessionID:            in.SessionID,
+		State:                sessionStateString(resp.GetSession().GetState()),
+		PinnedContextPresent: resp.GetSession().GetPinnedContextPresent(),
+		PinnedContextBytes:   resp.GetSession().GetPinnedContextBytes(),
 	}, nil
 }

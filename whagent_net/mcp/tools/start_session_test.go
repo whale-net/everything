@@ -157,3 +157,74 @@ func TestStartSession_SendTurnFailsAfterStartSessionSucceeded_ReportsPartialFail
 	assert.Contains(t, err.Error(), "queue unavailable", "the underlying SendTurn failure's own message must still be visible")
 	require.Len(t, fc.calls, 2, "both RPCs must have been attempted -- this is a partial failure, not a short circuit")
 }
+
+func TestStartSession_PinnedContext_ForwardedWhenSetUnsetWhenEmpty(t *testing.T) {
+	var got *pb.StartSessionRequest
+	fc := &fakeSessionServiceClient{
+		startSessionFunc: func(ctx context.Context, in *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+			got = in
+			return &pb.StartSessionResponse{Session: &pb.Session{
+				SessionId: "sess-1", State: pb.SessionState_SESSION_STATE_RUNNING,
+				PinnedContextPresent: in.PinnedContext != nil, PinnedContextBytes: int32(len(in.GetPinnedContext())),
+			}}, nil
+		},
+	}
+	tool := &startSessionTool{client: fc}
+
+	_, out, err := tool.call(context.Background(), nil, StartSessionInput{AgentID: "a", PinnedContext: "héllo"})
+	require.NoError(t, err)
+	require.NotNil(t, got.PinnedContext)
+	assert.Equal(t, "héllo", *got.PinnedContext)
+	assert.True(t, out.PinnedContextPresent)
+	assert.Equal(t, int32(6), out.PinnedContextBytes)
+
+	_, out, err = tool.call(context.Background(), nil, StartSessionInput{AgentID: "a"})
+	require.NoError(t, err)
+	assert.Nil(t, got.PinnedContext)
+	assert.False(t, out.PinnedContextPresent)
+	assert.Zero(t, out.PinnedContextBytes)
+}
+
+func TestStartSession_PinnedContext_InvalidArgumentSurfacesWithServerMessage(t *testing.T) {
+	for _, msg := range []string{"pinned_context is 32001 bytes; max 32000", "pinned_context is not valid UTF-8"} {
+		fc := &fakeSessionServiceClient{
+			startSessionFunc: func(ctx context.Context, in *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+				return nil, status.Error(codes.InvalidArgument, msg)
+			},
+		}
+		tool := &startSessionTool{client: fc}
+		_, _, err := tool.call(context.Background(), nil, StartSessionInput{AgentID: "a", PinnedContext: "x"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "InvalidArgument")
+		assert.Contains(t, err.Error(), msg)
+	}
+}
+
+func TestSessionOutputs_PinnedContextPresenceReported(t *testing.T) {
+	sess := &pb.Session{SessionId: "s", State: pb.SessionState_SESSION_STATE_RUNNING, PinnedContextPresent: true, PinnedContextBytes: 42}
+	fc := &fakeSessionServiceClient{
+		sendTurnFunc: func(context.Context, *pb.SendTurnRequest) (*pb.SendTurnResponse, error) {
+			return &pb.SendTurnResponse{Session: sess}, nil
+		},
+		stopSessionFunc: func(context.Context, *pb.StopSessionRequest) (*pb.StopSessionResponse, error) {
+			return &pb.StopSessionResponse{Session: sess}, nil
+		},
+		getSessionFunc: func(context.Context, *pb.GetSessionRequest) (*pb.GetSessionResponse, error) {
+			return &pb.GetSessionResponse{Session: sess}, nil
+		},
+	}
+	_, st, err := (&sendTurnTool{client: fc}).call(context.Background(), nil, SendTurnInput{SessionID: "s", Input: "i"})
+	require.NoError(t, err)
+	assert.True(t, st.PinnedContextPresent)
+	assert.Equal(t, int32(42), st.PinnedContextBytes)
+
+	_, sp, err := (&stopSessionTool{client: fc}).call(context.Background(), nil, StopSessionInput{SessionID: "s"})
+	require.NoError(t, err)
+	assert.True(t, sp.PinnedContextPresent)
+	assert.Equal(t, int32(42), sp.PinnedContextBytes)
+
+	_, gs, err := (&getSessionTool{client: fc}).call(context.Background(), nil, GetSessionInput{SessionID: "s"})
+	require.NoError(t, err)
+	assert.True(t, gs.PinnedContextPresent)
+	assert.Equal(t, int32(42), gs.PinnedContextBytes)
+}
