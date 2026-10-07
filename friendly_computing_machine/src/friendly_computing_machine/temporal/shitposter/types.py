@@ -43,6 +43,8 @@ class ShitpostParams:
     notice_slack_user_id: Optional[str] = None
     thread_owner_slack_user_id: Optional[str] = None
     parent_post_id: Optional[int] = None
+    # recent thread messages, prepended to a new riff session's first turn
+    thread_context: Optional[str] = None
 
 
 @dataclass

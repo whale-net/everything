@@ -155,9 +155,12 @@ def _generate_blocking(params: GenerateParams) -> GenerateResult:
                 if p.principal_iss and p.principal_sub
                 else None
             )
+            context = (
+                f"Thread so far:\n{p.thread_context}\n\n" if p.thread_context else ""
+            )
             session = client.start_session(
                 load_shitposter_agent_id(),
-                first_turn=f"{params.persona_text}\n\n{instruction}",
+                first_turn=f"{params.persona_text}\n\n{context}{instruction}",
                 on_behalf_of=on_behalf_of,
             )
             session_id = session.session_id

@@ -267,6 +267,16 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Thread riffs under shitposter posts (owner routing, claim, pointer, gate).
+py_test(
+    name = "test_shitpost_riff",
+    size = "small",
+    srcs = [
+        "shitposter/test_shitpost_riff.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # ShitpostWorkflow on the Temporal test server (SQLite, fake whagent/Slack).
 py_test(
     name = "test_shitpost_workflow",
