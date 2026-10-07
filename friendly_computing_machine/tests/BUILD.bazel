@@ -243,3 +243,26 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# Shitposter control plane: SCD2 opt-in, kill switch, gate, /shitpost admin
+# (SQLite-backed). Fakes the bolt App singleton, so its own target.
+py_test(
+    name = "test_shitposter",
+    size = "small",
+    srcs = [
+        "shitposter/test_shitposter_control_plane.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Shitposter migration: single chain head, upgrade/downgrade round-trip.
+py_test(
+    name = "test_shitposter_migration",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_shitposter_migration.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
