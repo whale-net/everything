@@ -280,6 +280,8 @@ def events_env(monkeypatch):
     monkeypatch.setattr(events, "relay_thread_reply", ns.relay)
     monkeypatch.setattr(events, "riff_thread_reply", ns.riff)
     monkeypatch.setattr(events, "get_bot_config", Mock(return_value=Mock(music_poll_infos=[])))
+    monkeypatch.setattr(events, "is_channel_opted_in", Mock(return_value=True))
+    monkeypatch.setattr(events, "upsert_message", Mock())
     monkeypatch.setattr(
         events,
         "SlackMessageCreate",
