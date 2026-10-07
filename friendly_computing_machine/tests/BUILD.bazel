@@ -342,3 +342,16 @@ py_test(
     data = ["//friendly_computing_machine/src/migrations:migration_versions"],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# Shitposter memory: SCD2 attributes/lore DAL with mandatory cause, and the
+# memory migration round-trip (head derived from the script directory).
+py_test(
+    name = "test_shitposter_memory",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_shitposter_memory.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
