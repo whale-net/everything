@@ -4,8 +4,6 @@ import asyncio
 import logging
 import os
 
-from temporalio.common import WorkflowIDConflictPolicy
-from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from friendly_computing_machine.src.friendly_computing_machine.db import dal
@@ -41,17 +39,18 @@ def schedule_params(channel_slack_id: str) -> ScheduleParams:
 
 
 async def ensure_schedule_async(client, channel_slack_id: str, task_queue: str, app_env: str | None = None) -> None:
-    """Idempotent start: a second call while one is running is a no-op."""
-    try:
-        await client.start_workflow(
-            ShitposterChannelScheduleWorkflow.run,
-            schedule_params(channel_slack_id),
-            id=schedule_workflow_id(channel_slack_id, app_env),
-            task_queue=task_queue,
-            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-        )
-    except WorkflowAlreadyStartedError:
-        pass
+    """Idempotent start-or-re-enable: signal-with-start, so a running run is never duplicated.
+
+    The start signal is a no-op on a running, unstopped run; after an opt-out it
+    re-enables the parked run with a fresh gap.
+    """
+    await client.start_workflow(
+        ShitposterChannelScheduleWorkflow.run,
+        schedule_params(channel_slack_id),
+        id=schedule_workflow_id(channel_slack_id, app_env),
+        task_queue=task_queue,
+        start_signal="start",
+    )
 
 
 async def _signal(client, channel_slack_id: str, name: str, app_env: str | None = None) -> None:
