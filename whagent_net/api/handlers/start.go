@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"context"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -45,6 +46,18 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 	}
 	if req.MaxCostUsdOverride != nil {
 		return nil, status.Error(codes.InvalidArgument, "max_cost_usd_override is not supported in M1: caps are agent-definition-level only")
+	}
+
+	// Empty pinned_context is the same as absent. Validated before any row exists.
+	var pinnedContext *string
+	if pc := req.GetPinnedContext(); pc != "" {
+		if !utf8.ValidString(pc) {
+			return nil, status.Error(codes.InvalidArgument, "pinned_context is not valid UTF-8")
+		}
+		if len(pc) > session.MaxPinnedContextBytes {
+			return nil, status.Errorf(codes.InvalidArgument, "pinned_context exceeds the %d-byte limit: supplied %d bytes", session.MaxPinnedContextBytes, len(pc))
+		}
+		pinnedContext = &pc
 	}
 
 	// Step 1: authenticate the caller. RequireClaimsUnaryInterceptor
@@ -172,10 +185,18 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 		AgentID:       agentID,
 		Model:         resolvedModel,
 		ModelOverride: modelOverride,
+		PinnedContext: pinnedContext,
 		Status:        session.StatusRunning,
 	}
 	if err := s.store.Sessions().Create(ctx, sess); err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
+	}
+	if pinnedContext != nil {
+		// Presence and size only, never the text.
+		logging.Get("startsession").InfoContext(ctx, "session started with pinned context",
+			"session_id", sessionID.String(),
+			"pinned_context_present", true,
+			"pinned_context_bytes", sess.PinnedContextBytes)
 	}
 	if req.OnBehalfOf != nil {
 		// A delegated start is the one case where the two identity columns
