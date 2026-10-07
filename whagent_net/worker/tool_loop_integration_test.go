@@ -7,13 +7,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
+	"github.com/whale-net/everything/whagent_net/session"
 )
 
 // TestActivities_CommitToolLoopIteration_CommitsMessageWithoutUsageRow
@@ -109,3 +116,81 @@ func TestActivities_CommitTurn_FoldsPriorLoopIterationsIntoOneUsageRow(t *testin
 }
 
 func costPtr(c llm.CostUSD) *llm.CostUSD { return &c }
+
+// TestActivities_CallModel_PinnedContextIsSecondSystemMessageEveryCall proves
+// every CallModel (turn 1, turn 2, a tool-loop iteration) sends the pinned
+// text verbatim as the second system message, and that it never lands in the
+// transcript.
+func TestActivities_CallModel_PinnedContextIsSecondSystemMessageEveryCall(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t)
+
+	pinned := "the secret word is X"
+	prompt := "definition prompt"
+	subject := session.Subject{Iss: "https://issuer.example.com", Sub: "user-pinned", Kind: session.SubjectKindHuman}
+	sess := &session.Session{
+		SessionID: uuid.New(), Subject: subject, OnBehalfOf: subject,
+		AgentID: "test-agent", Model: "test-model", Status: session.StatusRunning,
+		PinnedContext: &pinned,
+	}
+	require.NoError(t, store.Sessions().Create(ctx, sess))
+
+	var mu sync.Mutex
+	var bodies []struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var b struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(raw, &b)
+		mu.Lock()
+		bodies = append(bodies, b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"g","object":"chat.completion","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	a := &Activities{Store: store, LLM: llm.NewClient("k", ts.URL)}
+
+	// turn 1, turn 2, then a tool-loop iteration of turn 2 (same activity,
+	// later call) -- each with a growing transcript.
+	var ids []uuid.UUID
+	for turn := 1; turn <= 3; turn++ {
+		payload, err := marshalMessagePayload(llm.Message{Role: llm.RoleUser, Content: "question"})
+		require.NoError(t, err)
+		ev, err := store.Transcript().Append(ctx, sess.SessionID, (turn+1)/2, events.EventTypeUserMessage, payload)
+		require.NoError(t, err)
+		ids = append(ids, ev.EventID)
+		_, err = a.CallModel(ctx, CallModelInput{
+			SessionID: sess.SessionID, Turn: (turn + 1) / 2, EventIDs: append([]uuid.UUID(nil), ids...),
+			Model: "test-model", SystemPrompt: &prompt,
+		})
+		require.NoError(t, err)
+	}
+
+	require.Len(t, bodies, 3)
+	for i, b := range bodies {
+		require.GreaterOrEqual(t, len(b.Messages), 3, "call %d", i)
+		assert.Equal(t, "system", b.Messages[0].Role)
+		assert.Equal(t, prompt, b.Messages[0].Content)
+		assert.Equal(t, "system", b.Messages[1].Role)
+		assert.Equal(t, pinned, b.Messages[1].Content, "call %d", i)
+		assert.Equal(t, "user", b.Messages[2].Role)
+	}
+
+	evs, err := store.Transcript().Read(ctx, sess.SessionID, 0, 100)
+	require.NoError(t, err)
+	assert.Len(t, evs, 3, "only the three user messages; no pinned-context event")
+	for _, ev := range evs {
+		assert.NotContains(t, string(ev.Payload), pinned)
+	}
+}
