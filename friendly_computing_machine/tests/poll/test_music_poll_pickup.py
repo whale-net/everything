@@ -417,12 +417,13 @@ def test_pickup_creates_one_row_per_url_in_a_multi_link_message(session):
 def test_voting_is_by_posting_a_link_not_by_reacting(session):
     import friendly_computing_machine.src.friendly_computing_machine as fcm_pkg
 
-    # no reaction event is subscribed to or read anywhere in FCM, so a reaction
-    # is never a vote; the only way to add a response row is a link in the text
+    # reactions are captured for Shitposter but never touch poll responses, so a
+    # reaction is never a vote; a response row only comes from a link in the text
     reacting = [
         str(path)
         for path in Path(fcm_pkg.__file__).parent.rglob("*.py")
         if "reaction_added" in path.read_text()
+        and "MusicPollResponse" in path.read_text()
     ]
     assert reacting == []
 

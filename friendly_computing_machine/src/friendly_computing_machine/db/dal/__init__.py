@@ -57,10 +57,18 @@ from .shitposter_dal import (
     is_shitposter_enabled,
     list_channel_opt_in_history,
     list_kill_switch_history,
+    list_opted_in_channel_slack_ids,
     set_channel_opt_in,
     set_kill_switch,
     set_state_change_notifier,
     shitposter_gate,
+)
+from .slack_reaction_dal import (
+    add_reaction,
+    list_active_reactions,
+    normalize_emoji,
+    reconcile_message_reactions,
+    remove_reaction,
 )
 from .slack_dal import (
     find_poll_instance_messages,
@@ -96,6 +104,11 @@ from .task_dal import (
 )
 
 __all__ = [
+    # Slack reactions
+    "add_reaction",
+    "remove_reaction",
+    "list_active_reactions",
+    "normalize_emoji",
     # Slack functions
     "get_music_poll_channel_slack_ids",
     "get_bot_slack_user_slack_ids",
