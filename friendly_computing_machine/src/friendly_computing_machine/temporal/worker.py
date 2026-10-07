@@ -57,6 +57,17 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.util imp
     get_temporal_client_async,
     get_temporal_queue_name,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.activity import (
+    check_guardrails_activity,
+    generate_shitpost_activity,
+    post_and_record_shitpost_activity,
+    resolve_persona_activity,
+    send_ephemeral_notice_activity,
+    shitposter_gate_activity,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.workflow import (
+    ShitpostWorkflow,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.activity import (
     get_whagent_session_activity,
     insert_thread_session_activity,
@@ -81,6 +92,7 @@ WORKFLOWS = [
     SlackUserInfoWorkflow,
     SlackThreadAgentWorkflow,
     WeeklyMusicPollWorkflow,
+    ShitpostWorkflow,
 ]
 ACTIVITIES = [
     generate_context_prompt,
@@ -114,6 +126,12 @@ ACTIVITIES = [
     update_thread_session_status_activity,
     post_slack_thread_message_activity,
     update_slack_message_activity,
+    shitposter_gate_activity,
+    resolve_persona_activity,
+    generate_shitpost_activity,
+    check_guardrails_activity,
+    post_and_record_shitpost_activity,
+    send_ephemeral_notice_activity,
 ]
 
 
