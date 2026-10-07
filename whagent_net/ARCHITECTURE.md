@@ -88,6 +88,15 @@ the API shape obvious:
 Programmatic integrators need `GetSession` (is it done? waiting on me?),
 `ReadTranscript` (what happened), and `SendTurn`. They do not need context.
 
+**Pinned context.** A session may carry caller-supplied `pinned_context`
+(max 32,000 UTF-8 bytes), stored with the session row and immutable (LB5);
+it is never a transcript event. What the model saw on turn N is the
+definition system prompt + the session's pinned context + the events listed
+in that turn's `turn_context.event_ids` (LB1). The system prompt and pinned
+context are charged against the context token budget in both search and
+bulk modes, so they reduce kept history. Reads expose only presence and byte
+count unless `include_pinned_context` is set on `GetSession`.
+
 ## Component map
 
 | Component | Kind | Role |
