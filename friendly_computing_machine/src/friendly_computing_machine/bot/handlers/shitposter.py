@@ -13,12 +13,17 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     is_shitposter_enabled,
     set_channel_opt_in,
     set_kill_switch,
+    set_state_change_notifier,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackCommandCreate,
 )
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
     load_admin_slack_user_ids,
+)
+
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.schedule_control import (
+    notify_schedule_state_change,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +33,9 @@ ADMIN_SUBCOMMAND = "admin"
 ADMIN_USAGE = (
     "Usage: `/shitpost admin optin|optout|silence [reason]|resume|status`"
 )
+
+# opt-in/out and resume drive the per-channel schedule workflows
+set_state_change_notifier(notify_schedule_state_change)
 
 # read once at startup
 _ADMIN_SLACK_USER_IDS = load_admin_slack_user_ids()

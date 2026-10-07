@@ -267,6 +267,17 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# ShitposterChannelScheduleWorkflow on the Temporal test server: gap range,
+# restart replay, double start, silence/resume, opt-out and fast re-enable.
+py_test(
+    name = "test_shitpost_schedule",
+    size = "medium",
+    srcs = [
+        "shitposter/test_schedule_workflow.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Shitposter migration: single chain head, upgrade/downgrade round-trip.
 py_test(
     name = "test_shitposter_migration",
