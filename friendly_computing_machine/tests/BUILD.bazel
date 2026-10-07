@@ -223,7 +223,7 @@ py_test(
 
 # Shitposter persona/post migration and DAL against sqlite.
 py_test(
-    name = "test_shitposter",
+    name = "test_shitposter_persona",
     size = "small",
     srcs = [
         "conftest.py",
