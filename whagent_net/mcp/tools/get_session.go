@@ -11,6 +11,7 @@ import (
 // GetSessionInput is get_session's argument schema (issue #2120, FR3).
 type GetSessionInput struct {
 	SessionID string `json:"session_id" jsonschema:"The session to look up, as a UUID string"`
+	IncludePinnedContext bool `json:"include_pinned_context,omitempty" jsonschema:"When true, include the session's pinned context text in the result (default false); the text is as readable as the transcript"`
 }
 
 // GetSessionOutput is get_session's structured result (FR3): the

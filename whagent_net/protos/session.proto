@@ -187,10 +187,20 @@ message Session {
 
 message GetSessionRequest {
   string session_id = 1;
+
+  // When true, the response carries the session's pinned context text. Any
+  // caller allowed to read the session may set it; the text is as readable
+  // as the transcript. Defaults off.
+  bool include_pinned_context = 2;
 }
 
 message GetSessionResponse {
   Session session = 1;
+
+  // The pinned context, byte-for-byte as supplied. Set only when
+  // include_pinned_context was requested and the session has one. Lives on
+  // the response, not Session, so no other RPC can carry it.
+  optional string pinned_context = 2;
 }
 
 message ListSessionsRequest {
