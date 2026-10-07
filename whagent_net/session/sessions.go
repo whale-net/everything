@@ -91,6 +91,9 @@ type TerminalReason struct {
 	ErrorDetail   *string
 }
 
+// MaxPinnedContextBytes caps a session's pinned context, in UTF-8 bytes.
+const MaxPinnedContextBytes = 32000
+
 // Session is the `sessions` control-plane row (LB2/NFR3). Session ID
 // equals the Temporal workflow ID (LB2).
 type Session struct {
@@ -101,12 +104,16 @@ type Session struct {
 	AgentID         string
 	Model           string
 	ModelOverride   *string
-	Status          Status
-	CapKind         *CapKind
-	ErrorCategory   *ErrorCategory
-	ErrorDetail     *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// PinnedContext is set only on Create; reads populate PinnedContextBytes
+	// and leave the text nil (use the text-by-id store method).
+	PinnedContext      *string
+	PinnedContextBytes int
+	Status             Status
+	CapKind            *CapKind
+	ErrorCategory      *ErrorCategory
+	ErrorDetail        *string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // SessionFilter is ListSessions' (FR3/C15) filter set, mirroring

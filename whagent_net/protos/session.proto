@@ -177,6 +177,12 @@ message Session {
 
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
+
+  // True when the session was started with a non-empty pinned_context. The
+  // text itself is never returned on Session.
+  bool pinned_context_present = 13;
+  // UTF-8 byte length of the pinned context; 0 when absent.
+  int32 pinned_context_bytes = 14;
 }
 
 message GetSessionRequest {
@@ -232,6 +238,12 @@ message StartSessionRequest {
   // unset/empty allowlist, is rejected with PERMISSION_DENIED, and a
   // malformed subject (empty iss/sub/kind) with INVALID_ARGUMENT.
   Subject on_behalf_of = 6;
+  // System-level context the agent sees on every turn, shown to the model as
+  // a system message after the definition prompt. At most 32,000 UTF-8 bytes
+  // (bytes, not characters) and must be valid UTF-8, else INVALID_ARGUMENT.
+  // Empty is the same as absent. Immutable for the session; never a
+  // transcript event.
+  optional string pinned_context = 7;
 }
 
 message StartSessionResponse {
