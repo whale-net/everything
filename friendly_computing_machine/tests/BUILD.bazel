@@ -257,6 +257,16 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# /shitpost summon handler (fakes the bolt App singleton, so its own target).
+py_test(
+    name = "test_shitpost_summon",
+    size = "small",
+    srcs = [
+        "shitposter/test_shitpost_summon.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # ShitpostWorkflow on the Temporal test server (SQLite, fake whagent/Slack).
 py_test(
     name = "test_shitpost_workflow",
