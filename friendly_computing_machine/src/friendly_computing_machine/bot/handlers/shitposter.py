@@ -2,11 +2,15 @@
 
 import datetime
 import logging
+import uuid
 
 from opentelemetry import trace
 from slack_bolt import Ack, Respond, Say
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import app
+from friendly_computing_machine.src.friendly_computing_machine.bot.identity_link import (
+    prompt_identity_link,
+)
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     insert_slack_command,
     is_channel_opted_in,
@@ -14,12 +18,27 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     set_channel_opt_in,
     set_kill_switch,
     set_state_change_notifier,
+    shitposter_gate,
+)
+from friendly_computing_machine.src.friendly_computing_machine.db.dal.identity_dal import (
+    get_keycloak_identity,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackCommandCreate,
 )
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
     load_admin_slack_user_ids,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.types import (
+    ShitpostParams,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.workflow import (
+    ShitpostWorkflow,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.util import (
+    get_app_env,
+    get_temporal_queue_name,
+    start_workflow,
 )
 
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.schedule_control import (
@@ -36,13 +55,49 @@ ADMIN_USAGE = (
 
 # opt-in/out and resume drive the per-channel schedule workflows
 set_state_change_notifier(notify_schedule_state_change)
+NOT_AVAILABLE = "Shitposter is not available here."
+SUMMON_STARTED = "On it. Your shitpost is coming."
 
 # read once at startup
 _ADMIN_SLACK_USER_IDS = load_admin_slack_user_ids()
 
 
+def handle_summon(command: dict, client) -> str:
+    """Gate, resolve identity, start the pipeline; returns the ephemeral reply."""
+    user_id = command["user_id"]
+    channel_id = command["channel_id"]
+    team_id = command.get("team_id") or ""
+    topic = (command.get("text") or "").strip() or None
+
+    # uncached: an opt-out or silence takes effect on the very next summon
+    if not shitposter_gate(channel_id).allowed:
+        return NOT_AVAILABLE
+
+    identity = get_keycloak_identity(team_id, user_id)
+    if identity is None:
+        if prompt_identity_link(client, channel_id, team_id, user_id, "Shitposter"):
+            return "Link your Slack account first; check the message just sent to you."
+        return "Account linking is unavailable right now. Try again later."
+
+    start_workflow(
+        ShitpostWorkflow.run,
+        ShitpostParams(
+            channel_slack_id=channel_id,
+            trigger="summon",
+            principal_iss=identity.keycloak_iss,
+            principal_sub=identity.keycloak_sub,
+            topic=topic,
+            notice_slack_user_id=user_id,
+            thread_owner_slack_user_id=user_id,
+        ),
+        id=f"shitpost-{get_app_env()}-summon-{channel_id}-{uuid.uuid4().hex}",
+        task_queue=get_temporal_queue_name("main"),
+    )
+    return SUMMON_STARTED
+
+
 def handle_shitpost(
-    command: dict, admin_ids: frozenset[str]
+    command: dict, admin_ids: frozenset[str], client=None
 ) -> tuple[str, str | None]:
     """Run the command; returns (ephemeral reply, visible channel notice or None)."""
     user_id = command["user_id"]
@@ -50,8 +105,7 @@ def handle_shitpost(
     parts = (command.get("text") or "").strip().split(maxsplit=2)
 
     if not parts or parts[0].lower() != ADMIN_SUBCOMMAND:
-        # summon path lands with the summon task
-        return "Summoning a shitpost is not available yet.", None
+        return handle_summon(command, client), None
 
     if user_id not in admin_ids:
         return "Only Shitposter admins can run admin commands.", None
@@ -99,7 +153,9 @@ def handle_shitpost(
 
 
 @app.command("/shitpost")
-def handle_shitpost_command(ack: Ack, respond: Respond, say: Say, command):
+def handle_shitpost_command(
+    ack: Ack, respond: Respond, say: Say, command, client=None
+):
     with tracer.start_as_current_span("handle_shitpost_command") as span:
         ack()
         span.set_attribute("slack.command", "/shitpost")
@@ -114,7 +170,7 @@ def handle_shitpost_command(ack: Ack, respond: Respond, say: Say, command):
                 created_at=datetime.datetime.now(),
             )
         )
-        reply, notice = handle_shitpost(command, _ADMIN_SLACK_USER_IDS)
+        reply, notice = handle_shitpost(command, _ADMIN_SLACK_USER_IDS, client)
         respond(text=reply, response_type="ephemeral")
         if notice:
             say(text=notice)
