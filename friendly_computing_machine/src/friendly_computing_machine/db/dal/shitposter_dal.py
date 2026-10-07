@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, Literal, Optional
 
 from sqlalchemy import func, update
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
@@ -18,6 +19,9 @@ from friendly_computing_machine.src.friendly_computing_machine.db.util import (
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack_reaction import (
+    SlackReaction,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
     KILL_SWITCH_SCOPE,
@@ -27,6 +31,10 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterPersonaRevision,
     ShitposterPost,
     ShitposterSuggestion,
+    ShitposterSuggestionBacker,
+    ShitposterSuggestionCoarseReasonEnum,
+    ShitposterSuggestionOutcomeKindEnum,
+    ShitposterSuggestionReplyOutbox,
     ShitposterSuggestionStatusEnum,
 )
 
@@ -476,23 +484,272 @@ def expire_pending_suggestions(
     now: datetime.datetime,
     session: Optional[Session] = None,
 ) -> int:
-    """Mark pending suggestions past expires_at as expired; returns the row count."""
+    """Mark pending suggestions past expires_at as expired and queue an 'expired' reply for each."""
     with SessionManager(session) as session:
-        result = session.exec(
-            update(ShitposterSuggestion)
-            .where(
+        due = session.exec(
+            select(ShitposterSuggestion.id).where(
                 ShitposterSuggestion.status
                 == ShitposterSuggestionStatusEnum.PENDING.value,
                 ShitposterSuggestion.expires_at <= now,
             )
+        ).all()
+        expired = 0
+        for suggestion_id in due:
+            result = session.exec(
+                update(ShitposterSuggestion)
+                .where(
+                    ShitposterSuggestion.id == suggestion_id,
+                    ShitposterSuggestion.status
+                    == ShitposterSuggestionStatusEnum.PENDING.value,
+                )
+                .values(
+                    status=ShitposterSuggestionStatusEnum.EXPIRED.value,
+                    status_changed_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount != 1:
+                continue
+            _enqueue_reply(
+                session,
+                suggestion_id,
+                ShitposterSuggestionOutcomeKindEnum.EXPIRED.value,
+                None,
+                now,
+            )
+            expired += 1
+        session.commit()
+        return expired
+
+
+def _enqueue_reply(
+    session: Session,
+    suggestion_id: int,
+    kind: str,
+    coarse_reason: Optional[str],
+    now: datetime.datetime,
+) -> None:
+    session.add(
+        ShitposterSuggestionReplyOutbox(
+            suggestion_id=suggestion_id,
+            kind=kind,
+            coarse_reason=coarse_reason,
+            created_at=now,
+        )
+    )
+
+
+def enqueue_suggestion_outcome(
+    suggestion_id: int,
+    kind: str,
+    coarse_reason: Optional[str] = None,
+    now: Optional[datetime.datetime] = None,
+    session: Optional[Session] = None,
+) -> bool:
+    """Record the reflector's applied/declined outcome for a promoted suggestion and queue its reply.
+
+    Returns False (and changes nothing) unless the suggestion is currently promoted.
+    coarse_reason is required for declined and must be None for applied.
+    """
+    if kind == ShitposterSuggestionOutcomeKindEnum.APPLIED.value:
+        if coarse_reason is not None:
+            raise ValueError("applied outcomes take no coarse_reason")
+        new_status = ShitposterSuggestionStatusEnum.APPLIED.value
+    elif kind == ShitposterSuggestionOutcomeKindEnum.DECLINED.value:
+        valid = {r.value for r in ShitposterSuggestionCoarseReasonEnum}
+        if coarse_reason not in valid:
+            raise ValueError(f"declined outcomes need coarse_reason in {sorted(valid)}")
+        new_status = ShitposterSuggestionStatusEnum.DECLINED.value
+    else:
+        raise ValueError(f"outcome kind must be applied or declined, got {kind!r}")
+    now = now or datetime.datetime.now(datetime.UTC)
+    with SessionManager(session) as session:
+        result = session.exec(
+            update(ShitposterSuggestion)
+            .where(
+                ShitposterSuggestion.id == suggestion_id,
+                ShitposterSuggestion.status
+                == ShitposterSuggestionStatusEnum.PROMOTED.value,
+            )
+            .values(status=new_status, status_changed_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            session.rollback()
+            return False
+        _enqueue_reply(session, suggestion_id, kind, coarse_reason, now)
+        session.commit()
+        return True
+
+
+def _suggestion_for_message(
+    session: Session, slack_channel_slack_id: str, message_ts: str
+) -> ShitposterSuggestion | None:
+    return session.exec(
+        select(ShitposterSuggestion)
+        .join(SlackChannel, SlackChannel.id == ShitposterSuggestion.slack_channel_id)  # type: ignore[arg-type]
+        .where(
+            SlackChannel.slack_id == slack_channel_slack_id,
+            ShitposterSuggestion.slack_message_ts == message_ts,
+        )
+    ).first()
+
+
+def _distinct_backer_count(session: Session, suggestion: ShitposterSuggestion) -> int:
+    """Active human backers plus the submitter, each Slack user once."""
+    backers = set(
+        session.exec(
+            select(ShitposterSuggestionBacker.slack_user_id).where(
+                ShitposterSuggestionBacker.suggestion_id == suggestion.id,
+                ShitposterSuggestionBacker.removed_at.is_(None),  # type: ignore[union-attr]
+            )
+        ).all()
+    )
+    backers.add(suggestion.submitter_slack_user_id)
+    return len(backers)
+
+
+def on_suggestion_reaction_added(
+    slack_channel_slack_id: str,
+    message_ts: str,
+    slack_user_id: str,
+    is_bot: Optional[bool],
+    threshold: int,
+    now: Optional[datetime.datetime] = None,
+    session: Optional[Session] = None,
+) -> bool:
+    """Back a pending suggestion for a human reactor; promote it at the threshold.
+
+    Returns True only when this call promoted the suggestion. Bots, unknown bot
+    status, and the submitter's own reaction add no backer row (the submitter is
+    already counted).
+    """
+    now = now or datetime.datetime.now(datetime.UTC)
+    with SessionManager(session) as session:
+        suggestion = _suggestion_for_message(session, slack_channel_slack_id, message_ts)
+        if suggestion is None or suggestion.status != (
+            ShitposterSuggestionStatusEnum.PENDING.value
+        ):
+            return False
+        if is_bot is not False or slack_user_id == suggestion.submitter_slack_user_id:
+            return False
+        existing = session.exec(
+            select(ShitposterSuggestionBacker).where(
+                ShitposterSuggestionBacker.suggestion_id == suggestion.id,
+                ShitposterSuggestionBacker.slack_user_id == slack_user_id,
+                ShitposterSuggestionBacker.removed_at.is_(None),  # type: ignore[union-attr]
+            )
+        ).first()
+        if existing is None:
+            session.add(
+                ShitposterSuggestionBacker(
+                    suggestion_id=suggestion.id,
+                    slack_user_id=slack_user_id,
+                    backed_at=now,
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError:
+                # a redelivered event already added the backer
+                session.rollback()
+                return False
+        suggestion = session.get(ShitposterSuggestion, suggestion.id)
+        if suggestion is None or _distinct_backer_count(session, suggestion) < threshold:
+            return False
+        result = session.exec(
+            update(ShitposterSuggestion)
+            .where(
+                ShitposterSuggestion.id == suggestion.id,
+                ShitposterSuggestion.status
+                == ShitposterSuggestionStatusEnum.PENDING.value,
+            )
             .values(
-                status=ShitposterSuggestionStatusEnum.EXPIRED.value,
+                status=ShitposterSuggestionStatusEnum.PROMOTED.value,
+                promoted_at=now,
                 status_changed_at=now,
             )
             .execution_options(synchronize_session=False)
         )
         session.commit()
-        return int(result.rowcount)
+        return result.rowcount == 1
+
+
+def on_suggestion_reaction_removed(
+    slack_channel_slack_id: str,
+    message_ts: str,
+    slack_user_id: str,
+    now: Optional[datetime.datetime] = None,
+    session: Optional[Session] = None,
+) -> None:
+    """Stamp the reactor's backer row removed once they hold no other active reaction on the post."""
+    now = now or datetime.datetime.now(datetime.UTC)
+    with SessionManager(session) as session:
+        suggestion = _suggestion_for_message(session, slack_channel_slack_id, message_ts)
+        if suggestion is None:
+            return
+        still_reacting = session.exec(
+            select(SlackReaction.id).where(
+                SlackReaction.slack_channel_slack_id == slack_channel_slack_id,
+                SlackReaction.message_ts == message_ts,
+                SlackReaction.slack_user_slack_id == slack_user_id,
+                SlackReaction.removed_at.is_(None),  # type: ignore[union-attr]
+            )
+        ).first()
+        if still_reacting is not None:
+            return
+        backers = session.exec(
+            select(ShitposterSuggestionBacker).where(
+                ShitposterSuggestionBacker.suggestion_id == suggestion.id,
+                ShitposterSuggestionBacker.slack_user_id == slack_user_id,
+                ShitposterSuggestionBacker.removed_at.is_(None),  # type: ignore[union-attr]
+            )
+        ).all()
+        for backer in backers:
+            backer.removed_at = now
+            session.add(backer)
+        session.commit()
+
+
+def list_unposted_suggestion_replies(
+    limit: int = 50,
+    session: Optional[Session] = None,
+) -> list[tuple[int, str, Optional[str], str, str]]:
+    """(outbox id, kind, coarse_reason, channel slack id, suggestion post ts), oldest first."""
+    with SessionManager(session) as session:
+        rows = session.exec(
+            select(
+                ShitposterSuggestionReplyOutbox.id,
+                ShitposterSuggestionReplyOutbox.kind,
+                ShitposterSuggestionReplyOutbox.coarse_reason,
+                SlackChannel.slack_id,
+                ShitposterSuggestion.slack_message_ts,
+            )
+            .join(
+                ShitposterSuggestion,
+                ShitposterSuggestion.id == ShitposterSuggestionReplyOutbox.suggestion_id,  # type: ignore[arg-type]
+            )
+            .join(SlackChannel, SlackChannel.id == ShitposterSuggestion.slack_channel_id)  # type: ignore[arg-type]
+            .where(ShitposterSuggestionReplyOutbox.posted_at.is_(None))  # type: ignore[union-attr]
+            .order_by(ShitposterSuggestionReplyOutbox.created_at, ShitposterSuggestionReplyOutbox.id)  # type: ignore[arg-type]
+            .limit(limit)
+        ).all()
+        return [tuple(r) for r in rows]
+
+
+def mark_suggestion_reply_posted(
+    outbox_id: int,
+    now: Optional[datetime.datetime] = None,
+    session: Optional[Session] = None,
+) -> None:
+    now = now or datetime.datetime.now(datetime.UTC)
+    with SessionManager(session) as session:
+        row = session.get(ShitposterSuggestionReplyOutbox, outbox_id)
+        if row is None:
+            return
+        row.posted_at = now
+        session.add(row)
+        session.commit()
 
 def get_latest_riff_session_id(
     slack_channel_id: int, thread_ts: str, session: Optional[Session] = None

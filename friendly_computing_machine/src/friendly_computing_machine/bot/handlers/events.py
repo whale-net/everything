@@ -14,10 +14,15 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     add_reaction,
     get_bot_slack_user_slack_ids,
     is_channel_opted_in,
+    on_suggestion_reaction_added,
+    on_suggestion_reaction_removed,
     remove_reaction,
     upsert_message,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import SlackMessageCreate
+from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
+    suggestion_backer_threshold,
+)
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -142,7 +147,7 @@ def handle_reaction_added(event):
             is_bot = user in get_bot_slack_user_slack_ids()
         except Exception:
             is_bot = None
-        return add_reaction(
+        row = add_reaction(
             channel,
             ts,
             user,
@@ -150,6 +155,10 @@ def handle_reaction_added(event):
             added_at=_event_time(event.get("event_ts")),
             is_bot=is_bot,
         )
+        on_suggestion_reaction_added(
+            channel, ts, user, is_bot, suggestion_backer_threshold()
+        )
+        return row
 
     _capture_reaction(event, "handle_reaction_added", apply)
 
@@ -157,13 +166,15 @@ def handle_reaction_added(event):
 @app.event("reaction_removed")
 def handle_reaction_removed(event):
     def apply(channel, ts, event):
-        return remove_reaction(
+        removed = remove_reaction(
             channel,
             ts,
             event.get("user"),
             event.get("reaction"),
             removed_at=_event_time(event.get("event_ts")),
         )
+        on_suggestion_reaction_removed(channel, ts, event.get("user"))
+        return removed
 
     _capture_reaction(event, "handle_reaction_removed", apply)
 

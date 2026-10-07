@@ -82,6 +82,7 @@ Scheduled shitposts run as the FCM service subject with no `on_behalf_of`; whage
 | `FCM_ADMIN_SLACK_USER_IDS` | no | Comma-separated Slack user ids allowed to run `/shitpost admin ...` (opt-in/out, silence/resume). Whitespace is trimmed; empty or unset means no admins, so every admin action is refused. Read at startup on the `bot` app. |
 | `FCM_SHITPOSTER_SUGGESTION_DAILY_LIMIT` | no | Persona suggestions one member may submit per trailing 24 hours (default `3`). Must be a positive integer; otherwise the default is used with a warning. Read per submission. |
 | `FCM_SHITPOSTER_SUGGESTION_EXPIRY_DAYS` | no | Days a pending `/shitpost suggest` message waits for backing before it expires (default `7`). Must be a positive integer; otherwise the default is used with a warning. Read per submission. |
+| `FCM_SHITPOSTER_SUGGESTION_BACKER_THRESHOLD` | no | Distinct human Slack users backing a pending suggestion (the submitter counts once; bots and removed reactions do not) needed to promote it to the next persona update (default `3`). Must be a positive integer; otherwise the default is used with a warning. Read per reaction. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 
 Required Keycloak client config (provisioned through normal release/human steps, not by this repo):

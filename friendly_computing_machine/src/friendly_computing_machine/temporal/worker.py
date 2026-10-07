@@ -59,6 +59,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.util imp
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.activity import (
     check_guardrails_activity,
+    drain_suggestion_replies_activity,
     expire_pending_suggestions_activity,
     generate_shitpost_activity,
     post_and_record_shitpost_activity,
@@ -73,6 +74,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     ShitposterChannelScheduleWorkflow,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.suggestion_sweep_workflow import (
+    ShitposterSuggestionReplyDrainWorkflow,
     ShitposterSuggestionSweepWorkflow,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.workflow import (
@@ -104,6 +106,7 @@ WORKFLOWS = [
     WeeklyMusicPollWorkflow,
     ShitpostWorkflow,
     ShitposterChannelScheduleWorkflow,
+    ShitposterSuggestionReplyDrainWorkflow,
     ShitposterSuggestionSweepWorkflow,
 ]
 ACTIVITIES = [
@@ -145,6 +148,7 @@ ACTIVITIES = [
     post_and_record_shitpost_activity,
     send_ephemeral_notice_activity,
     expire_pending_suggestions_activity,
+    drain_suggestion_replies_activity,
 ]
 
 

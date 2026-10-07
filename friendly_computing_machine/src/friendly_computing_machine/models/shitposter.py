@@ -254,6 +254,11 @@ class ShitposterSuggestion(Base, table=True):
             server_default=func.now(),
         ),
     )
+    promoted_at: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    # run id of the reflector run that consumed this promoted suggestion; NULL until consumed
+    consumed_by_reflector_run_id: str | None = Field(default=None, nullable=True)
 
 
 class ShitposterSuggestionBacker(Base, table=True):
@@ -293,6 +298,13 @@ class ShitposterSuggestionOutcomeKindEnum(str, Enum):
     APPLIED = "applied"
     DECLINED = "declined"
     EXPIRED = "expired"
+
+
+class ShitposterSuggestionCoarseReasonEnum(str, Enum):
+    OFF_TOPIC = "off_topic"
+    UNSAFE = "unsafe"
+    DUPLICATE = "duplicate"
+    OTHER = "other"
 
 
 class ShitposterSuggestionReplyOutbox(Base, table=True):
