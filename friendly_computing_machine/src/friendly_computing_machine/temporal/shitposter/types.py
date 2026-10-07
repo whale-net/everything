@@ -3,7 +3,6 @@
 import os
 from dataclasses import dataclass
 from datetime import timedelta
-from enum import Enum
 from typing import Optional
 
 # Regenerations a scheduled post gets after a guardrail block before skipping.
@@ -16,7 +15,10 @@ ACTIVITY_TIMEOUT = timedelta(seconds=20)
 NO_SHITPOST_NOTICE = "no shitpost this time"
 
 
-class ShitpostOutcome(str, Enum):
+class ShitpostOutcome:
+    """Outcome string constants (plain str so Temporal's JSON converter round-trips them)."""
+
+
     POSTED = "posted"
     SKIPPED_GATE = "skipped_gate"
     BLOCKED_GUARDRAIL = "blocked_guardrail"
@@ -45,7 +47,7 @@ class ShitpostParams:
 
 @dataclass
 class ShitpostResult:
-    outcome: ShitpostOutcome
+    outcome: str
     reason: Optional[str] = None
     slack_message_ts: Optional[str] = None
     whagent_session_id: Optional[str] = None
