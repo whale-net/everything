@@ -21,3 +21,13 @@ def parse_negative_emoji(raw: str) -> frozenset[str]:
 def load_negative_emoji() -> frozenset[str]:
     """Read FCM_SHITPOSTER_NEGATIVE_EMOJI; empty means no reaction counts as negative."""
     return parse_negative_emoji(os.environ.get("FCM_SHITPOSTER_NEGATIVE_EMOJI", ""))
+
+
+def load_lore_top_share() -> float:
+    """Read FCM_SHITPOSTER_LORE_TOP_SHARE (fraction in (0, 1]); default 0.10."""
+    raise NotImplementedError
+
+
+def load_lore_window_days() -> int:
+    """Read FCM_SHITPOSTER_LORE_WINDOW_DAYS (positive int); default 30."""
+    raise NotImplementedError
