@@ -59,3 +59,25 @@ def load_shitposter_agent_id() -> str:
     if not agent_id:
         raise RuntimeError("FCM_SHITPOSTER_AGENT_ID is not set")
     return agent_id
+
+
+# Gap between scheduled posts, drawn uniformly per slot.
+MIN_GAP = timedelta(hours=4)
+MAX_GAP = timedelta(hours=12)
+# Reserved from the upper gap so generation time keeps post-to-post under MAX_GAP.
+GENERATION_MARGIN = timedelta(minutes=6)
+# Silenced-state poll, a backstop for a missed resume signal.
+SILENCE_POLL = timedelta(minutes=15)
+# Slots per run before continue_as_new bounds history.
+SLOTS_PER_RUN = 20
+
+
+@dataclass
+class ScheduleParams:
+    channel_slack_id: str
+    # slot counter carried across continue_as_new
+    slot: int = 0
+    # test/local override of the gap bounds; defaults are 4h-12h
+    min_gap_seconds: float = MIN_GAP.total_seconds()
+    max_gap_seconds: float = MAX_GAP.total_seconds()
+    slots_per_run: int = SLOTS_PER_RUN

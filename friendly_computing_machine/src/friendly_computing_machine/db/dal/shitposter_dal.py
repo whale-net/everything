@@ -216,6 +216,7 @@ def list_opted_in_channel_slack_ids(session: Optional[Session] = None) -> set[st
                 )
                 .where(ShitposterChannelOptIn.opted_in.is_(True))  # type: ignore[attr-defined]
                 .where(ShitposterChannelOptIn.valid_to.is_(None))  # type: ignore[union-attr]
+                .order_by(SlackChannel.slack_id)
             ).all()
         )
 

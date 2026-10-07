@@ -65,6 +65,12 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     send_ephemeral_notice_activity,
     shitposter_gate_activity,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.schedule_control import (
+    reconcile_schedules_async,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.schedule_workflow import (
+    ShitposterChannelScheduleWorkflow,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.workflow import (
     ShitpostWorkflow,
 )
@@ -93,6 +99,7 @@ WORKFLOWS = [
     SlackThreadAgentWorkflow,
     WeeklyMusicPollWorkflow,
     ShitpostWorkflow,
+    ShitposterChannelScheduleWorkflow,
 ]
 ACTIVITIES = [
     generate_context_prompt,
@@ -147,6 +154,10 @@ async def run_worker(app_env: str):
         futures.append(wf().async_upsert_schedule(client, app_env))
     await asyncio.gather(*futures)
     logger.info("all schedules created")
+    try:
+        await reconcile_schedules_async(client, get_temporal_queue_name("main"), app_env)
+    except Exception:
+        logger.exception("shitposter schedule reconciliation failed")
 
     # Run the worker
     with ThreadPoolExecutor(max_workers=100) as activity_executor:
