@@ -422,3 +422,20 @@ func TestEventsToMessages_GrowingTranscript_RendersPriorTurnsAsAnUnchangedPrefix
 	assert.Equal(t, describe(first), describe(second[:len(first)]),
 		"the earlier turn's messages must render identically and in the same order; a change here busts the prompt cache for the whole conversation")
 }
+
+// TestWithSessionContext_Ordering proves the definition prompt, then the
+// pinned context, then the transcript, with each head message omitted when
+// unset and the transcript returned unchanged when neither is set.
+func TestWithSessionContext_Ordering(t *testing.T) {
+	prompt, pinned, empty := "definition prompt", "the secret word is X", ""
+	msgs := []llm.Message{{Role: llm.RoleUser, Content: "hi"}}
+	sys := func(s string) llm.Message { return llm.Message{Role: llm.RoleSystem, Content: s} }
+
+	assert.Equal(t, []llm.Message{sys(prompt), sys(pinned), msgs[0]}, withSessionContext(msgs, &prompt, &pinned))
+	assert.Equal(t, []llm.Message{sys(pinned), msgs[0]}, withSessionContext(msgs, nil, &pinned))
+	assert.Equal(t, []llm.Message{sys(pinned), msgs[0]}, withSessionContext(msgs, &empty, &pinned))
+	assert.Equal(t, []llm.Message{sys(prompt), msgs[0]}, withSessionContext(msgs, &prompt, nil))
+	assert.Equal(t, []llm.Message{sys(prompt), msgs[0]}, withSessionContext(msgs, &prompt, &empty))
+	assert.Equal(t, msgs, withSessionContext(msgs, nil, nil))
+	assert.Equal(t, msgs, withSessionContext(msgs, &empty, &empty))
+}

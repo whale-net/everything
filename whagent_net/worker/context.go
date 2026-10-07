@@ -363,6 +363,24 @@ func withSystemPrompt(msgs []llm.Message, prompt *string) []llm.Message {
 	return append([]llm.Message{{Role: llm.RoleSystem, Content: *prompt}}, msgs...)
 }
 
+// withSessionContext builds [definition prompt, pinned context, ...msgs],
+// both RoleSystem, each only when non-empty. Pinned context sits directly
+// after the definition prompt and before any transcript message; with
+// neither set the result is msgs unchanged.
+func withSessionContext(msgs []llm.Message, prompt, pinned *string) []llm.Message {
+	var head []llm.Message
+	if prompt != nil && *prompt != "" {
+		head = append(head, llm.Message{Role: llm.RoleSystem, Content: *prompt})
+	}
+	if pinned != nil && *pinned != "" {
+		head = append(head, llm.Message{Role: llm.RoleSystem, Content: *pinned})
+	}
+	if len(head) == 0 {
+		return msgs
+	}
+	return append(head, msgs...)
+}
+
 // hoistAssistantToolCalls moves an assistant message that carries tool
 // calls to immediately BEFORE the run of tool results answering it, when
 // the transcript committed them in the other order.

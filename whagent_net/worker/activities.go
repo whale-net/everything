@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/libs/go/logging"
+
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
@@ -293,7 +295,17 @@ func (a *Activities) CallModel(ctx context.Context, in CallModelInput) (CallMode
 	if err != nil {
 		return CallModelResult{}, fmt.Errorf("call model: decode context events: %w", err)
 	}
-	messages = withSystemPrompt(messages, in.SystemPrompt)
+	// Read inside the activity (not via workflow input) so the text stays
+	// out of Temporal history; only presence/bytes are logged.
+	pinned, err := a.Store.Sessions().GetPinnedContext(ctx, in.SessionID)
+	if err != nil {
+		return CallModelResult{}, fmt.Errorf("call model: %w", err)
+	}
+	if pinned != nil && *pinned != "" {
+		logging.Get("worker").DebugContext(ctx, "call model with pinned context",
+			"session_id", in.SessionID, "turn", in.Turn, "pinned_context_present", true, "pinned_context_bytes", len(*pinned))
+	}
+	messages = withSessionContext(messages, in.SystemPrompt, pinned)
 
 	toolDefs, err := readTurnToolDefs(ctx, a.Store, in.SessionID, in.Turn)
 	if err != nil {
