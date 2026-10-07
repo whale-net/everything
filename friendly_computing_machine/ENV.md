@@ -162,3 +162,12 @@ needs a code change and a release. See [docs/shitposter_brain_jobs.md](docs/shit
 |---|---|---|---|
 | `BRAIN_JOB_TIMEOUTS` | harvest 15 min, reflect 30 min, write 30 min, snapshot 5 min | code constant | Workflow timeout per job kind. Hitting it marks the run `failed`. |
 | `STALE_LOCK_SLACK` | 5 min | code constant | Added to the job timeout. A `running` row older than that has no live workflow behind it, so the next run takes the lock over. |
+
+### Shitposter context snapshot
+
+Read by the Temporal worker when the snapshot job runs (`temporal/shitposter_brain/snapshot.py`).
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET` | no (default `2000`) | Maximum approximate tokens in a context snapshot's rendered text. Must be positive. |
+| `FCM_SHITPOSTER_LORE_DECAY_HALF_LIFE_HOURS` | no (default `168`) | Half-life of the recency term in the lore ranking score. Must be positive. |

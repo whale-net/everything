@@ -80,6 +80,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.workflow import (
     ShitposterBrainJobWorkflow,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
+    snapshot as _snapshot_job,  # noqa: F401 registers the snapshot job body
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.workflow import (
     ShitpostWorkflow,
 )
