@@ -2,4 +2,5 @@
 from . import commands  # noqa
 from . import events  # noqa
 from . import poll  # noqa
+from . import shitposter  # noqa
 from . import whagent  # noqa
