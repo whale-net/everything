@@ -330,6 +330,16 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Harvest brain job: 24h engagement finalization (reactions, replies, negatives, write-once).
+py_test(
+    name = "test_shitposter_harvest",
+    size = "small",
+    srcs = [
+        "shitposter/test_harvest_engagement.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Shitposter migration: single chain head, upgrade/downgrade round-trip.
 py_test(
     name = "test_shitposter_migration",

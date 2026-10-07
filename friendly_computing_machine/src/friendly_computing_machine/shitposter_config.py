@@ -1,4 +1,4 @@
-"""FCM admin set and tunables for Shitposter control commands."""
+"""FCM admin set, tunables, and engagement config for Shitposter control commands."""
 
 import logging
 import os
@@ -52,3 +52,14 @@ def suggestion_backer_threshold() -> int:
     return _positive_int_env(
         "FCM_SHITPOSTER_SUGGESTION_BACKER_THRESHOLD", DEFAULT_SUGGESTION_BACKER_THRESHOLD
     )
+
+
+def parse_negative_emoji(raw: str) -> frozenset[str]:
+    """Normalize to Slack reaction names: lowercase, surrounding colons stripped."""
+    names = (p.strip().strip(":").strip().lower() for p in raw.split(","))
+    return frozenset(n for n in names if n)
+
+
+def load_negative_emoji() -> frozenset[str]:
+    """Read FCM_SHITPOSTER_NEGATIVE_EMOJI; empty means no reaction counts as negative."""
+    return parse_negative_emoji(os.environ.get("FCM_SHITPOSTER_NEGATIVE_EMOJI", ""))
