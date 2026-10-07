@@ -11,7 +11,6 @@ calls it.
 """
 
 import logging
-import os
 import re
 
 from opentelemetry import trace
@@ -21,13 +20,15 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
     get_agent_id_for_channel,
     get_bot_config,
 )
+from friendly_computing_machine.src.friendly_computing_machine.bot.identity_link import (
+    prompt_identity_link,
+)
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     get_slack_channel,
     get_thread_session,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.dal.identity_dal import (
     get_keycloak_identity,
-    mint_link_token,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackThreadSessionStatusEnum,
@@ -57,12 +58,6 @@ _LEADING_MENTION_RE = re.compile(r"^\s*<@[^>]+>\s*")
 
 def _strip_bot_mention(text: str) -> str:
     return _LEADING_MENTION_RE.sub("", text, count=1).strip()
-
-
-def _web_public_url() -> str:
-    # base URL of the identity-link web app; the minted one-time token is
-    # appended as /link/<token>, which the web app redeems.
-    return os.environ.get("FCM_WEB_PUBLIC_URL", "").rstrip("/")
 
 
 def _slack_team_id(event) -> str:
@@ -128,33 +123,9 @@ def handle_whagent_app_mention(event, say, client=None, body=None):
                 return
             identity = get_keycloak_identity(team_id, slack_user_id)
             if identity is None:
-                web_public_url = _web_public_url()
-                if not web_public_url:
-                    logger.error(
-                        "FCM_WEB_PUBLIC_URL is unset; cannot mint identity link "
-                        "for unlinked slack team=%s user=%s",
-                        team_id,
-                        slack_user_id,
-                    )
-                else:
-                    token = mint_link_token(team_id, slack_user_id)
-                    # Posted at the channel top level, not scoped to thread_ts:
-                    # a thread-scoped ephemeral only renders if the user has
-                    # that specific thread open, so they'd never see it.
-                    client.chat_postEphemeral(
-                        channel=channel_slack_id,
-                        user=slack_user_id,
-                        text=(
-                            "Link your Slack account to use this agent: "
-                            f"<{web_public_url}/link/{token}|Link my account> "
-                            "(one-time link, expires in 10 minutes)."
-                        ),
-                    )
-                    logger.info(
-                        "issued identity link prompt slack team=%s user=%s",
-                        team_id,
-                        slack_user_id,
-                    )
+                prompt_identity_link(
+                    client, channel_slack_id, team_id, slack_user_id, "this agent"
+                )
                 span.set_attribute("whagent.identity_link_prompted", True)
                 return
 
