@@ -1,6 +1,12 @@
-"""FCM admin set and engagement config for Shitposter."""
+"""FCM admin set, engagement, and tunables for Shitposter."""
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_SUGGESTION_DAILY_LIMIT = 3
+DEFAULT_SUGGESTION_EXPIRY_DAYS = 7
 
 
 def parse_admin_slack_user_ids(raw: str) -> frozenset[str]:
@@ -47,3 +53,31 @@ def load_lore_window_days() -> int:
     if days < 1:
         raise ValueError(f"FCM_SHITPOSTER_LORE_WINDOW_DAYS must be >= 1, got {raw!r}")
     return days
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        logger.warning("%s=%r is not a positive integer; using %d", name, raw, default)
+        return default
+    return value
+
+
+def suggestion_daily_limit() -> int:
+    """Persona suggestions one member may submit per trailing 24h (FCM_SHITPOSTER_SUGGESTION_DAILY_LIMIT)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_SUGGESTION_DAILY_LIMIT", DEFAULT_SUGGESTION_DAILY_LIMIT
+    )
+
+
+def suggestion_expiry_days() -> int:
+    """Days a pending suggestion waits for backing before it expires (FCM_SHITPOSTER_SUGGESTION_EXPIRY_DAYS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_SUGGESTION_EXPIRY_DAYS", DEFAULT_SUGGESTION_EXPIRY_DAYS
+    )

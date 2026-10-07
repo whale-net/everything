@@ -227,6 +227,65 @@ class ShitposterPostEngagement(Base, table=True):
     )
 
 
+class ShitposterSuggestionStatusEnum(str, Enum):
+    PENDING = "pending"
+    PROMOTED = "promoted"
+    APPLIED = "applied"
+    DECLINED = "declined"
+    EXPIRED = "expired"
+
+
+class ShitposterSuggestion(Base, table=True):
+    """A community persona suggestion posted as a pending message in a channel."""
+
+    __table_args__ = (
+        UniqueConstraint(
+            "slack_channel_id",
+            "slack_message_ts",
+            name="uq_shitpostersuggestion_channel_ts",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'promoted', 'applied', 'declined', 'expired')",
+            name="ck_shitpostersuggestion_status",
+        ),
+        Index(
+            "ix_shitpostersuggestion_status_expires_at",
+            "status",
+            "expires_at",
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    persona_id: int = Field(
+        nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    slack_channel_id: int = Field(
+        nullable=False, foreign_key="slackchannel.id", index=True
+    )
+    # Slack ts of the posted pending-suggestion message; reactions join on (channel, ts)
+    slack_message_ts: str
+    submitter_slack_user_id: str
+    text: str
+    # ShitposterSuggestionStatusEnum value
+    status: str = Field(default=ShitposterSuggestionStatusEnum.PENDING.value)
+    submitted_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    expires_at: datetime.datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    status_changed_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+
+
 class ShitposterBrainJobKind(str, Enum):
     HARVEST = "harvest"
     REFLECT = "reflect"

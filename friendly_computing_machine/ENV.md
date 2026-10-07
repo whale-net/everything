@@ -83,6 +83,8 @@ Keycloak identity. It runs against the same Keycloak realm as whagent-net's
 
 Scheduled shitposts run as the FCM service subject with no `on_behalf_of`; whagent-net's on-behalf-of allowlist only gates requests that carry `on_behalf_of`, so no whagent-net change is needed and FCM's human-work delegation is unchanged.
 | `FCM_ADMIN_SLACK_USER_IDS` | no | Comma-separated Slack user ids allowed to run `/shitpost admin ...` (opt-in/out, silence/resume). Whitespace is trimmed; empty or unset means no admins, so every admin action is refused. Read at startup on the `bot` app. |
+| `FCM_SHITPOSTER_SUGGESTION_DAILY_LIMIT` | no | Persona suggestions one member may submit per trailing 24 hours (default `3`). Must be a positive integer; otherwise the default is used with a warning. Read per submission. |
+| `FCM_SHITPOSTER_SUGGESTION_EXPIRY_DAYS` | no | Days a pending `/shitpost suggest` message waits for backing before it expires (default `7`). Must be a positive integer; otherwise the default is used with a warning. Read per submission. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 
 Required Keycloak client config (provisioned through normal release/human steps, not by this repo):

@@ -1,6 +1,7 @@
 """Activities for the Shitposter generation pipeline (see workflow.py)."""
 
 import asyncio
+import datetime
 import logging
 import time
 from dataclasses import dataclass
@@ -296,3 +297,9 @@ async def send_ephemeral_notice_activity(params: NoticeParams) -> None:
         text=params.text,
         **({"thread_ts": params.thread_ts} if params.thread_ts else {}),
     )
+
+
+@activity.defn
+async def expire_pending_suggestions_activity() -> int:
+    """Expire pending persona suggestions past their expires_at; returns the count."""
+    return dal.expire_pending_suggestions(datetime.datetime.now(datetime.UTC))

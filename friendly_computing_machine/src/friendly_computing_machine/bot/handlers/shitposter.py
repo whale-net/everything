@@ -8,6 +8,9 @@ from opentelemetry import trace
 from slack_bolt import Ack, Respond, Say
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import app
+from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.shitposter_suggest import (
+    handle_suggest,
+)
 from friendly_computing_machine.src.friendly_computing_machine.bot.identity_link import (
     prompt_identity_link,
 )
@@ -52,6 +55,7 @@ ADMIN_SUBCOMMAND = "admin"
 ADMIN_USAGE = (
     "Usage: `/shitpost admin optin|optout|silence [reason]|resume|status`"
 )
+SUGGEST_SUBCOMMAND = "suggest"
 
 # opt-in/out and resume drive the per-channel schedule workflows
 set_state_change_notifier(notify_schedule_state_change)
@@ -103,6 +107,11 @@ def handle_shitpost(
     user_id = command["user_id"]
     channel_id = command["channel_id"]
     parts = (command.get("text") or "").strip().split(maxsplit=2)
+
+    if parts and parts[0].lower() == SUGGEST_SUBCOMMAND:
+        raw = (command.get("text") or "").strip()
+        suggestion = raw[len(parts[0]):].strip()
+        return handle_suggest(user_id, channel_id, suggestion, client), None
 
     if not parts or parts[0].lower() != ADMIN_SUBCOMMAND:
         return handle_summon(command, client), None
