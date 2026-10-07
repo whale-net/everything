@@ -154,3 +154,14 @@ window is compared across a timezone-naive and a timezone-aware column, so the
 comparison is only correct while the app container's timezone matches the
 database session's. Nothing in the chart sets `TZ` today, so do not set it
 without reading [docs/poll.md](docs/poll.md) first.
+
+## Shitposter brain job runner
+
+Not environment-configurable. These are code constants in
+`src/friendly_computing_machine/temporal/shitposter_brain/base.py`; changing one
+needs a code change and a release. See [docs/shitposter_brain_jobs.md](docs/shitposter_brain_jobs.md).
+
+| Setting | Value | Configurable? | Purpose |
+|---|---|---|---|
+| `BRAIN_JOB_TIMEOUTS` | harvest 15 min, reflect 30 min, write 30 min, snapshot 5 min | code constant | Workflow timeout per job kind. Hitting it marks the run `failed`. |
+| `STALE_LOCK_SLACK` | 5 min | code constant | Added to the job timeout. A `running` row older than that has no live workflow behind it, so the next run takes the lock over. |
