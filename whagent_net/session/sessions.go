@@ -91,6 +91,9 @@ type TerminalReason struct {
 	ErrorDetail   *string
 }
 
+// MaxPinnedContextBytes caps a session's pinned context, in UTF-8 bytes.
+const MaxPinnedContextBytes = 32000
+
 // Session is the `sessions` control-plane row (LB2/NFR3). Session ID
 // equals the Temporal workflow ID (LB2).
 type Session struct {
@@ -101,12 +104,16 @@ type Session struct {
 	AgentID         string
 	Model           string
 	ModelOverride   *string
-	Status          Status
-	CapKind         *CapKind
-	ErrorCategory   *ErrorCategory
-	ErrorDetail     *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// PinnedContext is set only on Create; reads populate PinnedContextBytes
+	// and leave the text nil (use the text-by-id store method).
+	PinnedContext      *string
+	PinnedContextBytes int
+	Status             Status
+	CapKind            *CapKind
+	ErrorCategory      *ErrorCategory
+	ErrorDetail        *string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // SessionFilter is ListSessions' (FR3/C15) filter set, mirroring
@@ -153,6 +160,9 @@ type PageInfo struct {
 type SessionStore interface {
 	// Create inserts a new session row.
 	Create(ctx context.Context, s *Session) error
+	// GetPinnedContext returns the session's pinned context text, or nil when
+	// the session has none (or does not exist). The only read path for the text.
+	GetPinnedContext(ctx context.Context, id uuid.UUID) (*string, error)
 	// GetByID reads a session by its ID (== Temporal workflow ID).
 	GetByID(ctx context.Context, id uuid.UUID) (*Session, error)
 	// UpdateStatus transitions a session to status, applying terminal's
@@ -192,6 +202,7 @@ const sessionColumns = `
 	session_id, subject_iss, subject_sub, subject_kind,
 	on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
 	parent_session_id, agent_id, model, model_override,
+	COALESCE(pinned_context_bytes, 0),
 	status, cap_kind, error_category, error_detail,
 	created_at, updated_at
 `
@@ -211,6 +222,7 @@ func scanSession(row pgx.Row) (*Session, error) {
 		&sess.SessionID, &sess.Subject.Iss, &sess.Subject.Sub, &subjectKind,
 		&sess.OnBehalfOf.Iss, &sess.OnBehalfOf.Sub, &onBehalfOfKind,
 		&sess.ParentSessionID, &sess.AgentID, &sess.Model, &sess.ModelOverride,
+		&sess.PinnedContextBytes,
 		&status, &capKind, &errorCategory, &sess.ErrorDetail,
 		&sess.CreatedAt, &sess.UpdatedAt,
 	); err != nil {
@@ -237,18 +249,30 @@ func (s sessionStore) Create(ctx context.Context, sess *Session) error {
 		INSERT INTO sessions (
 			session_id, subject_iss, subject_sub, subject_kind,
 			on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
-			parent_session_id, agent_id, model, model_override, status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING created_at, updated_at
+			parent_session_id, agent_id, model, model_override, pinned_context, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		RETURNING created_at, updated_at, COALESCE(pinned_context_bytes, 0)
 	`,
 		sess.SessionID, sess.Subject.Iss, sess.Subject.Sub, string(sess.Subject.Kind),
 		sess.OnBehalfOf.Iss, sess.OnBehalfOf.Sub, string(sess.OnBehalfOf.Kind),
-		sess.ParentSessionID, sess.AgentID, sess.Model, sess.ModelOverride, string(sess.Status),
-	).Scan(&sess.CreatedAt, &sess.UpdatedAt)
+		sess.ParentSessionID, sess.AgentID, sess.Model, sess.ModelOverride, sess.PinnedContext, string(sess.Status),
+	).Scan(&sess.CreatedAt, &sess.UpdatedAt, &sess.PinnedContextBytes)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
 	}
 	return nil
+}
+
+func (s sessionStore) GetPinnedContext(ctx context.Context, id uuid.UUID) (*string, error) {
+	var text *string
+	err := s.pool.QueryRow(ctx, `SELECT pinned_context FROM sessions WHERE session_id = $1`, id).Scan(&text)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get pinned context: %w", err)
+	}
+	return text, nil
 }
 
 // GetByID returns nil (not an error) when no session with id exists.

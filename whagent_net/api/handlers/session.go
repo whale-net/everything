@@ -411,13 +411,14 @@ func subjectsEqual(a, b session.Subject) bool {
 
 // canControl reports whether caller may send turns to or stop sess (FR1/
 // C13, FR10). Control is granted by either of two independent rules:
-//   (a) caller is (or is acting for) sess.OnBehalfOf -- the identity the
-//     session runs as; or
-//   (b) caller is sess.Subject, the identity that actually started the
-//     session, AND the current call's own Keycloak client_id is on the
-//     on-behalf-of allowlist. This lets the client that started a delegated
-//     session keep driving it after handing it off, without ever widening
-//     the rule to arbitrary callers.
+//
+//	(a) caller is (or is acting for) sess.OnBehalfOf -- the identity the
+//	  session runs as; or
+//	(b) caller is sess.Subject, the identity that actually started the
+//	  session, AND the current call's own Keycloak client_id is on the
+//	  on-behalf-of allowlist. This lets the client that started a delegated
+//	  session keep driving it after handing it off, without ever widening
+//	  the rule to arbitrary callers.
 //
 // clientID is the authenticated caller's client_id (grpcauth.Claims.
 // ClientID), read fresh from every call's claims -- never persisted on the
@@ -467,6 +468,10 @@ func sessionToProto(sess *session.Session) *pb.Session {
 		OnBehalfOf: subjectToProto(sess.OnBehalfOf),
 		CreatedAt:  timestamppb.New(sess.CreatedAt),
 		UpdatedAt:  timestamppb.New(sess.UpdatedAt),
+
+		// Presence and size only; the text is never put on the wire here.
+		PinnedContextPresent: sess.PinnedContextBytes > 0,
+		PinnedContextBytes:   int32(sess.PinnedContextBytes),
 	}
 	if sess.ParentSessionID != nil {
 		out.ParentSessionId = sess.ParentSessionID.String()
