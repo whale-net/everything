@@ -162,6 +162,7 @@ py_test(
         "slack_sync/conftest.py",
         "slack_sync/test_message_channel_gate.py",
         "slack_sync/test_message_upsert_dedupe.py",
+        "slack_sync/test_shitposter_capture.py",
         "slack_sync/test_user_sync_team_id.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
@@ -262,6 +263,18 @@ py_test(
     srcs = [
         "conftest.py",
         "db/test_shitposter_migration.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Slack reaction migration: chains after the control-plane head, round-trips.
+py_test(
+    name = "test_slack_reaction_migration",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_slack_reaction_migration.py",
     ],
     data = ["//friendly_computing_machine/src/migrations:migration_versions"],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
