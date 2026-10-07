@@ -14,6 +14,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models import (  
     music_poll,
     poll,
     scheduled_poll,
+    shitposter,
     slack,
     task,
 )
