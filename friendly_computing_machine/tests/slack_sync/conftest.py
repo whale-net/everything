@@ -20,6 +20,13 @@ from friendly_computing_machine.src.friendly_computing_machine.models.base impor
 from friendly_computing_machine.src.friendly_computing_machine.models.music_poll import (
     MusicPoll,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
+    ShitposterChannelOptIn,
+    ShitposterKillSwitch,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack_reaction import (
+    SlackReaction,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
     SlackMessage,
@@ -62,6 +69,9 @@ TABLES = [
     SlackSpecialChannelType.__table__,
     SlackSpecialChannel.__table__,
     MusicPoll.__table__,
+    ShitposterChannelOptIn.__table__,
+    ShitposterKillSwitch.__table__,
+    SlackReaction.__table__,
 ]
 
 

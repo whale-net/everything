@@ -206,6 +206,23 @@ def is_channel_opted_in(
         return bool(row)
 
 
+def list_opted_in_channel_slack_ids(session: Optional[Session] = None) -> set[str]:
+    """Slack ids of channels whose current opt-in row is opted in (uncached)."""
+    with SessionManager(session) as session:
+        return set(
+            session.exec(
+                select(SlackChannel.slack_id)
+                .join(
+                    ShitposterChannelOptIn,
+                    SlackChannel.id == ShitposterChannelOptIn.slack_channel_id,  # type: ignore[arg-type]
+                )
+                .where(ShitposterChannelOptIn.opted_in.is_(True))  # type: ignore[attr-defined]
+                .where(ShitposterChannelOptIn.valid_to.is_(None))  # type: ignore[union-attr]
+                .order_by(SlackChannel.slack_id)
+            ).all()
+        )
+
+
 def is_shitposter_enabled(session: Optional[Session] = None) -> bool:
     """True unless a current kill-switch row says disabled."""
     with SessionManager(session) as session:
@@ -476,3 +493,18 @@ def expire_pending_suggestions(
         )
         session.commit()
         return int(result.rowcount)
+
+def get_latest_riff_session_id(
+    slack_channel_id: int, thread_ts: str, session: Optional[Session] = None
+) -> str | None:
+    """Session of the newest riff in a thread; None if no riff has run there yet."""
+    with SessionManager(session) as session:
+        return session.exec(
+            select(ShitposterPost.whagent_session_id)
+            .where(
+                ShitposterPost.slack_channel_id == slack_channel_id,
+                ShitposterPost.thread_ts == thread_ts,
+                ShitposterPost.trigger == "riff",
+            )
+            .order_by(ShitposterPost.id.desc())
+        ).first()

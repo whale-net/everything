@@ -39,6 +39,9 @@ class _FakeApp:
 
 app_mod._app_instance = _FakeApp()
 
+from friendly_computing_machine.src.friendly_computing_machine.bot import (  # noqa: E402
+    identity_link,
+)
 from friendly_computing_machine.src.friendly_computing_machine.bot.handlers import (  # noqa: E402
     whagent,
 )
@@ -80,7 +83,7 @@ def handler_env(monkeypatch):
     get_identity = Mock(return_value=None)
     mint = Mock(return_value=FAKE_TOKEN)
     monkeypatch.setattr(whagent, "get_keycloak_identity", get_identity)
-    monkeypatch.setattr(whagent, "mint_link_token", mint)
+    monkeypatch.setattr(identity_link, "mint_link_token", mint)
 
     # temporal side effects
     start_workflow = Mock()
