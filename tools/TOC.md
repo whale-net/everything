@@ -21,6 +21,7 @@ Build, release, and development tooling.
 - [agentsync-mcp/README.md](agentsync-mcp/README.md) — cross-agent-session rendezvous MCP server: one session starts/joins a session with another and blocks on `sync()` until the peer replies
 - [project-manager/README.md](project-manager/README.md) — AGY & Claude Code plugin: multi-persona GitHub-tracked planning pipeline (producer/architect/stakeholder/planner/worker/validator/system-validator), scoping products into milestones before designing each one
 - [project-manager/CONVENTIONS.md](project-manager/CONVENTIONS.md) — the plugin's GitHub label/workflow contract (product brief & milestones, issue kinds, lifecycle, worker unblock procedure) — every persona file follows this exactly
+- [omnigent/agents/README.md](omnigent/agents/README.md) — Omnigent-native agent bundles (e.g. `local-pi`, uploadable via `sys_session_create`), distinct from `project-manager/omnigent-agents/`'s ported Claude Code personas
 - [app_registry/TOC.md](app_registry/TOC.md) — includes the `app-registry` AGY/Claude Code plugin: three crystaldba `postgres-mcp` servers (`app-registry-pg-{tilt,dev,prod}`)
 
 ## Code Generation
