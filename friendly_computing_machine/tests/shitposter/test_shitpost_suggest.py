@@ -1,9 +1,16 @@
 """/shitpost suggest: gate order, rate limit, guardrails, storage, expiry sweep (SQLite)."""
 
+import asyncio
 import datetime
 from unittest.mock import Mock
 
 import pytest
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker
+from temporalio.worker.workflow_sandbox import (
+    SandboxedWorkflowRunner,
+    SandboxRestrictions,
+)
 from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, create_engine, select
@@ -285,3 +292,75 @@ def test_routes_suggest_without_starting_summon(env, session, monkeypatch):
     monkeypatch.setattr(handler, "start_workflow", start)
     _suggest()
     start.assert_not_called()
+
+
+SWEEP_QUEUE = "fcm-sweep-test"
+
+
+def test_sweep_workflow_is_registered_with_worker(monkeypatch):
+    from friendly_computing_machine.src.friendly_computing_machine.temporal import (
+        base,
+        worker,
+    )
+    from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter import (
+        activity as shitposter_activity,
+    )
+    from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.suggestion_sweep_workflow import (
+        SWEEP_INTERVAL,
+        ShitposterSuggestionSweepWorkflow,
+    )
+
+    assert ShitposterSuggestionSweepWorkflow in worker.WORKFLOWS
+    assert shitposter_activity.expire_pending_suggestions_activity in worker.ACTIVITIES
+    assert issubclass(ShitposterSuggestionSweepWorkflow, base.AbstractScheduleWorkflow)
+
+    monkeypatch.setattr(base, "get_temporal_queue_name", lambda _name: SWEEP_QUEUE)
+    schedule = ShitposterSuggestionSweepWorkflow().get_schedule("test")
+    assert schedule.spec.intervals[0].every == SWEEP_INTERVAL
+    assert schedule.action.task_queue == SWEEP_QUEUE
+    assert schedule.action.id == "fcm-test-ShitposterSuggestionSweepWorkflow"
+
+
+def test_periodic_schedule_action_expires_stale_pending_without_submission(
+    env, session, monkeypatch
+):
+    # the test server has no CreateSchedule, so this runs the schedule's own action
+    # (workflow + task queue from get_schedule) and checks the sweep it performs
+    from friendly_computing_machine.src.friendly_computing_machine.temporal import base
+    from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter import (
+        activity as shitposter_activity,
+    )
+    from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.suggestion_sweep_workflow import (
+        ShitposterSuggestionSweepWorkflow,
+    )
+
+    monkeypatch.setattr(base, "get_temporal_queue_name", lambda _name: SWEEP_QUEUE)
+    schedule = ShitposterSuggestionSweepWorkflow().get_schedule("test")
+    stale = _store(session, NOW - datetime.timedelta(days=30), user="U_OLD")
+    fresh = _store(session, NOW, user="U_NEW")
+    stale_id, fresh_id = stale.id, fresh.id
+    session.commit()
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as wfe:
+            async with Worker(
+                wfe.client,
+                task_queue=SWEEP_QUEUE,
+                workflows=[ShitposterSuggestionSweepWorkflow],
+                activities=[shitposter_activity.expire_pending_suggestions_activity],
+                workflow_runner=SandboxedWorkflowRunner(
+                    restrictions=SandboxRestrictions.default.with_passthrough_all_modules()
+                ),
+            ):
+                return await wfe.client.execute_workflow(
+                    schedule.action.workflow,
+                    id="sweep-run-1",
+                    task_queue=schedule.action.task_queue,
+                )
+
+    expired_count = asyncio.run(scenario())
+    assert expired_count == 1
+    session.expire_all()
+    statuses = {r.id: r.status for r in _rows(session)}
+    assert statuses[stale_id] == "expired"
+    assert statuses[fresh_id] == "pending"
