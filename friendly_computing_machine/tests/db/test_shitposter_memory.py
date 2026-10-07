@@ -41,7 +41,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterPersonaAttribute,
 )
 
-MEMORY_REVISION = "e5b0d3a8c2f4"
+MEMORY_REVISION = "e5b0d3a8c2f5"
 MEMORY_TABLES = frozenset(
     {"shitposterpersonaattribute", "shitposterloreentry", "shitpostermemorychange"}
 )
