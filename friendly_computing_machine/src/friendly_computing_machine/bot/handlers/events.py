@@ -1,12 +1,22 @@
+import datetime
 import logging
 
 from opentelemetry import trace
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import app, get_bot_config
+from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.riff import (
+    riff_thread_reply,
+)
 from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.whagent import (
     relay_thread_reply,
 )
-from friendly_computing_machine.src.friendly_computing_machine.db.dal import upsert_message
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+    add_reaction,
+    get_bot_slack_user_slack_ids,
+    is_channel_opted_in,
+    remove_reaction,
+    upsert_message,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import SlackMessageCreate
 
 logger = logging.getLogger(__name__)
@@ -14,20 +24,26 @@ tracer = trace.get_tracer(__name__)
 
 
 @app.event("message")
-def handle_message(event, say):
+def handle_message(event, say, client=None):
     # TODO: typehint for event? or am I supposed to just yolo it?
     with tracer.start_as_current_span("handle_message") as span:
         try:
             logger.debug(event)
 
             # Bolt runs only the first matching "message" listener, so the
-            # whagent thread relay is dispatched from here.
+            # whagent thread relay and shitposter riffs are dispatched from here.
             relayed = False
             try:
                 relayed = relay_thread_reply(event)
                 span.set_attribute("whagent.relayed", relayed)
             except Exception:
                 logger.exception("failed to relay thread reply to whagent-net")
+
+            if not relayed:
+                try:
+                    span.set_attribute("shitposter.riff", riff_thread_reply(event, client))
+                except Exception:
+                    logger.exception("failed to handle shitposter thread riff")
 
             sub_type = event.get("subtype", "")
             span.set_attribute("slack.event.subtype", sub_type)
@@ -53,19 +69,23 @@ def handle_message(event, say):
             # there used to be a rule about bot user, bot thread, but that was removed
             config = get_bot_config()
 
-            if message.slack_channel_slack_id not in {
+            music_poll_channel = message.slack_channel_slack_id in {
                 info.slack_channel.slack_id for info in config.music_poll_infos
-            }:
+            }
+            # opt-in is read live, never from the cached bot config
+            if not music_poll_channel and not is_channel_opted_in(
+                message.slack_channel_slack_id
+            ):
                 # A relayed whagent turn was already handled above -- it's not
-                # dropped, it's just not a poll-channel message, so don't log
+                # dropped, it's just not a stored channel, so don't log
                 # it as skipped.
                 if not relayed:
                     logger.info(
-                        "skipping message %s - not in music poll channel",
+                        "skipping message %s - channel not stored",
                         message.slack_id,
                     )
                 span.set_attribute("message.processed", False)
-                span.set_attribute("message.reason", "not in music poll channel")
+                span.set_attribute("message.reason", "channel not stored")
                 return
 
             # if we reach this point, we can insert the message
@@ -78,6 +98,74 @@ def handle_message(event, say):
             span.record_exception(e)
             span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
             raise
+
+
+def _event_time(event_ts: str | None) -> datetime.datetime | None:
+    if not event_ts:
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(float(event_ts), tz=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _capture_reaction(event, name: str, apply) -> None:
+    """Shared gate for reaction events: message items in opted-in channels only."""
+    with tracer.start_as_current_span(name) as span:
+        try:
+            item = event.get("item") or {}
+            channel = item.get("channel")
+            span.set_attribute("slack.channel.id", channel or "")
+            span.set_attribute("slack.user.id", event.get("user") or "")
+            if item.get("type") != "message" or not channel or not item.get("ts"):
+                logger.debug("ignoring reaction on non-message item: %s", item)
+                span.set_attribute("reaction.processed", False)
+                return
+            if not is_channel_opted_in(channel):
+                logger.debug("ignoring reaction in non-opted-in channel %s", channel)
+                span.set_attribute("reaction.processed", False)
+                return
+            changed = apply(channel, item["ts"], event)
+            span.set_attribute("reaction.processed", True)
+            span.set_attribute("reaction.changed", bool(changed))
+        except Exception as e:
+            span.record_exception(e)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+            raise
+
+
+@app.event("reaction_added")
+def handle_reaction_added(event):
+    def apply(channel, ts, event):
+        user = event.get("user")
+        try:
+            is_bot = user in get_bot_slack_user_slack_ids()
+        except Exception:
+            is_bot = None
+        return add_reaction(
+            channel,
+            ts,
+            user,
+            event.get("reaction"),
+            added_at=_event_time(event.get("event_ts")),
+            is_bot=is_bot,
+        )
+
+    _capture_reaction(event, "handle_reaction_added", apply)
+
+
+@app.event("reaction_removed")
+def handle_reaction_removed(event):
+    def apply(channel, ts, event):
+        return remove_reaction(
+            channel,
+            ts,
+            event.get("user"),
+            event.get("reaction"),
+            removed_at=_event_time(event.get("event_ts")),
+        )
+
+    _capture_reaction(event, "handle_reaction_removed", apply)
 
 
 @app.error
