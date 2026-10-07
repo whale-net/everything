@@ -24,6 +24,11 @@ prompted with a one-time link (see below) instead of being given a session.
 | Identity-link web | `web run` | FastAPI app that performs the browser OIDC login and writes the Slack→Keycloak mapping. |
 | Migration job | `migration run` | Applies Alembic migrations. |
 
+The workflow worker also hosts the Shitposter brain job runner
+(`ShitposterBrainJobWorkflow`): one job per persona at a time, enforced by a
+`running` row per persona, with skipped runs recorded. See
+[docs/shitposter_brain_jobs.md](docs/shitposter_brain_jobs.md).
+
 ### Identity-link web app (`web`)
 
 `friendly_computing_machine/src/friendly_computing_machine/web/` is a small FastAPI app. It performs a
