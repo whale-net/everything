@@ -86,6 +86,7 @@ go_test(
         "service_account_integration_test.go",
         "session_integration_test.go",
         "start_on_behalf_of_integration_test.go",
+        "start_pinned_context_integration_test.go",
         "stream_events_integration_test.go",
         "usage_integration_test.go",
     ],

@@ -464,3 +464,45 @@ func TestSessionStore_List_UsesIndexNotSequentialScan(t *testing.T) {
 	assert.Contains(t, planText, "idx_sessions_created_at_id", "the list query must use the new index, plan was:\n%s", planText)
 	assert.NotContains(t, planText, "Seq Scan on sessions", "the list query must not fall back to a sequential scan, plan was:\n%s", planText)
 }
+
+// TestSessionStore_PinnedContext_StoredOnceAndReportedAsUTF8Bytes proves the
+// text round-trips via GetPinnedContext, bytes are UTF-8 octets (not runes),
+// and List/GetByID report size without carrying the text.
+func TestSessionStore_PinnedContext_StoredOnceAndReportedAsUTF8Bytes(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	text := "héllo ☃" // 7 runes, 10 bytes
+	with := newTestSession()
+	with.PinnedContext = &text
+	require.NoError(t, s.Sessions().Create(ctx, with))
+	assert.Equal(t, len(text), with.PinnedContextBytes)
+
+	without := newTestSession()
+	require.NoError(t, s.Sessions().Create(ctx, without))
+
+	got, err := s.Sessions().GetByID(ctx, with.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 10, got.PinnedContextBytes)
+	assert.Nil(t, got.PinnedContext, "reads must not load the text")
+
+	gotText, err := s.Sessions().GetPinnedContext(ctx, with.SessionID)
+	require.NoError(t, err)
+	require.NotNil(t, gotText)
+	assert.Equal(t, text, *gotText)
+
+	none, err := s.Sessions().GetPinnedContext(ctx, without.SessionID)
+	require.NoError(t, err)
+	assert.Nil(t, none)
+
+	listed, _, err := s.Sessions().List(ctx, session.SessionFilter{}, session.SessionPage{PageSize: 100})
+	require.NoError(t, err)
+	byID := map[uuid.UUID]*session.Session{}
+	for _, l := range listed {
+		byID[l.SessionID] = l
+	}
+	require.Contains(t, byID, with.SessionID)
+	assert.Equal(t, 10, byID[with.SessionID].PinnedContextBytes)
+	assert.Nil(t, byID[with.SessionID].PinnedContext)
+	assert.Equal(t, 0, byID[without.SessionID].PinnedContextBytes)
+}
