@@ -59,6 +59,11 @@ from .shitposter_dal import (
     list_kill_switch_history,
     set_channel_opt_in,
     set_kill_switch,
+    count_suggestions_by_submitter_since,
+    create_suggestion,
+    expire_pending_suggestions,
+    get_suggestion_by_channel_ts,
+    list_submitted_at_since,
     set_state_change_notifier,
     shitposter_gate,
 )

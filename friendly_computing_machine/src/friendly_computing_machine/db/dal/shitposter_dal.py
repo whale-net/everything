@@ -26,6 +26,8 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterPersona,
     ShitposterPersonaRevision,
     ShitposterPost,
+    ShitposterSuggestion,
+    ShitposterSuggestionStatusEnum,
 )
 
 logger = logging.getLogger(__name__)
@@ -367,3 +369,110 @@ def set_thread_owner_if_unset(
         )
         session.commit()
         return result.rowcount == 1
+
+
+def create_suggestion(
+    persona_id: int,
+    slack_channel_id: int,
+    slack_message_ts: str,
+    submitter_slack_user_id: str,
+    text: str,
+    expires_at: datetime.datetime,
+    submitted_at: Optional[datetime.datetime] = None,
+    session: Optional[Session] = None,
+) -> ShitposterSuggestion:
+    """Store a pending suggestion for a posted message; (channel, ts) is unique."""
+    with SessionManager(session) as session:
+        suggestion = ShitposterSuggestion(
+            persona_id=persona_id,
+            slack_channel_id=slack_channel_id,
+            slack_message_ts=slack_message_ts,
+            submitter_slack_user_id=submitter_slack_user_id,
+            text=text,
+            status=ShitposterSuggestionStatusEnum.PENDING.value,
+            submitted_at=submitted_at or datetime.datetime.now(datetime.UTC),
+            expires_at=expires_at,
+            status_changed_at=submitted_at or datetime.datetime.now(datetime.UTC),
+        )
+        session.add(suggestion)
+        session.commit()
+        session.refresh(suggestion)
+        return suggestion
+
+
+def count_suggestions_by_submitter_since(
+    submitter_slack_user_id: str,
+    since: datetime.datetime,
+    session: Optional[Session] = None,
+) -> int:
+    """Stored suggestions by one submitter with submitted_at >= since, any channel."""
+    with SessionManager(session) as session:
+        return int(
+            session.exec(
+                select(func.count())
+                .select_from(ShitposterSuggestion)
+                .where(
+                    ShitposterSuggestion.submitter_slack_user_id
+                    == submitter_slack_user_id,
+                    ShitposterSuggestion.submitted_at >= since,
+                )
+            ).one()
+        )
+
+
+def list_submitted_at_since(
+    submitter_slack_user_id: str,
+    since: datetime.datetime,
+    session: Optional[Session] = None,
+) -> list[datetime.datetime]:
+    """submitted_at values for one submitter since `since`, oldest first."""
+    with SessionManager(session) as session:
+        return list(
+            session.exec(
+                select(ShitposterSuggestion.submitted_at)
+                .where(
+                    ShitposterSuggestion.submitter_slack_user_id
+                    == submitter_slack_user_id,
+                    ShitposterSuggestion.submitted_at >= since,
+                )
+                .order_by(ShitposterSuggestion.submitted_at)  # type: ignore[arg-type]
+            ).all()
+        )
+
+
+def get_suggestion_by_channel_ts(
+    slack_channel_id: int,
+    slack_message_ts: str,
+    session: Optional[Session] = None,
+) -> ShitposterSuggestion | None:
+    """Look up a suggestion by its posted message's channel and ts."""
+    with SessionManager(session) as session:
+        return session.exec(
+            select(ShitposterSuggestion).where(
+                ShitposterSuggestion.slack_channel_id == slack_channel_id,
+                ShitposterSuggestion.slack_message_ts == slack_message_ts,
+            )
+        ).first()
+
+
+def expire_pending_suggestions(
+    now: datetime.datetime,
+    session: Optional[Session] = None,
+) -> int:
+    """Mark pending suggestions past expires_at as expired; returns the row count."""
+    with SessionManager(session) as session:
+        result = session.exec(
+            update(ShitposterSuggestion)
+            .where(
+                ShitposterSuggestion.status
+                == ShitposterSuggestionStatusEnum.PENDING.value,
+                ShitposterSuggestion.expires_at <= now,
+            )
+            .values(
+                status=ShitposterSuggestionStatusEnum.EXPIRED.value,
+                status_changed_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        session.commit()
+        return int(result.rowcount)
