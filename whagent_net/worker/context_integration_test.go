@@ -9,7 +9,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -367,4 +370,131 @@ func TestActivities_BuildContext_SearchMode_BoundedByBudgetNotMaxContextEvents(t
 
 	assert.Greater(t, len(result.EventIDs), maxContextEvents, "a search-mode session must not be truncated to maxContextEvents when the char budget still has room -- it must be bounded by the budget, not the event count")
 	assert.Len(t, result.EventIDs, fillerCount+1, "every filler event plus this turn's own new user-input event must fit comfortably under the char budget")
+}
+
+type warnCapture struct {
+	mu   sync.Mutex
+	recs []slog.Record
+}
+
+func (c *warnCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (c *warnCapture) Handle(_ context.Context, r slog.Record) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recs = append(c.recs, r)
+	return nil
+}
+func (c *warnCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *warnCapture) WithGroup(string) slog.Handler         { return c }
+
+// captureWarnings swaps slog's default handler for one that records every
+// WARN-level record, restoring it on cleanup.
+func captureWarnings(t *testing.T) func() []slog.Record {
+	t.Helper()
+	prev := slog.Default()
+	c := &warnCapture{}
+	slog.SetDefault(slog.New(c))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return func() []slog.Record {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		var out []slog.Record
+		for _, r := range c.recs {
+			if r.Level == slog.LevelWarn {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+}
+
+func newPinnedSession(t *testing.T, ctx context.Context, store *session.Store, pinned string) *session.Session {
+	t.Helper()
+	subject := session.Subject{Iss: "https://issuer.example.com", Sub: "user-" + uuid.NewString(), Kind: session.SubjectKindHuman}
+	sess := &session.Session{
+		SessionID: uuid.New(), Subject: subject, OnBehalfOf: subject,
+		AgentID: "test-agent", Model: "test-model", Status: session.StatusRunning,
+		PinnedContext: &pinned,
+	}
+	require.NoError(t, store.Sessions().Create(ctx, sess))
+	return sess
+}
+
+func appendBigEvent(t *testing.T, ctx context.Context, store *session.Store, id uuid.UUID, turn, size int) {
+	t.Helper()
+	payload, err := marshalMessagePayload(llm.Message{Role: llm.RoleUser, Content: strings.Repeat("x", size)})
+	require.NoError(t, err)
+	_, err = store.Transcript().AppendIfAbsent(ctx, id, turn, events.EventTypeUserMessage, payload)
+	require.NoError(t, err)
+}
+
+// TestActivities_BuildContext_PromptAndPinnedContext_KeepFewerEvents covers
+// both modes: the same transcript keeps fewer events once a long prompt and
+// pinned context are charged, and a session with neither is unchanged.
+func TestActivities_BuildContext_PromptAndPinnedContext_KeepFewerEvents(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t)
+	warnings := captureWarnings(t)
+	longPrompt := strings.Repeat("p", 30_000)
+
+	for name, mode := range map[string]session.ToolLoadingMode{
+		"bulk": session.ToolLoadingModeBulk, "search": session.ToolLoadingModeSearch,
+	} {
+		t.Run(name, func(t *testing.T) {
+			plain := newTestSessionRow(t, ctx, store)
+			pinned := newPinnedSession(t, ctx, store, strings.Repeat("c", 30_000))
+			for turn := 1; turn <= 40; turn++ {
+				appendBigEvent(t, ctx, store, plain.SessionID, turn, 2000)
+				appendBigEvent(t, ctx, store, pinned.SessionID, turn, 2000)
+			}
+			a := &Activities{Store: store}
+			def := session.AgentDefinition{ToolLoadingMode: mode}
+			base, err := a.BuildContext(ctx, BuildContextInput{SessionID: plain.SessionID, Turn: 41, Input: "hi", Definition: def})
+			require.NoError(t, err)
+			def.SystemPrompt = &longPrompt
+			with, err := a.BuildContext(ctx, BuildContextInput{SessionID: pinned.SessionID, Turn: 41, Input: "hi", Definition: def})
+			require.NoError(t, err)
+			assert.Less(t, len(with.EventIDs), len(base.EventIDs))
+			assert.Empty(t, warnings(), "room remained, so no warning")
+		})
+	}
+}
+
+// TestActivities_BuildContext_NoRoom_LogsExactlyOneWarningWithoutText covers
+// a fixed charge larger than the budget in both modes.
+func TestActivities_BuildContext_NoRoom_LogsExactlyOneWarningWithoutText(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t)
+
+	for name, mode := range map[string]session.ToolLoadingMode{
+		"bulk": session.ToolLoadingModeBulk, "search": session.ToolLoadingModeSearch,
+	} {
+		t.Run(name, func(t *testing.T) {
+			warnings := captureWarnings(t)
+			secret := "SECRET-PROMPT-TEXT"
+			prompt := strings.Repeat(secret, 8000) // > both budgets
+			sess := newPinnedSession(t, ctx, store, "SECRET-PINNED-TEXT")
+			for turn := 1; turn <= 5; turn++ {
+				appendFillerEvent(t, ctx, store, sess.SessionID, turn)
+			}
+			a := &Activities{Store: store}
+			res, err := a.BuildContext(ctx, BuildContextInput{
+				SessionID: sess.SessionID, Turn: 6, Input: "hi",
+				Definition: session.AgentDefinition{ToolLoadingMode: mode, SystemPrompt: &prompt},
+			})
+			require.NoError(t, err)
+			assert.NotEmpty(t, res.EventIDs, "the turn still runs on the floor window")
+
+			recs := warnings()
+			require.Len(t, recs, 1)
+			attrs := map[string]any{}
+			recs[0].Attrs(func(a slog.Attr) bool { attrs[a.Key] = a.Value.Any(); return true })
+			assert.Contains(t, attrs, "session_id")
+			assert.Contains(t, attrs, "system_prompt_bytes")
+			assert.Contains(t, attrs, "pinned_context_bytes")
+			assert.Contains(t, attrs, "budget")
+			all := recs[0].Message + fmt.Sprint(attrs)
+			assert.NotContains(t, all, "SECRET")
+		})
+	}
 }

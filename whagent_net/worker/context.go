@@ -102,7 +102,8 @@ const transcriptReadPageSize = 200
 // already sitting in the transcript), then selects a budgeted projection
 // over the transcript -- recent events plus the agent definition, fitted
 // to bulkModeContextBudget (bulk mode) or searchModeContextBudget (search
-// mode, FR10), both via fitToBudget -- and persists the exact ordered
+// mode, FR10), both via fitToBudget with the definition prompt and pinned
+// context charged in full -- and persists the exact ordered
 // event-ID list that projection was built from into `turn_context` (LB1).
 // The projection itself (the assembled llm.Message list) is derived and
 // ephemeral and never enters workflow history or the `turn_context` row
@@ -131,6 +132,20 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 	if err != nil {
 		return BuildContextResult{}, fmt.Errorf("build context: read transcript: %w", err)
 	}
+	// The definition prompt and pinned context are sent in full every turn,
+	// so both are charged against the budget before any event is admitted.
+	pinned, err := a.Store.Sessions().GetPinnedContext(ctx, in.SessionID)
+	if err != nil {
+		return BuildContextResult{}, fmt.Errorf("build context: %w", err)
+	}
+	promptBytes, pinnedBytes := 0, 0
+	if in.Definition.SystemPrompt != nil {
+		promptBytes = len(*in.Definition.SystemPrompt)
+	}
+	if pinned != nil {
+		pinnedBytes = len(*pinned)
+	}
+	fixed := promptBytes + pinnedBytes
 	if in.Definition.ToolLoadingMode == session.ToolLoadingModeSearch {
 		// FR10 (issue #2673): a shared budget spanning this turn's tool
 		// definitions and transcript content, and -- unlike the bulk-mode
@@ -145,11 +160,8 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 		if err != nil {
 			return BuildContextResult{}, fmt.Errorf("build context: %w", err)
 		}
-		if overage := toolDefsCharge(toolDefs) - searchModeContextBudget; overage > 0 {
-			logging.Get("worker").WarnContext(ctx, "search-mode tool definitions alone exceed the context budget; keeping a minimal event floor instead of the full budgeted projection",
-				"session_id", in.SessionID, "turn", in.Turn, "overage_chars", overage)
-		}
-		all = fitToBudget(toolDefs, all, searchModeContextBudget)
+		all = fitToBudget(toolDefs, all, searchModeContextBudget, fixed)
+		a.warnIfNoRoom(ctx, in, all, toolDefsCharge(toolDefs)+fixed, searchModeContextBudget, promptBytes, pinnedBytes)
 	} else {
 		// Bulk mode, two bounds. The count ceiling is applied first and
 		// unchanged: it bounds how many event IDs land in the turn_context
@@ -166,7 +178,8 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 		// branch runs before ActivityListToolDefinitions for a bulk-mode
 		// turn, so no turn_tool_defs row exists yet (see
 		// bulkModeContextBudget).
-		all = fitToBudget(nil, all, bulkModeContextBudget)
+		all = fitToBudget(nil, all, bulkModeContextBudget, fixed)
+		a.warnIfNoRoom(ctx, in, all, fixed, bulkModeContextBudget, promptBytes, pinnedBytes)
 	}
 
 	eventIDs := make([]uuid.UUID, len(all))
@@ -183,6 +196,24 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 	}
 
 	return BuildContextResult{EventIDs: eventIDs}, nil
+}
+
+// warnIfNoRoom logs the turn's single budget WARNING when the fixed charge
+// (prompt, pinned context and, in search mode, tool definitions) leaves no
+// room for the newest transcript event, so the floor window was kept. Sizes
+// only, never text.
+func (a *Activities) warnIfNoRoom(ctx context.Context, in BuildContextInput, kept []events.Event, charged, budget, promptBytes, pinnedBytes int) {
+	if len(kept) == 0 {
+		return
+	}
+	if charged+eventCharge(kept[len(kept)-1]) <= budget {
+		return
+	}
+	// Over budget only when the floor window was taken: a normal fill never
+	// admits an event past the budget.
+	logging.Get("worker").WarnContext(ctx, "system prompt, pinned context and tool definitions leave no room in the context budget; keeping a minimal event floor",
+		"session_id", in.SessionID, "turn", in.Turn,
+		"system_prompt_bytes", promptBytes, "pinned_context_bytes", pinnedBytes, "budget", budget)
 }
 
 // readWholeTranscript pages through every committed event for sessionID in
