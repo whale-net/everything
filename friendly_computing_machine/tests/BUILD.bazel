@@ -309,6 +309,17 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# ShitposterBrainJobWorkflow on the Temporal test server: per-persona lock skip,
+# all-or-nothing apply, failure and timeout marking runs failed.
+py_test(
+    name = "test_shitposter_brain_job_runner",
+    size = "small",
+    srcs = [
+        "shitposter/test_brain_job_runner.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Shitposter migration: single chain head, upgrade/downgrade round-trip.
 py_test(
     name = "test_shitposter_migration",

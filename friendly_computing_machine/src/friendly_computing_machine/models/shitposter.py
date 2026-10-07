@@ -15,10 +15,12 @@ from sqlalchemy import (
     Column,
     DateTime,
     Index,
+    JSON,
     UniqueConstraint,
     func,
     text,
 )
+from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
@@ -253,4 +255,74 @@ class ShitposterSuggestion(Base, table=True):
             nullable=False,
             server_default=func.now(),
         ),
+    )
+
+
+class ShitposterBrainJobKind(str, Enum):
+    HARVEST = "harvest"
+    REFLECT = "reflect"
+    WRITE = "write"
+    SNAPSHOT = "snapshot"
+
+
+class ShitposterBrainJobTrigger(str, Enum):
+    SCHEDULE = "schedule"
+    OPERATOR = "operator"
+
+
+class ShitposterBrainJobStatus(str, Enum):
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    NO_OP = "no_op"
+
+
+class ShitposterBrainJobRun(Base, table=True):
+    """Append-only record of each brain job attempt, including skips."""
+
+    __table_args__ = (
+        # at most one running job per persona; the job runner's lock
+        Index(
+            "uq_shitposterbrainjobrun_running",
+            "persona_id",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+            sqlite_where=text("status = 'running'"),
+        ),
+        CheckConstraint(
+            "job_kind IN ('harvest', 'reflect', 'write', 'snapshot')",
+            name="ck_shitposterbrainjobrun_job_kind",
+        ),
+        CheckConstraint(
+            "trigger IN ('schedule', 'operator')",
+            name="ck_shitposterbrainjobrun_trigger",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed', 'skipped', 'no_op')",
+            name="ck_shitposterbrainjobrun_status",
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    persona_id: int = Field(
+        nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    # ShitposterBrainJobKind value
+    job_kind: str
+    # ShitposterBrainJobTrigger value
+    trigger: str
+    # ShitposterBrainJobStatus value
+    status: str
+    started_at: datetime.datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    finished_at: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    skip_reason: str | None = Field(default=None, nullable=True)
+    error: str | None = Field(default=None, nullable=True)
+    details: dict | None = Field(
+        default=None, sa_column=Column(
+            JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=True
+        )
     )
