@@ -56,7 +56,7 @@ func toolError(rpcName string, err error) error {
 // changes its message.
 type reauthRequiredError struct {
 	scope string
-	cause  error
+	cause error
 }
 
 // newReauthRequiredError builds the mid-call reauth-required error for

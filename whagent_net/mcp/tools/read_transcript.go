@@ -51,9 +51,9 @@ type ReadTranscriptOutput struct {
 // browser-OAuth2 path only -- see dispatch.go's own doc comment for the
 // manual-token-path no-op case.
 type readTranscriptTool struct {
-	client         pb.SessionServiceClient
+	client        pb.SessionServiceClient
 	scopeResolver ScopeResolver
-	grant          GrantSource
+	grant         GrantSource
 }
 
 // RegisterReadTranscript registers the read_transcript tool on srv.

@@ -22,14 +22,16 @@ type GetSessionInput struct {
 // -- mirrors pb.Session's has_cap_kind/has_error_category optionality
 // (session.proto's "Session" message doc).
 type GetSessionOutput struct {
-	SessionID     string `json:"session_id" jsonschema:"The session's id"`
-	State         string `json:"state" jsonschema:"One of the six SessionState values (running, awaiting_input, done, stopped, failed, capped)"`
-	AgentID       string `json:"agent_id" jsonschema:"The agent definition this session runs"`
-	Model         string `json:"model" jsonschema:"The model this session is running (after any FR5 override resolution)"`
-	CapKind       string `json:"cap_kind,omitempty" jsonschema:"Set only when state is capped: which guardrail ended the session (turns or cost)"`
-	ErrorCategory string `json:"error_category,omitempty" jsonschema:"Set only when state is failed: retryable or non_retryable"`
-	ErrorDetail   string `json:"error_detail,omitempty" jsonschema:"Set only when state is failed: human-readable detail of what failed"`
-	PinnedContext string `json:"pinned_context,omitempty" jsonschema:"The session's pinned context text; set only when include_pinned_context was true and the session has one"`
+	SessionID            string `json:"session_id" jsonschema:"The session's id"`
+	State                string `json:"state" jsonschema:"One of the six SessionState values (running, awaiting_input, done, stopped, failed, capped)"`
+	AgentID              string `json:"agent_id" jsonschema:"The agent definition this session runs"`
+	Model                string `json:"model" jsonschema:"The model this session is running (after any FR5 override resolution)"`
+	CapKind              string `json:"cap_kind,omitempty" jsonschema:"Set only when state is capped: which guardrail ended the session (turns or cost)"`
+	ErrorCategory        string `json:"error_category,omitempty" jsonschema:"Set only when state is failed: retryable or non_retryable"`
+	ErrorDetail          string `json:"error_detail,omitempty" jsonschema:"Set only when state is failed: human-readable detail of what failed"`
+	PinnedContextPresent bool   `json:"pinned_context_present" jsonschema:"True when the session was started with a pinned context; the text itself is never returned"`
+	PinnedContextBytes   int32  `json:"pinned_context_bytes" jsonschema:"UTF-8 byte length of the session's pinned context; 0 when none"`
+	PinnedContext        string `json:"pinned_context,omitempty" jsonschema:"The session's pinned context text; set only when include_pinned_context was true and the session has one"`
 }
 
 // getSessionTool holds the SessionService client this tool is a
@@ -42,9 +44,9 @@ type GetSessionOutput struct {
 // browser-OAuth2 path only -- see dispatch.go's own doc comment for the
 // manual-token-path no-op case.
 type getSessionTool struct {
-	client         pb.SessionServiceClient
+	client        pb.SessionServiceClient
 	scopeResolver ScopeResolver
-	grant          GrantSource
+	grant         GrantSource
 }
 
 // RegisterGetSession registers the get_session tool on srv.
@@ -79,10 +81,12 @@ func (t *getSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in 
 	sess := resp.GetSession()
 
 	out := GetSessionOutput{
-		SessionID: sess.GetSessionId(),
-		State:     sessionStateString(sess.GetState()),
-		AgentID:   sess.GetAgentId(),
-		Model:     sess.GetModel(),
+		SessionID:            sess.GetSessionId(),
+		State:                sessionStateString(sess.GetState()),
+		AgentID:              sess.GetAgentId(),
+		Model:                sess.GetModel(),
+		PinnedContextPresent: sess.GetPinnedContextPresent(),
+		PinnedContextBytes:   sess.GetPinnedContextBytes(),
 	}
 	if sess.CapKind != nil {
 		out.CapKind = capKindString(*sess.CapKind)

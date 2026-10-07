@@ -26,8 +26,10 @@ type StartSessionInput struct {
 // session's id and current state, mirroring pb.Session's caller-relevant
 // fields.
 type StartSessionOutput struct {
-	SessionID string `json:"session_id" jsonschema:"The started session's id, as a UUID string"`
-	State     string `json:"state" jsonschema:"The session's current state (see SessionState)"`
+	SessionID            string `json:"session_id" jsonschema:"The started session's id, as a UUID string"`
+	State                string `json:"state" jsonschema:"The session's current state (see SessionState)"`
+	PinnedContextPresent bool   `json:"pinned_context_present" jsonschema:"True when the session was started with a pinned context; the text itself is never returned"`
+	PinnedContextBytes   int32  `json:"pinned_context_bytes" jsonschema:"UTF-8 byte length of the session's pinned context; 0 when none"`
 }
 
 // startSessionTool holds the SessionService client this tool is a
@@ -93,8 +95,10 @@ func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, i
 
 	if in.FirstTurn == "" {
 		return nil, StartSessionOutput{
-			SessionID: sess.GetSessionId(),
-			State:     sessionStateString(sess.GetState()),
+			SessionID:            sess.GetSessionId(),
+			State:                sessionStateString(sess.GetState()),
+			PinnedContextPresent: sess.GetPinnedContextPresent(),
+			PinnedContextBytes:   sess.GetPinnedContextBytes(),
 		}, nil
 	}
 
@@ -110,7 +114,9 @@ func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, i
 	}
 
 	return nil, StartSessionOutput{
-		SessionID: sess.GetSessionId(),
-		State:     sessionStateString(turnResp.GetSession().GetState()),
+		SessionID:            sess.GetSessionId(),
+		State:                sessionStateString(turnResp.GetSession().GetState()),
+		PinnedContextPresent: sess.GetPinnedContextPresent(),
+		PinnedContextBytes:   sess.GetPinnedContextBytes(),
 	}, nil
 }
