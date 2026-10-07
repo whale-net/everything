@@ -84,6 +84,9 @@ Scheduled shitposts run as the FCM service subject with no `on_behalf_of`; whage
 | `FCM_SHITPOSTER_SUGGESTION_DAILY_LIMIT` | no | Persona suggestions one member may submit per trailing 24 hours (default `3`). Must be a positive integer; otherwise the default is used with a warning. Read per submission. |
 | `FCM_SHITPOSTER_SUGGESTION_EXPIRY_DAYS` | no | Days a pending `/shitpost suggest` message waits for backing before it expires (default `7`). Must be a positive integer; otherwise the default is used with a warning. Read per submission. |
 | `FCM_SHITPOSTER_SUGGESTION_BACKER_THRESHOLD` | no | Distinct human Slack users backing a pending suggestion (the submitter counts once; bots and removed reactions do not) needed to promote it to the next persona update (default `3`). Must be a positive integer; otherwise the default is used with a warning. Read per reaction. |
+| `FCM_SHITPOSTER_REFLECTOR_AGENT_ID` | for the reflect job | whagent-net agent id the reflect brain job starts its session on. Base prompt only, no tools, so it has no `tool_set` and is not listed in `whagent_net/config/agents.yaml`; the row is inserted by hand like the Shitposter agent. Read per reflect run that has new input. |
+| `FCM_SHITPOSTER_REFLECTOR_INPUT_CAP` | no | Most unconsumed engagement and promoted-suggestion inputs one reflect run reads, newest first; excess carries to the next run (default `200`). Must be a positive integer; otherwise the default is used with a warning. Read per reflect run. |
+| `FCM_SHITPOSTER_ATTRIBUTE_CAP` | no | Maximum active persona attributes after a reflect run (default `20`). An update over the cap applies only with retirements or merges that keep it within the cap; otherwise the excess additions are rejected. Read per reflect run. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 
 Required Keycloak client config (provisioned through normal release/human steps, not by this repo):

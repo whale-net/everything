@@ -151,11 +151,12 @@ def _attr_rows(session, persona_id: int, key: str):
 # --- migration ---------------------------------------------------------------
 
 
-def test_memory_revision_is_the_chain_head():
+def test_memory_revision_is_an_ancestor_of_the_single_head():
     script = ScriptDirectory(str(_versions_dir().parent))
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == MEMORY_REVISION
+    ancestors = {r.revision for r in script.iterate_revisions(heads[0], "base")}
+    assert MEMORY_REVISION in ancestors
 
 
 def test_upgrade_creates_memory_tables_and_current_indexes(migration, pre_engine):

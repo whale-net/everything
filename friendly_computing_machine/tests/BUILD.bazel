@@ -340,6 +340,16 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Reflect brain job: validated daily attribute updates within the attribute cap.
+py_test(
+    name = "test_shitposter_reflect",
+    size = "small",
+    srcs = [
+        "shitposter/test_reflect_daily_update.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Shitposter migration: single chain head, upgrade/downgrade round-trip.
 py_test(
     name = "test_shitposter_migration",

@@ -63,3 +63,19 @@ def parse_negative_emoji(raw: str) -> frozenset[str]:
 def load_negative_emoji() -> frozenset[str]:
     """Read FCM_SHITPOSTER_NEGATIVE_EMOJI; empty means no reaction counts as negative."""
     return parse_negative_emoji(os.environ.get("FCM_SHITPOSTER_NEGATIVE_EMOJI", ""))
+
+
+DEFAULT_REFLECTOR_INPUT_CAP = 200
+DEFAULT_ATTRIBUTE_CAP = 20
+
+
+def reflector_input_cap() -> int:
+    """Engagement and promoted-suggestion inputs one reflect run reads, newest first (FCM_SHITPOSTER_REFLECTOR_INPUT_CAP)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_REFLECTOR_INPUT_CAP", DEFAULT_REFLECTOR_INPUT_CAP
+    )
+
+
+def attribute_cap() -> int:
+    """Maximum active persona attributes after a reflect run (FCM_SHITPOSTER_ATTRIBUTE_CAP)."""
+    return _positive_int_env("FCM_SHITPOSTER_ATTRIBUTE_CAP", DEFAULT_ATTRIBUTE_CAP)
