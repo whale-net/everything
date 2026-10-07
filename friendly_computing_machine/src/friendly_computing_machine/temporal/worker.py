@@ -71,6 +71,15 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.schedule_workflow import (
     ShitposterChannelScheduleWorkflow,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.activity import (
+    apply_brain_job_activity,
+    begin_brain_job_activity,
+    compute_brain_job_activity,
+    fail_brain_job_activity,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.workflow import (
+    ShitposterBrainJobWorkflow,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.workflow import (
     ShitpostWorkflow,
 )
@@ -100,6 +109,7 @@ WORKFLOWS = [
     WeeklyMusicPollWorkflow,
     ShitpostWorkflow,
     ShitposterChannelScheduleWorkflow,
+    ShitposterBrainJobWorkflow,
 ]
 ACTIVITIES = [
     generate_context_prompt,
@@ -139,6 +149,10 @@ ACTIVITIES = [
     check_guardrails_activity,
     post_and_record_shitpost_activity,
     send_ephemeral_notice_activity,
+    begin_brain_job_activity,
+    compute_brain_job_activity,
+    apply_brain_job_activity,
+    fail_brain_job_activity,
 ]
 
 

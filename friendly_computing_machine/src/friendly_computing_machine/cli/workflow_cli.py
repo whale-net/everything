@@ -30,6 +30,13 @@ from friendly_computing_machine.src.friendly_computing_machine.gemini.client imp
 from friendly_computing_machine.src.friendly_computing_machine.health import (
     run_health_server,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.control import (
+    trigger_brain_job_async,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.util import (
+    get_temporal_client_async,
+    get_temporal_queue_name,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.worker import (
     run_worker,
 )
@@ -122,6 +129,30 @@ def cli_run(
 
     logger.info("starting temporal worker")
     asyncio.run(run_worker(app_env=ctx.obj['app_env']))
+
+
+@app.command("brain-trigger")
+def cli_brain_trigger(
+    ctx: typer.Context,
+    persona_id: int,
+    job_kind: Annotated[str, typer.Argument(help="harvest, reflect, write, or snapshot")],
+):
+    """Run one Shitposter brain job now, through the same per-persona lock as scheduled runs."""
+
+    async def _run():
+        client = await get_temporal_client_async()
+        return await trigger_brain_job_async(
+            client,
+            get_temporal_queue_name("main"),
+            persona_id,
+            job_kind,
+            ctx.obj.get("app_env"),
+        )
+
+    result = asyncio.run(_run())
+    print(f"run_id={result.run_id} status={result.status}")
+    if result.skip_reason:
+        print(f"skip_reason={result.skip_reason}")
 
 
 @app.command("test")
