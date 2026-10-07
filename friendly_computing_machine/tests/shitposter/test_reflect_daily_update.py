@@ -216,6 +216,26 @@ def test_cap_drops_only_the_excess_additions_from_the_end():
     assert [r["reason"] for r in rejections] == ["attribute_cap"]
 
 
+def test_cap_admits_addition_paired_with_merge():
+    ops = [
+        {"op": "merge", "from_key": "pace", "into_key": "humor", "cause_refs": ["post:1"]},
+        {"op": "add", "key": "mood", "text": "Gloomy tone", "kind": "trait", "cause_refs": ["post:1"]},
+    ]
+    accepted, rejections = reflect._validate(ops, INPUTS, ACTIVE, [], [], 2)
+    assert rejections == []
+    assert [o["op"] for o in accepted] == ["merge", "add"]
+
+
+def test_cap_does_not_admit_addition_paired_with_invalid_retirement():
+    ops = [
+        {"op": "retire", "key": "ghost", "cause_refs": ["post:1"]},
+        {"op": "add", "key": "mood", "text": "Gloomy tone", "kind": "trait", "cause_refs": ["post:1"]},
+    ]
+    accepted, rejections = reflect._validate(ops, INPUTS, ACTIVE, [], [], 2)
+    assert accepted == []
+    assert [r["reason"] for r in rejections] == ["missing_attribute", "attribute_cap"]
+
+
 def test_parse_ops_requires_an_ops_list():
     assert reflect._parse_ops('noise {"ops": []} trailing') == []
     with pytest.raises(ValueError):
