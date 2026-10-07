@@ -74,6 +74,18 @@ slash command or out-of-band instruction. A prompt issuance logs at INFO with th
 (never the token). If `FCM_WEB_PUBLIC_URL` is unset the mention is still blocked and an ERROR is logged.
 Multi-participant attribution inside an already-linked thread is out of scope.
 
+## Shitposter persona memory
+
+The shitposter's learned memory is FCM data keyed by persona id (`models/shitposter_memory.py`,
+`db/dal/shitposter_memory_dal.py`). Every write closes/opens SCD2 rows and appends a change-log row
+in one transaction, and every write must name a cause.
+
+| Table | Versioning | Role |
+|---|---|---|
+| `shitposterpersonaattribute` | SCD2 (`valid_from` / `valid_to`, NULL = current) | Persona attributes with status `active` / `retired` / `merged` and a `retired_by_operator` flag. |
+| `shitposterloreentry` | SCD2 (`valid_from` / `valid_to`, NULL = current) | Running jokes and lore (`hit` / `consolidated`), with source post id, lifetime popularity, and a `retired_by_operator` flag. |
+| `shitpostermemorychange` | Append-only, not SCD2 | Log of every attribute and lore operation (add, reinforce, retire, merge, fold, promote) with before/after text and `cause_kind` (`post_engagement`, `suggestion`, `operator`, `fold`). A check constraint requires at least one cause reference. |
+
 ## Integrations
 
 - **whagent-net** — `@mention`-triggered AI sessions. The bot queues a turn, the workflow worker calls
