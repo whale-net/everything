@@ -75,6 +75,7 @@ Keycloak identity. It runs against the same Keycloak realm as whagent-net's
 | `FCM_OIDC_CLIENT_SECRET` | yes | Keycloak client secret for the confidential browser-login client. |
 | `FCM_WEB_SESSION_SECRET` | yes | Signing key for the Starlette session cookie that carries Authlib's OIDC `state`/`nonce` and the one-time link token across the redirect. |
 | `FCM_SHITPOSTER_AGENT_ID` | for Shitposter | whagent-net agent id the Shitposter workflow starts sessions on. The agent definition holds only a generic base prompt; the persona text comes from FCM's persona record and is sent as the session's first turn. Read by the Temporal worker when generating. |
+| `FCM_SHITPOSTER_DENYLIST` | no | Comma-separated extra terms the Shitposter content filter rejects (whole-word, case-insensitive), on top of the built-in list. Read by the Temporal worker per check. |
 | `FCM_ADMIN_SLACK_USER_IDS` | no | Comma-separated Slack user ids allowed to run `/shitpost admin ...` (opt-in/out, silence/resume). Whitespace is trimmed; empty or unset means no admins, so every admin action is refused. Read at startup on the `bot` app. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 

@@ -122,6 +122,15 @@ class WhagentClient:
             )
             return method(request, metadata=self._metadata(force_refresh=True))
 
+    def service_subject(self) -> tuple[str, str]:
+        """(iss, sub) recorded for runs under this client's own credential.
+
+        iss is the Keycloak realm issuer derived from the token URL; sub is
+        the client id (the service account's stable name).
+        """
+        issuer = self._token_url.removesuffix("/protocol/openid-connect/token")
+        return issuer, self._client_id
+
     # ------------------------------------------------------------------
     # SessionService
     # ------------------------------------------------------------------
