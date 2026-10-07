@@ -68,6 +68,33 @@ capability, the resource server authorizes the user.
    `(iss, sub)`. If the user has no link, prompt them to link and start
    nothing; never fall back to a session that runs as the client itself.
 
+## Pinned context
+
+`StartSession.pinned_context` (MCP `start_session` `pinned_context`) lets a
+caller give a session its own system-level text, seen on every turn.
+
+- **Cap and validity:** at most 32,000 bytes, measured in UTF-8 bytes, not
+  characters. It must be valid UTF-8. Otherwise the start fails with
+  `INVALID_ARGUMENT`.
+- **Immutable, not a transcript event:** fixed at start for the life of the
+  session; it never appears as a transcript event.
+- **What the model sees:** a system message placed after the definition's
+  system prompt on every turn.
+- **Who can read it:** anyone who can read the session, i.e. as readable as
+  the transcript, via `GetSession` / `get_session` with
+  `include_pinned_context`. Session state alone reports only
+  `pinned_context_present` and `pinned_context_bytes`.
+- **Use:** the supported way to give a session caller-owned memory while the
+  definition prompt stays generic. The caller assembles the text.
+- **Budget:** the definition system prompt and pinned context are charged
+  against the context budget in both search and bulk modes, which reduces
+  kept history for long-prompt definitions. Chatty sessions should size the
+  context well below the cap to keep history.
+- **Retries:** `StartSession` is not idempotent; a retried start can create a
+  duplicate session carrying the same context.
+- **Via MCP:** the text stays in the calling parent's own transcript as a
+  tool argument.
+
 ## Worked examples
 
 | | ASS | manmanv2 |

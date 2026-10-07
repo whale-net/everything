@@ -13,6 +13,11 @@ the component map and design decisions.
 
 ## Status
 
+**Pinned context shipped.** `StartSession`/MCP `start_session` accept a
+caller-owned `pinned_context` (32,000 UTF-8 bytes max, immutable, shown to
+the model every turn after the definition prompt) — see
+[docs/INTEGRATING.md](docs/INTEGRATING.md) "Pinned context".
+
 **M1 shipped.** An operator can run a capped, tool-enabled session as
 themselves against `audience_score_system`'s MCP server from Claude Code,
 and read its transcript — the milestone's outcome sentence, exercised end
