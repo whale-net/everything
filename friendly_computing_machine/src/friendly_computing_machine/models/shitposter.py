@@ -254,3 +254,82 @@ class ShitposterSuggestion(Base, table=True):
             server_default=func.now(),
         ),
     )
+
+
+class ShitposterSuggestionBacker(Base, table=True):
+    """A human Slack user backing a pending suggestion; removal stamps removed_at.
+
+    The submitter is not a row here; it counts once toward the threshold implicitly.
+    """
+
+    __table_args__ = (
+        Index(
+            "uq_shitpostersuggestionbacker_active",
+            "suggestion_id",
+            "slack_user_id",
+            unique=True,
+            postgresql_where=text("removed_at IS NULL"),
+            sqlite_where=text("removed_at IS NULL"),
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    suggestion_id: int = Field(
+        nullable=False, foreign_key="shitpostersuggestion.id", index=True
+    )
+    slack_user_id: str
+    backed_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    removed_at: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+
+class ShitposterSuggestionOutcomeKindEnum(str, Enum):
+    APPLIED = "applied"
+    DECLINED = "declined"
+    EXPIRED = "expired"
+
+
+class ShitposterSuggestionReplyOutbox(Base, table=True):
+    """Pending thread replies on a suggestion post; drained only while the kill switch is off."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('applied', 'declined', 'expired')",
+            name="ck_shitpostersuggestionreplyoutbox_kind",
+        ),
+        CheckConstraint(
+            "coarse_reason IS NULL OR coarse_reason IN "
+            "('off_topic', 'unsafe', 'duplicate', 'other')",
+            name="ck_shitpostersuggestionreplyoutbox_coarse_reason",
+        ),
+        Index(
+            "ix_shitpostersuggestionreplyoutbox_unposted",
+            "created_at",
+            postgresql_where=text("posted_at IS NULL"),
+            sqlite_where=text("posted_at IS NULL"),
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    suggestion_id: int = Field(
+        nullable=False, foreign_key="shitpostersuggestion.id", index=True
+    )
+    # ShitposterSuggestionOutcomeKindEnum value
+    kind: str
+    # coarse, fixed vocabulary; never carries the declined text or a backer name
+    coarse_reason: str | None = Field(default=None, nullable=True)
+    created_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    posted_at: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
