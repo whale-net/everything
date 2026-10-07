@@ -277,6 +277,17 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# /shitpost suggest: gate order, 24h rate limit, guardrails, storage, expiry sweep,
+# and the periodic expiry schedule (runs on the Temporal test server).
+py_test(
+    name = "test_shitpost_suggest",
+    size = "medium",
+    srcs = [
+        "shitposter/test_shitpost_suggest.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # ShitpostWorkflow on the Temporal test server (SQLite, fake whagent/Slack).
 py_test(
     name = "test_shitpost_workflow",
