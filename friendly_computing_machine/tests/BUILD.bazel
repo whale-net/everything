@@ -345,3 +345,13 @@ py_test(
     data = ["//friendly_computing_machine/src/migrations:migration_versions"],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# Context snapshot job: budget, random pick, retirement, versioning, and source text.
+py_test(
+    name = "test_shitposter_context_snapshot",
+    size = "small",
+    srcs = [
+        "shitposter/test_context_snapshot.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
