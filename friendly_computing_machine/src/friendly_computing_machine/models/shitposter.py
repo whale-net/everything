@@ -1,7 +1,10 @@
-"""Shitposter persona (SCD2 revisions) and bot post records.
+"""Shitposter records: control plane (SCD2 opt-in, kill switch), persona
+(SCD2 revisions) and bot post records.
 
-The persona of record lives here, not in whagent-net's agent definition.
-Each post records the persona revision it was written from.
+Channel opt-in is a dedicated per-channel record, never a slackchannel column.
+The kill switch is a workspace-wide singleton; with no current row Shitposter
+is ON. The persona of record lives here, not in whagent-net's agent
+definition; each post records the persona revision it was written from.
 """
 
 import datetime
@@ -19,6 +22,68 @@ from sqlalchemy import (
 from sqlmodel import Field
 
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
+
+# the kill switch's singleton key
+KILL_SWITCH_SCOPE = "workspace"
+
+
+class ShitposterChannelOptInBase(Base):
+    slack_channel_id: int = Field(foreign_key="slackchannel.id", index=True)
+    opted_in: bool
+    set_by_slack_user_id: str
+    set_by_slack_team_id: str | None = Field(default=None, nullable=True)
+
+
+class ShitposterChannelOptIn(ShitposterChannelOptInBase, table=True):
+    __table_args__ = (
+        # at most one current row per channel
+        Index(
+            "uq_shitposterchanneloptin_current",
+            "slack_channel_id",
+            unique=True,
+            postgresql_where=text("valid_to IS NULL"),
+            sqlite_where=text("valid_to IS NULL"),
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    valid_from: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True), nullable=False, server_default=func.now()
+        ),
+    )
+    valid_to: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+
+class ShitposterKillSwitchBase(Base):
+    scope: str = Field(default=KILL_SWITCH_SCOPE)
+    # true = Shitposter ON
+    enabled: bool
+    # a Slack user id, or a free-text actor for out-of-band writes
+    set_by: str
+    reason: str | None = Field(default=None, nullable=True)
+
+
+class ShitposterKillSwitch(ShitposterKillSwitchBase, table=True):
+    __table_args__ = (
+        Index(
+            "uq_shitposterkillswitch_current",
+            "scope",
+            unique=True,
+            postgresql_where=text("valid_to IS NULL"),
+            sqlite_where=text("valid_to IS NULL"),
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    valid_from: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True), nullable=False, server_default=func.now()
+        ),
+    )
+    valid_to: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
 
 
 class ShitposterTriggerEnum(str, Enum):

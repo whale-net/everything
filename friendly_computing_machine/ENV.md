@@ -74,6 +74,7 @@ Keycloak identity. It runs against the same Keycloak realm as whagent-net's
 | `FCM_OIDC_CLIENT_ID` | yes | Keycloak client id for the **confidential browser-login** client (distinct from the `WHAGENT_CLIENT_ID` service account). |
 | `FCM_OIDC_CLIENT_SECRET` | yes | Keycloak client secret for the confidential browser-login client. |
 | `FCM_WEB_SESSION_SECRET` | yes | Signing key for the Starlette session cookie that carries Authlib's OIDC `state`/`nonce` and the one-time link token across the redirect. |
+| `FCM_ADMIN_SLACK_USER_IDS` | no | Comma-separated Slack user ids allowed to run `/shitpost admin ...` (opt-in/out, silence/resume). Whitespace is trimmed; empty or unset means no admins, so every admin action is refused. Read at startup on the `bot` app. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 
 Required Keycloak client config (provisioned through normal release/human steps, not by this repo):

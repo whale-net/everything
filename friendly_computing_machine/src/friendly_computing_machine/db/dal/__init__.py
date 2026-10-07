@@ -51,6 +51,17 @@ from .poll_dal import (
     get_poll_snapshot,
     set_poll_message,
 )
+from .shitposter_dal import (
+    GateResult,
+    is_channel_opted_in,
+    is_shitposter_enabled,
+    list_channel_opt_in_history,
+    list_kill_switch_history,
+    set_channel_opt_in,
+    set_kill_switch,
+    set_state_change_notifier,
+    shitposter_gate,
+)
 from .slack_dal import (
     find_poll_instance_messages,
     get_agent_link_for_channel,
