@@ -77,6 +77,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     compute_brain_job_activity,
     fail_brain_job_activity,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
+    harvest as _harvest,  # noqa: F401  registers the harvest job body
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.workflow import (
     ShitposterBrainJobWorkflow,
 )
