@@ -4,6 +4,9 @@ import logging
 from opentelemetry import trace
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import app, get_bot_config
+from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.riff import (
+    riff_thread_reply,
+)
 from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.whagent import (
     relay_thread_reply,
 )
@@ -21,20 +24,26 @@ tracer = trace.get_tracer(__name__)
 
 
 @app.event("message")
-def handle_message(event, say):
+def handle_message(event, say, client=None):
     # TODO: typehint for event? or am I supposed to just yolo it?
     with tracer.start_as_current_span("handle_message") as span:
         try:
             logger.debug(event)
 
             # Bolt runs only the first matching "message" listener, so the
-            # whagent thread relay is dispatched from here.
+            # whagent thread relay and shitposter riffs are dispatched from here.
             relayed = False
             try:
                 relayed = relay_thread_reply(event)
                 span.set_attribute("whagent.relayed", relayed)
             except Exception:
                 logger.exception("failed to relay thread reply to whagent-net")
+
+            if not relayed:
+                try:
+                    span.set_attribute("shitposter.riff", riff_thread_reply(event, client))
+                except Exception:
+                    logger.exception("failed to handle shitposter thread riff")
 
             sub_type = event.get("subtype", "")
             span.set_attribute("slack.event.subtype", sub_type)

@@ -384,3 +384,19 @@ def set_thread_owner_if_unset(
         )
         session.commit()
         return result.rowcount == 1
+
+
+def get_latest_riff_session_id(
+    slack_channel_id: int, thread_ts: str, session: Optional[Session] = None
+) -> str | None:
+    """Session of the newest riff in a thread; None if no riff has run there yet."""
+    with SessionManager(session) as session:
+        return session.exec(
+            select(ShitposterPost.whagent_session_id)
+            .where(
+                ShitposterPost.slack_channel_id == slack_channel_id,
+                ShitposterPost.thread_ts == thread_ts,
+                ShitposterPost.trigger == "riff",
+            )
+            .order_by(ShitposterPost.id.desc())
+        ).first()
