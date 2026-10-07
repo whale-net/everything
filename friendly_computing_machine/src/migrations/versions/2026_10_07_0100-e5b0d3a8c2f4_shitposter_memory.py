@@ -4,7 +4,7 @@ Persona attributes and lore (SCD2) plus the append-only memory change log.
 Every change row carries a cause; the change log is not SCD2.
 
 Revision ID: e5b0d3a8c2f4
-Revises: d4a9c1e7b3f2
+Revises: e5b8d3f1a6c4
 Create Date: 2026-10-07 01:00:00.000000
 
 """
@@ -17,7 +17,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "e5b0d3a8c2f4"
-down_revision: Union[str, None] = "d4a9c1e7b3f2"
+down_revision: Union[str, None] = "e5b8d3f1a6c4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
