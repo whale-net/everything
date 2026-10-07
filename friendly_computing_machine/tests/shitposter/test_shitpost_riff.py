@@ -297,6 +297,7 @@ def events_env(monkeypatch):
 def test_handle_message_dispatches_riff_when_not_relayed(events_env):
     ev = _reply()
     events.handle_message(ev, events_env.say, events_env.client)
+    events_env.relay.assert_called_once_with(ev)
     events_env.riff.assert_called_once_with(ev, events_env.client)
 
 
