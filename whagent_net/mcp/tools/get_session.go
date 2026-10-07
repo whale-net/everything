@@ -29,6 +29,7 @@ type GetSessionOutput struct {
 	CapKind       string `json:"cap_kind,omitempty" jsonschema:"Set only when state is capped: which guardrail ended the session (turns or cost)"`
 	ErrorCategory string `json:"error_category,omitempty" jsonschema:"Set only when state is failed: retryable or non_retryable"`
 	ErrorDetail   string `json:"error_detail,omitempty" jsonschema:"Set only when state is failed: human-readable detail of what failed"`
+	PinnedContext string `json:"pinned_context,omitempty" jsonschema:"The session's pinned context text; set only when include_pinned_context was true and the session has one"`
 }
 
 // getSessionTool holds the SessionService client this tool is a
@@ -71,7 +72,7 @@ func (t *getSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in 
 		return nil, GetSessionOutput{}, err
 	}
 
-	resp, err := t.client.GetSession(ctx, &pb.GetSessionRequest{SessionId: in.SessionID})
+	resp, err := t.client.GetSession(ctx, &pb.GetSessionRequest{SessionId: in.SessionID, IncludePinnedContext: in.IncludePinnedContext})
 	if err != nil {
 		return nil, GetSessionOutput{}, toolError("GetSession", err)
 	}
@@ -91,6 +92,9 @@ func (t *getSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in 
 	}
 	if sess.ErrorDetail != nil {
 		out.ErrorDetail = *sess.ErrorDetail
+	}
+	if in.IncludePinnedContext {
+		out.PinnedContext = resp.GetPinnedContext()
 	}
 	return nil, out, nil
 }

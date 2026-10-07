@@ -227,7 +227,16 @@ func (s *SessionServer) GetSession(ctx context.Context, req *pb.GetSessionReques
 	// already rejected any call with no claims before this handler ran, so
 	// there is no anonymous read path despite the absence of an explicit
 	// check.
-	return &pb.GetSessionResponse{Session: sessionToProto(sess)}, nil
+	resp := &pb.GetSessionResponse{Session: sessionToProto(sess)}
+	// Text is returned only on request, and never logged (presence/bytes are on Session).
+	if req.GetIncludePinnedContext() && sess.PinnedContextBytes > 0 {
+		text, err := s.store.Sessions().GetPinnedContext(ctx, id)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "get pinned context: %v", err)
+		}
+		resp.PinnedContext = text
+	}
+	return resp, nil
 }
 
 // ListSessions returns sessions matching req's filters, keyset-paginated
