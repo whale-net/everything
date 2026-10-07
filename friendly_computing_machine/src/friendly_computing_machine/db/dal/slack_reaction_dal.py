@@ -137,3 +137,49 @@ def list_active_reactions(
                 .order_by(SlackReaction.id)  # type: ignore[arg-type]
             ).all()
         )
+
+
+def reconcile_message_reactions(
+    slack_channel_slack_id: str,
+    message_ts: str,
+    slack_reactions: list[dict],
+    session: Optional[Session] = None,
+) -> tuple[int, int]:
+    """Make the active rows match Slack's `reactions` array for one message.
+
+    Only listed users count: Slack truncates `users` on heavily reacted
+    messages, so an unlisted user's active row is treated as removed.
+    Returns (added, removed); a second call with the same input returns (0, 0).
+    """
+    wanted: set[tuple[str, str]] = {
+        (user, normalize_emoji(r["name"]))
+        for r in slack_reactions
+        for user in (r.get("users") or [])
+    }
+    added = removed = 0
+    with SessionManager(session) as session:
+        active = list_active_reactions(
+            slack_channel_slack_id, message_ts, session=session
+        )
+        have = {(row.slack_user_slack_id, row.emoji) for row in active}
+        for user, emoji in sorted(wanted - have):
+            if add_reaction(
+                slack_channel_slack_id,
+                message_ts,
+                user,
+                emoji,
+                added_by_backfill=True,
+                session=session,
+            ):
+                added += 1
+        for user, emoji in sorted(have - wanted):
+            if remove_reaction(
+                slack_channel_slack_id,
+                message_ts,
+                user,
+                emoji,
+                removed_by_backfill=True,
+                session=session,
+            ):
+                removed += 1
+    return added, removed
