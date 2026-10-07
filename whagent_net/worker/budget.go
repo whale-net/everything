@@ -187,8 +187,13 @@ func eventCharge(ev events.Event) int {
 // or re-filtered. #2669 pins Tools' order for prompt-cache prefix
 // stability; rebuilding or re-sorting toolDefs here, even transiently,
 // would undo that.
-func fitToBudget(toolDefs []llm.ToolDefinition, evs []events.Event, budget int) []events.Event {
-	remaining := budget - toolDefsCharge(toolDefs)
+//
+// fixedCharge is the length of content that is sent on every turn and never
+// shortened or dropped (the definition system prompt plus the session's
+// pinned context, in the same character unit as eventCharge); it is charged
+// in full alongside toolDefs before any event is admitted.
+func fitToBudget(toolDefs []llm.ToolDefinition, evs []events.Event, budget, fixedCharge int) []events.Event {
+	remaining := budget - toolDefsCharge(toolDefs) - fixedCharge
 
 	if remaining <= 0 || len(evs) == 0 {
 		return floorWindow(evs)

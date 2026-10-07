@@ -54,7 +54,7 @@ func TestFitToBudget_EverythingFits_KeepsEveryEventInSeqOrder(t *testing.T) {
 		fitToBudgetTestEvent(t, 3, 50),
 	}
 
-	kept := fitToBudget(toolDefs, evs, 1_000_000)
+	kept := fitToBudget(toolDefs, evs, 1_000_000, 0)
 
 	require.Len(t, kept, 3)
 	assert.Equal(t, []int64{1, 2, 3}, []int64{kept[0].Seq, kept[1].Seq, kept[2].Seq},
@@ -74,7 +74,7 @@ func TestFitToBudget_TightBudget_DropsOldestEventsFirst(t *testing.T) {
 	// No tool defs charged, so the whole budget goes to events: exactly
 	// room for the two newest (100 + 100 = 200 <= 250) but not all three
 	// (300 > 250).
-	kept := fitToBudget(nil, evs, 250)
+	kept := fitToBudget(nil, evs, 250, 0)
 
 	require.Len(t, kept, 2, "only the two newest events fit under a 250-char budget")
 	assert.Equal(t, int64(2), kept[0].Seq)
@@ -103,8 +103,8 @@ func TestFitToBudget_MoreUnlockedTools_StrictlyFewerEventsKept(t *testing.T) {
 	// set is charged.
 	budget := toolDefsCharge(small) + 10_000
 
-	keptSmall := fitToBudget(small, evs, budget)
-	keptLarge := fitToBudget(large, evs, budget)
+	keptSmall := fitToBudget(small, evs, budget, 0)
+	keptLarge := fitToBudget(large, evs, budget, 0)
 
 	require.Len(t, keptSmall, 10, "the small tool set must leave room for every event")
 	assert.Less(t, len(keptLarge), len(keptSmall),
@@ -124,7 +124,7 @@ func TestFitToBudget_ToolDefsExceedBudget_FloorBehaviorNotEmpty(t *testing.T) {
 	}
 	budget := toolDefsCharge(toolDefs) - 1 // strictly less than toolDefs alone cost
 
-	kept := fitToBudget(toolDefs, evs, budget)
+	kept := fitToBudget(toolDefs, evs, budget, 0)
 
 	require.Len(t, kept, minFloorEvents, "the floor must keep exactly minFloorEvents event(s) rather than returning an empty projection")
 	assert.Equal(t, evs[len(evs)-1].EventID, kept[0].EventID, "the floor must keep the MOST RECENT event(s), not the oldest")
@@ -139,7 +139,7 @@ func TestFitToBudget_ToolDefsExceedBudget_FewerEventsThanFloor_KeepsAll(t *testi
 	evs := []events.Event{fitToBudgetTestEvent(t, 1, 50)}
 	budget := toolDefsCharge(toolDefs) - 1
 
-	kept := fitToBudget(toolDefs, evs, budget)
+	kept := fitToBudget(toolDefs, evs, budget, 0)
 
 	require.Len(t, kept, 1)
 	assert.Equal(t, evs[0].EventID, kept[0].EventID)
@@ -158,7 +158,7 @@ func TestFitToBudget_NewestSingleEventDoesNotFit_FloorApplies(t *testing.T) {
 	}
 	budget := toolDefsCharge(toolDefs) + 10 // remaining=10, too small for either event
 
-	kept := fitToBudget(toolDefs, evs, budget)
+	kept := fitToBudget(toolDefs, evs, budget, 0)
 
 	require.Len(t, kept, minFloorEvents)
 	assert.Equal(t, evs[len(evs)-1].EventID, kept[0].EventID)
@@ -174,7 +174,7 @@ func TestFitToBudget_NeverSplitsAnEvent(t *testing.T) {
 		fitToBudgetTestEvent(t, 2, 500), // big, newest -- doesn't fit
 	}
 	// Room for the small, older event alone, but not the big newest one.
-	kept := fitToBudget(nil, evs, 20)
+	kept := fitToBudget(nil, evs, 20, 0)
 
 	require.Len(t, kept, minFloorEvents, "the newest event doesn't fit and stops the fill -- the floor keeps the newest event anyway rather than falling back to the older, cheaper one")
 	assert.Equal(t, evs[1].EventID, kept[0].EventID, "fitToBudget must never skip the newest non-fitting event in favor of an older cheaper one")
@@ -191,13 +191,13 @@ func TestFitToBudget_Deterministic(t *testing.T) {
 	}
 	budget := toolDefsCharge(toolDefs) + 900
 
-	first := fitToBudget(toolDefs, evs, budget)
+	first := fitToBudget(toolDefs, evs, budget, 0)
 	for i := 0; i < 10; i++ {
 		// Fresh copies each call so aliasing can't mask a mutation bug as
 		// "determinism".
 		toolDefsCopy := append([]llm.ToolDefinition{}, toolDefs...)
 		evsCopy := append([]events.Event{}, evs...)
-		again := fitToBudget(toolDefsCopy, evsCopy, budget)
+		again := fitToBudget(toolDefsCopy, evsCopy, budget, 0)
 		require.Len(t, again, len(first))
 		for j := range first {
 			assert.Equal(t, first[j].EventID, again[j].EventID, "fitToBudget must return the identical kept set on every call over the same inputs")
@@ -219,12 +219,12 @@ func TestFitToBudget_DoesNotMutateOrReorderToolDefs(t *testing.T) {
 	original := append([]llm.ToolDefinition{}, toolDefs...)
 	evs := []events.Event{fitToBudgetTestEvent(t, 1, 50), fitToBudgetTestEvent(t, 2, 50)}
 
-	_ = fitToBudget(toolDefs, evs, 1_000_000)
+	_ = fitToBudget(toolDefs, evs, 1_000_000, 0)
 	assert.Equal(t, original, toolDefs, "fitToBudget must not mutate or reorder toolDefs")
 
 	// A budget that also exercises the floor path (toolDefs alone exceed
 	// budget) must leave toolDefs untouched too.
-	_ = fitToBudget(toolDefs, evs, 1)
+	_ = fitToBudget(toolDefs, evs, 1, 0)
 	assert.Equal(t, original, toolDefs, "fitToBudget must not mutate or reorder toolDefs even on the floor path")
 }
 
@@ -299,7 +299,7 @@ func TestFitToBudget_CutBetweenRequestAndResults_NeverOpensOnAnOrphan(t *testing
 	}
 
 	for budget := 0; budget <= 1_200; budget++ {
-		kept := fitToBudget(nil, evs, budget)
+		kept := fitToBudget(nil, evs, budget, 0)
 		if len(kept) == 0 {
 			continue
 		}
@@ -326,7 +326,7 @@ func TestFitToBudget_OversizedToolResult_StaysWithinBudget(t *testing.T) {
 
 	// A budget with room for the newest user turn and the clamped result,
 	// but nowhere near the result's raw length.
-	kept := fitToBudget(nil, evs, 25_000)
+	kept := fitToBudget(nil, evs, 25_000, 0)
 
 	require.Len(t, kept, 3, "a clamped oversized result must still be kept, not treated as unaffordable")
 	assert.Equal(t, int64(1), kept[0].Seq)
@@ -346,7 +346,7 @@ func TestFitToBudget_OversizedAssistantMessage_FallsBackToFloorWindow(t *testing
 		fitToBudgetToolResultEvent(t, 2, 0, 100), // its result
 	}
 
-	kept := fitToBudget(nil, evs, 1_000)
+	kept := fitToBudget(nil, evs, 1_000, 0)
 
 	require.NotEmpty(t, kept)
 	assert.Equal(t, events.EventTypeAssistantMessage, kept[0].Type,

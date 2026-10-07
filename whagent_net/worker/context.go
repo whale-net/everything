@@ -149,7 +149,7 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 			logging.Get("worker").WarnContext(ctx, "search-mode tool definitions alone exceed the context budget; keeping a minimal event floor instead of the full budgeted projection",
 				"session_id", in.SessionID, "turn", in.Turn, "overage_chars", overage)
 		}
-		all = fitToBudget(toolDefs, all, searchModeContextBudget)
+		all = fitToBudget(toolDefs, all, searchModeContextBudget, 0)
 	} else {
 		// Bulk mode, two bounds. The count ceiling is applied first and
 		// unchanged: it bounds how many event IDs land in the turn_context
@@ -166,7 +166,7 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 		// branch runs before ActivityListToolDefinitions for a bulk-mode
 		// turn, so no turn_tool_defs row exists yet (see
 		// bulkModeContextBudget).
-		all = fitToBudget(nil, all, bulkModeContextBudget)
+		all = fitToBudget(nil, all, bulkModeContextBudget, 0)
 	}
 
 	eventIDs := make([]uuid.UUID, len(all))
