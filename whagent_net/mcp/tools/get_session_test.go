@@ -102,3 +102,29 @@ func TestGetSession_RendersEveryTerminalReasonVariant(t *testing.T) {
 		})
 	}
 }
+
+func TestGetSession_PinnedContextOnlyWhenRequested(t *testing.T) {
+	text := "  héllo ☃\n"
+	var gotReq *pb.GetSessionRequest
+	fc := &fakeSessionServiceClient{
+		getSessionFunc: func(ctx context.Context, in *pb.GetSessionRequest) (*pb.GetSessionResponse, error) {
+			gotReq = in
+			resp := &pb.GetSessionResponse{Session: &pb.Session{SessionId: "s", PinnedContextPresent: true, PinnedContextBytes: 12}}
+			if in.IncludePinnedContext {
+				resp.PinnedContext = &text
+			}
+			return resp, nil
+		},
+	}
+	tool := &getSessionTool{client: fc}
+
+	_, out, err := tool.call(context.Background(), nil, GetSessionInput{SessionID: "s"})
+	require.NoError(t, err)
+	assert.False(t, gotReq.IncludePinnedContext)
+	assert.Empty(t, out.PinnedContext)
+
+	_, out, err = tool.call(context.Background(), nil, GetSessionInput{SessionID: "s", IncludePinnedContext: true})
+	require.NoError(t, err)
+	assert.True(t, gotReq.IncludePinnedContext)
+	assert.Equal(t, text, out.PinnedContext)
+}

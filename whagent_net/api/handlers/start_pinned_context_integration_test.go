@@ -132,3 +132,54 @@ func TestStartSession_PinnedContext(t *testing.T) {
 		assert.Equal(t, assertedUser.Sub, resp.Session.OnBehalfOf.Sub)
 	})
 }
+
+func TestGetSession_IncludePinnedContext(t *testing.T) {
+	srv, store := newOnBehalfOfTestServer(t, fcmClientID)
+	ctx := context.Background()
+	seedServiceTestAgent(t, ctx, store, "agent-1", nil)
+	caller := ctxAs(humanClaims("alice"))
+
+	// Multi-byte UTF-8, leading/trailing whitespace and newlines.
+	pc := "  héllo ☃ 日本\n\n\tline two \r\n  "
+	started, err := srv.StartSession(caller, &pb.StartSessionRequest{AgentId: "agent-1", PinnedContext: &pc})
+	require.NoError(t, err)
+	id := started.Session.SessionId
+
+	t.Run("flag off returns no text but reports presence and bytes", func(t *testing.T) {
+		resp, err := srv.GetSession(caller, &pb.GetSessionRequest{SessionId: id})
+		require.NoError(t, err)
+		assert.Nil(t, resp.PinnedContext)
+		assert.True(t, resp.Session.PinnedContextPresent)
+		assert.EqualValues(t, len(pc), resp.Session.PinnedContextBytes)
+	})
+
+	t.Run("flag on round-trips exact bytes", func(t *testing.T) {
+		resp, err := srv.GetSession(caller, &pb.GetSessionRequest{SessionId: id, IncludePinnedContext: true})
+		require.NoError(t, err)
+		require.NotNil(t, resp.PinnedContext)
+		assert.Equal(t, pc, resp.GetPinnedContext())
+	})
+
+	t.Run("flag on without pinned context returns none", func(t *testing.T) {
+		s, err := srv.StartSession(caller, &pb.StartSessionRequest{AgentId: "agent-1"})
+		require.NoError(t, err)
+		resp, err := srv.GetSession(caller, &pb.GetSessionRequest{SessionId: s.Session.SessionId, IncludePinnedContext: true})
+		require.NoError(t, err)
+		assert.Nil(t, resp.PinnedContext)
+		assert.False(t, resp.Session.PinnedContextPresent)
+	})
+
+	t.Run("delegated start and other readers allowed as GetSession", func(t *testing.T) {
+		d, err := srv.StartSession(delegatingClaims("fcm-service", fcmClientID), &pb.StartSessionRequest{
+			AgentId:       "agent-1",
+			OnBehalfOf:    subjectToTestProto(assertedUser),
+			PinnedContext: strPtr2("delegated ctx"),
+		})
+		require.NoError(t, err)
+		for _, c := range []context.Context{delegatedUserClaims(), thirdPartyClaims(), ctxAs(humanClaims("bob"))} {
+			resp, err := srv.GetSession(c, &pb.GetSessionRequest{SessionId: d.Session.SessionId, IncludePinnedContext: true})
+			require.NoError(t, err)
+			assert.Equal(t, "delegated ctx", resp.GetPinnedContext())
+		}
+	})
+}
