@@ -23,11 +23,27 @@ def load_negative_emoji() -> frozenset[str]:
     return parse_negative_emoji(os.environ.get("FCM_SHITPOSTER_NEGATIVE_EMOJI", ""))
 
 
+DEFAULT_LORE_TOP_SHARE = 0.10
+DEFAULT_LORE_WINDOW_DAYS = 30
+
+
 def load_lore_top_share() -> float:
     """Read FCM_SHITPOSTER_LORE_TOP_SHARE (fraction in (0, 1]); default 0.10."""
-    raise NotImplementedError
+    raw = os.environ.get("FCM_SHITPOSTER_LORE_TOP_SHARE", "").strip()
+    if not raw:
+        return DEFAULT_LORE_TOP_SHARE
+    share = float(raw)
+    if not 0 < share <= 1:
+        raise ValueError(f"FCM_SHITPOSTER_LORE_TOP_SHARE must be in (0, 1], got {raw!r}")
+    return share
 
 
 def load_lore_window_days() -> int:
     """Read FCM_SHITPOSTER_LORE_WINDOW_DAYS (positive int); default 30."""
-    raise NotImplementedError
+    raw = os.environ.get("FCM_SHITPOSTER_LORE_WINDOW_DAYS", "").strip()
+    if not raw:
+        return DEFAULT_LORE_WINDOW_DAYS
+    days = int(raw)
+    if days < 1:
+        raise ValueError(f"FCM_SHITPOSTER_LORE_WINDOW_DAYS must be >= 1, got {raw!r}")
+    return days

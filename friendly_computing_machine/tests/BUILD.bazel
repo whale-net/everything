@@ -319,6 +319,16 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Lore promotion: top-share boundary, exclusions, window persistence, idempotent reruns.
+py_test(
+    name = "test_shitposter_lore_promotion",
+    size = "small",
+    srcs = [
+        "shitposter/test_lore_promotion.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Shitposter migration: single chain head, upgrade/downgrade round-trip.
 py_test(
     name = "test_shitposter_migration",
