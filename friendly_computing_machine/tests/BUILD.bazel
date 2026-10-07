@@ -160,6 +160,7 @@ py_test(
     size = "small",
     srcs = [
         "slack_sync/conftest.py",
+        "slack_sync/test_archive_backfill.py",
         "slack_sync/test_message_channel_gate.py",
         "slack_sync/test_message_upsert_dedupe.py",
         "slack_sync/test_shitposter_capture.py",

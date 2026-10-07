@@ -204,6 +204,22 @@ def is_channel_opted_in(
         return bool(row)
 
 
+def list_opted_in_channel_slack_ids(session: Optional[Session] = None) -> set[str]:
+    """Slack ids of channels whose current opt-in row is opted in (uncached)."""
+    with SessionManager(session) as session:
+        return set(
+            session.exec(
+                select(SlackChannel.slack_id)
+                .join(
+                    ShitposterChannelOptIn,
+                    SlackChannel.id == ShitposterChannelOptIn.slack_channel_id,  # type: ignore[arg-type]
+                )
+                .where(ShitposterChannelOptIn.opted_in.is_(True))  # type: ignore[attr-defined]
+                .where(ShitposterChannelOptIn.valid_to.is_(None))  # type: ignore[union-attr]
+            ).all()
+        )
+
+
 def is_shitposter_enabled(session: Optional[Session] = None) -> bool:
     """True unless a current kill-switch row says disabled."""
     with SessionManager(session) as session:

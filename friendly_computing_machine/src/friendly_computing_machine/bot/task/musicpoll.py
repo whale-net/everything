@@ -3,6 +3,8 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Optional
 
+from slack_sdk.errors import SlackApiError
+
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
     get_bot_config,
     get_slack_web_client,
@@ -19,6 +21,8 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     get_music_poll_responses,
     get_unprocessed_music_poll_instances,
     insert_music_poll_instance,
+    list_opted_in_channel_slack_ids,
+    reconcile_message_reactions,
     insert_music_poll_responses,
     upsert_message,
 )
@@ -155,10 +159,36 @@ class MusicPollInit(OneOffTask):
         return TaskInstanceStatus.OK
 
 
+class _ReactionBackfillState:
+    """Reaction reconcile for one run; a missing reactions:read scope is
+    logged once and skips the rest of the reaction work."""
+
+    def __init__(self) -> None:
+        self.disabled = False
+
+    def reconcile(self, channel_slack_id: str, msg: dict) -> None:
+        if self.disabled or msg.get("ts") is None:
+            return
+        try:
+            reconcile_message_reactions(
+                channel_slack_id, msg["ts"], msg.get("reactions") or []
+            )
+        except SlackApiError as e:
+            if e.response is not None and e.response.get("error") == "missing_scope":
+                logger.error(
+                    "reaction backfill skipped: Slack app lacks reactions:read"
+                )
+                self.disabled = True
+            else:
+                raise
+
+
 # TODO - this should probably not be a job, and instead moved into the music poll processor
 class MusicPollArchiveMessages(AbstractTask):
     """
-    Archive the messages in the music poll channels
+    Daily archive of messages in music-poll channels and Shitposter-opted-in
+    channels. Reactions are reconciled for opted-in channels only. The class
+    name is the registered task identity, so it is kept.
     """
 
     @property
@@ -170,9 +200,15 @@ class MusicPollArchiveMessages(AbstractTask):
 
         bot_config = get_bot_config(should_ignore_cache=True)
         # TODO - this is the same logic as the event handler for now
-        archive_channel_slack_ids = {
+        music_poll_channel_slack_ids = {
             info.slack_channel.slack_id for info in bot_config.music_poll_infos
         }
+        # current opt-in state, read uncached from the control plane
+        opted_in_channel_slack_ids = list_opted_in_channel_slack_ids()
+        archive_channel_slack_ids = (
+            music_poll_channel_slack_ids | opted_in_channel_slack_ids
+        )
+        reaction_state = _ReactionBackfillState()
 
         slack_client = get_slack_web_client()
         # free slack is 90 days, no need for more
@@ -185,6 +221,11 @@ class MusicPollArchiveMessages(AbstractTask):
                 channel_slack_id,
                 slack_client,
                 max_ts_offset=search_start_unix_timestamp,
+                reaction_state=(
+                    reaction_state
+                    if channel_slack_id in opted_in_channel_slack_ids
+                    else None
+                ),
             )
         logger.info("primary message backfill completed")
 
@@ -201,6 +242,7 @@ class MusicPollArchiveMessages(AbstractTask):
         slack_channel_slack_id: str,
         slack_client: SlackWebClientFCM,
         max_ts_offset: Optional[float] = None,
+        reaction_state: Optional["_ReactionBackfillState"] = None,
     ) -> None:
         if max_ts_offset is None:
             # 30 day lookback by default, should be enough
@@ -231,6 +273,8 @@ class MusicPollArchiveMessages(AbstractTask):
                 # logger.info('upserting message %s %s %s', create.slack_id, create.ts, create.text)
                 message_instance = upsert_message(create)
                 ids.append(message_instance.id)
+                if reaction_state is not None:
+                    reaction_state.reconcile(slack_channel_slack_id, msg)
                 logger.debug("upserted message %s", message_instance.id)
 
                 # if this is a thread message, pick up replies
