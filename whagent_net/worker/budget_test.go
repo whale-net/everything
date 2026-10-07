@@ -404,3 +404,35 @@ func TestFloorWindow_EmptyInput_ReturnsEmpty(t *testing.T) {
 	assert.Empty(t, floorWindow(nil))
 	assert.Empty(t, floorWindow([]events.Event{}))
 }
+
+func TestFitToBudget_FixedCharge_KeepsStrictlyFewerEvents(t *testing.T) {
+	evs := make([]events.Event, 10)
+	for i := range evs {
+		evs[i] = fitToBudgetTestEvent(t, int64(i+1), 1000)
+	}
+	for name, tools := range map[string][]llm.ToolDefinition{
+		"bulk":   nil,
+		"search": {fitToBudgetTestTool("search_tools", 5)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			budget := toolDefsCharge(tools) + 10_000
+			require.Len(t, fitToBudget(tools, evs, budget, 0), 10)
+			kept := fitToBudget(tools, evs, budget, 3000)
+			require.Len(t, kept, 7)
+			assert.Equal(t, evs[3].EventID, kept[0].EventID, "oldest events are the ones dropped")
+		})
+	}
+}
+
+func TestFitToBudget_FixedChargeAtOrOverBudget_FloorWindow(t *testing.T) {
+	evs := []events.Event{
+		fitToBudgetTestEvent(t, 1, 50),
+		fitToBudgetTestEvent(t, 2, 50),
+		fitToBudgetTestEvent(t, 3, 50),
+	}
+	for _, fixed := range []int{1000, 5000} {
+		kept := fitToBudget(nil, evs, 1000, fixed)
+		require.Len(t, kept, minFloorEvents)
+		assert.Equal(t, evs[2].EventID, kept[0].EventID)
+	}
+}
