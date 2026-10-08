@@ -135,11 +135,16 @@ class WhagentClient:
     # SessionService
     # ------------------------------------------------------------------
 
+    def supports_pinned_context(self) -> bool:
+        """True when the whagent_net proto carries StartSession.pinned_context."""
+        return "pinned_context" in self._pb2.StartSessionRequest.DESCRIPTOR.fields_by_name
+
     def start_session(
         self,
         agent_id: str,
         first_turn: Optional[str] = None,
         on_behalf_of: Optional[tuple[str, str]] = None,
+        pinned_context: Optional[str] = None,
     ) -> session_pb2.Session:
         """Start a session, optionally sending its first turn.
 
@@ -147,12 +152,17 @@ class WhagentClient:
         carries no first-turn field of its own, so a non-empty first_turn
         is a second SendTurn call after StartSession succeeds.
 
+        pinned_context is system-level text the session sees on every turn;
+        callers check supports_pinned_context() before passing it.
+
         on_behalf_of is the linked user's (iss, sub) Keycloak identity, or
         None to leave the field unset (a non-delegated, self-acting start).
         The assertion is authorized by this client's own allowlisted
         client_id, not by any credential the Slack user holds.
         """
         request = self._pb2.StartSessionRequest(agent_id=agent_id)
+        if pinned_context is not None:
+            request.pinned_context = pinned_context
         if on_behalf_of is not None:
             iss, sub = on_behalf_of
             request.on_behalf_of.CopyFrom(

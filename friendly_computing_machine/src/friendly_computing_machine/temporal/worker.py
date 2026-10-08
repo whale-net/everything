@@ -63,7 +63,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     expire_pending_suggestions_activity,
     generate_shitpost_activity,
     post_and_record_shitpost_activity,
+    record_scheduled_skip_activity,
     resolve_persona_activity,
+    resolve_snapshot_activity,
     send_ephemeral_notice_activity,
     shitposter_gate_activity,
 )
@@ -161,6 +163,8 @@ ACTIVITIES = [
     generate_shitpost_activity,
     check_guardrails_activity,
     post_and_record_shitpost_activity,
+    record_scheduled_skip_activity,
+    resolve_snapshot_activity,
     send_ephemeral_notice_activity,
     expire_pending_suggestions_activity,
     drain_suggestion_replies_activity,

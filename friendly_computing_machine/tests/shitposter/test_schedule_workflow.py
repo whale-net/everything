@@ -35,6 +35,10 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterPersona,
     ShitposterPersonaRevision,
     ShitposterPost,
+    ShitposterScheduledSkip,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_context import (
+    ShitposterContextSnapshot,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
@@ -69,6 +73,8 @@ TABLES = [
     ShitposterPersona.__table__,
     ShitposterPersonaRevision.__table__,
     ShitposterPost.__table__,
+    ShitposterContextSnapshot.__table__,
+    ShitposterScheduledSkip.__table__,
 ]
 
 
@@ -82,7 +88,10 @@ class FakeWhagent:
     def service_subject(self):
         return SERVICE
 
-    def start_session(self, agent_id, first_turn=None, on_behalf_of=None):
+    def supports_pinned_context(self):
+        return False
+
+    def start_session(self, agent_id, first_turn=None, on_behalf_of=None, pinned_context=None):
         self._sessions += 1
         self.starts.append({"first_turn": first_turn, "on_behalf_of": on_behalf_of})
         return type("S", (), {"session_id": f"sess-{self._sessions}"})()
@@ -186,6 +195,8 @@ async def _worker(env):
             act.check_guardrails_activity,
             act.post_and_record_shitpost_activity,
             act.send_ephemeral_notice_activity,
+            act.resolve_snapshot_activity,
+            act.record_scheduled_skip_activity,
         ],
         workflow_runner=SandboxedWorkflowRunner(
             restrictions=SandboxRestrictions.default.with_passthrough_all_modules()

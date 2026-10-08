@@ -106,6 +106,11 @@ def pre_engine():
 @pytest.fixture
 def engine(pre_engine, migration):
     _run(migration, "upgrade", pre_engine)
+    # the ORM maps the post's snapshot column; this revision predates it
+    with pre_engine.begin() as conn:
+        conn.exec_driver_sql(
+            "ALTER TABLE fcm.shitposterpost ADD COLUMN context_snapshot_id INTEGER"
+        )
     return pre_engine
 
 
