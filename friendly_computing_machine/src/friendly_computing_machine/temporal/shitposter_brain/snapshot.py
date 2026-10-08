@@ -43,6 +43,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     JobBody,
     register_job_body,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.fold import (
+    fold_stale_lore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +182,9 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
     budget = load_context_token_budget()
     half_life = load_lore_decay_half_life_hours()
     ranked_cap = load_snapshot_ranked_lore_cap()
+
+    # folds before the candidate read so stale lore leaves the pool in this same transaction
+    fold_stale_lore(persona_id, now=now, session=session)
 
     attributes = [
         Candidate(ITEM_ATTRIBUTE, row.id, row.text)
