@@ -76,3 +76,60 @@ func TestChart_ResolveArgoApplicationName_DevProdIndependent(t *testing.T) {
 		t.Errorf("prod (no override set): ResolveArgoApplicationName = %q, want convention %q", got, "acme-foo-prod")
 	}
 }
+
+// TestArgoRevisionMatches covers the revision forms ArgoCD reports: chart
+// versions with or without a leading "v", comma-joined multi-source lists,
+// and short vs. full git SHAs -- without letting one version prefix-match
+// another.
+func TestArgoRevisionMatches(t *testing.T) {
+	cases := []struct {
+		observed string
+		expected []string
+		want     bool
+	}{
+		{"0.0.39", []string{"v0.0.39"}, true},
+		{"v0.0.39", []string{"0.0.39"}, true},
+		{"abc1234def,0.0.39", []string{"0.0.39"}, true},
+		{"0.0.38", []string{"0.0.39"}, false},
+		{"1.10.1000", []string{"1.10.100"}, false},
+		{"abc1234def5678", []string{"", "abc1234"}, true},
+		{"", []string{"0.0.39"}, false},
+		{"0.0.39", []string{""}, false},
+	}
+	for _, c := range cases {
+		if got := ArgoRevisionMatches(c.observed, c.expected...); got != c.want {
+			t.Errorf("ArgoRevisionMatches(%q, %q) = %v, want %v", c.observed, c.expected, got, c.want)
+		}
+	}
+}
+
+// TestClassifyArgoObservation_PinsToRevision proves a Synced/Healthy/
+// Succeeded (or Failed) observation for the previous release is pending,
+// not this promotion's outcome, while legacy rows without revisions keep
+// the revision-blind rule.
+func TestClassifyArgoObservation_PinsToRevision(t *testing.T) {
+	healthy := func(syncRev, opRev string) PromotionSyncEvent {
+		return PromotionSyncEvent{SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded", SyncRevision: syncRev, OperationRevision: opRev}
+	}
+	cases := []struct {
+		name string
+		e    PromotionSyncEvent
+		want PromotionSyncOutcome
+	}{
+		{"previous release", healthy("0.0.38", "0.0.38"), PromotionSyncOutcomePending},
+		{"synced but operation still previous", healthy("0.0.39", "0.0.38"), PromotionSyncOutcomePending},
+		{"this release", healthy("0.0.39", "0.0.39"), PromotionSyncOutcomeSyncedHealthy},
+		{"legacy row without revisions", healthy("", ""), PromotionSyncOutcomeSyncedHealthy},
+		{"previous release hook failed", PromotionSyncEvent{SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Failed", SyncRevision: "0.0.38", OperationRevision: "0.0.38"}, PromotionSyncOutcomePending},
+		{"this release hook failed", PromotionSyncEvent{SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Failed", SyncRevision: "0.0.39", OperationRevision: "0.0.39"}, PromotionSyncOutcomeSyncFailed},
+		{"this release degraded", PromotionSyncEvent{SyncStatus: "Synced", HealthStatus: "Degraded", OperationPhase: "Succeeded", SyncRevision: "0.0.39", OperationRevision: "0.0.39"}, PromotionSyncOutcomeSyncFailed},
+	}
+	for _, c := range cases {
+		if got := ClassifyArgoObservation(c.e, "0.0.39", ""); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := ClassifyArgoObservation(healthy("0.0.38", "0.0.38")); got != PromotionSyncOutcomeSyncedHealthy {
+		t.Errorf("no expected revision: got %q, want revision-blind synced_healthy", got)
+	}
+}

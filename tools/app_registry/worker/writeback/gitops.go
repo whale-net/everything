@@ -189,6 +189,7 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 		Domain:              in.Domain,
 		ChartName:           chart.GetFullName(),
 		ArgoApplicationName: resolveArgoApplicationName(chart, in.EnvironmentKey),
+		TargetRevision:      targetRevision,
 		StateHash:           resp.StateHash,
 		RenderedAt:          time.Now().UTC(),
 		Document:            doc,

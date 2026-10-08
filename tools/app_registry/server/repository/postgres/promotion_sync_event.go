@@ -17,11 +17,11 @@ import (
 // package's convention (see AppBuildLogRepository/artifact.go) is one
 // receiver type per repository.*Repository interface, not per table.
 
-const promotionSyncEventColumns = `sync_event_id, promotion_id, source, sync_status, health_status, operation_phase, occurred_at`
+const promotionSyncEventColumns = `sync_event_id, promotion_id, source, sync_status, health_status, operation_phase, sync_revision, operation_revision, occurred_at`
 
 func scanPromotionSyncEvent(row pgx.Row) (repository.PromotionSyncEvent, error) {
 	var e repository.PromotionSyncEvent
-	if err := row.Scan(&e.SyncEventID, &e.PromotionID, &e.Source, &e.SyncStatus, &e.HealthStatus, &e.OperationPhase, &e.OccurredAt); err != nil {
+	if err := row.Scan(&e.SyncEventID, &e.PromotionID, &e.Source, &e.SyncStatus, &e.HealthStatus, &e.OperationPhase, &e.SyncRevision, &e.OperationRevision, &e.OccurredAt); err != nil {
 		return repository.PromotionSyncEvent{}, err
 	}
 	return e, nil
@@ -36,10 +36,10 @@ func scanPromotionSyncEvent(row pgx.Row) (repository.PromotionSyncEvent, error) 
 // (see postgres/errors.go's translatePgError doc comment).
 func (r *promotionRepo) RecordSyncEvent(ctx context.Context, e repository.PromotionSyncEvent) (*repository.PromotionSyncEvent, error) {
 	row := r.ex.QueryRow(ctx, `
-		INSERT INTO promotion_sync_event (promotion_id, source, sync_status, health_status, operation_phase)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO promotion_sync_event (promotion_id, source, sync_status, health_status, operation_phase, sync_revision, operation_revision)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+promotionSyncEventColumns,
-		e.PromotionID, e.Source, e.SyncStatus, e.HealthStatus, e.OperationPhase)
+		e.PromotionID, e.Source, e.SyncStatus, e.HealthStatus, e.OperationPhase, e.SyncRevision, e.OperationRevision)
 	created, err := scanPromotionSyncEvent(row)
 	if err != nil {
 		if de, ok := translatePgError(err, fmt.Sprintf("promotion sync event for promotion %s", e.PromotionID)); ok {

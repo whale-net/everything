@@ -162,9 +162,9 @@ func TestWritebackWorkflow_TriggersArgoSyncAfterRecordWritebackResult(t *testing
 	registerActivityStubs(env)
 
 	in := WritebackInput{PromotionID: "promo-5", EnvironmentKey: "stage", Domain: "acme", StateHash: "hash-5"}
-	rendered := RenderedState{EnvironmentKey: "stage", Domain: "acme", ChartName: "foo", ArgoApplicationName: "foo-stage", StateHash: "hash-5", Document: []byte(`{"ok":true}`)}
+	rendered := RenderedState{EnvironmentKey: "stage", Domain: "acme", ChartName: "foo", ArgoApplicationName: "foo-stage", TargetRevision: "v0.0.39", StateHash: "hash-5", Document: []byte(`{"ok":true}`)}
 	want := PublishResult{Location: "acme/foo/versions/stage.yaml", CommitSHA: "cafef00d"}
-	wantArgoIn := ArgoSyncInput{PromotionID: "promo-5", Domain: "acme", ApplicationName: "foo-stage"}
+	wantArgoIn := ArgoSyncInput{PromotionID: "promo-5", Domain: "acme", ApplicationName: "foo-stage", ExpectedRevision: "v0.0.39", ExpectedCommitSHA: "cafef00d"}
 
 	var calls []string
 	env.OnActivity(ActivityRenderEnvironmentState, mock.Anything, in).Return(rendered, nil).Once().
@@ -209,7 +209,7 @@ func TestWritebackWorkflow_ArgoApplicationNameUsesOverrideVerbatim(t *testing.T)
 	in := WritebackInput{PromotionID: "promo-6", EnvironmentKey: "stage", Domain: "acme", StateHash: "hash-6"}
 	rendered := RenderedState{EnvironmentKey: "stage", Domain: "acme", ChartName: "foo", ArgoApplicationName: "legacy-foo-app", StateHash: "hash-6", Document: []byte(`{"ok":true}`)}
 	want := PublishResult{Location: "acme/foo/versions/stage.yaml", CommitSHA: "cafef00e"}
-	wantArgoIn := ArgoSyncInput{PromotionID: "promo-6", Domain: "acme", ApplicationName: "legacy-foo-app"}
+	wantArgoIn := ArgoSyncInput{PromotionID: "promo-6", Domain: "acme", ApplicationName: "legacy-foo-app", ExpectedCommitSHA: "cafef00e"}
 
 	env.OnActivity(ActivityRenderEnvironmentState, mock.Anything, in).Return(rendered, nil).Once()
 	env.OnActivity(ActivityPublish, mock.Anything, rendered).Return(want, nil).Once()

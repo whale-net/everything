@@ -66,9 +66,10 @@ const (
 	// worker/writeback/argosync.go's ArgoSyncActivities.
 	ActivityTriggerArgoRefresh = "TriggerArgoRefresh"
 	// ActivityPollArgoSyncStatus polls ArgoCD's sync/health status for a
-	// promotion's target Application up to 3 times, 2 minutes apart,
-	// recording one promotion_sync_event row (source = poll_observed) per
-	// attempt and stopping early once a terminal state is observed --
+	// promotion's target Application every 15 seconds for up to ~15
+	// minutes, recording a promotion_sync_event row (source =
+	// poll_observed) whenever the observation changes and stopping early
+	// once a terminal state for the promotion's own revision is observed --
 	// FR3/FR4/FR5, NFR3, issue #1030. See worker/writeback/argosync.go's
 	// ArgoSyncActivities.
 	ActivityPollArgoSyncStatus = "PollArgoSyncStatus"
@@ -127,6 +128,11 @@ type RenderedState struct {
 	// re-derived by the workflow itself -- see WritebackWorkflow's own
 	// comment where it's read.
 	ArgoApplicationName string
+	// TargetRevision is the chart version this render points the
+	// environment at -- the revision ArgoCD must report before
+	// PollArgoSyncStatus treats a Synced/Healthy observation as this
+	// promotion's (see ArgoSyncInput.ExpectedRevision).
+	TargetRevision string
 	// StateHash is read back from the GetEnvironmentState response itself
 	// (not copied from WritebackInput), so Publish's no-op check reflects
 	// what was actually rendered just now, not what the outbox row
@@ -255,21 +261,23 @@ func WritebackWorkflow(ctx workflow.Context, in WritebackInput) (PublishResult, 
 	// informative, and PollArgoSyncStatus's own attempt loop/timeout
 	// independently guards against ArgoCD being genuinely unreachable.
 	argoIn := ArgoSyncInput{
-		PromotionID:     in.PromotionID,
-		Domain:          in.Domain,
-		ApplicationName: rendered.ArgoApplicationName,
+		PromotionID:       in.PromotionID,
+		Domain:            in.Domain,
+		ApplicationName:   rendered.ArgoApplicationName,
+		ExpectedRevision:  rendered.TargetRevision,
+		ExpectedCommitSHA: result.CommitSHA,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityTriggerArgoRefresh, argoIn).Get(ctx, nil); err != nil {
 		workflow.GetLogger(ctx).Error("trigger argo refresh failed after successful publish", "promotion_id", in.PromotionID, "error", err)
 	}
 
-	// PollArgoSyncStatus's own internal loop runs up to ~6 minutes (NFR3),
+	// PollArgoSyncStatus's own internal loop runs up to ~15 minutes,
 	// so it gets its own workflow.ActivityOptions with a much longer
 	// StartToCloseTimeout than the 30s `ao` used for the rest of this
 	// workflow -- reusing `ao` here would time out the activity partway
 	// through its own bounded poll loop.
 	pollAO := workflow.ActivityOptions{
-		StartToCloseTimeout: 7 * time.Minute,
+		StartToCloseTimeout: pollArgoSyncStartToClose,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts: 3,
 		},

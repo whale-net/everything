@@ -265,3 +265,43 @@ func TestGetStatus_NonOKStatus(t *testing.T) {
 		})
 	}
 }
+
+// TestGetApplicationStatus_Revisions proves the revisions a sync status and
+// operation phase refer to are surfaced, covering single- and multi-source
+// shapes, so callers can tell "synced to the new release" apart from
+// "still synced to the previous one".
+func TestGetApplicationStatus_Revisions(t *testing.T) {
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"status": {
+				"sync": {
+					"status": "Synced",
+					"revision": "0.0.39",
+					"revisions": ["0.0.39", "abc123"],
+					"comparedTo": {"source": {"targetRevision": "v0.0.39"}, "sources": [{"targetRevision": "main"}]}
+				},
+				"health": {"status": "Healthy"},
+				"operationState": {
+					"phase": "Succeeded",
+					"operation": {"sync": {"revision": "0.0.38"}},
+					"syncResult": {"revision": "0.0.38"}
+				}
+			}
+		}`))
+	})
+
+	st, err := c.GetApplicationStatus(context.Background(), "proj", "app")
+	if err != nil {
+		t.Fatalf("GetApplicationStatus: %v", err)
+	}
+	if got, want := strings.Join(st.SyncRevisions, ","), "0.0.39,abc123,v0.0.39,main"; got != want {
+		t.Errorf("SyncRevisions = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(st.OperationRevisions, ","), "0.0.38"; got != want {
+		t.Errorf("OperationRevisions = %q, want %q", got, want)
+	}
+	if st.SyncStatus != "Synced" || st.HealthStatus != "Healthy" || st.OperationPhase != "Succeeded" {
+		t.Errorf("status triple = %q/%q/%q", st.SyncStatus, st.HealthStatus, st.OperationPhase)
+	}
+}

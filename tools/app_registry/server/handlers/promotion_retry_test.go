@@ -116,8 +116,13 @@ func TestRetryArgoSync_Success_StartsWorkflowWithCorrectInput(t *testing.T) {
 	promotionID := promoteChart(t, f, "dev", "retry-success")
 	srv, temporalClient := newMockTemporalPromotionServer(f)
 
+	details, err := f.repo.Promotions().GetDetails(t.Context(), promotionID)
+	if err != nil {
+		t.Fatalf("GetDetails: %v", err)
+	}
 	wantArgoIn := writeback.ArgoSyncInput{
 		PromotionID: promotionID, Domain: "demo", ApplicationName: "demo-achart-dev", IsRetry: true,
+		ExpectedRevision: details.ToVersion, ExpectedCommitSHA: details.WritebackCommitSHA,
 	}
 	run := &mocks.WorkflowRun{}
 	temporalClient.On("ExecuteWorkflow", mock.Anything, mock.MatchedBy(func(opts client.StartWorkflowOptions) bool {

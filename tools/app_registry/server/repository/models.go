@@ -559,7 +559,52 @@ type PromotionSyncEvent struct {
 	// ArgoCD's health rollup excludes hooks entirely -- see
 	// DerivePromotionSyncOutcome's doc comment.
 	OperationPhase string
-	OccurredAt     time.Time
+	// SyncRevision/OperationRevision are the comma-joined revisions ArgoCD
+	// reported SyncStatus and OperationPhase against (migration 027), ""
+	// on trigger rows and on rows recorded before revisions were tracked.
+	// A Synced/Succeeded pair only belongs to this promotion when these
+	// match its version -- see ArgoRevisionMatches.
+	SyncRevision      string
+	OperationRevision string
+	OccurredAt        time.Time
+}
+
+// ArgoRevisionMatches reports whether observed (a comma-joined revision
+// list, as stored in PromotionSyncEvent.SyncRevision/OperationRevision)
+// contains any of expected: a chart version (compared ignoring a leading
+// "v") or a git commit SHA (compared as a prefix either way, so short and
+// full SHAs match). Empty expected values are ignored.
+func ArgoRevisionMatches(observed string, expected ...string) bool {
+	for _, o := range strings.Split(observed, ",") {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		for _, e := range expected {
+			if e == "" {
+				continue
+			}
+			if strings.TrimPrefix(o, "v") == strings.TrimPrefix(e, "v") {
+				return true
+			}
+			if isGitSHA(o) && isGitSHA(e) && (strings.HasPrefix(o, e) || strings.HasPrefix(e, o)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isGitSHA(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // PromotionSyncEvent.Source values -- must match promotion_sync_event's
@@ -635,39 +680,62 @@ type PromotionDetails struct {
 // back to scanning further back in history for an earlier terminal
 // observation.
 //
+// expectedRevisions are the revisions that identify THIS promotion in
+// ArgoCD (its chart version, its writeback commit SHA); see
+// ClassifyArgoObservation for how they gate the outcome.
+func DerivePromotionSyncOutcome(events []PromotionSyncEvent, expectedRevisions ...string) (outcome PromotionSyncOutcome, currentSyncStatus, currentHealthStatus, currentOperationPhase string) {
+	if len(events) == 0 {
+		return PromotionSyncOutcomePending, "", "", ""
+	}
+	last := events[len(events)-1]
+	return ClassifyArgoObservation(last, expectedRevisions...), last.SyncStatus, last.HealthStatus, last.OperationPhase
+}
+
+// ClassifyArgoObservation classifies one ArgoCD observation for a
+// promotion -- shared by DerivePromotionSyncOutcome and the worker's poll
+// loop (worker/writeback/argosync.go), so "stop polling" and "what the page
+// shows" never disagree.
+//
 // SYNCED_HEALTHY requires all three of SyncStatus==Synced,
 // HealthStatus==Healthy, AND OperationPhase==Succeeded -- not just the
 // first two. ArgoCD's health rollup excludes hook resources (PreSync/Sync/
 // PostSync, e.g. a migration Job run via the argocd.argoproj.io/hook
 // annotation) entirely, so Synced+Healthy alone can be observed while a
-// PostSync hook is still Running. OperationPhase is ArgoCD's own
-// confirmation that the most recent sync operation, including every hook
-// it ran, has fully completed -- see worker/writeback/argosync.go's
-// isTerminalArgoSyncState, which applies this same three-way rule when
-// deciding whether to keep polling.
+// PostSync hook is still Running.
 //
-// A Failed/Error OperationPhase is SYNC_FAILED even if HealthStatus still
-// reads Healthy, since that is exactly a hook failing while the resources
-// it gates remain healthy on their own.
-func DerivePromotionSyncOutcome(events []PromotionSyncEvent) (outcome PromotionSyncOutcome, currentSyncStatus, currentHealthStatus, currentOperationPhase string) {
-	if len(events) == 0 {
-		return PromotionSyncOutcomePending, "", "", ""
+// It also requires the observation to be ABOUT this promotion: right after
+// a writeback, ArgoCD (or the ApplicationSet generating the Application)
+// has not yet picked up the new desired state, and keeps reporting the
+// PREVIOUS release as Synced/Healthy/Succeeded. So when expectedRevisions
+// is non-empty and the row carries revisions, SyncRevision AND
+// OperationRevision must both match one of them. Rows with no revisions
+// (recorded before migration 027) keep the revision-blind rule.
+//
+// A Failed/Error OperationPhase or Degraded health is SYNC_FAILED -- but
+// likewise only when that observation is about this promotion's revision;
+// a failure left over from the previous release stays PENDING.
+func ClassifyArgoObservation(e PromotionSyncEvent, expectedRevisions ...string) PromotionSyncOutcome {
+	pinned := false
+	for _, r := range expectedRevisions {
+		if r != "" {
+			pinned = true
+		}
 	}
-	last := events[len(events)-1]
-	currentSyncStatus = last.SyncStatus
-	currentHealthStatus = last.HealthStatus
-	currentOperationPhase = last.OperationPhase
+	syncIsOurs, opIsOurs := true, true
+	if pinned && (e.SyncRevision != "" || e.OperationRevision != "") {
+		syncIsOurs = ArgoRevisionMatches(e.SyncRevision, expectedRevisions...)
+		opIsOurs = ArgoRevisionMatches(e.OperationRevision, expectedRevisions...)
+	}
 	switch {
-	case last.HealthStatus == "Degraded":
-		outcome = PromotionSyncOutcomeSyncFailed
-	case last.OperationPhase == "Failed" || last.OperationPhase == "Error":
-		outcome = PromotionSyncOutcomeSyncFailed
-	case last.SyncStatus == "Synced" && last.HealthStatus == "Healthy" && last.OperationPhase == "Succeeded":
-		outcome = PromotionSyncOutcomeSyncedHealthy
+	case e.HealthStatus == "Degraded" && syncIsOurs:
+		return PromotionSyncOutcomeSyncFailed
+	case (e.OperationPhase == "Failed" || e.OperationPhase == "Error") && opIsOurs:
+		return PromotionSyncOutcomeSyncFailed
+	case e.SyncStatus == "Synced" && e.HealthStatus == "Healthy" && e.OperationPhase == "Succeeded" && syncIsOurs && opIsOurs:
+		return PromotionSyncOutcomeSyncedHealthy
 	default:
-		outcome = PromotionSyncOutcomePending
+		return PromotionSyncOutcomePending
 	}
-	return outcome, currentSyncStatus, currentHealthStatus, currentOperationPhase
 }
 
 // PromotionListFilter is ListPromotionsRequest's filter set.

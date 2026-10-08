@@ -142,3 +142,31 @@ here lives on `chart` (not `environment`), is keyed by environment inside
 that per-chart map, and only ever affects the ArgoCD Application name, never
 the gitops file path.
 
+
+## ArgoCD sync observation: pinned to the promotion's revision
+
+Right after a writeback, ArgoCD (and any ApplicationSet generating the
+Application) hasn't picked up the new desired state yet, so the Application
+keeps reporting the **previous** release as `Synced`/`Healthy` with a
+`Succeeded` operation. A revision-blind check reads that as success on the
+first poll.
+
+`PollArgoSyncStatus` therefore carries `ArgoSyncInput.ExpectedRevision` (the
+rendered chart version, `RenderedState.TargetRevision`) and
+`ExpectedCommitSHA` (the writeback commit), reads the revisions ArgoCD
+reports (`status.sync.revision(s)`, `comparedTo` target revisions, and the
+operation's `syncResult`/`operation.sync` revisions via
+`argocd.Client.GetApplicationStatus`), and persists them on each
+`promotion_sync_event` row (migration 027). `repository.ClassifyArgoObservation`
+is the one rule both the worker's stop condition and
+`DerivePromotionSyncOutcome` use: success or failure only counts when both
+the sync and operation revisions match the promotion (chart versions compare
+ignoring a leading `v`; git SHAs compare by prefix). Rows without revisions
+(pre-027) keep the revision-blind rule.
+
+Polling runs every 15s for up to ~15 minutes and records a row only when the
+observation changes, so the Promotion Details page stays live without a row
+per tick. Requiring N consecutive healthy polls was considered and rejected:
+a stale previous-release state is itself stable across polls, so a streak
+only helps by adding enough latency to outlast ArgoCD's pickup delay — it
+slows every promotion and still fails whenever that delay is longer.

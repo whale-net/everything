@@ -727,10 +727,12 @@ func (s *PromotionServer) RetryArgoSync(ctx context.Context, req *pb.RetryArgoSy
 	}
 
 	argoIn := writeback.ArgoSyncInput{
-		PromotionID:     promotionID,
-		Domain:          chart.Domain,
-		ApplicationName: chart.FullName() + "-" + details.Promotion.EnvironmentKey,
-		IsRetry:         true,
+		PromotionID:       promotionID,
+		Domain:            chart.Domain,
+		ApplicationName:   chart.FullName() + "-" + details.Promotion.EnvironmentKey,
+		IsRetry:           true,
+		ExpectedRevision:  details.ToVersion,
+		ExpectedCommitSHA: details.WritebackCommitSHA,
 	}
 	workflowID := writeback.RetryArgoSyncWorkflowID(promotionID, time.Now().UTC().UnixNano())
 
