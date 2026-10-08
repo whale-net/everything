@@ -19,6 +19,7 @@ go_library(
     deps = [
         "//audience_score_system/store",
         "//libs/go/logging",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_golang_google_api//googleapi",
         "@org_golang_google_api//option",
         "@org_golang_google_api//youtube/v3:youtube",

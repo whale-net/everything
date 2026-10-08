@@ -15,6 +15,7 @@ go_library(
         "@com_github_openai_openai_go_v2//option",
         "@com_github_openai_openai_go_v2//packages/param",
         "@com_github_openai_openai_go_v2//shared",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
 )
 

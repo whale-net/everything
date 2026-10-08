@@ -44,7 +44,7 @@ func (s *DelegatedGrantSource) RevokeRefreshToken(ctx context.Context, refreshTo
 
 	httpClient := s.cfg.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultHTTPTimeout}
+		httpClient = newDefaultHTTPClient()
 	}
 
 	form := url.Values{
