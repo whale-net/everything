@@ -9,11 +9,18 @@ or the new row for an add).
 import datetime
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
+    ShitposterBrainJobRun,
+    ShitposterPostEngagement,
+    ShitposterReflectorRun,
+    ShitposterSuggestion,
+    ShitposterSuggestionBacker,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
     ShitposterAttributeStatusEnum,
@@ -773,5 +780,71 @@ def attributes_as_of(
                     )
                 )
                 .order_by(ShitposterPersonaAttribute.attribute_key, ShitposterPersonaAttribute.id)
+            ).all()
+        )
+
+
+def list_reflector_runs(
+    persona_id: int,
+    limit: int,
+    offset: int = 0,
+    session: Optional[Session] = None,
+) -> list[tuple[ShitposterReflectorRun, datetime.datetime]]:
+    """Reflector run records with their brain job start time, newest first."""
+    with SessionManager(session) as s:
+        rows = s.exec(
+            select(ShitposterReflectorRun, ShitposterBrainJobRun.started_at)
+            .join(
+                ShitposterBrainJobRun,
+                ShitposterBrainJobRun.id == ShitposterReflectorRun.brain_job_run_id,
+            )
+            .where(ShitposterReflectorRun.persona_id == persona_id)
+            .order_by(
+                ShitposterBrainJobRun.started_at.desc(),  # type: ignore[union-attr]
+                ShitposterReflectorRun.id.desc(),  # type: ignore[union-attr]
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [(run, started_at) for run, started_at in rows]
+
+
+def count_reflector_runs(persona_id: int, session: Optional[Session] = None) -> int:
+    with SessionManager(session) as s:
+        return s.exec(
+            select(func.count())
+            .select_from(ShitposterReflectorRun)
+            .where(ShitposterReflectorRun.persona_id == persona_id)
+        ).one()
+
+
+def get_post_engagement(
+    post_id: int, session: Optional[Session] = None
+) -> ShitposterPostEngagement | None:
+    with SessionManager(session) as s:
+        return s.get(ShitposterPostEngagement, post_id)
+
+
+def get_suggestion(
+    suggestion_id: int, session: Optional[Session] = None
+) -> ShitposterSuggestion | None:
+    with SessionManager(session) as s:
+        return s.get(ShitposterSuggestion, suggestion_id)
+
+
+def active_backer_slack_ids(
+    suggestion_id: int, session: Optional[Session] = None
+) -> list[str]:
+    """Slack user ids currently backing a suggestion, in backing order."""
+    with SessionManager(session) as s:
+        return list(
+            s.exec(
+                select(ShitposterSuggestionBacker.slack_user_id)
+                .where(ShitposterSuggestionBacker.suggestion_id == suggestion_id)
+                .where(ShitposterSuggestionBacker.removed_at.is_(None))  # type: ignore[union-attr]
+                .order_by(
+                    ShitposterSuggestionBacker.backed_at,  # type: ignore[union-attr]
+                    ShitposterSuggestionBacker.id,  # type: ignore[union-attr]
+                )
             ).all()
         )

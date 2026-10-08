@@ -8,6 +8,10 @@ from opentelemetry import trace
 from slack_bolt import Ack, Respond, Say
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import app
+from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.shitposter_operator import (
+    OPERATOR_SUBCOMMANDS,
+    handle_operator_command,
+)
 from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.shitposter_suggest import (
     handle_suggest,
 )
@@ -53,7 +57,8 @@ tracer = trace.get_tracer(__name__)
 
 ADMIN_SUBCOMMAND = "admin"
 ADMIN_USAGE = (
-    "Usage: `/shitpost admin optin|optout|silence [reason]|resume|status`"
+    "Usage: `/shitpost admin optin|optout|silence [reason]|resume|status|"
+    "history [n]|runs [n]|retire <attribute|lore> <id>|snapshot <post permalink>`"
 )
 SUGGEST_SUBCOMMAND = "suggest"
 
@@ -121,6 +126,9 @@ def handle_shitpost(
 
     sub = parts[1].lower() if len(parts) > 1 else ""
     rest = parts[2].strip() if len(parts) > 2 else None
+    if sub in OPERATOR_SUBCOMMANDS:
+        operator_text = f"{sub} {rest}" if rest else sub
+        return handle_operator_command(operator_text, user_id, admin_ids), None
     if sub in ("optin", "optout"):
         opted_in = sub == "optin"
         changed = set_channel_opt_in(
