@@ -173,6 +173,41 @@ class ShitposterPostBase(Base):
     )
 
 
+class ShitposterScheduledSkipReasonEnum(str, Enum):
+    WRITER_UNAVAILABLE = "writer_unavailable"
+
+
+class ShitposterScheduledSkip(Base, table=True):
+    """A scheduled slot that produced no post because the writer was unavailable."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "reason IN ('writer_unavailable')",
+            name="ck_shitposterscheduledskip_reason",
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    persona_id: int = Field(
+        nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    slack_channel_id: int = Field(
+        nullable=False, foreign_key="slackchannel.id", index=True
+    )
+    # ShitposterScheduledSkipReasonEnum value
+    reason: str
+    # snapshot the slot would have written from, if one existed when it skipped
+    context_snapshot_id: int | None = Field(
+        default=None, nullable=True, foreign_key="shitpostercontextsnapshot.id"
+    )
+    skipped_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+
+
 class ShitposterPost(ShitposterPostBase, table=True):
     __table_args__ = (
         UniqueConstraint(
@@ -196,6 +231,10 @@ class ShitposterPost(ShitposterPostBase, table=True):
             nullable=False,
             server_default=func.current_timestamp(),
         ),
+    )
+    # snapshot the post was written from; NULL only when no snapshot existed yet
+    context_snapshot_id: int | None = Field(
+        default=None, nullable=True, foreign_key="shitpostercontextsnapshot.id", index=True
     )
 
 
