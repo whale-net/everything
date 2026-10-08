@@ -24,6 +24,7 @@ class ShitpostOutcome:
     BLOCKED_GUARDRAIL = "blocked_guardrail"
     FAILED_GENERATION = "failed_generation"
     TIMED_OUT = "timed_out"
+    SKIPPED_WRITER_UNAVAILABLE = "skipped_writer_unavailable"
 
 
 @dataclass
@@ -45,6 +46,9 @@ class ShitpostParams:
     parent_post_id: Optional[int] = None
     # recent thread messages, prepended to a new riff session's first turn
     thread_context: Optional[str] = None
+    # explicit snapshot to write from (a queued draft's); for a riff on an
+    # existing session, the snapshot that session was started from
+    context_snapshot_id: Optional[int] = None
 
 
 @dataclass

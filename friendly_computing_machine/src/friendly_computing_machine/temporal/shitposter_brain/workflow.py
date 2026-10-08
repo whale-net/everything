@@ -12,11 +12,13 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.workflow import ParentClosePolicy
 
 with workflow.unsafe.imports_passed_through():
     from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
         ShitposterBrainJobKind,
         ShitposterBrainJobStatus,
+        ShitposterBrainJobTrigger,
     )
     from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.activity import (
         apply_brain_job_activity,
@@ -65,9 +67,38 @@ class ShitposterBrainJobWorkflow:
             return await self._fail(begin.run_id, kind, f"timed out after {timeout}")
         timer.cancel()
         try:
-            return body.result()
+            result = body.result()
         except ActivityError as e:
             return await self._fail(begin.run_id, kind, str(e.cause or e))
+        # the apply committed and released the lock, so the snapshot can take it
+        reflected = kind == ShitposterBrainJobKind.REFLECT
+        if reflected and result.status == ShitposterBrainJobStatus.SUCCEEDED.value:
+            await self._enqueue_snapshot(params.persona_id)
+        return result
+
+    async def _enqueue_snapshot(self, persona_id: int) -> None:
+        """Start the persona's snapshot job after a reflect apply committed.
+
+        Runs outside the apply transaction. A failed start is logged and left
+        for the next successful reflect run to enqueue again.
+        """
+        info = workflow.info()
+        try:
+            await workflow.start_child_workflow(
+                ShitposterBrainJobWorkflow.run,
+                BrainJobInput(
+                    persona_id=persona_id,
+                    job_kind=ShitposterBrainJobKind.SNAPSHOT.value,
+                    trigger=ShitposterBrainJobTrigger.SCHEDULE.value,
+                ),
+                id=f"{info.workflow_id}-snapshot",
+                task_queue=info.task_queue,
+                parent_close_policy=ParentClosePolicy.ABANDON,
+            )
+        except Exception:
+            workflow.logger.error(
+                "snapshot enqueue after reflect failed persona=%s", persona_id, exc_info=True
+            )
 
     async def _body(
         self, params: BrainJobInput, run_id: int, timeout: timedelta

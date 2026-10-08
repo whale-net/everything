@@ -37,6 +37,12 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterPersonaRevision,
     ShitposterPost,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
+    ShitposterScheduledSkip,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_context import (
+    ShitposterContextSnapshot,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
     SlackUser,
@@ -67,16 +73,20 @@ TABLES = [
     ShitposterPersona.__table__,
     ShitposterPersonaRevision.__table__,
     ShitposterPost.__table__,
+    ShitposterContextSnapshot.__table__,
+    ShitposterScheduledSkip.__table__,
 ]
+SNAPSHOT_TEXT = "Snapshot: the gremlin loves cheese."
 
 
 class FakeWhagent:
-    """Only the methods the pipeline uses; no pinned-context API exists here."""
+    """Only the methods the pipeline uses; pinned context is opt-in via `pinned`."""
 
-    def __init__(self, replies, on_generate=None, hang=False):
+    def __init__(self, replies, on_generate=None, hang=False, pinned=False):
         self.replies = list(replies)
         self.on_generate = on_generate
         self.hang = hang
+        self.pinned = pinned
         self.starts = []
         self.turns = []
         self._sessions = 0
@@ -84,10 +94,18 @@ class FakeWhagent:
     def service_subject(self):
         return SERVICE
 
-    def start_session(self, agent_id, first_turn=None, on_behalf_of=None):
+    def supports_pinned_context(self):
+        return self.pinned
+
+    def start_session(self, agent_id, first_turn=None, on_behalf_of=None, pinned_context=None):
         self._sessions += 1
         self.starts.append(
-            {"agent_id": agent_id, "first_turn": first_turn, "on_behalf_of": on_behalf_of}
+            {
+                "agent_id": agent_id,
+                "first_turn": first_turn,
+                "on_behalf_of": on_behalf_of,
+                "pinned_context": pinned_context,
+            }
         )
         return type("S", (), {"session_id": f"sess-{self._sessions}"})()
 
@@ -174,6 +192,8 @@ def _run(whagent, monkeypatch, params):
                     act.check_guardrails_activity,
                     act.post_and_record_shitpost_activity,
                     act.send_ephemeral_notice_activity,
+                    act.resolve_snapshot_activity,
+                    act.record_scheduled_skip_activity,
                 ],
                 workflow_runner=SandboxedWorkflowRunner(
                     restrictions=SandboxRestrictions.default.with_passthrough_all_modules()
@@ -307,8 +327,7 @@ def test_failed_generation_posts_nothing(engine, slack, monkeypatch):
     w = FakeWhagent([])
     w.start_session = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
     res = _run(w, monkeypatch, ShitpostParams(CHAN, "scheduled"))
-    assert res.outcome in (ShitpostOutcome.FAILED_GENERATION, ShitpostOutcome.BLOCKED_GUARDRAIL)
-    assert res.outcome == ShitpostOutcome.FAILED_GENERATION
+    assert res.outcome == ShitpostOutcome.SKIPPED_WRITER_UNAVAILABLE
     assert slack.posts == []
 
 
@@ -336,3 +355,127 @@ def test_opt_out_mid_generation_posts_nothing(engine, slack, monkeypatch):
     res = _run(w, monkeypatch, ShitpostParams(CHAN, "scheduled"))
     assert res.outcome == ShitpostOutcome.SKIPPED_GATE
     assert slack.posts == []
+
+
+def _add_snapshot(engine, version, text=SNAPSHOT_TEXT):
+    with Session(engine) as s:
+        persona = s.exec(select(ShitposterPersona)).first()
+        snap = ShitposterContextSnapshot(
+            persona_id=persona.id, version=version, brain_job_run_id=1,
+            token_count=10, rendered_text=text,
+        )
+        s.add(snap)
+        s.commit()
+        s.refresh(snap)
+        return snap.id
+
+
+def _skips(engine):
+    with Session(engine) as s:
+        return list(s.exec(select(ShitposterScheduledSkip)).all())
+
+
+def test_scheduled_post_records_latest_snapshot_and_uses_it_as_first_turn(engine, slack, monkeypatch):
+    _add_snapshot(engine, 1, "old snapshot")
+    latest = _add_snapshot(engine, 2)
+    w = FakeWhagent(["snapshot post"])
+    _run(w, monkeypatch, ShitpostParams(CHAN, "scheduled"))
+    assert w.starts[0]["first_turn"].startswith(SNAPSHOT_TEXT)
+    assert PERSONA_TEXT not in w.starts[0]["first_turn"]
+    assert w.starts[0]["pinned_context"] is None
+    [post] = _posts(engine)
+    assert post.context_snapshot_id == latest
+
+
+def test_pinned_context_carries_snapshot_when_supported(engine, slack, monkeypatch):
+    snap = _add_snapshot(engine, 1)
+    w = FakeWhagent(["pinned post"], pinned=True)
+    _run(w, monkeypatch, ShitpostParams(CHAN, "summon", principal_iss=HUMAN[0],
+                                        principal_sub=HUMAN[1], notice_slack_user_id="U_S"))
+    assert w.starts[0]["pinned_context"] == SNAPSHOT_TEXT
+    assert SNAPSHOT_TEXT not in w.starts[0]["first_turn"]
+    [post] = _posts(engine)
+    assert post.context_snapshot_id == snap
+
+
+def test_no_snapshot_falls_back_to_persona_first_turn_with_null_id(engine, slack, monkeypatch):
+    w = FakeWhagent(["persona post"], pinned=True)
+    _run(w, monkeypatch, ShitpostParams(CHAN, "scheduled"))
+    assert w.starts[0]["first_turn"].startswith(PERSONA_TEXT)
+    assert w.starts[0]["pinned_context"] is None
+    [post] = _posts(engine)
+    assert post.context_snapshot_id is None
+
+
+def test_explicit_snapshot_id_overrides_latest(engine, slack, monkeypatch):
+    older = _add_snapshot(engine, 1, "draft snapshot")
+    _add_snapshot(engine, 2)
+    w = FakeWhagent(["draft post"])
+    _run(w, monkeypatch, ShitpostParams(CHAN, "scheduled", context_snapshot_id=older))
+    assert w.starts[0]["first_turn"].startswith("draft snapshot")
+    [post] = _posts(engine)
+    assert post.context_snapshot_id == older
+
+
+def test_riff_on_existing_session_keeps_its_snapshot_id(engine, slack, monkeypatch):
+    older = _add_snapshot(engine, 1)
+    _add_snapshot(engine, 2)
+    w = FakeWhagent(["riffing"])
+    _run(w, monkeypatch, ShitpostParams(
+        CHAN, "riff", principal_iss=HUMAN[0], principal_sub=HUMAN[1],
+        thread_ts="99.000001", whagent_session_id="sess-old",
+        thread_owner_slack_user_id="U_OWNER", context_snapshot_id=older,
+    ))
+    assert w.starts == []
+    [post] = _posts(engine)
+    assert post.context_snapshot_id == older
+
+
+def test_scheduled_writer_unavailable_records_skip_and_returns(engine, slack, monkeypatch):
+    snap = _add_snapshot(engine, 1)
+    w = FakeWhagent([])
+    w.start_session = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("whagent down"))
+    res = _run(w, monkeypatch, ShitpostParams(CHAN, "scheduled"))
+    assert res.outcome == ShitpostOutcome.SKIPPED_WRITER_UNAVAILABLE
+    assert res.reason == "writer_unavailable"
+    assert slack.posts == [] and slack.ephemerals == []
+    [skip] = _skips(engine)
+    assert skip.reason == "writer_unavailable"
+    assert skip.context_snapshot_id == snap
+    assert skip.slack_channel_id is not None
+
+
+def test_scheduled_writer_timeout_records_skip(engine, slack, monkeypatch):
+    monkeypatch.setattr(wf, "SCHEDULED_DEADLINE", datetime.timedelta(seconds=7))
+    monkeypatch.setattr(wf, "MAX_SCHEDULED_ATTEMPTS", 1)
+    w = FakeWhagent([], hang=True)
+    res = _run(w, monkeypatch, ShitpostParams(CHAN, "scheduled"))
+    assert res.outcome == ShitpostOutcome.SKIPPED_WRITER_UNAVAILABLE
+    [skip] = _skips(engine)
+    assert skip.context_snapshot_id is None
+
+
+def test_summon_writer_unavailable_sends_notice_and_no_skip(engine, slack, monkeypatch):
+    w = FakeWhagent([])
+    w.start_session = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("whagent down"))
+    res = _run(w, monkeypatch, ShitpostParams(
+        CHAN, "summon", principal_iss=HUMAN[0], principal_sub=HUMAN[1],
+        notice_slack_user_id="U_S",
+    ))
+    assert res.outcome == ShitpostOutcome.FAILED_GENERATION
+    assert slack.ephemerals[0]["text"] == NO_SHITPOST_NOTICE
+    assert _skips(engine) == []
+
+
+def test_riff_writer_unavailable_sends_notice_and_no_skip(engine, slack, monkeypatch):
+    w = FakeWhagent([])
+    w.start_session = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("whagent down"))
+    res = _run(w, monkeypatch, ShitpostParams(
+        CHAN, "riff", principal_iss=HUMAN[0], principal_sub=HUMAN[1],
+        thread_ts="99.000001", thread_owner_slack_user_id="U_OWNER",
+        notice_slack_user_id="U_S",
+    ))
+    assert res.outcome == ShitpostOutcome.FAILED_GENERATION
+    assert slack.posts == []
+    assert slack.ephemerals[0]["text"] == NO_SHITPOST_NOTICE
+    assert _skips(engine) == []
