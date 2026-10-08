@@ -36,7 +36,7 @@ var Implementation = &mcp.Implementation{
 func New() *mcp.Server {
 	srv := mcp.NewServer(Implementation, nil)
 	srv.AddReceivingMiddleware(AuthMiddleware())
-	// Added last, so it runs outermost: each tool call is its own trace.
+	// Added last, so it runs outermost: each tool call gets its own span.
 	srv.AddReceivingMiddleware(mcpobs.ToolCallMiddleware(logging.Tracer("whagent_net/mcp"), logging.Get("whagent_net/mcp/tools"), nil))
 	return srv
 }

@@ -1,5 +1,5 @@
 // Per-tool-call observability. mcp/main.go's logging.Configure (tracing +
-// OTLP export) and the otelhttp.NewHandler wrap around NewHTTPHandler
+// OTLP export) and the mcpobs.NewHTTPHandler wrap around NewHTTPHandler
 // (transport.go) already give this binary process-level startup/shutdown
 // logs and generic HTTP spans -- but every MCP tool call multiplexes over
 // that single HTTP endpoint as JSON-RPC, so an HTTP span alone never shows
@@ -43,8 +43,8 @@ var (
 // this always wraps the full call -- including the unauthenticated/
 // permission-denied paths those two functions check before invoking the
 // product handler -- not just the product handler itself.
-func instrumentToolCall[Out any](ctx context.Context, toolName string, fn func(context.Context) (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
-	return mcpobs.InstrumentToolCall(ctx, tracer, logger, toolName, func(ctx context.Context) (string, string, bool) {
+func instrumentToolCall[Out any](ctx context.Context, toolName string, req *mcp.CallToolRequest, fn func(context.Context) (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
+	return mcpobs.InstrumentToolCall(ctx, tracer, logger, toolName, mcpobs.RequestHeader(req), func(ctx context.Context) (string, string, bool) {
 		if person := PersonFromContext(ctx); person != nil {
 			return "person_id", person.ID.String(), true
 		}

@@ -57,7 +57,7 @@ func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 // The transport is wrapped in mcpobs.WrapClientTransport so every
 // ListTools/CallTool request carries the caller's active trace as a W3C
 // traceparent header -- domain servers (e.g. audience_score_system/mcp,
-// krill/mcp) already extract it via their own otelhttp.NewHandler wrap
+// krill/mcp) already extract it via their mcpobs.NewHTTPHandler wrap
 // (libs/go/logging's global propagator), so without this a domain
 // server's MCP tool-call span would always start a disconnected root
 // trace instead of continuing the caller's.

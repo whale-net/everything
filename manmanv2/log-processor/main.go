@@ -102,7 +102,7 @@ func main() {
 
 	// Connect to API server for session queries
 	slog.Info("connecting to API server", "address", config.APIAddress)
-	apiConn, err := grpc.NewClient(config.APIAddress, grpc.WithTransportCredentials(insecure.NewCredentials()), authOpt)
+	apiConn, err := grpc.NewClient(config.APIAddress, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithStatsHandler(otelgrpc.NewClientHandler()), authOpt)
 	if err != nil {
 		slog.Error("failed to connect to API server", "error", err)
 		os.Exit(1)

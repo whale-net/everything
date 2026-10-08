@@ -15,8 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-
 	"github.com/whale-net/everything/audience_score_system/mcp/server"
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/store"
@@ -24,6 +22,7 @@ import (
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpobs"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -224,7 +223,7 @@ func run() error {
 
 	httpServer := &http.Server{
 		Addr:         cfg.MCPAddr,
-		Handler:      otelhttp.NewHandler(handler, "audience-score-system-mcp"),
+		Handler:      mcpobs.NewHTTPHandler(handler, "audience-score-system-mcp"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

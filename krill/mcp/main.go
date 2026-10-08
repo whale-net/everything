@@ -48,7 +48,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/mcp/server"
@@ -59,6 +58,7 @@ import (
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpobs"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
 
@@ -410,7 +410,8 @@ func run() error {
 }
 
 // newHTTPServer builds the http.Server `mcp` listens on, wrapped in the
-// otelhttp handler that gives every streamable-HTTP request a server span.
+// mcpobs.NewHTTPHandler, which gives every streamable-HTTP request a server
+// span that its tool calls nest under.
 //
 // WriteTimeout is deliberately left unset. net/http applies it as an
 // absolute deadline measured from when the request header was read, not
@@ -423,7 +424,7 @@ func run() error {
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:        addr,
-		Handler:     otelhttp.NewHandler(handler, "krill-mcp"),
+		Handler:     mcpobs.NewHTTPHandler(handler, "krill-mcp"),
 		ReadTimeout: 15 * time.Second,
 		IdleTimeout: 60 * time.Second,
 	}
