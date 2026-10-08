@@ -24,6 +24,10 @@ from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
+# registers the snapshot table that ShitposterPost.context_snapshot_id references
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_context import (  # noqa: F401
+    ShitposterContextSnapshot,
+)
 
 # the kill switch's singleton key
 KILL_SWITCH_SCOPE = "workspace"

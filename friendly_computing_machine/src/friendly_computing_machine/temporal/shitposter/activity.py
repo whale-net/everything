@@ -17,6 +17,9 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.util import (
     slack_post_thread_message,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db import dal
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+    shitposter_snapshot_dal,
+)
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
 )
@@ -68,12 +71,29 @@ class PersonaResult:
 
 
 @dataclass
+class SnapshotResult:
+    # None when no snapshot exists yet; the persona text is used instead
+    snapshot_id: Optional[int] = None
+    rendered_text: Optional[str] = None
+
+
+@dataclass
+class SkipParams:
+    channel_slack_id: str
+    persona_id: int
+    reason: str
+    context_snapshot_id: Optional[int] = None
+
+
+@dataclass
 class GenerateParams:
     params: ShitpostParams
     persona_text: str
     deadline_seconds: float
     # tells the model to try again after a guardrail block
     attempt: int = 0
+    # latest or explicit snapshot text; replaces persona_text when set
+    context_text: Optional[str] = None
 
 
 @dataclass
@@ -97,6 +117,7 @@ class PostParams:
     text: str
     persona: PersonaResult
     whagent_session_id: str
+    context_snapshot_id: Optional[int] = None
 
 
 @dataclass
@@ -159,10 +180,23 @@ def _generate_blocking(params: GenerateParams) -> GenerateResult:
             context = (
                 f"Thread so far:\n{p.thread_context}\n\n" if p.thread_context else ""
             )
+            # the snapshot stands in for the persona text; persona text is the
+            # fallback only before any snapshot exists
+            pinned = None
+            if params.context_text is None:
+                head = params.persona_text
+            elif client.supports_pinned_context():
+                pinned, head = params.context_text, ""
+            else:
+                head = params.context_text
+            first_turn = (
+                f"{head}\n\n{context}{instruction}" if head else f"{context}{instruction}"
+            )
             session = client.start_session(
                 load_shitposter_agent_id(),
-                first_turn=f"{params.persona_text}\n\n{context}{instruction}",
+                first_turn=first_turn,
                 on_behalf_of=on_behalf_of,
+                pinned_context=pinned,
             )
             session_id = session.session_id
             from_seq = 0
@@ -196,6 +230,23 @@ async def resolve_persona_activity(_: None = None) -> PersonaResult:
         persona_revision_id=revision.id,
         persona_text=revision.persona_text,
     )
+
+
+@activity.defn
+async def resolve_snapshot_activity(explicit_snapshot_id: Optional[int] = None) -> SnapshotResult:
+    """Explicit snapshot when given, else the default persona's latest one."""
+    if explicit_snapshot_id is not None:
+        snapshot = shitposter_snapshot_dal.snapshot_by_id(explicit_snapshot_id)
+        if snapshot is None:
+            raise RuntimeError(f"context snapshot {explicit_snapshot_id} not found")
+    else:
+        persona = dal.shitposter_dal.get_default_persona()
+        if persona is None:
+            raise RuntimeError("no shitposter persona is seeded")
+        snapshot = shitposter_snapshot_dal.latest_snapshot(persona.id)
+    if snapshot is None:
+        return SnapshotResult()
+    return SnapshotResult(snapshot_id=snapshot.id, rendered_text=snapshot.rendered_text)
 
 
 @activity.defn
@@ -255,7 +306,27 @@ def _record(params: PostParams, ts: str) -> None:
             else p.thread_owner_slack_user_id
         ),
         parent_post_id=p.parent_post_id,
+        context_snapshot_id=params.context_snapshot_id,
     )
+
+
+@activity.defn
+async def record_scheduled_skip_activity(params: SkipParams) -> None:
+    """Record a scheduled slot that posted nothing because the writer was unavailable."""
+    with SessionManager() as session:
+        channel = session.exec(
+            select(SlackChannel).where(SlackChannel.slack_id == params.channel_slack_id)
+        ).one()
+        channel_id = channel.id
+    try:
+        dal.shitposter_dal.record_scheduled_skip(
+            persona_id=params.persona_id,
+            slack_channel_id=channel_id,
+            reason=params.reason,
+            context_snapshot_id=params.context_snapshot_id,
+        )
+    except Exception:
+        logger.exception("scheduled skip record failed: channel=%s", params.channel_slack_id)
 
 
 @activity.defn

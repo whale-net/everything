@@ -30,6 +30,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterPersona,
     ShitposterPersonaRevision,
     ShitposterPost,
+    ShitposterScheduledSkip,
     ShitposterSuggestion,
     ShitposterSuggestionBacker,
     ShitposterSuggestionCoarseReasonEnum,
@@ -341,6 +342,7 @@ def record_post(
     thread_ts: str | None = None,
     thread_owner_slack_user_id: str | None = None,
     parent_post_id: int | None = None,
+    context_snapshot_id: int | None = None,
     session: Optional[Session] = None,
 ) -> ShitposterPost:
     """Persist a bot post; (channel, ts) is unique and a duplicate raises."""
@@ -358,11 +360,45 @@ def record_post(
             whagent_session_id=whagent_session_id,
             thread_owner_slack_user_id=thread_owner_slack_user_id,
             parent_post_id=parent_post_id,
+            context_snapshot_id=context_snapshot_id,
         )
         session.add(post)
         session.commit()
         session.refresh(post)
         return post
+
+
+def record_scheduled_skip(
+    persona_id: int,
+    slack_channel_id: int,
+    reason: str,
+    context_snapshot_id: int | None = None,
+    session: Optional[Session] = None,
+) -> ShitposterScheduledSkip:
+    """Record a scheduled slot that produced no post."""
+    with SessionManager(session) as session:
+        skip = ShitposterScheduledSkip(
+            persona_id=persona_id,
+            slack_channel_id=slack_channel_id,
+            reason=reason,
+            context_snapshot_id=context_snapshot_id,
+        )
+        session.add(skip)
+        session.commit()
+        session.refresh(skip)
+        return skip
+
+
+def get_session_context_snapshot_id(
+    whagent_session_id: str, session: Optional[Session] = None
+) -> int | None:
+    """Snapshot the whagent session was started from, read off the newest post in it."""
+    with SessionManager(session) as session:
+        return session.exec(
+            select(ShitposterPost.context_snapshot_id)
+            .where(ShitposterPost.whagent_session_id == whagent_session_id)
+            .order_by(ShitposterPost.id.desc())
+        ).first()
 
 
 def get_post_by_channel_ts(
