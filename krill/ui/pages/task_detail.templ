@@ -346,6 +346,7 @@ templ TaskDetail(page TaskDetailPage) {
 				@TaskBadges(page.Badges)
 			</div>
 			<div class="flex-1"></div>
+			@taskActionsCallout(page)
 			<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
 				hx-get={ templ.URL(page.Path) }
 				hx-include={ "#" + TaskTabStateID }
@@ -354,15 +355,12 @@ templ TaskDetail(page TaskDetailPage) {
 				Refresh
 			</button>
 		</div>
-		<p class="mt-1 text-sm text-base-content/70">
-			Loaded at <span data-krill="loaded-at">{ page.LoadedAt }</span>
-		</p>
-		<p class="mt-2 text-sm">
-			<a href={ templ.URL(page.TasksPath) } class="link link-primary" data-krill="tasks-link">Back to { page.ContainerName } tasks</a>
-			<a href={ templ.URL(page.BoardPath) } class="link link-primary ml-2" data-krill="board-link">Board</a>
+		<p class="mt-1 flex flex-wrap items-center gap-x-3 text-sm text-base-content/70">
+			<time data-krill="loaded-at" data-krill-updated-at={ page.LoadedAt } datetime={ page.LoadedAt } title={ page.LoadedAt }>{ page.LoadedAt }</time>
+			<a href={ templ.URL(page.TasksPath) } class="link" data-krill="tasks-link">Back to { page.ContainerName } tasks</a>
+			<a href={ templ.URL(page.BoardPath) } class="link" data-krill="board-link">Board</a>
 		</p>
 		@taskActionError(page)
-		@taskActionsCallout(page)
 		<div class="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" data-krill="task-detail-frame">
 			<section class="min-w-0 space-y-4" data-krill="task-detail-main">
 				@taskLaneSteps(page.Steps)
@@ -405,14 +403,9 @@ templ taskActionError(page TaskDetailPage) {
 // triggers and the popover submits both, sits in this one region.
 templ taskActionsCallout(page TaskDetailPage) {
 	if page.Actions != nil {
-		<div class="mt-4 card bg-base-100 border border-base-300" data-krill="task-actions">
-			<div class="card-body gap-2 p-4">
-				<h2 class="card-title text-sm font-semibold">Actions</h2>
-				<div class="flex flex-wrap items-center gap-2">
-					@page.Actions
-				</div>
-				@page.Popovers
-			</div>
+		<div class="flex flex-wrap items-center gap-2" role="group" aria-label="Actions" data-krill="task-actions">
+			@page.Actions
+			@page.Popovers
 		</div>
 	}
 }
@@ -519,7 +512,7 @@ templ taskPropertiesCard(page TaskDetailPage) {
 						<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
 							aria-label="Copy task id" data-krill="copy-task-id" data-task-id={ page.ID }
 							disabled title="Copying the task id needs JavaScript">
-							{ page.ID }
+							{ idChipText(page.ID) }
 						</button>
 						// The confirmation lands here, beside the chip and
 						// never over it, so the id is still on screen while
@@ -606,7 +599,7 @@ templ taskDetailCrumbs(crumbs []TaskCrumb) {
 // describing a workflow this task is not on.
 templ taskLaneSteps(steps []TaskLaneStep) {
 	if len(steps) > 0 {
-		<ul class="steps w-full" data-krill="task-lane-steps">
+		<ul class="steps w-full text-xs sm:text-base" data-krill="task-lane-steps">
 			for _, s := range steps {
 				<li class={ taskLaneStepClasses(s) } data-krill={ taskLaneStepHook(s) }
 					if s.Current {
@@ -788,7 +781,7 @@ templ taskDescriptionCard(body string) {
 		<div class="card bg-base-100 border border-base-300" data-krill="task-description">
 			<div class="card-body gap-2 p-4">
 				<h2 class="card-title text-sm font-semibold">Description</h2>
-				<pre class="whitespace-pre-wrap text-sm" data-krill="task-body">{ body }</pre>
+				<div class="krill-md" data-krill="task-body">@templ.Raw(renderMarkdown(body))</div>
 			</div>
 		</div>
 	}
@@ -817,7 +810,7 @@ templ taskLatestNotesCard(page TaskDetailPage) {
 					for _, n := range page.LatestNotes {
 						<li data-krill="task-latest-note">
 							@TaskNoteBadges(n)
-							<pre class="whitespace-pre-wrap text-sm" data-krill="note-body">{ n.Body }</pre>
+							<div class="krill-md text-sm" data-krill="note-body">@templ.Raw(renderMarkdown(n.Body))</div>
 						</li>
 					}
 				</ul>
@@ -887,7 +880,7 @@ templ taskNotesPanel(page TaskDetailPage) {
 				for _, n := range page.Notes {
 					<li data-krill="task-note">
 						@TaskNoteBadges(n)
-						<pre class="mt-1 whitespace-pre-wrap" data-krill="note-body">{ n.Body }</pre>
+						<div class="mt-1 krill-md" data-krill="note-body">@templ.Raw(renderMarkdown(n.Body))</div>
 					</li>
 				}
 			</ul>

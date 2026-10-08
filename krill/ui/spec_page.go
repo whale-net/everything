@@ -174,7 +174,17 @@ func (app *App) renderSpecTabPage(w http.ResponseWriter, r *http.Request, title 
 		renderFragment(w, r, body)
 		return
 	}
-	app.renderShell(w, r, title, r.URL.Path, body)
+	// The heading names the product; an unreadable product list costs only
+	// the name, never the page.
+	productName := ""
+	if products, err := app.scopeProducts(r.Context()); err == nil {
+		for _, p := range products {
+			if p.ID == productID {
+				productName = p.Name
+			}
+		}
+	}
+	app.renderShell(w, r, title, r.URL.Path, pages.SpecPage(productName, body))
 }
 
 // specTabSwapRequested reports whether this htmx request asked for the

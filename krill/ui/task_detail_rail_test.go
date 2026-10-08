@@ -526,8 +526,8 @@ func TestTaskDetailRailCopyChipIsAnAccessibleControlBoundFromTheHead(t *testing.
 	assert.Contains(t, row, `aria-label="Copy task id"`)
 	assert.Contains(t, row, `data-krill="copy-task-id"`)
 	assert.Contains(t, row, `data-task-id="`+task.ID.String()+`"`)
-	assert.Contains(t, row, ">"+task.ID.String()+"</button>",
-		"the chip's own text is the id, so the control reads as what it copies")
+	assert.Contains(t, row, ">"+task.ID.String()[:8]+"</button>",
+		"the chip's own text is the id's short form, so the control reads as what it copies")
 
 	// No behaviour IN the markup. It all lives in the head, so the chip
 	// survives a swap as dead markup the head re-wires, rather than carrying
@@ -648,8 +648,8 @@ func TestTaskDetailRailCopyChipIsDisabledUntilTheHeadEnablesIt(t *testing.T) {
 			"control that cannot work must not look live")
 	// The id survives the degradation as text -- which is the whole point of
 	// keeping it on the button rather than behind the clipboard.
-	assert.Contains(t, row, ">"+task.ID.String()+"</button>",
-		"with scripting off the id must still be readable on the page")
+	assert.Contains(t, row, ">"+task.ID.String()[:8]+"</button>",
+		"with scripting off the id's short form must still be readable on the page")
 
 	// And the head is what makes it work again. Without this half the chip
 	// is permanently dead and the disabled title becomes a lie.
@@ -705,7 +705,7 @@ func TestTaskDetailRailCopyConfirmationIsAPoliteLiveRegion(t *testing.T) {
 
 	// Beside the chip, not over it: the id stays on screen while the
 	// confirmation is read, and the confirmation sits in the same row.
-	assert.Contains(t, row, ">"+task.ID.String()+"</button>",
+	assert.Contains(t, row, ">"+task.ID.String()[:8]+"</button>",
 		"the chip's id must still be there while the confirmation reads")
 	// Only the id row carries the status hook: a confirmation region that
 	// wandered onto another row would announce beside the wrong value.

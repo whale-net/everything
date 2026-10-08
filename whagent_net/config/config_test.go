@@ -194,7 +194,7 @@ func TestValidate_EmptyToolSetWithoutDeclaration_StillFails(t *testing.T) {
 
 // TestLoad_ReflectorAgentIsNoTools proves the checked-in shitposter-reflector
 // definition is a base-prompt-only agent: tools: none, no tool_set, and a
-// system prompt carrying the strict JSON op schema.
+// system prompt carrying the JSON op schema FCM's reflect job validates.
 func TestLoad_ReflectorAgentIsNoTools(t *testing.T) {
 	_, agents, err := Load()
 	require.NoError(t, err)
@@ -209,9 +209,29 @@ func TestLoad_ReflectorAgentIsNoTools(t *testing.T) {
 	assert.Equal(t, ToolsNone, reflector.Tools)
 	assert.Empty(t, reflector.ToolSet)
 	assert.NotEmpty(t, reflector.SystemPrompt)
-	for _, want := range []string{`"ops"`, `"add"`, `"reinforce"`, `"retire"`, `"merge"`, `"trait"`, `"instruction"`, `"cause_refs"`} {
+	for _, want := range []string{`"ops"`, `"add"`, `"reinforce"`, `"retire"`, `"merge"`, `"key"`, `"from_key"`, `"into_key"`, `"kind"`, `"trait"`, `"cause_refs"`} {
 		assert.Contains(t, reflector.SystemPrompt, want)
 	}
+}
+
+// TestLoad_WriterAgentIsNoTools proves the checked-in shitposter-writer
+// definition is a base-prompt-only agent sharing the reflector's role, so
+// FCM's one service account can start sessions on both.
+func TestLoad_WriterAgentIsNoTools(t *testing.T) {
+	_, agents, err := Load()
+	require.NoError(t, err)
+
+	byID := map[string]*AgentDefinitionConfig{}
+	for i := range agents {
+		byID[agents[i].AgentID] = &agents[i]
+	}
+	writer := byID["shitposter-writer"]
+	require.NotNil(t, writer, "agents.yaml must define shitposter-writer")
+	assert.Equal(t, ToolsNone, writer.Tools)
+	assert.Empty(t, writer.ToolSet)
+	assert.Contains(t, writer.SystemPrompt, "Reply with only the post text")
+	require.NotNil(t, byID["shitposter-reflector"])
+	assert.Equal(t, byID["shitposter-reflector"].RequiredRole, writer.RequiredRole)
 }
 
 // TestAgentDefinitionConfig_Tools_Decodes proves `tools: none` decodes 1:1

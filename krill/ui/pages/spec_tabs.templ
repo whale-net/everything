@@ -67,6 +67,20 @@ type SpecTabsPage struct {
 // SpecTabs renders the strip above the active panel, both inside the one
 // region every tab swaps. The rest of the page -- shell, header, product
 // banner -- sits outside it and is never re-derived by a tab click.
+// SpecPage is the full-page frame around the tab region: the page heading
+// sits outside the swap region, so a tab click never re-renders it.
+templ SpecPage(productName string, tabs templ.Component) {
+	<div class="space-y-4" data-krill="spec-page">
+		<div class="flex flex-wrap items-center gap-3">
+			<h1 class="text-2xl font-semibold" data-krill="spec-page-title">Spec</h1>
+			if productName != "" {
+				<span class="text-base-content/70" data-krill="spec-page-product">{ productName }</span>
+			}
+		</div>
+		@tabs
+	</div>
+}
+
 templ SpecTabs(page SpecTabsPage) {
 	<div id={ SpecPanelAnchor } data-krill="spec-panel" data-krill-spec-tab={ page.Tab }>
 		@specTabStrip(page.Tabs)

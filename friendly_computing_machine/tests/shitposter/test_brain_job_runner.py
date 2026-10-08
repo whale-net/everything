@@ -2,7 +2,8 @@
 
 Covers the per-persona lock: an overlapping or operator-triggered job is recorded
 as skipped, a body that raises after its writes leaves no partial writes, and a
-job past its timeout is recorded failed. Job bodies are fakes registered per test.
+job past its timeout is recorded failed. A successful reflect run enqueues one
+snapshot run; a failed or no-op reflect run enqueues none. Job bodies are fakes registered per test.
 
 Red-proof run: the begin activity always acquiring the lock -> overlap test fails.
 """
@@ -17,6 +18,7 @@ from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, create_engine, select
 from temporalio.client import ScheduleOverlapPolicy, WorkflowFailureError
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (
@@ -47,6 +49,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.base import (
     ApplyOutcome,
     BrainJobInput,
+    BrainJobResult,
     JobBody,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.workflow import (
@@ -316,3 +319,123 @@ def test_timeout_marks_run_failed(engine, persona_id, gate, monkeypatch):
     assert [r.status for r in runs] == [ShitposterBrainJobStatus.FAILED.value]
     assert runs[0].error
     assert _persona_names(engine) == ["shitposter"]
+
+
+# Reflect-to-snapshot chaining: a successful reflect apply enqueues exactly one snapshot run.
+
+SNAPSHOT_SUFFIX = "-snapshot"
+
+
+def _register_kind(monkeypatch, job_kind, apply=None, compute=None):
+    def default_compute(params):
+        return {"n": 1}
+
+    def default_apply(session, run_id, payload):
+        return ApplyOutcome(status=ShitposterBrainJobStatus.SUCCEEDED.value, details=payload)
+
+    body = JobBody(compute=compute or default_compute, apply=apply or default_apply)
+    monkeypatch.setitem(base.JOB_BODIES, job_kind, body)
+
+
+async def _start_kind(env, persona_id, job_kind):
+    return await env.client.start_workflow(
+        ShitposterBrainJobWorkflow.run,
+        BrainJobInput(
+            persona_id=persona_id,
+            job_kind=job_kind,
+            trigger=ShitposterBrainJobTrigger.SCHEDULE.value,
+        ),
+        id=f"test-{job_kind}-{persona_id}-{datetime.datetime.now().timestamp()}",
+        task_queue=TASK_QUEUE,
+    )
+
+
+async def _snapshot_started(env, reflect_handle) -> bool:
+    try:
+        await env.client.get_workflow_handle(f"{reflect_handle.id}{SNAPSHOT_SUFFIX}").describe()
+    except RPCError as e:
+        if e.status == RPCStatusCode.NOT_FOUND:
+            return False
+        raise
+    return True
+
+
+def _snapshot_runs(engine, persona_id):
+    return [
+        r
+        for r in _runs(engine, persona_id)
+        if r.job_kind == ShitposterBrainJobKind.SNAPSHOT.value
+    ]
+
+
+def test_successful_reflect_enqueues_exactly_one_snapshot(engine, persona_id, monkeypatch):
+    snapshot_applies = []
+
+    def snapshot_apply(session, run_id, payload):
+        snapshot_applies.append(run_id)
+        return ApplyOutcome(status=ShitposterBrainJobStatus.SUCCEEDED.value, details={"v": 1})
+
+    _register_kind(monkeypatch, ShitposterBrainJobKind.REFLECT.value)
+    _register_kind(monkeypatch, ShitposterBrainJobKind.SNAPSHOT.value, apply=snapshot_apply)
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                handle = await _start_kind(env, persona_id, ShitposterBrainJobKind.REFLECT.value)
+                reflected = await handle.result()
+                snapshot = await env.client.get_workflow_handle(
+                    f"{handle.id}{SNAPSHOT_SUFFIX}", result_type=BrainJobResult
+                ).result()
+                return reflected, snapshot
+
+    reflected, snapshot = _run(go())
+    assert reflected.status == ShitposterBrainJobStatus.SUCCEEDED.value
+    assert snapshot.status == ShitposterBrainJobStatus.SUCCEEDED.value
+    assert len(snapshot_applies) == 1
+    snapshot_rows = _snapshot_runs(engine, persona_id)
+    assert [r.status for r in snapshot_rows] == [ShitposterBrainJobStatus.SUCCEEDED.value]
+    assert snapshot_rows[0].trigger == ShitposterBrainJobTrigger.SCHEDULE.value
+
+
+def test_failed_reflect_apply_enqueues_no_snapshot(engine, persona_id, monkeypatch):
+    def apply(session, run_id, payload):
+        session.add(ShitposterPersona(name="partial-write"))
+        session.flush()
+        raise RuntimeError("apply broke mid-write")
+
+    _register_kind(monkeypatch, ShitposterBrainJobKind.REFLECT.value, apply=apply)
+    _register_kind(monkeypatch, ShitposterBrainJobKind.SNAPSHOT.value)
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                handle = await _start_kind(env, persona_id, ShitposterBrainJobKind.REFLECT.value)
+                with pytest.raises(WorkflowFailureError):
+                    await handle.result()
+                return await _snapshot_started(env, handle)
+
+    assert _run(go()) is False
+    assert _persona_names(engine) == ["shitposter"]
+    reflect_rows = [r for r in _runs(engine, persona_id) if r.job_kind == ShitposterBrainJobKind.REFLECT.value]
+    assert [r.status for r in reflect_rows] == [ShitposterBrainJobStatus.FAILED.value]
+    assert _snapshot_runs(engine, persona_id) == []
+
+
+def test_no_op_reflect_enqueues_no_snapshot(engine, persona_id, monkeypatch):
+    def apply(session, run_id, payload):
+        return ApplyOutcome(status=ShitposterBrainJobStatus.NO_OP.value, details={"applied": 0})
+
+    _register_kind(monkeypatch, ShitposterBrainJobKind.REFLECT.value, apply=apply)
+    _register_kind(monkeypatch, ShitposterBrainJobKind.SNAPSHOT.value)
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                handle = await _start_kind(env, persona_id, ShitposterBrainJobKind.REFLECT.value)
+                reflected = await handle.result()
+                return reflected, await _snapshot_started(env, handle)
+
+    reflected, started = _run(go())
+    assert reflected.status == ShitposterBrainJobStatus.NO_OP.value
+    assert started is False
+    assert _snapshot_runs(engine, persona_id) == []

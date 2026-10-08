@@ -9,11 +9,18 @@ or the new row for an add).
 import datetime
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
+    ShitposterBrainJobRun,
+    ShitposterPostEngagement,
+    ShitposterReflectorRun,
+    ShitposterSuggestion,
+    ShitposterSuggestionBacker,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
     ShitposterAttributeStatusEnum,
@@ -569,54 +576,12 @@ def fold_lore(
     if not cause_ref:
         raise ValueError("fold requires a cause_ref")
     now = _now(now)
-    ids = sorted(set(from_lore_ids))
     with SessionManager(session) as s:
-        sources = [_current_lore(s, lore_id) for lore_id in ids]
-        persona_ids = {row.persona_id for row in sources}
-        if len(persona_ids) != 1:
-            raise ValueError("fold sources must belong to one persona")
-        persona_id = persona_ids.pop()
-        cause = ShitposterMemoryCauseKindEnum.FOLD.value
-        for row in sources:
-            row.valid_to = now
-            s.add(row)
-        s.flush()
-        for row in sources:
-            _log(
-                s,
-                persona_id=persona_id,
-                entity_kind=ShitposterMemoryEntityKindEnum.LORE.value,
-                entity_id=row.id,
-                operation=ShitposterMemoryOperationEnum.FOLD,
-                before_text=row.text,
-                after_text=into_text,
-                cause_kind=cause,
-                cause_post_id=None,
-                cause_ref=cause_ref,
-                reflector_run_id=reflector_run_id,
-                now=now,
-            )
-        consolidated = ShitposterLoreEntry(
-            persona_id=persona_id,
-            text=into_text,
-            kind=ShitposterLoreKindEnum.CONSOLIDATED.value,
-            source_post_id=None,
-            popularity_score=sum(row.popularity_score for row in sources),
-            retired_by_operator=False,
-            valid_from=now,
-        )
-        s.add(consolidated)
-        s.flush()
-        _log(
+        consolidated = fold_items(
             s,
-            persona_id=persona_id,
-            entity_kind=ShitposterMemoryEntityKindEnum.LORE.value,
-            entity_id=consolidated.id,
-            operation=ShitposterMemoryOperationEnum.ADD,
-            before_text=None,
-            after_text=into_text,
-            cause_kind=cause,
-            cause_post_id=None,
+            lore_ids=from_lore_ids,
+            attribute_ids=[],
+            into_text=into_text,
             cause_ref=cause_ref,
             reflector_run_id=reflector_run_id,
             now=now,
@@ -624,6 +589,121 @@ def fold_lore(
         s.commit()
         s.refresh(consolidated)
         return consolidated
+
+
+def current_consolidated_lore(
+    persona_id: int, session: Optional[Session] = None
+) -> Optional[ShitposterLoreEntry]:
+    """The persona's current consolidated lore entry, if one exists."""
+    with SessionManager(session) as s:
+        return s.exec(
+            select(ShitposterLoreEntry)
+            .where(ShitposterLoreEntry.persona_id == persona_id)
+            .where(ShitposterLoreEntry.valid_to.is_(None))
+            .where(ShitposterLoreEntry.kind == ShitposterLoreKindEnum.CONSOLIDATED.value)
+        ).one_or_none()
+
+
+def fold_items(
+    session: Session,
+    *,
+    lore_ids: list[int],
+    attribute_ids: list[int],
+    into_text: str,
+    cause_ref: str,
+    reflector_run_id: Optional[str],
+    now: datetime.datetime,
+) -> ShitposterLoreEntry:
+    """Fold source rows into one new consolidated lore entry, inside the caller's transaction.
+
+    Current lore sources are closed. Attribute sources must already be closed as
+    retired or merged, and an operator-retired attribute is refused. Each source
+    gets a fold change row; the caller owns the commit.
+    """
+    if not lore_ids and not attribute_ids:
+        raise ValueError("fold requires at least one source")
+    if not cause_ref:
+        raise ValueError("fold requires a cause_ref")
+    lore_rows = [_current_lore(session, i) for i in sorted(set(lore_ids))]
+    attribute_rows = [_fold_attribute_source(session, i) for i in sorted(set(attribute_ids))]
+    persona_ids = {row.persona_id for row in lore_rows + attribute_rows}
+    if len(persona_ids) != 1:
+        raise ValueError("fold sources must belong to one persona")
+    persona_id = persona_ids.pop()
+    cause = ShitposterMemoryCauseKindEnum.FOLD.value
+
+    for row in lore_rows:
+        row.valid_to = now
+        session.add(row)
+    session.flush()
+    for row in lore_rows:
+        _log(
+            session,
+            persona_id=persona_id,
+            entity_kind=ShitposterMemoryEntityKindEnum.LORE.value,
+            entity_id=row.id,
+            operation=ShitposterMemoryOperationEnum.FOLD,
+            before_text=row.text,
+            after_text=into_text,
+            cause_kind=cause,
+            cause_post_id=None,
+            cause_ref=cause_ref,
+            reflector_run_id=reflector_run_id,
+            now=now,
+        )
+    for row in attribute_rows:
+        _log(
+            session,
+            persona_id=persona_id,
+            entity_kind=ShitposterMemoryEntityKindEnum.ATTRIBUTE.value,
+            entity_id=row.id,
+            operation=ShitposterMemoryOperationEnum.FOLD,
+            before_text=row.text,
+            after_text=into_text,
+            cause_kind=cause,
+            cause_post_id=None,
+            cause_ref=cause_ref,
+            reflector_run_id=reflector_run_id,
+            now=now,
+        )
+    consolidated = ShitposterLoreEntry(
+        persona_id=persona_id,
+        text=into_text,
+        kind=ShitposterLoreKindEnum.CONSOLIDATED.value,
+        source_post_id=None,
+        popularity_score=sum(row.popularity_score for row in lore_rows),
+        retired_by_operator=False,
+        valid_from=now,
+    )
+    session.add(consolidated)
+    session.flush()
+    _log(
+        session,
+        persona_id=persona_id,
+        entity_kind=ShitposterMemoryEntityKindEnum.LORE.value,
+        entity_id=consolidated.id,
+        operation=ShitposterMemoryOperationEnum.ADD,
+        before_text=None,
+        after_text=into_text,
+        cause_kind=cause,
+        cause_post_id=None,
+        cause_ref=cause_ref,
+        reflector_run_id=reflector_run_id,
+        now=now,
+    )
+    return consolidated
+
+
+def _fold_attribute_source(session: Session, attribute_id: int) -> ShitposterPersonaAttribute:
+    row = session.get(ShitposterPersonaAttribute, attribute_id)
+    if row is None:
+        raise LookupError(f"no attribute with id {attribute_id}")
+    # retire and merge close the source row but leave its status as written at add time
+    if row.valid_to is None:
+        raise ValueError(f"attribute {attribute_id} is still current; only retired or merged attributes fold")
+    if row.retired_by_operator:
+        raise ValueError(f"attribute {attribute_id} was retired by the operator and never folds")
+    return row
 
 
 def operator_retire(
@@ -773,5 +853,71 @@ def attributes_as_of(
                     )
                 )
                 .order_by(ShitposterPersonaAttribute.attribute_key, ShitposterPersonaAttribute.id)
+            ).all()
+        )
+
+
+def list_reflector_runs(
+    persona_id: int,
+    limit: int,
+    offset: int = 0,
+    session: Optional[Session] = None,
+) -> list[tuple[ShitposterReflectorRun, datetime.datetime]]:
+    """Reflector run records with their brain job start time, newest first."""
+    with SessionManager(session) as s:
+        rows = s.exec(
+            select(ShitposterReflectorRun, ShitposterBrainJobRun.started_at)
+            .join(
+                ShitposterBrainJobRun,
+                ShitposterBrainJobRun.id == ShitposterReflectorRun.brain_job_run_id,
+            )
+            .where(ShitposterReflectorRun.persona_id == persona_id)
+            .order_by(
+                ShitposterBrainJobRun.started_at.desc(),  # type: ignore[union-attr]
+                ShitposterReflectorRun.id.desc(),  # type: ignore[union-attr]
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [(run, started_at) for run, started_at in rows]
+
+
+def count_reflector_runs(persona_id: int, session: Optional[Session] = None) -> int:
+    with SessionManager(session) as s:
+        return s.exec(
+            select(func.count())
+            .select_from(ShitposterReflectorRun)
+            .where(ShitposterReflectorRun.persona_id == persona_id)
+        ).one()
+
+
+def get_post_engagement(
+    post_id: int, session: Optional[Session] = None
+) -> ShitposterPostEngagement | None:
+    with SessionManager(session) as s:
+        return s.get(ShitposterPostEngagement, post_id)
+
+
+def get_suggestion(
+    suggestion_id: int, session: Optional[Session] = None
+) -> ShitposterSuggestion | None:
+    with SessionManager(session) as s:
+        return s.get(ShitposterSuggestion, suggestion_id)
+
+
+def active_backer_slack_ids(
+    suggestion_id: int, session: Optional[Session] = None
+) -> list[str]:
+    """Slack user ids currently backing a suggestion, in backing order."""
+    with SessionManager(session) as s:
+        return list(
+            s.exec(
+                select(ShitposterSuggestionBacker.slack_user_id)
+                .where(ShitposterSuggestionBacker.suggestion_id == suggestion_id)
+                .where(ShitposterSuggestionBacker.removed_at.is_(None))  # type: ignore[union-attr]
+                .order_by(
+                    ShitposterSuggestionBacker.backed_at,  # type: ignore[union-attr]
+                    ShitposterSuggestionBacker.id,  # type: ignore[union-attr]
+                )
             ).all()
         )

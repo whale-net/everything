@@ -153,7 +153,7 @@ templ specBladeID(id string) {
 			<button type="button" class="badge badge-ghost badge-sm font-mono disabled:opacity-50"
 				aria-label="Copy feature id" data-krill="copy-task-id" data-task-id={ id }
 				disabled title="Copying the feature id needs JavaScript">
-				{ id }
+				{ idChipText(id) }
 			</button>
 			<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
 		</dd>

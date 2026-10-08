@@ -51,6 +51,42 @@ records `no_op`.
 `register_harvest_schedule(...)` creates the hourly schedule. Nothing calls it at
 worker startup yet; `brain-trigger <persona_id> harvest` runs it on demand.
 
+## Reflect job
+
+`reflect.py` applies one daily round of validated changes to the persona's active
+attributes. Compute gathers unconsumed engagement rows and promoted suggestions,
+newest first, capped at `FCM_SHITPOSTER_REFLECTOR_INPUT_CAP`; the excess carries to
+the next run. With no input the run records `no_op` and the agent is not called.
+Otherwise the reflector agent (`FCM_SHITPOSTER_REFLECTOR_AGENT_ID`) returns
+`{"ops": [...]}` with `add`, `reinforce`, `retire`, and `merge` ops, each citing
+refs such as `post:<id>` or `suggestion:<id>`. The agent's system prompt (`shitposter-reflector` in
+`whagent_net/config/agents.yaml`) restates this op schema; change both together.
+
+Each op is rejected, changing nothing, with one of these reasons:
+
+- `malformed`: wrong shape, unknown op, empty or over-long text
+- `no_valid_cause`: no cited ref is an input of this run
+- `missing_attribute`: names a key that is not an active attribute
+- `targets_member`: add text names a current community member (M6 guardrail check)
+- `instruction`: `kind` is `instruction`, or the text reads as a directive
+- `negative_reinforce`: reinforce cites an engagement whose negative reactions outnumber the rest
+- `retired_readd`: add matches an operator-retired item and all cited evidence predates the retirement
+- `key_exists`, `conflicting_op`: the key is already active, or an earlier op in the run touched it
+- `attribute_cap`: an addition that would take active attributes over `FCM_SHITPOSTER_ATTRIBUTE_CAP`
+
+The cap drops trailing additions first; retires and merges always apply.
+
+Apply writes the accepted ops through the memory DAL with the cited refs as cause,
+the `shitposterreflectorrun` row, the consumed-input markers, and the applied or
+declined outcome for each consumed suggestion, all in the runner's transaction.
+`retire` and `merge` ops call the fold hook (`register_fold_hook`) inside that
+transaction if one is registered.
+
+`register_reflect_schedule(...)` creates the daily schedule. Nothing calls it at
+worker startup yet. `brain-trigger <persona_id> reflect` runs it on demand. The
+snapshot job after a successful run: the workflow starts the persona's snapshot run as a
+child once the apply commits. No-op and failed runs enqueue nothing.
+
 ## Snapshot job
 
 `snapshot.py` renders a persona's memory (attributes, then the top N ranked lore,

@@ -74,7 +74,7 @@ Keycloak identity. It runs against the same Keycloak realm as whagent-net's
 | `FCM_OIDC_CLIENT_ID` | yes | Keycloak client id for the **confidential browser-login** client (distinct from the `WHAGENT_CLIENT_ID` service account). |
 | `FCM_OIDC_CLIENT_SECRET` | yes | Keycloak client secret for the confidential browser-login client. |
 | `FCM_WEB_SESSION_SECRET` | yes | Signing key for the Starlette session cookie that carries Authlib's OIDC `state`/`nonce` and the one-time link token across the redirect. |
-| `FCM_SHITPOSTER_AGENT_ID` | for Shitposter | whagent-net agent id the Shitposter workflow starts sessions on. The agent definition holds only a generic base prompt; the persona text comes from FCM's persona record and is sent as the session's first turn. Read by the Temporal worker when generating. |
+| `FCM_SHITPOSTER_AGENT_ID` | for Shitposter | whagent-net agent id the Shitposter workflow starts sessions on. Defined in `whagent_net/config/agents.yaml` as `shitposter-writer` with `tools: none`; it holds only the generic writer base prompt (voice, length, hard limits), and the persona text comes from FCM's persona record and is sent as the session's first turn. Read by the Temporal worker when generating. |
 | `FCM_SHITPOSTER_DENYLIST` | no | Comma-separated extra terms the Shitposter content filter rejects (whole-word, case-insensitive), on top of the built-in list. Read by the Temporal worker per check. |
 | `FCM_SHITPOSTER_GAP_MIN_SECONDS` / `FCM_SHITPOSTER_GAP_MAX_SECONDS` | no | Test/local override of the scheduled-shitpost gap bounds (default 4h-12h). Both must be set to take effect. Read when a channel schedule workflow is started. |
 | `FCM_SHITPOSTER_NEGATIVE_EMOJI` | no | Comma-separated Slack reaction names (colons and case ignored, e.g. `thumbsdown,-1`) that count as negative engagement on a bot post. Empty means none count. Read by the engagement harvester when it finalizes a post. |
@@ -179,7 +179,7 @@ and by the scheduled post path (`temporal/shitposter/activity.py`).
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `FCM_SHITPOSTER_WRITER_AGENT_ID` | for the write job | whagent-net agent id the write brain job starts its session on. Defined in `whagent_net/config/agents.yaml` as `shitposter-writer` with `tools: none`. Read per write run. |
+| `FCM_SHITPOSTER_WRITER_AGENT_ID` | for the write job | whagent-net agent id the write brain job starts its session on. Defined in `whagent_net/config/agents.yaml` as `shitposter-drafter` with `tools: none`. Read per write run. |
 | `FCM_SHITPOSTER_WRITE_CADENCE_HOURS` | no (default `3`) | Hours between writer runs; used when the write schedule is registered. Must be a positive integer. |
 | `FCM_SHITPOSTER_DRAFT_BATCH_SIZE` | no (default `5`) | Most drafts stored per writer run. Extra or malformed reply items are dropped and counted in the run's `details`. Must be a positive integer. |
 | `FCM_SHITPOSTER_DRAFT_EXPIRY_HOURS` | no (default `24`) | A draft older than this is not eligible for a scheduled post. Must be a positive integer. |
@@ -193,3 +193,4 @@ Read by the Temporal worker when the snapshot job runs (`temporal/shitposter_bra
 | `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET` | no (default `2000`) | Maximum approximate tokens in a context snapshot's rendered text. Must be positive. |
 | `FCM_SHITPOSTER_LORE_DECAY_HALF_LIFE_HOURS` | no (default `168`) | Half-life of the recency term in the lore ranking score. Must be positive. |
 | `FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP` | no (default `10`) | Size N of the snapshot's ranked lore section. Only lore ranked below N is eligible for the random pick. Must be >= 1. |
+| `FCM_SHITPOSTER_STALE_LORE_DAYS` | no (default `30`) | Days a hit lore entry may go without appearing in a context snapshot (or since creation, if never shown) before the snapshot job folds it into the persona's consolidated lore entry. An entry at exactly this age folds. Operator-retired lore never folds. Must be a positive integer; otherwise the default is used with a warning. Read per snapshot run. |

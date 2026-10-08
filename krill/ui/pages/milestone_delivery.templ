@@ -63,7 +63,7 @@ templ deliveryEntityID(e DeliveryEntity) {
 			<button type="button" class="badge badge-ghost badge-sm font-mono disabled:opacity-50"
 				aria-label={ "Copy " + e.Kind + " id" } data-krill="copy-task-id" data-task-id={ e.ID }
 				disabled title="Copying the id needs JavaScript">
-				{ e.ID }
+				{ idChipText(e.ID) }
 			</button>
 			<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
 		</dd>
