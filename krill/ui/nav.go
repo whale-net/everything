@@ -1,11 +1,6 @@
-// The workspace shell's nav: the sidebar every signed-in page renders
-// (design/wireframes/_shell.html) as one unheaded Overview link followed by
-// six headed groups, and the rule for deciding which one the page being
-// rendered belongs to.
-//
-// The item set is build-time constant; only the hrefs, the badges, and
-// the active marking vary per request, because a link has to carry the
-// operator's current product.
+// Workspace shell sidebar: an unheaded Overview link, six headed groups, and
+// the rule for which item the current page belongs to. Hrefs vary per request
+// because links carry the operator's current product.
 package main
 
 import (
@@ -20,82 +15,51 @@ import (
 	"github.com/whale-net/everything/krill/ui/components"
 )
 
-// navItem is one link in the workspace shell's sidebar.
 type navItem struct {
-	// Label is the link's text.
 	Label string
 
-	// Href is where the link goes. It must resolve on this binary: an
-	// item whose redesigned page has not shipped points at the existing
-	// page for that area rather than at a route that would 404.
+	// Href must resolve on this binary; never point at a route that would 404.
 	Href string
 
-	// Path is the route prefix that marks this item active. Usually Href,
-	// but split out because an item can link at one page and own another
-	// -- Tasks links at the delivery page while the pages it owns are the
-	// milestone task subtree.
-	//
-	// A "*" segment matches any one segment, which is how an item owns a
-	// subtree rooted at an id the chrome does not hold: the milestone task
-	// and board pages differ by their own trailing segment, not by any
-	// one milestone.
+	// Path is the route prefix that marks this item active when it differs from
+	// Href. A "*" segment matches any one segment, so an item can own a subtree
+	// rooted at an id the chrome does not hold.
 	Path string
 
-	// AltPath is a second path this item also owns, for a page that has
-	// two URLs. Overview is one: "/" and the product's own overview both
-	// render it, and the operator must see where they are on either.
-	// Tasks and Board are the other kind -- one wildcard pattern owning a
-	// subtree rooted at a container id the chrome does not hold.
+	// AltPath is a second path this item owns, for a page with two URLs or a
+	// legacy wildcard subtree.
 	AltPath string
 
-	// Exact marks an item whose only active page is its own path, with
-	// nothing under it. The Spec group's tabs are siblings hanging off
-	// the product path, so without it Capabilities would stay lit while
-	// an operator is reading Decisions.
+	// Exact limits activity to the path itself; the Spec tabs are siblings under
+	// the product path and would otherwise all stay lit.
 	Exact bool
 
-	// Badge is the count this item carries. Its zero value renders no
-	// badge, so an item that has no figure to show needs no special case
-	// -- and neither does a read that failed, which is the same absence
-	// by design.
+	// Badge is the item's count; the zero value renders no badge.
 	Badge navBadge
 }
 
-// navGroup is one headed section of the sidebar: a title and its items.
-// An empty Title renders its items unheaded, which is how Overview sits
-// above the groups rather than inside one.
+// navGroup is one sidebar section. An empty Title renders its items unheaded.
 type navGroup struct {
 	Title string
 	Items []navItem
 }
 
-// navBadge is a nav item's count in the three states a read can leave it:
-// a positive figure to render, a genuine zero, and a read that failed.
-//
-// The third state is why this is a type rather than an int. A zero badge
-// tells an operator nothing needs attention; an unreadable count says the
-// same thing for the wrong reason, so a red 0 is a false alarm and a
-// silent 0 is worse than either. unreadableBadge is a distinct value that
-// renders as no badge at all.
+// navBadge is a nav count that distinguishes a failed read from zero, so an
+// unreadable count renders no badge rather than a misleading 0.
 type navBadge struct {
-	// count is the figure, meaningful only when readable.
 	count int
 
-	// readable is false when the read failed, leaving count undefined.
 	readable bool
 }
 
-// countedBadge is a figure the read returned, zero included.
 func countedBadge(count int) navBadge {
 	return navBadge{count: count, readable: true}
 }
 
-// unreadableBadge is a count this request could not obtain. It is a
-// package-level value so no caller can construct it wrongly.
+// unreadableBadge is a count this request could not obtain.
 var unreadableBadge = navBadge{}
 
-// label is the badge's rendered text, or "" for no badge -- which covers
-// both a zero count and an unreadable one.
+// label is the badge text, or "" for zero or unreadable.
 func (b navBadge) label() string {
 	if !b.readable || b.count <= 0 {
 		return ""
@@ -103,23 +67,11 @@ func (b navBadge) label() string {
 	return strconv.Itoa(b.count)
 }
 
-// needsAttentionBadge reads how many tasks are escalated in one product
-// across all its milestones: the same figure the Overview Escalated tile
-// and the unfiltered Escalated tab show, so the three cannot drift.
-//
-// The read is CountEscalatedTasks through the P0 console narrowing -- the
-// store's dedicated count read, which returns a failed count as its error
-// rather than as a 0 and does not cap at a page size. Only the product is
-// narrowed; a milestone filter would scope the badge to one container and
-// hide escalations elsewhere in the product.
-//
-// A failure is not a zero. It omits the badge and logs at WARNING: the
-// page rendered fine without it, but the operator is looking at a
-// sidebar that cannot tell them whether anything is stuck.
+// needsAttentionBadge counts escalated tasks across the whole product, the same
+// figure the Overview tile and Escalated tab show. A failed read logs a warning
+// and omits the badge rather than showing 0.
 func (app *App) needsAttentionBadge(ctx context.Context, productID uuid.UUID) navBadge {
 	if productID == uuid.Nil {
-		// No product means no product-wide count to read; an empty scope
-		// is not a deployment whose escalation queue needs watching.
 		return countedBadge(0)
 	}
 	scopeID, err := app.soleScopeID(ctx)
@@ -139,27 +91,15 @@ func (app *App) needsAttentionBadge(ctx context.Context, productID uuid.UUID) na
 	return countedBadge(count)
 }
 
-// navTargets carries the ids the sidebar's hrefs are built from, plus the
-// one figure it shows. Product is the operator's current product.
-//
-// There is no milestone id here any more. It existed only so Tasks and
-// Board could build per-milestone hrefs, and while neither page needs one
-// it was a field the chrome could only sometimes fill: a page reached
-// without a container in its URL had no milestone to pass, and the two
-// items fell back to the delivery page for it. Now that both views are
-// product-wide, every href is a function of the product alone, so a
-// request cannot produce a sidebar whose links disagree with the page it
-// is on.
+// navTargets carries the ids sidebar hrefs are built from, plus the badge.
+// Every href depends only on the product.
 type navTargets struct {
 	Product uuid.UUID
 
-	// Escalated is the Needs-attention item's badge. It is a value the
-	// caller resolved per request, not something the sidebar reads: the
-	// chrome renders, the route reads.
+	// Escalated is resolved by the route per request; the sidebar only renders it.
 	Escalated navBadge
 }
 
-// itemPath is the prefix that marks an item active.
 func (i navItem) itemPath() string {
 	if i.Path != "" {
 		return i.Path
@@ -167,8 +107,6 @@ func (i navItem) itemPath() string {
 	return i.Href
 }
 
-// itemPaths is every path an item owns: its own, plus the alternative a
-// two-URL item carries.
 func (i navItem) itemPaths() []string {
 	if i.AltPath == "" {
 		return []string{i.itemPath()}
@@ -176,11 +114,8 @@ func (i navItem) itemPaths() []string {
 	return []string{i.itemPath(), i.AltPath}
 }
 
-// navItemIsActive reports whether the page being rendered belongs to this
-// item. Matched at path-segment boundaries rather than by raw prefix: an
-// item's path is a prefix of its sub-pages ("/ops" of "/ops/claimed"), but
-// not of an unrelated sibling that merely starts with the same characters
-// ("/opsarchive"). A "*" segment matches exactly one segment.
+// navItemIsActive reports whether the current page belongs to item, matching
+// at path-segment boundaries so "/ops" owns "/ops/claimed" but not "/opsarchive".
 func navItemIsActive(item navItem, activePath string) bool {
 	for _, pattern := range item.itemPaths() {
 		if pathOwns(pattern, activePath, item.Exact) {
@@ -190,10 +125,8 @@ func navItemIsActive(item navItem, activePath string) bool {
 	return false
 }
 
-// pathOwns reports whether the page at activePath is the pattern itself or
-// sits under it. An Exact pattern owns its path alone; the Spec group's
-// tabs are siblings, not a chain, and prefix matching would leave
-// Capabilities lit while an operator reads Decisions.
+// pathOwns reports whether activePath is pattern or sits under it; an exact
+// pattern owns only itself.
 func pathOwns(pattern, activePath string, exact bool) bool {
 	patternSegments := pathSegments(pattern)
 	segments := pathSegments(activePath)
@@ -208,9 +141,8 @@ func pathOwns(pattern, activePath string, exact bool) bool {
 	return len(segments) == len(patternSegments) || !exact
 }
 
-// pathSegments splits a URL path into its non-empty segments. The root is
-// the empty path, so it has none -- which is what keeps the Overview item
-// from matching every page as a prefix.
+// pathSegments splits a path into non-empty segments. The root has none, which
+// keeps Overview from matching every page as a prefix.
 func pathSegments(path string) []string {
 	path = strings.Trim(path, "/")
 	if path == "" {
@@ -219,15 +151,8 @@ func pathSegments(path string) []string {
 	return strings.Split(path, "/")
 }
 
-// workspaceNav builds the shell's grouped nav for a product, marking at
-// most one item active.
-//
-// At most one, first match in render order: two items can share a path --
-// Tasks and Board both link at the delivery page until their own pages
-// ship -- and a sidebar showing two active items is worse than one showing
-// the more specific Work item it currently points through. Overview sits
-// first and matches its own two URLs alone, so it is never active while
-// another area is.
+// workspaceNav builds the grouped nav, marking at most one item active: the
+// first match in render order.
 func workspaceNav(t navTargets, activePath string) []components.NavGroup {
 	groups := navGroupTable(t)
 	out := make([]components.NavGroup, 0, len(groups))
@@ -249,18 +174,8 @@ func workspaceNav(t navTargets, activePath string) []components.NavGroup {
 	return out
 }
 
-// workspaceShellData is the one seam a route building a shell page goes
-// through: it takes the ids the caller resolved and returns the chrome
-// with every href already built from them.
-//
-// The product id is the caller's, never one this file resolves: a route
-// that forgot to supply one would silently render a sidebar pointing at
-// uuid.Nil's paths, which resolve to nothing, so passing it explicitly
-// keeps that failure a compile error rather than a dead link.
-//
-// switcher is the sidebar's Product select, which this function does not
-// build: it reads the scope, and a seam that stayed pure is one a route
-// cannot accidentally turn into a second, differently-filtered read.
+// workspaceShellData builds the shell chrome from caller-resolved ids. It stays
+// pure: the switcher is passed in so a route cannot add a second scope read.
 func workspaceShellData(t navTargets, activePath, title, userLabel string, switcher *components.ProductSwitcherData) components.ShellData {
 	return components.ShellData{
 		LayoutData: components.LayoutData{
@@ -272,27 +187,21 @@ func workspaceShellData(t navTargets, activePath, title, userLabel string, switc
 	}
 }
 
-// escalationBadgeKey carries an escalated count this request already read,
-// so a page whose own body shows the same figure -- the Overview's primary
-// action -- and the sidebar's Needs-attention badge are one read rather
-// than two that could disagree.
+// escalationBadgeKey carries an escalated count already read this request, so
+// a page showing the same figure and the sidebar badge share one read.
 type escalationBadgeKey struct{}
 
-// withEscalationBadge returns a request carrying an already-read badge.
 func withEscalationBadge(r *http.Request, badge navBadge) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), escalationBadgeKey{}, badge))
 }
 
-// escalationBadgeFrom returns the badge this request already read, if any.
 func escalationBadgeFrom(ctx context.Context) (navBadge, bool) {
 	badge, ok := ctx.Value(escalationBadgeKey{}).(navBadge)
 	return badge, ok
 }
 
-// shellNavTargets is the per-request half of the seam: it takes the product
-// a route already resolved and adds the one figure the chrome must read for
-// itself, so a route building a shell page never has to remember to fetch
-// it.
+// shellNavTargets adds the escalation badge to a route-resolved product,
+// reusing a count already on ctx.
 func (app *App) shellNavTargets(ctx context.Context, productID uuid.UUID) navTargets {
 	badge, ok := escalationBadgeFrom(ctx)
 	if !ok {
@@ -304,66 +213,25 @@ func (app *App) shellNavTargets(ctx context.Context, productID uuid.UUID) navTar
 	}
 }
 
-// navGroupTable is the sidebar's fixed shape, in render order. The item
-// set is build-time constant; only the hrefs and the active marking vary
-// per request.
+// navGroupTable is the sidebar's fixed shape, in render order.
 func navGroupTable(t navTargets) []navGroup {
 	product := productPath(t.Product)
 	overview := productHref(t.Product, overviewSuffix)
-	// The Delivery group's own item is the Milestones table itself, not the
-	// pre-redesign delivery URL it replaced (FR 31cbd3eb). The old href is a
-	// 302 now, so leaving it here would make every operator who clicked
-	// "Milestones" pay a redirect hop to reach the page it names -- and the
-	// hop is silent in the address bar, which reads as the link being wrong.
-	//
-	// It still OWNS the pre-redesign path (its AltPath), for the reason the
-	// Tasks and Board items below keep theirs: an operator who followed a
-	// bookmarked /delivery link is on the Milestones page and the sidebar
-	// must say so. The wildcard-free AltPath is exact, so it cannot light
-	// for anything the item does not already own.
+	// AltPath keeps legacy /delivery bookmarks marking Milestones active.
 	milestones := productHref(t.Product, milestonesSuffix)
 
-	// Tasks and Board are the two product-wide views of one scope, so both
-	// hrefs are the product's own pages and neither needs a milestone id
-	// from the chrome. They were the delivery page and the in-flight
-	// milestone's board only while the product-wide routes did not exist;
-	// linking an operator to a page listing the milestones rather than to
-	// the tasks they came to see is a fallback that has nothing left to
-	// fall back from.
-	//
-	// Each still OWNS the pre-redesign per-milestone subtree (its
-	// AltPath). It was load-bearing while those URLs served their own
-	// pages: an operator who followed a bookmarked /milestones/{mid}/tasks
-	// link was on a Tasks page and had to see the sidebar say so. The
-	// wildcard is what lets one item own a subtree rooted at an id the
-	// chrome does not hold.
-	//
-	// The href does not follow: it is the product-wide page either way.
-	// Every per-milestone URL is now a 302 -- the list and the board into
-	// these very product-wide pages (FR f41a352d), the detail into the
-	// product-scoped detail (FR 0c03eac1) -- so an operator who followed a
-	// bookmark arrives by the redirect on a path Path already owns, and the
-	// sidebar marks Tasks from Path. The AltPath is kept as the belt to
-	// that pair of braces rather than removed with them: a render whose URL
-	// still carries a pre-redesign path is then marked correctly too, and
-	// the wildcard costs nothing when nothing does.
+	// Tasks and Board are product-wide. AltPath keeps legacy per-milestone URLs
+	// marked correctly; the wildcard owns a subtree rooted at an unknown id.
 	tasks := productHref(t.Product, tasksSuffix)
 	board := productHref(t.Product, boardSuffix)
 
-	// Needs attention is the product's own page now (FR 5fd47f4d). It used
-	// to link at the pre-redesign /ops root, which is a 302 into this very
-	// page -- so leaving the href there would make every operator pay a
-	// silent redirect hop to reach the queue they clicked, and the sidebar
-	// would mark nothing once they arrived. The old path is kept as the
-	// AltPath for the reason Tasks and Milestones keep theirs: a render
-	// whose URL still carries it is then marked correctly too.
+	// AltPath keeps the legacy /ops root marking Needs attention active.
 	needsAttention := productHref(t.Product, needsAttentionSuffix)
 
 	return []navGroup{
 		{Title: "", Items: []navItem{
-			// The home page is the Overview, and so is the product's own
-			// overview URL. Both light this item, neither as a prefix, so
-			// no other area's page does.
+			// Overview owns both "/" and the product overview, exactly, so no other
+			// area's page lights it.
 			{Label: "Overview", Href: overview, Path: overview, AltPath: "/", Exact: true},
 		}},
 		{Title: "Work", Items: []navItem{

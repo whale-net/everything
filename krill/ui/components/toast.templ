@@ -6,79 +6,38 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// The shell's one toast region: the polite live area every successful
-// mutation drops a short-lived confirmation into (FR c97a5018).
-//
-// It is deliberately NOT a //libs/go/htmxui primitive. htmxui scopes
-// itself to what several independent domains already shared, and a toast
-// host is used by one (see htmxui ARCHITECTURE §8); krill keeps it in its
-// own chrome package, the same reason the sidebar and the product
-// switcher will live here.
-//
-// Two properties are load-bearing and are why this is a component rather
-// than a div someone pastes into a page:
-//
-//   - It carries aria-live itself. A live region only announces nodes
-//     inserted *after* it was rendered, so the region has to be present
-//     in the initial page, not swapped in with the content that triggered
-//     it.
-//   - It is mounted once, outside whatever htmx swaps. A host inside a
-//     swapped region is destroyed by the very mutation that is trying to
-//     report itself, so an in-flight toast would vanish without ever
-//     being read.
+// The shell's single toast region. It must be in the initial page (aria-live only
+// announces nodes inserted after render) and mounted outside any htmx swap target,
+// or the mutation it reports would destroy it.
 
-// ToastHostID is the stable id an out-of-band swap addresses the host by.
-// It is part of the contract between the shell that mounts the host and
-// the handler that OOB-swaps a toast into it, so it is named once here.
+// ToastHostID is the id out-of-band toast swaps address the host by.
 const ToastHostID = "krill-toast-host"
 
-// ToastAutoDismissMs is how long a toast stays before it removes itself.
-// Long enough to read a one-line confirmation, short enough that a burst
-// of mutations does not paper over the page the operator is looking at.
+// ToastAutoDismissMs is how long a toast stays before removing itself.
 const ToastAutoDismissMs = 5000
 
-// toastAutoDismissExpr is the Alpine x-init body that schedules the
-// self-dismiss. It is built from ToastAutoDismissMs rather than
-// hardcoding a second copy of the number in markup, so the constant above
-// stays the one place the duration is decided.
+// toastAutoDismissExpr is the Alpine x-init body that schedules the self-dismiss.
 func toastAutoDismissExpr() string {
 	return "setTimeout(() => $el.remove(), " + strconv.Itoa(ToastAutoDismissMs) + ")"
 }
 
-// ToastHost is the shell's single aria-live="status" region. It renders
-// empty: toasts arrive by out-of-band swap, not as page content, so the
-// host itself never carries a message and swapping page content in and
-// out can never destroy an in-flight toast.
+// ToastHost is the shell's empty aria-live="status" region; toasts arrive by OOB swap.
 templ ToastHost() {
 	<div id={ ToastHostID } data-krill="toast-host"
 		 aria-live="status" aria-atomic="false"
 		 class="toast toast-top toast-end z-50"></div>
 }
 
-// ToastOOB is one toast wrapped for out-of-band delivery into ToastHost.
-//
-// beforeend rather than the default outerHTML swap: outerHTML would
-// replace the host itself -- taking the live region and its aria-live
-// wiring with it -- so the second toast of a session would land in a
-// region that announces nothing.
+// ToastOOB wraps a toast for out-of-band delivery into ToastHost. beforeend, not
+// outerHTML: replacing the host would drop its aria-live wiring for later toasts.
 templ ToastOOB(message string) {
 	<div id={ ToastHostID } hx-swap-oob="beforeend">
 		@Toast(message)
 	</div>
 }
 
-// Toast is one dismissible confirmation. It is the htmxui Alert
-// primitive rather than a hand-rolled box (Alert derives its ARIA role
-// from its variant, which is exactly the drift the primitive removes),
-// carrying the two things a toast needs and an Alert does not: the
-// self-dismiss timer, and a dismiss control.
-//
-// The timer is Alpine, not a hand-rolled timeout: //libs/go/htmxbase
-// already loads hx-alpine-compat so Alpine state survives htmx 4 morph
-// swaps, and a toast is inserted by an htmx swap, so a raw setTimeout
-// scoped by hand would have to be re-bound on every swap. $el is the
-// alert element itself, so removing it removes the toast without touching
-// the host or any sibling toast.
+// Toast is one dismissible confirmation on the htmxui Alert primitive. The timer is
+// Alpine because hx-alpine-compat keeps it bound across htmx morph swaps.
 templ Toast(message string) {
 	@htmxui.Alert(htmxui.AlertSuccess, message, templ.Attributes{
 		"data-krill": "toast",
@@ -92,11 +51,7 @@ templ Toast(message string) {
 	}
 }
 
-// ToastFlash is the no-JS rendering of a mutation's success message: the
-// same message the toast would have shown, presented as an ordinary
-// success alert in the page body. A browser without JavaScript never
-// sees the host, so without this a successful form post would land on a
-// page that says nothing happened at all.
+// ToastFlash is the no-JS rendering of a mutation's success message as an inline alert.
 templ ToastFlash(message string) {
 	@htmxui.Alert(htmxui.AlertSuccess, message, templ.Attributes{
 		"data-krill": "toast-flash",

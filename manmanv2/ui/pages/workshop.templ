@@ -459,7 +459,7 @@ templ workshopLibraryPanel(panel WorkshopLibraryPanelData) {
 		<div>
 			<h3 class="text-sm font-semibold text-base-content mb-2">Addons in Library ({ fmt.Sprintf("%d", len(panel.Addons)) })</h3>
 			if len(panel.Addons) > 0 {
-				<div class="divide-y divide-base-300">
+				<div class="divide-y divide-[var(--color-base-300)]">
 					for _, addon := range panel.Addons {
 						<div class="flex justify-between items-center py-2">
 							<span class="text-sm text-base-content">{ addon.Name }</span>
@@ -498,7 +498,7 @@ templ workshopLibraryPanel(panel WorkshopLibraryPanelData) {
 		<div>
 			<h3 class="text-sm font-semibold text-base-content mb-2">Included Libraries ({ fmt.Sprintf("%d", len(panel.ChildLibraries)) })</h3>
 			if len(panel.ChildLibraries) > 0 {
-				<div class="divide-y divide-base-300">
+				<div class="divide-y divide-[var(--color-base-300)]">
 					for _, child := range panel.ChildLibraries {
 						<div class="flex justify-between items-center py-2">
 							<span class="text-sm text-base-content">{ child.Name }</span>

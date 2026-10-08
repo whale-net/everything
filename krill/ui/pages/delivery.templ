@@ -1,50 +1,31 @@
 package pages
 
-// The delivery/roadmap page body: a product's every milestone and
-// milepebble with its current status, plus the per-item shipped vs
-// unshipped breakdown for each partially-complete container. The pure
-// builders that populate these view models stay in //krill/ui (package
-// main), so delivery_page_test.go keeps exercising the same functions the
-// HTTP handler calls.
+// The delivery/roadmap page body: every milestone and milepebble with its
+// status, plus a shipped/unshipped breakdown for partially-complete ones.
 
 import (
 	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// DeliveryAnchor is the DOM id this page's content region carries, so the
-// manual Refresh button can replace the region it lives in rather than
-// itself. Only one product's delivery page renders at a time, so the id
-// need not be per-product.
+// DeliveryAnchor is the content region's id, so Refresh replaces the region
+// rather than itself. One product renders at a time, so it is not per-product.
 const DeliveryAnchor = "krill-spec-delivery"
 
-// DeliveryEntity is one spec entity (a Feature or a Requirement) a
-// container delivers, flattened out of a breakdown Document into a single
-// display row.
+// DeliveryEntity is one Feature or Requirement a container delivers,
+// flattened into a display row.
 type DeliveryEntity struct {
 	Label string // "Cn — Name" for a Feature, "FR — Name" for a Requirement
 	ID    string
 
-	// Kind is what the entity IS -- "Feature" or "Requirement" -- separated
-	// from Label because Label's prefix is the display number ("C4", "FR",
-	// "NFR"), not the kind. A table with a Kind column needs the two apart;
-	// the roadmap, which renders one flat list, needs only Label.
+	// Kind is "Feature" or "Requirement"; Label's prefix is the display number,
+	// not the kind.
 	Kind string
 }
 
-// DeliveryBreakdown is one container's per-item shipped vs
-// not-yet-shipped scope, the get_delivery_breakdown shape. Present only
-// for a partially-complete container; nil for every other status.
-//
-// Error is set instead of the two lists when that container's breakdown
-// read failed: one unreadable container degrades to an inline error in
-// place of its own block rather than taking the whole page down.
-//
-// StatusDisagrees is set when the container's own status is
-// "partially complete" yet its breakdown lists nothing outstanding -- the
-// badge and the list beside it reading two different stories. Only the
-// caller that has read the container's status may set it, and it is never
-// set alongside Error.
+// DeliveryBreakdown is a partially-complete container's shipped/unshipped scope.
+// Error replaces the lists when that read failed. StatusDisagrees marks a
+// partially-complete status with nothing outstanding; never set with Error.
 type DeliveryBreakdown struct {
 	Shipped         []DeliveryEntity
 	Unshipped       []DeliveryEntity
@@ -85,39 +66,22 @@ type DeliveryPage struct {
 	Milestones []DeliveryMilestone
 }
 
-// statusBadge renders one container's status. The colour, size, and soft
-// treatment come from components.MilestoneStatusStyle, so "shipped" and
-// "partially complete" stay visually distinct without this file knowing
-// anything about daisyUI.
+// statusBadge renders one container's status via MilestoneStatusStyle.
 templ statusBadge(status string) {
 	{{ s := components.MilestoneStatusStyle(status) }}
 	@htmxui.Badge(status, s.Variant, s.Size, s.Soft, nil)
 }
 
-// deliveryStatusDisagreement names, in the operator's own terms, the one
-// case where a container's status badge and its breakdown cannot both be
-// true: the container reads "partially complete" while nothing in its
-// breakdown is outstanding. Rendered inside that container's own block,
-// directly under the badge, because the defect IS a badge and a list
-// disagreeing in the same view.
-//
-// The copy asserts no cause. Whether the status or the delivery scope is
-// the wrong one is not observable from here, so it says so rather than
-// guessing.
+// deliveryStatusDisagreement flags a partially-complete container with nothing
+// outstanding. It asserts no cause, since which side is wrong is not observable.
 const deliveryStatusDisagreement = "Status and breakdown disagree: this container reads partially complete, but nothing in its breakdown is outstanding -- every item it delivers has a shipment record, or it delivers none. Read the delivery scope, not the badge, for what is left."
 
-// deliveryUnshippedLabel is what every member of the Unshipped bucket
-// is: delivered to this container, with no delivery_shipment row against
-// it. It states no cause -- a skipped recording step is not observable
-// anywhere in krill, and the same sentence is true of a planned
-// milestone's entire scope.
+// deliveryUnshippedLabel describes the Unshipped bucket without asserting a
+// cause, since a skipped recording step is not observable in krill.
 const deliveryUnshippedLabel = "Delivered to this container, no shipment record."
 
-// breakdownBlock is the shared shipped/unshipped block, rendered for
-// both a milestone and its milepebbles so the two look identical.
-//
-// data-krill is the stable hook a test (and an operator's own tooling)
-// scopes to; the classes are presentation only.
+// breakdownBlock is the shipped/unshipped block shared by milestones and
+// milepebbles. data-krill is the stable hook tests and tooling scope to.
 templ breakdownBlock(b *DeliveryBreakdown) {
 	<div data-krill="delivery-breakdown" class="mt-2 rounded-lg border border-base-300 p-3 text-sm">
 		if b.Error != "" {
@@ -165,9 +129,8 @@ templ taskLinks(tasksPath, boardPath string) {
 	<a href={ templ.URL(boardPath) } class="link link-primary ml-2 text-sm" data-krill="delivery-board-link">Board</a>
 }
 
-// Delivery renders a product's milestone roadmap -- list_product_delivery's
-// shape, with get_delivery_breakdown's per-item detail inlined for each
-// partially-complete container (FR 4398c532).
+// Delivery renders a product's milestone roadmap, inlining the per-item
+// breakdown for each partially-complete container.
 templ Delivery(page DeliveryPage) {
 	<section id={ DeliveryAnchor } data-krill="delivery">
 		@pageHeader(DeliveryAnchor, page.Path, page.Product.Name+" — delivery & roadmap", page.Product.Vision)

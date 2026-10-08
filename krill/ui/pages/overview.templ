@@ -1,12 +1,7 @@
 package pages
 
-// The Overview page body: the shell's home, answering "is anything stuck,
-// which milestone is in flight" (FR c3e1c276).
-//
-// It is the page frame plus the Needs-attention panel. The four stat tiles
-// and the in-flight milestones panel render their own slots below; the
-// header here has to stand on its own, because it is the part that must
-// answer both questions in the first glance.
+// The Overview page body: answers "is anything stuck, which milestone is in
+// flight" at first glance, with stat tiles and panels below.
 
 import (
 	"strconv"
@@ -15,13 +10,11 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// OverviewAnchor is the DOM id this page's content region carries, so a
-// swap can replace the region rather than the document around it.
+// OverviewAnchor is the content region's id, so a swap replaces the region
+// rather than the document around it.
 const OverviewAnchor = "krill-overview"
 
-// OverviewMilestone is one container currently in flight: its name and the
-// status that put it there, rendered as a badge so "in design" and "in
-// progress" are distinguishable at a glance.
+// OverviewMilestone is one in-flight container: its name and its status badge.
 type OverviewMilestone struct {
 	Name   string
 	Status string
@@ -31,62 +24,47 @@ type OverviewMilestone struct {
 type OverviewPage struct {
 	Product ProductHeader
 
-	// InFlight is every container in this product whose status means work
-	// is happening now. Empty is a real answer -- it renders as a sentence
-	// saying so, not as a blank panel an operator has to interpret.
+	// InFlight is every container with work happening now. Empty renders as a
+	// sentence, not a blank panel.
 	InFlight []OverviewMilestone
 
-	// InFlightError is set when the delivery read failed, in place of the
-	// list. It is never both: claiming no milestone is in flight because
-	// the read failed would answer the page's central question wrongly.
+	// InFlightError replaces InFlight when the delivery read failed, so a failure
+	// never reads as "nothing in flight".
 	InFlightError string
 
 	// Escalated is the count the primary action is built from.
 	Escalated int
 
-	// EscalatedReadable is false when the count could not be read. The
-	// action is then absent and the header says nothing about escalation
-	// at all -- "nothing is escalated" would be a second unverified claim.
+	// EscalatedReadable is false when the count could not be read; the action is
+	// then absent rather than claiming nothing is escalated.
 	EscalatedReadable bool
 
-	// EscalatedError is set in place of the count whenever it is not
-	// readable, and renders where the action would have been. Silence is
-	// not the alternative: an absent action beside an absent sentence
-	// reads as "nothing needs you", which is the one answer this count
-	// was unable to give (FR ede7cee6).
+	// EscalatedError renders where the action would be when the count is unreadable,
+	// since silence would read as "nothing needs you".
 	EscalatedError string
 
 	// EscalatedHref is the Escalated tab of Needs attention.
 	EscalatedHref string
 
-	// StatTiles are the four headline figures, each linking to whatever
-	// it counts. Every tile's data is carried on its own, so one region's
-	// read failing never costs the others their figures.
+	// StatTiles are the four headline figures, each linking to what it counts.
+	// Each tile carries its own data, so one failed read never costs the others.
 	StatTiles []OverviewStatTile
 
-	// InFlightPanel is the "Milestones in flight" card: the same
-	// containers the header names, each carrying the task progress the
-	// one product-wide read returned for it (FR 8ef82053).
+	// InFlightPanel is the "Milestones in flight" card with each container's
+	// task progress.
 	InFlightPanel OverviewInFlightPanel
 
-	// NeedsAttention is this product's most recently escalated tasks, at
-	// most NeedsAttentionMax of them. Empty is a real answer -- it renders
-	// as a designed empty state, not as a blank card.
+	// NeedsAttention is the most recently escalated tasks, at most
+	// NeedsAttentionMax. Empty renders as a designed empty state.
 	NeedsAttention []OverviewEscalation
 
-	// NeedsAttentionError is set when the escalated read failed, in place
-	// of the list. It is never both: an empty list beside a failed read
-	// would claim nothing is escalated when nothing was checked.
+	// NeedsAttentionError replaces the list when the escalated read failed, so
+	// nothing unchecked is claimed clear.
 	NeedsAttentionError string
 }
 
-// OverviewStatTile is one headline figure and the link behind it.
-//
-// Count and Sub are separate fields, and Sub is derived from the very rows
-// its own Count was counted over, so a sub-line can never describe a
-// different set than the number above it. Sub is "" when the data does not
-// support one: a tile that can show its count still shows its count rather
-// than a misleading zero.
+// OverviewStatTile is one headline figure and its link. Sub is derived from
+// the same rows as Count, and is "" when the data does not support one.
 type OverviewStatTile struct {
 	Label string
 	Href  string
@@ -94,31 +72,24 @@ type OverviewStatTile struct {
 	// Count is the rendered figure, "" when the read failed.
 	Count string
 
-	// Sub is the one-line qualifier beneath it -- the timeframe or the
-	// narrower slice the figure is drawn from.
+	// Sub is the one-line qualifier: the timeframe or narrower slice.
 	Sub string
 
-	// ValueClass colours the figure: text-error for a figure that means
-	// something is stuck, text-warning for one that means something is
-	// waiting on an answer.
+	// ValueClass colours the figure: text-error for stuck, text-warning for waiting.
 	ValueClass string
 
-	// Err is set when this tile's own read failed. It renders in place of
-	// the figure: a queue that could not be counted must not render as an
-	// empty one, which is indistinguishable from a genuinely idle queue.
+	// Err replaces the figure when this tile's read failed, so an uncounted queue
+	// never looks idle.
 	Err string
 }
 
-// overviewStatTile renders one figure as a link to what it counts. The
-// whole stat is the anchor, so the click target is the figure the operator
-// is reading rather than a word under it.
+// overviewStatTile renders one figure as a link; the whole stat is the anchor.
 templ overviewStatTile(tile OverviewStatTile) {
 	<a href={ templ.URL(tile.Href) } class="stat" data-krill="overview-stat">
 		<div class="stat-title">{ tile.Label }</div>
 		if tile.Err != "" {
-			// An htmxui.Alert rather than a styled figure: a queue that
-			// could not be counted must not occupy the same slot, with the
-			// same weight, as one that was counted and came back empty.
+			// An Alert rather than a figure, so an uncounted queue does not look like an
+			// empty one.
 			<div data-krill="overview-stat-error">
 				@htmxui.Alert(htmxui.AlertError, tile.Err, nil)
 			</div>
@@ -131,8 +102,7 @@ templ overviewStatTile(tile OverviewStatTile) {
 	</a>
 }
 
-// overviewStatTiles is the four-figure block. Vertical on a narrow screen,
-// horizontal once there is room for four across.
+// overviewStatTiles stacks vertically on narrow screens, horizontal when four fit.
 templ overviewStatTiles(tiles []OverviewStatTile) {
 	<div class="stats stats-vertical sm:stats-horizontal w-full border border-base-300 bg-base-100 shadow" data-krill="overview-stats">
 		for _, tile := range tiles {
@@ -141,14 +111,8 @@ templ overviewStatTiles(tiles []OverviewStatTile) {
 	</div>
 }
 
-// OverviewInFlightRow is one container's row in the in-flight panel: the
-// name linking to its detail page, the status that put it in flight, and
-// the two figures its progress bar is built from.
-//
-// Done and Total are handed over whole rather than re-derived here. The
-// read owns how a cancelled task counts (store.CancelledTaskCounting),
-// and a view that summed the lanes again could disagree with the
-// breakdown rendered elsewhere on the same figures.
+// OverviewInFlightRow is one in-flight container's row. Done and Total come
+// whole from the read, which owns how cancelled tasks count.
 type OverviewInFlightRow struct {
 	Name   string
 	Href   string
@@ -157,10 +121,8 @@ type OverviewInFlightRow struct {
 	Total  int
 }
 
-// AwaitingSignoff reports whether this row is a container whose spec is
-// still being written. It renders as a sentence rather than a progress
-// bar: there are no tasks to count yet, and "0 of 0 tasks done" beside
-// an empty bar reads as a stalled container rather than a new one.
+// AwaitingSignoff reports a container whose spec is still being written; it
+// renders a sentence rather than an empty "0 of 0" bar that looks stalled.
 func (r OverviewInFlightRow) AwaitingSignoff() bool {
 	return r.Status == statusInDesign
 }
@@ -169,31 +131,22 @@ func (r OverviewInFlightRow) AwaitingSignoff() bool {
 // container that does not says so rather than rendering "0 of 0".
 func (r OverviewInFlightRow) HasTasks() bool { return r.Total > 0 }
 
-// OverviewInFlightPanel is the whole card. Error and empty are separate
-// states rather than one, because only one of them is an answer.
+// OverviewInFlightPanel is the whole card; error and empty are distinct states.
 type OverviewInFlightPanel struct {
-	// Rows are the in-flight containers, in the roadmap order the read
-	// returned them.
+	// Rows are the in-flight containers, in roadmap order.
 	Rows []OverviewInFlightRow
 
-	// Error is set when the progress read failed, in place of the rows.
-	// An unreadable read must not render as an empty list: "nothing is in
-	// flight" and "we could not check" are different answers and only one
-	// of them is true.
+	// Error replaces Rows when the progress read failed: "nothing in flight" and
+	// "could not check" are different answers.
 	Error string
 }
 
-// statusInDesign is the wire spelling of the one in-flight status whose
-// rows carry no task counts yet. It matches store.MilestoneStatusInDesign;
-// the view takes it as a string because every status a row carries is one
-// (OverviewInFlightRow.Status), so comparing it to the store's typed
-// constant here would mean importing the store into a page that has no
-// other reason to.
+// statusInDesign matches store.MilestoneStatusInDesign as a string, avoiding a
+// store import in this page.
 const statusInDesign = "in design"
 
-// inFlightPanelRows renders the rows of the in-flight card, each with the
-// milestone or milepebble's name linking to its detail page, the status
-// badge that put it in flight, and its progress.
+// inFlightPanelRows renders each in-flight row: linked name, status badge,
+// and progress.
 templ inFlightPanelRows(rows []OverviewInFlightRow) {
 	<ul class="space-y-3" data-krill="overview-in-flight-panel-rows">
 		for _, m := range rows {
@@ -222,32 +175,26 @@ templ inFlightPanelRows(rows []OverviewInFlightRow) {
 	</ul>
 }
 
-// NeedsAttentionMax is how many escalated tasks the panel lists. The FR's
-// "at most the 5 most recently escalated" bounds what an operator skims
-// before following See all, so the read asks the store for exactly this
-// many rather than fetching a default page and truncating it.
+// NeedsAttentionMax is how many escalated tasks the panel lists; the store is
+// asked for exactly this many rather than truncating a default page.
 const NeedsAttentionMax = 5
 
-// OverviewEscalation is one escalated task in the Needs-attention panel:
-// why it escalated, what it is, and when. EscalatedAtExact carries the
-// same instant as the relative EscalatedAt so hovering can surface the
-// precise time, which the relative figure alone cannot answer.
+// OverviewEscalation is one escalated task in the Needs-attention panel.
+// EscalatedAtExact backs the relative EscalatedAt for a precise hover time.
 type OverviewEscalation struct {
 	TaskID string
 	Title  string
 	Href   string
 
-	// Reason is the store's wire value; the badge renders its human
-	// wording through components.EscalationReasonLabel.
+	// Reason is the store's wire value, rendered via EscalationReasonLabel.
 	Reason string
 
 	EscalatedAt      string
 	EscalatedAtExact string
 }
 
-// inFlightBadges renders one badge per in-flight container, through the
-// same statusBadge the delivery page uses so the colours match every
-// other status badge in the shell.
+// inFlightBadges renders one badge per in-flight container via statusBadge, so
+// colours match the rest of the shell.
 templ inFlightBadges(milestones []OverviewMilestone) {
 	<ul class="flex flex-wrap gap-2" data-krill="overview-in-flight">
 		for _, m := range milestones {
@@ -259,9 +206,7 @@ templ inFlightBadges(milestones []OverviewMilestone) {
 	</ul>
 }
 
-// overviewTaskWord is the plural the primary action needs. "1 escalated
-// task" read beside "2 escalated task" is the kind of small wrongness
-// that makes an operator doubt the number next to it.
+// overviewTaskWord is the plural the primary action needs.
 func overviewTaskWord(n int) string {
 	if n == 1 {
 		return "task"
@@ -269,22 +214,16 @@ func overviewTaskWord(n int) string {
 	return "tasks"
 }
 
-// escalationReasonBadge renders one escalation reason through the shared
-// reason vocabulary, so a reason added to the store later cannot render
-// as a blank badge.
+// escalationReasonBadge renders a reason through the shared vocabulary, so a
+// new store reason never renders blank.
 templ escalationReasonBadge(e OverviewEscalation) {
 	{{ s := components.EscalationReasonStyle(e.Reason) }}
 	@htmxui.Badge(components.EscalationReasonLabel(e.Reason), s.Variant, s.Size, s.Soft,
 		templ.Attributes{"data-krill": "needs-attention-reason"})
 }
 
-// NeedsAttentionPanel lists this product's most recently escalated tasks,
-// the answer to "is anything stuck" on the page whose first job is that.
-//
-// The empty state is a designed one rather than an absent list: an
-// operator opening the panel to confirm nothing is wrong should be told
-// so, not left reading a blank card and wondering whether the read
-// happened.
+// NeedsAttentionPanel lists the most recently escalated tasks, with a designed
+// empty state so a clear queue is stated rather than left blank.
 templ NeedsAttentionPanel(page OverviewPage) {
 	<div class="card bg-base-100 border border-base-300" data-krill="needs-attention-panel">
 		<div class="card-body">
@@ -317,9 +256,8 @@ templ NeedsAttentionPanel(page OverviewPage) {
 	</div>
 }
 
-// Overview renders the product's Overview: the product as its heading, a
-// badge naming each container in flight, and one primary action when
-// there is something escalated to act on.
+// Overview renders the product heading, a badge per in-flight container, and
+// one primary action when something is escalated.
 templ Overview(page OverviewPage) {
 	<section id={ OverviewAnchor } data-krill="overview" class="space-y-6">
 		<header class="flex flex-wrap items-start justify-between gap-4">

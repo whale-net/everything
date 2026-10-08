@@ -1,31 +1,24 @@
 package pages
 
-// The read-only task list body for one milestone or milepebble. Pure
-// builders that populate these view models live in //krill/ui
-// (task_page.go).
+// Read-only task list body for one milestone or milepebble.
 
 import (
 	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// TasksAnchor is the DOM id of the task list's content region; the
-// Refresh button's hx-target and the served fragment's root id.
+// TasksAnchor is the DOM id of the task list region and the Refresh target.
 const TasksAnchor = "krill-task-list"
 
-// TaskBadge is one derived task state. Key is the state vocabulary
-// //krill/ui/components maps onto a colour, not a label, so the three
-// task views can never drift apart on either the key or the label.
+// TaskBadge is one derived task state. Key selects the colour via
+// //krill/ui/components so all task views agree.
 type TaskBadge struct {
 	Key   string // stable data-krill suffix, e.g. "claimed", "lease-expired"
 	Label string
 }
 
-// TaskRow is one task row. ClaimID and LeaseExpiresAt are the observed
-// claim identity, kept so a later write can be claim-guarded.
-//
-// Milepebble and Quiet are the board card's two extras, which the list row
-// has no use for and leaves empty and false. See board.templ's card.
+// TaskRow is one task row. ClaimID and LeaseExpiresAt are kept so a later
+// write can be claim-guarded.
 type TaskRow struct {
 	ID             string
 	Title          string
@@ -36,24 +29,20 @@ type TaskRow struct {
 	DetailPath     string
 	Badges         []TaskBadge
 
-	// Milepebble names the milepebble a cut milestone's task came from,
-	// empty for the milestone's own task and for an uncut milestone.
+	// Milepebble names the source milepebble of a cut milestone's task (board only).
 	Milepebble string
 
-	// Quiet is FR f6b62cc7's carve-out for the board card: a Done-lane
-	// task with nothing outstanding shows only its title and its
-	// milepebble, so finished work does not read as work still to do.
+	// Quiet marks a finished Done-lane board card that shows only its title and
+	// milepebble, so it does not read as outstanding work.
 	Quiet bool
 }
 
-// TaskMilepebbleLink links a cut milestone to one milepebble's views.
 type TaskMilepebbleLink struct {
 	Name      string
 	TasksPath string
 	BoardPath string
 }
 
-// TaskListPage is the task list view model.
 type TaskListPage struct {
 	Path         string
 	Name         string
@@ -65,17 +54,13 @@ type TaskListPage struct {
 	Milepebbles  []TaskMilepebbleLink
 }
 
-// TaskLaneBadge renders a task's lane as a badge. The colour comes from
-// components.TaskLaneStyle, so the list, the board and the detail show
-// one lane one way.
+// TaskLaneBadge renders a task's lane as a badge, styled consistently across views.
 templ TaskLaneBadge(lane string) {
 	{{ s := components.TaskLaneStyle(lane) }}
 	@htmxui.Badge(lane, s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "task-lane"})
 }
 
-// TaskStateBadge renders one derived task state as a badge. The colour
-// comes from components.TaskStateStyle, so a claimed task reads the same
-// wherever it is shown.
+// TaskStateBadge renders one derived task state as a badge.
 templ TaskStateBadge(b TaskBadge) {
 	{{ s := components.TaskStateStyle(b.Key) }}
 	@htmxui.Badge(b.Label, s.Variant, s.Size, s.Soft, templ.Attributes{
@@ -83,15 +68,14 @@ templ TaskStateBadge(b TaskBadge) {
 	})
 }
 
-// TaskBadges renders a task's derived state badges, one per state.
 templ TaskBadges(badges []TaskBadge) {
 	for _, b := range badges {
 		@TaskStateBadge(b)
 	}
 }
 
-// TaskList renders the task list region: the whole region is the served
-// fragment and the Refresh target.
+// TaskList renders the task list region, which is both the served fragment and
+// the Refresh target.
 templ TaskList(page TaskListPage) {
 	<section id={ TasksAnchor } data-krill="task-list">
 		<div class="flex items-start justify-between gap-4 mb-2">

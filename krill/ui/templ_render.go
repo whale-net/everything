@@ -19,27 +19,9 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// buildHead is krill's htmxbase CustomHead: the no-FOUC theme bootstrap,
-// then the pinned Tailwind browser build, then the daisyUI stylesheet,
-// then htmxui's ThemesCSS -- in that order.
-//
-// Load-order trap (htmxui ARCHITECTURE §10): ThemesCSS must load *after*
-// the daisyUI stylesheet. htmxbase renders CustomCSS before CustomHead,
-// so ThemesCSS must go in CustomHead, never CustomCSS -- loading it
-// first makes the palette override silently lose to daisyUI's defaults
-// with no error anywhere. templ_render_test.go guards the order.
-//
-// htmx core (4.x) and Alpine (3.x) are loaded by htmxbase's own base
-// layout, before CustomHead, so any htmx extension script appended here
-// is already ordered after core.
-//
-// No SSE extension in this PR: krill's ops console uses a
-// self-terminating poll instead, and wiring //libs/go/htmxsse would mean
-// a RabbitMQ dependency krill does not have today.
-//
-// The text/tailwindcss block carries no @import: the browser build adds
-// `@import "tailwindcss"` itself, and an explicit one makes Chrome's
-// preload scanner fetch a relative "tailwindcss" URL on every page load.
+// buildHead is krill's htmxbase CustomHead: theme bootstrap, Tailwind, daisyUI,
+// then ThemesCSS. ThemesCSS must follow daisyUI or it silently loses, and
+// htmxbase renders CustomCSS first, so it belongs here.
 func buildHead() string {
 	return fmt.Sprintf(`<script>
 (function(){var KEY=%q;var t=null;try{t=localStorage.getItem(KEY);}catch(e){t=null;}
@@ -57,31 +39,9 @@ document.documentElement.setAttribute('data-theme',t);})();
 <script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS+shellCSS, relativeAgeScript, leaseCountdownScript, copyTaskIdScript)
 }
 
-// leaseCountdownScript rewrites every board card's lease <time> into the
-// relative form FR f6b62cc7 asks for -- "Lease in 18 min" while the claim
-// holds, "Lease expired 6 min ago" once it does not.
-//
-// It reads the absolute instant off the element's `datetime` attribute,
-// never off text the server rendered, for the reason NFR 7b497d92 gives:
-// the board is a fragment the Refresh button and the scope control
-// re-request, so a relative string inside it would be as old as the
-// response and would differ between two identical reads. Deriving it here
-// -- in the document head, outside every fragment -- also means one
-// implementation for all three task views, and re-running after each swap
-// picks up a Refresh's new instants without a reload.
-//
-// Without JavaScript the element keeps the absolute instant the server
-// put in it, which is why that instant is the element's own content rather
-// than an empty node: the operator still sees when the lease runs out.
-//
-// Both listeners hang off `document`, never `document.body`: htmxbase
-// renders this from CustomHead, so a classic inline script here runs while
-// the parser is still inside <head> and document.body is still null. htmx
-// events bubble, so document sees every swap regardless.
-//
-// The swap listener is named `htmx:after:swap` -- the event htmx 4.0.0
-// actually dispatches. htmx 4 renamed its lifecycle events to the colon
-// form, so the 1.x camelCase name binds a listener that never fires.
+// leaseCountdownScript rewrites each lease <time> to "Lease in N min" or
+// "Lease expired N min ago" from its datetime, so swapped fragments never
+// carry stale relative text. Listeners sit on document (body is null in <head>).
 const leaseCountdownScript = `
 (function(){
 function span(ms){
@@ -104,15 +64,8 @@ document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
 document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
 })();`
 
-// markdownCSS gives goldmark-rendered markdown (pages/markdown.go's
-// renderMarkdown, wrapped in a ".krill-md" element at every call site) sane
-// default spacing/typography -- the pinned Tailwind CDN build's preflight
-// reset otherwise zeroes a <p>'s margin and a <ul>'s list-style, so
-// goldmark's own <p>/<ul>/<pre>/<code>/<blockquote> output would render as
-// an unstyled, list-marker-less wall of text. Mirrors whagent_net/ui's
-// chatMarkdownCSS (same gap, same fix), scoped to ".krill-md" instead of
-// ".chat-markdown" since krill's markdown is full-width page prose, not a
-// chat bubble.
+// markdownCSS restores spacing and list markers for ".krill-md" prose, which
+// Tailwind's preflight reset otherwise strips.
 const markdownCSS = `
 .krill-md :where(p) { margin: 0 0 0.5em; }
 .krill-md :where(p):last-child { margin-bottom: 0; }
@@ -128,41 +81,15 @@ const markdownCSS = `
 .krill-md :where(h1, h2, h3, h4, h5, h6) { font-weight: 700; margin: 0.5em 0 0.25em; }
 `
 
-// shellCSS holds the workspace shell's own overrides. htmxui's themes.css
-// colors every navbar ghost button neutral-content for a neutral navbar, but
-// krill's header is base-100, so its Theme and account buttons need
-// base-content to be readable.
+// shellCSS: krill's header is base-100, so its ghost navbar buttons need
+// base-content rather than themes.css's neutral-content.
 const shellCSS = `
 [data-krill="workspace-shell"] .navbar .btn-ghost { color: var(--color-base-content); }
 `
 
-// relativeAgeScript upgrades every [data-krill-updated-at] element's text to
-// "N ago", read off the absolute RFC3339 instant the server put in the
-// attribute (NFR 7b497d92). Only a freshness stamp (a data-krill hook ending
-// in "updated-at") reads "Updated N ago"; an event time such as an escalation
-// or a session's opening reads as the bare age.
-//
-// It lives in the document head, never in a fragment: the regions htmx swaps
-// carry the instant and nothing else, so a relative string rendered by the
-// server would be as old as the response and there would be nothing inside
-// the region to say so. Deriving it here also means one implementation for
-// every page rather than one per view, and it re-runs after each swap so a
-// Refresh's new instant is picked up without a reload.
-//
-// It degrades to the instant the server rendered, which is why that text is
-// the element's server-side content rather than an empty node: with
-// JavaScript off the operator still sees when the page was read.
-//
-// Both listeners are on document, never on document.body: this script is
-// emitted into the head, where <body> does not exist yet, so a
-// document.body guard would evaluate false and bind nothing -- the
-// swap upgrade would then never fire, and every in-place swap on the
-// Tasks region (a filter change, a Refresh) would leave the element
-// showing the absolute instant the server rendered.
-//
-// The swap listener is named `htmx:after:swap`, the event htmx 4.0.0
-// dispatches; the 1.x camelCase name is never dispatched and would bind a
-// listener that never fires.
+// relativeAgeScript rewrites [data-krill-updated-at] text to "N ago" from the
+// attribute, re-running after each swap; freshness stamps read "Updated N ago".
+// Listeners sit on document because <body> does not exist yet in <head>.
 const relativeAgeScript = `
 (function(){
 function ago(then){
@@ -185,32 +112,9 @@ document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
 document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
 })();`
 
-// copyTaskIdScript gives the task detail rail's Task id chip its behaviour:
-// click copies the id to the clipboard and confirms in place. It is the one
-// control on the page that cannot be server-rendered, for the reason
-// NFR 7b497d92 names -- the rail is a fragment the Refresh button and every
-// tab swap re-request, so state held only inside it would die with the swap.
-// Deriving it in the head, outside every fragment, is also what lets it
-// survive a tab swap without the server re-binding it.
-//
-// The page is read-only: this writes to the operator's own clipboard and
-// POSTs nothing to krill, so there is no form, no hx-post and no operator
-// route anywhere in the path.
-//
-// Degradation is deliberate on both axes. The chip renders disabled with the
-// reason in its title, and this script is what enables it -- a control that
-// is guaranteed to fail must not look live (design-htmx-ui, Page anatomy),
-// because an operator who clicks a button that does nothing has been told
-// the id is gone when it is not. And navigator.clipboard is absent on an
-// insecure origin and refused under a denied clipboard permission; either
-// way the failure selects the id instead, so the operator's next Ctrl+C
-// works. Silence is the one outcome that is not acceptable here.
-//
-// Both listeners hang off `document`, never `document.body`, for the same
-// reason as leaseCountdownScript: this is emitted from CustomHead, so a
-// classic inline script here runs while the parser is still inside <head>
-// and document.body is still null. htmx events bubble, so document sees
-// every swap regardless.
+// copyTaskIdScript enables the task id chip (rendered disabled) and copies
+// the id on click. When the clipboard API is unavailable it selects the id
+// instead. Lives in the head so it survives fragment swaps.
 const copyTaskIdScript = `
 (function(){
 var RESET_MS=2500;
@@ -295,40 +199,19 @@ document.addEventListener('DOMContentLoaded',function(){upgrade(document);});
 document.addEventListener('htmx:after:swap',function(e){upgrade(e.target);});
 })();`
 
-// renderShell writes one signed-in page: the workspace chrome plus body,
-// at HTTP 200.
-//
-// body is a templ.Component rather than pre-rendered HTML: templ has no
-// "content" concept, so the caller composes the page and the seam owns
-// the document around it. Every app route is mounted behind
-// app.auth.RequireAuthFunc by mountShellRoutes, so the identity read here
-// is always present.
-//
-// activePath is the path the nav marks from -- the page's own URL, or the
-// nav key for a page whose URL is not one of the nav's own (the shell home
-// renders the Overview, whose nav key is the product's overview URL).
+// renderShell writes one signed-in page (chrome plus body) at 200.
+// activePath is the nav key to mark, usually the page's own URL.
 func (app *App) renderShell(w http.ResponseWriter, r *http.Request, title, activePath string, body templ.Component) {
 	app.renderShellStatus(w, r, title, activePath, body, http.StatusOK)
 }
 
-// renderShellStatus is renderShell with an explicit status code, so a
-// page that renders a real 404/400/500 body still does so inside the
-// chrome rather than as a bare http.Error string.
-//
-// The status necessarily lives here rather than in a component: templ
-// components are body-writers with no status concept, which is exactly
-// the capability the old renderShellStatus already provided. spec_page.go
-// and interventions.go depend on it.
-//
-// The component is rendered into a buffer *before* WriteHeader, so a
-// component that fails to render leaves the response unwritten rather
-// than committing a status and then truncating the body.
+// renderShellStatus is renderShell with an explicit status. The body is
+// buffered before WriteHeader so a render failure never truncates a
+// committed response.
 func (app *App) renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath string, body templ.Component, status int) {
 	r = app.withShellProduct(w, r)
 
-	// A plain string, never an htmxauth.UserInfo: htmxui §1 requires
-	// components stay free of a specific auth dependency, so no auth type
-	// may reach one.
+	// A plain string: components must not depend on an auth type.
 	var userLabel string
 	if u := htmxauth.GetUser(r.Context()); u != nil {
 		userLabel = u.PreferredUsername
@@ -340,20 +223,14 @@ func (app *App) renderShellStatus(w http.ResponseWriter, r *http.Request, title,
 		workspaceShellData(
 			app.shellNavTargets(r.Context(), productID.ID),
 			activePath, title, userLabel,
-			// The switcher is read here, by the one seam every page goes
-			// through, rather than left to each route. Passing nil instead
-			// would compile and ship a sidebar with no Product select --
-			// the operator loses the one control that carries the product
-			// in the URL, with nothing failing.
+			// Passing nil here would silently drop the sidebar's Product select.
 			app.productSwitcherData(r),
 		),
 		withFlashSuccess(r, w, body))
 
 	var buf bytes.Buffer
 	if err := page.Render(r.Context(), &buf); err != nil {
-		// Every component is compiled by templ and every value passed
-		// here is this package's own, so this is a programming mistake,
-		// not a runtime condition.
+		// Components are compiled and values are ours, so failure is a bug.
 		panic(err)
 	}
 
@@ -369,9 +246,8 @@ func (app *App) renderShellStatus(w http.ResponseWriter, r *http.Request, title,
 	}
 }
 
-// hxTargetID is the id of the region an htmx request is swapping. htmx 4
-// sends HX-Target as "tag#id" (e.g. "div#krill-spec-panel"); earlier
-// versions sent the bare id, so both forms resolve to the id.
+// hxTargetID returns the id htmx is swapping. htmx 4 sends HX-Target as
+// "tag#id"; older versions sent the bare id, so both resolve.
 func hxTargetID(r *http.Request) string {
 	target := r.Header.Get("HX-Target")
 	if i := strings.LastIndex(target, "#"); i >= 0 {
@@ -380,44 +256,25 @@ func hxTargetID(r *http.Request) string {
 	return target
 }
 
-// withShellProduct guarantees the request carries a current product before
-// the chrome is assembled, so every shell page's sidebar names the product
-// that page is about. A resolver's own answer wins; a URL that names its
-// product in the path supplies it directly; an un-prefixed page resolves
-// one server-side and records it as the last-viewed.
+// withShellProduct ensures the request carries a current product before the
+// chrome is built: a resolver's answer, then the URL's product, then a
+// server-side pick recorded as last-viewed.
 func (app *App) withShellProduct(w http.ResponseWriter, r *http.Request) *http.Request {
 	if _, ok := currentProduct(r.Context()); ok {
 		return r
 	}
 	if pid, _ := shellPathTargets(r.URL.Path); pid != uuid.Nil {
-		// The id is the URL's own and is checked against the caller's
-		// scope by the handler that serves it; the chrome only needs it to
-		// build its own hrefs.
+		// The handler checks the id's scope; the chrome only builds hrefs from it.
 		return withCurrentProduct(r, store.Product{ID: pid})
 	}
 	r, _ = app.rememberUnprefixedProduct(w, r)
 	return r
 }
 
-// shellPathTargets is the product, and the milestone or milepebble under
-// it, that a product-scoped URL names: the id under /products/{id}/...,
-// /spec/products/{id}/... or /design/products/{id}/..., and the container
-// id under that product's /milestones/ prefix.
-//
-// Both are uuid.Nil for a URL that names neither, which is the un-prefixed
-// case the resolvers answer.
-//
-// The container id is no longer read by the chrome: Tasks and Board link
-// at the product-wide pages, so no nav href depends on which milestone a
-// page happens to be scoped to. It is still parsed, and still covered by
-// overview_page_test.go, because the function's shape is a path reader
-// rather than a nav helper -- narrowing it to one return would leave the
-// next path-derived id with nowhere to go.
+// shellPathTargets returns the product id and milestone container id a
+// product-scoped URL names, or uuid.Nil for each it does not.
 func shellPathTargets(path string) (product, milestone uuid.UUID) {
 	segments := pathSegments(path)
-	// The id sits directly after "products", which is itself at the root
-	// or under /spec or /design; the container sits directly after
-	// "milestones".
 	const productsSegment, milestonesSegment = "products", "milestones"
 	switch {
 	case len(segments) >= 2 && segments[0] == productsSegment:
@@ -439,9 +296,7 @@ func shellPathTargets(path string) (product, milestone uuid.UUID) {
 	return product, uuid.Nil
 }
 
-// parseUUID is uuid.Parse for a path segment, answering Nil for anything
-// that is not a UUID -- which is how an id-shaped segment that is really
-// some other word never reaches a store call.
+// parseUUID is uuid.Parse for a path segment, returning Nil for non-UUIDs.
 func parseUUID(segment string) uuid.UUID {
 	id, err := uuid.Parse(segment)
 	if err != nil {
@@ -450,25 +305,13 @@ func parseUUID(segment string) uuid.UUID {
 	return id
 }
 
-// renderFragment writes a bare component at HTTP 200, with no chrome and
-// no document layout -- the HX-Request half of a one-route-two-modes
-// branch.
-//
-// The status is always 200: an htmx swap target's HTTP status is not
-// surfaced to the operator, so a failure has to ride inside the fragment
-// rather than in a status code. See the agent guide's error rule.
-//
-// The component is buffered before the status is committed, for the same
-// reason renderShellStatus buffers: a component that fails partway
-// through would otherwise leave a truncated fragment swapped into the
-// page at 200, silently corrupting it. Once a byte is on the wire there is
-// no way to take it back, so the render has to succeed first.
+// renderFragment writes a bare component at 200 for htmx requests; errors
+// must ride inside the fragment since htmx hides the status. Buffered so a
+// failed render never swaps in a truncated fragment.
 func renderFragment(w http.ResponseWriter, r *http.Request, c templ.Component) {
 	var buf bytes.Buffer
 	if err := c.Render(r.Context(), &buf); err != nil {
-		// The component is compiled by templ and every value is this
-		// package's own, so a failure here is a programming mistake, not
-		// a runtime condition -- the same reasoning as the page path.
+		// Components are compiled and values are ours, so failure is a bug.
 		panic(err)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -478,23 +321,16 @@ func renderFragment(w http.ResponseWriter, r *http.Request, c templ.Component) {
 	}
 }
 
-// shellWithBody composes the chrome around a page body. templ passes a
-// component's children through the context rather than as a parameter, so
-// calling components.Shell from Go means re-attaching the body to the
-// context inside a ComponentFunc.
+// shellWithBody wraps body in the chrome. templ passes children via context,
+// so the body is re-attached inside a ComponentFunc.
 func shellWithBody(data components.ShellData, body templ.Component) templ.Component {
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		return components.Shell(data).Render(templ.WithChildren(ctx, body), w)
 	})
 }
 
-// mustRenderComponent renders c to a string, panicking on failure.
-//
-// Production goes through renderShell/renderFragment. Tests use this: the
-// question they ask is "does this data reach the page", so a plain string
-// is the right shape and keeps ~40 call sites free of error plumbing.
-// Every component is compiled by templ and every value is this package's
-// own, so failure here is a programming mistake, not a runtime condition.
+// mustRenderComponent renders c to a string, panicking on failure. Used by
+// tests.
 func mustRenderComponent(c templ.Component) string {
 	var buf bytes.Buffer
 	if err := c.Render(context.Background(), &buf); err != nil {

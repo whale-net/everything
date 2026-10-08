@@ -3,30 +3,19 @@ package components
 import "github.com/whale-net/everything/libs/go/htmxui"
 
 // NavLink is one entry in a nav list. Active is computed by the caller
-// (nav.go's NavIsActive, the segment-boundary rule) rather than here:
-// htmxui.Shell hardcodes no nav of its own (ARCHITECTURE §2), and the
-// matching rule is krill's, not the shared library's.
+// because the matching rule is krill's, not the shared shell's.
 type NavLink struct {
 	Label  string
 	Href   string
 	Active bool
 
-	// Count is the item's badge figure, or "" for no badge at all.
-	// It is a string so the caller decides what a count means before
-	// this type sees it: a zero and a count that could not be read both
-	// arrive as "", because a badge reading 0 tells an operator nothing
-	// is wrong when in fact nothing was read.
+	// Count is the badge figure, or "" for no badge. Zero and an unreadable
+	// count both arrive as "": a badge reading 0 would falsely signal all clear.
 	Count string
 }
 
-// LayoutData is krill's app-owned chrome data.
-//
-// UserLabel is a plain string, never an htmxauth.UserInfo: htmxui §1
-// requires components to stay free of a specific auth dependency so an
-// AUTH_MODE=none deployment (or a domain with no auth at all) can still
-// populate the chrome. The render seam in krill/ui/templ_render.go
-// resolves it from the request context, so no auth type ever reaches a
-// component.
+// LayoutData is krill's app-owned chrome data. UserLabel is a plain string
+// so components stay free of any auth dependency (AUTH_MODE=none still works).
 type LayoutData struct {
 	Title     string
 	UserLabel string
@@ -48,10 +37,8 @@ templ navLink(l NavLink) {
 	</li>
 }
 
-// navCount renders an item's badge beside its label. An empty count is
-// the absence of a badge, not a badge of zero -- the caller has already
-// folded "nothing escalated" and "could not read how many are escalated"
-// into that one value.
+// navCount renders an item's badge beside its label; an empty count
+// renders no badge at all.
 templ navCount(count string) {
 	if count != "" {
 		<span class="badge badge-error badge-sm" data-krill="nav-count">{ count }</span>
@@ -70,9 +57,8 @@ templ SubNav(links []NavLink) {
 	</nav>
 }
 
-// NavGroup is one headed section of the workspace sidebar: a title and its
-// items. An empty Title renders its items unheaded, which is how Overview
-// sits above the groups rather than inside one.
+// NavGroup is one headed sidebar section. An empty Title renders its items
+// unheaded, which is how Overview sits above the groups.
 type NavGroup struct {
 	Title string
 	Items []NavLink
@@ -85,22 +71,13 @@ type ShellData struct {
 	// NavGroups is the sidebar, in render order.
 	NavGroups []NavGroup
 
-	// Switcher is the sidebar's Product select, above the nav. It is a
-	// pointer so a page with no product in scope (an empty deployment)
-	// renders the nav alone rather than a select with nothing to pick.
+	// Switcher is the sidebar's Product select; nil when no product is in scope.
 	Switcher *ProductSwitcherData
 }
 
-// Shell is the workspace chrome: a daisyUI drawer whose sidebar is
-// persistent at lg and an overlay below it, a sticky top bar, the grouped
-// nav, and the one toast host the whole shell shares.
-//
-// The drawer is a checkbox and a pair of <label for>, so it opens and
-// closes with no JavaScript at all; there is no htmx or Alpine behaviour
-// behind it, and therefore nothing to re-test when either moves.
-//
-// ToastHost sits outside <main> rather than inside it, so the mutation
-// that reports itself never destroys the live region meant to announce it.
+// Shell is the workspace chrome: a daisyUI drawer (checkbox + label, no JS),
+// a sticky top bar, the grouped nav, and the shared toast host. ToastHost sits
+// outside <main> so a swap never destroys the live region announcing it.
 templ Shell(data ShellData) {
 	<div class="drawer lg:drawer-open min-h-screen bg-base-200" data-krill="workspace-shell">
 		<input id="krill-drawer" type="checkbox" class="drawer-toggle" />
@@ -136,11 +113,8 @@ templ Shell(data ShellData) {
 	</div>
 }
 
-// sidebar renders the grouped nav. The data-krill hook is the same one
-// nav_test.go scopes its active-link scan to, so a page's own product
-// sub-nav can never be counted as a primary one; the menu-title headings
-// are daisyUI's, which is what keeps a group heading visually distinct
-// from the items under it.
+// sidebar renders the grouped nav. The data-krill hook keeps a page's own
+// product sub-nav from being counted as primary nav.
 templ sidebar(groups []NavGroup) {
 	<nav aria-label="Primary" data-krill="primary-nav" class="px-2 pb-2">
 		<ul class="menu menu-sm w-full gap-0.5">

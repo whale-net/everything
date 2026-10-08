@@ -1,16 +1,6 @@
-// specReader is how this binary's own app pages read the spec axis: the
-// same //krill/slice.Querier and //krill/store readers the MCP spec tools
-// call underneath (get_product_slice -> Querier.GetProductSlice,
-// list_personas -> PersonaStore.ListCurrentByProduct, list_non_goals ->
-// NonGoalStore.ListCurrentByProduct). Reads go through the same code the
-// MCP surface wraps rather than a parallel query, so a page and the
-// matching tool can never disagree about what "the current spec" is.
-//
-// These reads carry no krill session and no operator Subject; the routes
-// calling them are gated to reader-or-operator by readerRoute (main.go). Every method below reads
-// *current* rows (GetCurrentByID / ListCurrentByProduct), never history,
-// which is what "current revisions only" means for the views: a superseded
-// revision is never surfaced.
+// specReader reads the spec axis through the same slice.Querier and store
+// readers the MCP spec tools wrap, so a page and its tool cannot disagree.
+// Reads carry no krill session and return current revisions only.
 package main
 
 import (
@@ -23,52 +13,36 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// specReadClient is the read seam the /spec and delivery pages depend on:
-// the spec-axis reads each page makes. *specReader is the production
-// implementation; the interface exists so the view assembly and the
-// per-container breakdown-failure tolerance are testable against an
-// in-memory fake, with no database. The method set is exactly the reads
-// the mounted handlers call -- adding a page that reads through app.spec
-// adds its method here, so the seam stays a deliberate list.
+// specReadClient is the read seam the /spec and delivery pages depend on;
+// it exists so view assembly is testable against an in-memory fake.
 type specReadClient interface {
 	ProductSlice(ctx context.Context, productID uuid.UUID) (slice.Document, error)
 	Personas(ctx context.Context, productID uuid.UUID) ([]store.Persona, error)
 	NonGoals(ctx context.Context, productID uuid.UUID) ([]store.NonGoal, error)
 	Delivery(ctx context.Context, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error)
 	DeliveryBreakdown(ctx context.Context, containerID uuid.UUID) (shipped, unshipped slice.Document, err error)
-	// StatusHistory is get_milestone_status_history: one container's whole
-	// status-transition register, oldest first, each entry carrying its own
-	// status, note, actor pair and instant. The Milestone detail's rail
-	// reads it for the change count and the status-history view reads the
-	// same list to render it, so the label an operator follows can never
-	// disagree with the page it lands on.
+	// StatusHistory is get_milestone_status_history: one container's status
+	// transitions, oldest first.
 	StatusHistory(ctx context.Context, containerID uuid.UUID) ([]store.MilestoneStatusEvent, error)
 	Product(ctx context.Context, productID uuid.UUID) (store.Product, error)
 	Products(ctx context.Context) ([]store.Product, error)
 }
 
-// specReader is the spec-axis read side of the UI, backed directly by
-// store.Store (krill/ui already holds a pool for its session store and
-// auth tables). The write side, by contrast, is the HTTP client in
-// writeclient.go -- reads need no session to attribute, so they do not
-// need api's write gate.
+// specReader is the UI's read side, backed directly by store.Store. Reads
+// need no session to attribute, so they bypass api's write gate.
 type specReader struct {
 	store   *store.Store
 	querier *slice.Querier
 }
 
-// *specReader is the production specReadClient.
 var _ specReadClient = (*specReader)(nil)
 
-// newSpecReader wires reader to this deployment's store. The querier is
-// //krill/slice's, so the Document the capability map and decisions pages
-// render is assembled by the exact same code get_product_slice returns.
+// newSpecReader wires the reader to the deployment's store and slice querier.
 func newSpecReader(s *store.Store) *specReader {
 	return &specReader{store: s, querier: slice.NewQuerier(s)}
 }
 
-// ProductSlice is get_product_slice: the whole Product's FeatureSets,
-// Features, FRs/NFRs, and LoadBearingDecisions, current revisions only.
+// ProductSlice is get_product_slice: the Product's whole current spec tree.
 func (r *specReader) ProductSlice(ctx context.Context, productID uuid.UUID) (slice.Document, error) {
 	doc, err := r.querier.GetProductSlice(ctx, productID)
 	if err != nil {
@@ -86,8 +60,8 @@ func (r *specReader) Personas(ctx context.Context, productID uuid.UUID) ([]store
 	return personas, nil
 }
 
-// NonGoals is list_non_goals: every current Non-Goal (both the permanent
-// and deferred kinds) under the Product.
+// NonGoals is list_non_goals: every current Non-Goal (permanent and
+// deferred) under the Product.
 func (r *specReader) NonGoals(ctx context.Context, productID uuid.UUID) ([]store.NonGoal, error) {
 	nonGoals, err := r.store.NonGoals().ListCurrentByProduct(ctx, productID)
 	if err != nil {
@@ -96,14 +70,9 @@ func (r *specReader) NonGoals(ctx context.Context, productID uuid.UUID) ([]store
 	return nonGoals, nil
 }
 
-// Delivery is list_product_delivery: every milestone and milepebble under
-// the Product, each with its derived current status and -- for a
-// partially-complete container -- its shipped/unshipped counts, resolved
-// through the exact //krill/slice.Querier.ListProductDelivery the MCP tool
-// wraps. The product's own scope_id is resolved from its current row first,
-// exactly as the tool's handler does, because a read here carries no
-// krill session to read scope_id from. An empty statuses slice means "all",
-// mirroring the querier's own contract.
+// Delivery is list_product_delivery. The product's scope_id is resolved from
+// its current row, since a read here has no session to supply it. Empty
+// statuses means all.
 func (r *specReader) Delivery(ctx context.Context, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error) {
 	product, err := r.store.Products().GetCurrentByID(ctx, productID)
 	if err != nil {
@@ -116,12 +85,8 @@ func (r *specReader) Delivery(ctx context.Context, productID uuid.UUID, statuses
 	return listing, nil
 }
 
-// DeliveryBreakdown is get_delivery_breakdown: one container's per-item
-// shipped vs not-yet-shipped scope, as the same two slice.Documents
-// //krill/slice.Querier.GetDeliveryBreakdown returns to the MCP tool. Works
-// for a milepebble exactly as for a milestone -- both are milestone_ref
-// rows, which the querier resolves through DeliveryShipments().
-// DeliveryBreakdown.
+// DeliveryBreakdown is get_delivery_breakdown: one milestone or milepebble's
+// shipped vs not-yet-shipped scope.
 func (r *specReader) DeliveryBreakdown(ctx context.Context, containerID uuid.UUID) (shipped, unshipped slice.Document, err error) {
 	shipped, unshipped, err = r.querier.GetDeliveryBreakdown(ctx, containerID)
 	if err != nil {
@@ -130,19 +95,9 @@ func (r *specReader) DeliveryBreakdown(ctx context.Context, containerID uuid.UUI
 	return shipped, unshipped, nil
 }
 
-// StatusHistory is get_milestone_status_history: every status transition
-// one container has recorded, oldest first.
-//
-// It is store.MilestoneStatusEventStore.ListTransitions -- the same read the
-// MCP tool calls underneath -- rather than a second query, so the count the
-// Milestone detail's rail prints and the list the status-history view renders
-// are two renderings of one register and cannot disagree.
-//
-// milestoneID is a milestone_ref id of either Kind: a milepebble is its own
-// milestone_ref row, so the same call answers for one. A container with no
-// transition at all returns an empty slice rather than an error: absence of
-// history is a real answer (its current status is "not started"), not a
-// failed read.
+// StatusHistory is get_milestone_status_history: every status transition one
+// container (milestone or milepebble) recorded, oldest first. No transitions
+// yields an empty slice, not an error.
 func (r *specReader) StatusHistory(ctx context.Context, containerID uuid.UUID) ([]store.MilestoneStatusEvent, error) {
 	events, err := r.store.MilestoneStatus().ListTransitions(ctx, containerID)
 	if err != nil {
@@ -151,9 +106,7 @@ func (r *specReader) StatusHistory(ctx context.Context, containerID uuid.UUID) (
 	return events, nil
 }
 
-// Product returns the Product's own current row -- the header every
-// product-scoped page shows (name, vision), so an operator can tell which
-// product they are browsing.
+// Product returns the Product's current row, for the page header.
 func (r *specReader) Product(ctx context.Context, productID uuid.UUID) (store.Product, error) {
 	product, err := r.store.Products().GetCurrentByID(ctx, productID)
 	if err != nil {
@@ -162,10 +115,8 @@ func (r *specReader) Product(ctx context.Context, productID uuid.UUID) (store.Pr
 	return product, nil
 }
 
-// Products lists every current Product in the deployment's sole scope
-// (mirrors the mcp list_products discovery shape, which resolves the sole
-// scope itself -- a browser cannot pick a scope). This is the index an
-// operator browses a specific product from.
+// Products lists every current Product in the deployment's sole scope; a
+// browser cannot pick a scope.
 func (r *specReader) Products(ctx context.Context) ([]store.Product, error) {
 	scope, err := r.store.Scopes().GetSole(ctx)
 	if err != nil {

@@ -1,54 +1,26 @@
 package pages
 
-// The Milestone detail page's two read-only cards (FR 0f1fb763): the
-// milestone's own outcome, and the containers cut from it with their
-// progress.
-//
-// They live in their own file rather than in milestone_detail.templ so
-// each region of the page -- the header, this pair, the delivery tables,
-// the properties rail -- is one component beside the others, and adding
-// a section is a line in the frame rather than an edit to a growing
-// template. Nothing here is stateful: the outcome and the milepebbles are
-// read off the resolved container, and every link is an ordinary href, so
-// the cards render identically with and without JavaScript.
+// Milestone detail's two read-only cards: the milestone's outcome and the
+// milepebbles cut from it. Plain hrefs only, so they render without JavaScript.
 
-// MilestoneDetailMilepebble is one cut container's row in the detail's
-// Milepebbles card.
-//
-// It carries the same three facts the Milestones table's inline expansion
-// gives a milepebble row -- name, status, progress -- and reuses
-// ProgressCell rather than keeping its own figures, so a milepebble's bar
-// says the same thing here as it does in the table it was linked from. A
-// second copy of Done/Total would eventually disagree with the first, and
-// with the read that owns both (store.CancelledTaskCounting).
+// MilestoneDetailMilepebble is one row of the Milepebbles card. It reuses
+// ProgressCell so its bar matches the Milestones table.
 type MilestoneDetailMilepebble struct {
-	// ID is the milepebble's own id, so the row is addressable and its
-	// tasks link is checkable against the container it was built from.
 	ID string
 
-	// TasksPath and BoardPath are this milepebble's own two views of its
-	// work -- the tasks cut from the milepebble, not the milestone's whole
-	// cut, each scoped to the milepebble. What an operator opens a
-	// milepebble to see is that milepebble's work, so both links name it.
+	// TasksPath and BoardPath are scoped to this milepebble, not the whole milestone.
 	Name      string
 	TasksPath string
 	BoardPath string
 
-	// Status renders through the shared statusBadge: a milepebble is its
-	// own container with its own status, and the parent's badge beside it
-	// says nothing about this one.
+	// Status is the milepebble's own status, not its parent's.
 	Status string
 
 	ProgressCell
 }
 
-// milestoneDetailOutcome is the card holding the milestone's own outcome
-// sentence.
-//
-// It renders nothing when the milestone declares no outcome, rather than a
-// card with a heading and nothing under it: an empty card is a question the
-// operator has to answer themselves, and this page's own cut always says
-// what it holds.
+// milestoneDetailOutcome renders the outcome card, or nothing when the
+// milestone declares no outcome.
 templ milestoneDetailOutcome(page MilestoneDetailPage) {
 	if page.Outcome != "" {
 		<div class="card bg-base-100 border border-base-300" data-krill="milestone-outcome">
@@ -62,13 +34,8 @@ templ milestoneDetailOutcome(page MilestoneDetailPage) {
 	}
 }
 
-// milestoneDetailMilepebbles is the card listing the containers cut from
-// this milestone, each with its own status badge and its own progress bar.
-//
-// It renders nothing at all when none are cut -- not an empty card, and not
-// a card on a milepebble's own detail. A milepebble has no children of its
-// own, so "no milepebbles" there is not a gap in the page, it is the whole
-// of what this region has to say.
+// milestoneDetailMilepebbles lists the milepebbles cut from this milestone; it
+// renders nothing when none are cut.
 templ milestoneDetailMilepebbles(page MilestoneDetailPage) {
 	if len(page.Milepebbles) > 0 {
 		<div class="card bg-base-100 border border-base-300" data-krill="milestone-milepebbles">
@@ -102,12 +69,7 @@ templ milestoneDetailMilepebbles(page MilestoneDetailPage) {
 	}
 }
 
-// milestoneDetailCards is the content column's read-only section: what this
-// milestone is for, and the cuts it was split into.
-//
-// It is one component rather than two calls at the frame so the frame's
-// left cell names "the cards" once and adding or removing a section is a
-// change inside this function, not an edit to the shared grid.
+// milestoneDetailCards is the content column's read-only section.
 templ milestoneDetailCards(page MilestoneDetailPage) {
 	@milestoneDetailOutcome(page)
 	@milestoneDetailMilepebbles(page)

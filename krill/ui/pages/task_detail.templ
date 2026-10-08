@@ -14,15 +14,11 @@ import (
 // Refresh button's hx-target and the served fragment's root id.
 const TaskDetailAnchor = "krill-task-detail"
 
-// TaskPanelAnchor is the DOM id of the tab panel region: the hx-target
-// every tab names, and the id the served panel fragment's ROOT carries.
-// The fragment has to carry it or htmx deletes the element it was asked
-// to replace and every later tab click is a no-op that never reaches the
-// server (README's swap-target rule).
+// TaskPanelAnchor is the tab panel region's id: every tab's hx-target and the
+// served fragment's root id, without which htmx drops the target.
 const TaskPanelAnchor = "krill-task-panel"
 
-// The tab keys -- the four ?tab= values. Overview is the default and is
-// therefore ABSENT from the URL, so its href is the page's own address.
+// The four ?tab= values. Overview is the default and absent from the URL.
 const (
 	TaskTabOverview     = "overview"
 	TaskTabNotes        = "notes"
@@ -40,46 +36,27 @@ func TaskTabID(key string) string {
 // name the region's carried input uses to hand it to the Refresh button.
 const TaskTabQueryParam = "tab"
 
-// TaskTabStateID is the DOM id of the hidden input inside the panel region
-// that carries the selected tab.
-//
-// It exists because the Refresh button is OUTSIDE the swap region: a tab
-// click re-renders this region and nothing else, so a tab fixed into the
-// button's own markup at page-load time is the tab the page was LOADED
-// with, not the one the operator is on. The button includes this input
-// instead, so it reads the tab from the live region at press time -- the
-// same carried-state pattern the Tasks scope form uses for the filters it
-// re-reads.
+// TaskTabStateID is the hidden input carrying the selected tab. Refresh sits
+// outside the swap region, so it reads the live tab from this input at press time.
 const TaskTabStateID = "krill-task-tab-state"
 
-// TaskCrumb is one breadcrumb entry: where the operator has been on the
-// way to this task. Href is empty for the task's own title, which is the
-// page they are already on and so is the one crumb that is not a link.
+// TaskCrumb is one breadcrumb entry. Href is empty for the task's own title,
+// the current page.
 type TaskCrumb struct {
 	Label string
 	Href  string
 }
 
-// TaskLaneStep is one lane of the step strip, over the task's OWN
-// lane_sequence (store/task.go NFR5: a task may skip or reorder lanes, so
-// the sequence it was created with is the only authority on what comes
-// next). Current marks the lane the task is in; Passed marks every lane
-// before it, which is what "already through this" looks like.
+// TaskLaneStep is one lane of the step strip over the task's own lane_sequence,
+// which may skip or reorder lanes. Passed marks lanes before Current.
 type TaskLaneStep struct {
 	Label   string
 	Passed  bool
 	Current bool
 }
 
-// TaskTab is one tab of the detail's facet strip. Href is a REAL href on
-// the tab's own tab-qualified URL, so the no-JS path, a reload, a shared
-// link and the browser's Back button all agree with what htmx swaps --
-// the same rule README states for paging.
-//
-// Count is carried only when HasCount is true, which is only when the read
-// behind the count succeeded. A count of zero is a claim the read backed;
-// the absence of a badge is what a failed read renders, because "0" would
-// be a second unverified claim about a list we could not read.
+// TaskTab is one tab. Href is the tab's real URL, so no-JS, reload, sharing and
+// Back agree with htmx. Count shows only when HasCount (its read succeeded).
 type TaskTab struct {
 	Key      string
 	Label    string
@@ -96,63 +73,37 @@ type TaskDepLink struct {
 	DetailPath string
 }
 
-// TaskNoteRow is one note on the task.
-//
-// Rows arrive in the store's own order (ListNotesForTask's ascending
-// created_at, id) and are rendered in it: a note list an operator reads as
-// a log is only a log if the page does not reshuffle it, and the store's
-// order is the one the MCP read and every other view agree on.
+// TaskNoteRow is one note. Rows render in the store's order (created_at, id),
+// the order every other view agrees on.
 type TaskNoteRow struct {
 	Kind   string
 	Status string
 	Body   string
 }
 
-// LatestNotesLimit is how many of a task's most recent notes the Overview
-// panel shows. The Overview answers "what has been said about this lately",
-// not "everything ever said about it" -- the Notes tab owns the whole list,
-// and the FR is explicit that the Overview's list is a subset of it.
+// LatestNotesLimit is how many recent notes the Overview shows; the Notes
+// tab owns the full list.
 const LatestNotesLimit = 3
 
-// The three callout keys -- the states the Overview panel explains. They
-// are also what the markup carries as data-krill-callout, so a callout that
-// quietly stopped explaining one of those states fails a test rather than
-// passing as "some alert is present".
+// The three callout keys, also rendered as data-krill-callout so each state
+// is individually assertable.
 const (
 	TaskCalloutEscalated    = "escalated"
 	TaskCalloutCapped       = "capped"
 	TaskCalloutLeaseExpired = "lease-expired"
 )
 
-// TaskCallout is one explanation the Overview panel gives about a task
-// that is not simply in flight: why it was escalated, that it is at its
-// attempt cap, or that its lease has lapsed.
-//
-// Key is one of the three constants above and is the hook the markup
-// carries, so each state is individually assertable. Variant is carried
-// rather than chosen in the component because severity is a property of
-// the STATE, not of the box: it follows the same mapping the task's state
-// badge uses (components.TaskStateStyle), so an escalated task's banner
-// and its badge are the same colour instead of two independent decisions
-// about how alarmed to look.
+// TaskCallout explains a task that is not simply in flight (escalated, at
+// attempt cap, or lease lapsed). Variant follows TaskStateStyle so the banner
+// and the state badge share a colour.
 type TaskCallout struct {
 	Key     string
 	Message string
 	Variant htmxui.AlertVariant
 }
 
-// TaskNoteBadges renders one note's two badges -- what it IS (kind) and
-// where it sits in its lifecycle (status).
-//
-// It is the ONE rendering of a note's badges on this page, shared by the
-// Notes panel and the Overview panel's latest notes, so the two facets
-// cannot disagree about what a note is. The colours come from
-// components.NoteKindStyle and components.NoteLifecycleStyle, which is
-// where the vocabulary's presentation belongs.
-//
-// It takes the row rather than the two strings so the Overview panel, whose
-// rows it also renders, calls the same component with the same argument
-// shape the Notes panel does.
+// TaskNoteBadges renders a note's kind and status badges; the one rendering
+// shared by the Notes and Overview panels.
 templ TaskNoteBadges(n TaskNoteRow) {
 	<div class="flex flex-wrap items-center gap-2" data-krill="note-badges">
 		{{ k := components.NoteKindStyle(n.Kind) }}
@@ -162,25 +113,14 @@ templ TaskNoteBadges(n TaskNoteRow) {
 	</div>
 }
 
-// taskDepList is the ONE rendering of a task's dependencies: each as a
-// link to its own product-scoped detail plus its lane as a badge, in the
-// order the read returned them.
-//
-// Both callers -- the rail's Depends-on card and the Dependencies tab --
-// render through it, because the card is a shortcut to the same list and
-// two spellings of it are two lists that can drift. Each item's address
-// is the product-scoped /products/{pid}/tasks/{tid}, so a dependency on
-// another milestone needs no container in the link.
+// taskDepList is the one rendering of a task's dependencies, shared by the
+// rail card and the Dependencies tab, linked by product-scoped URL.
 templ taskDepList(deps []TaskDepLink) {
 	<ul class="space-y-2" data-krill="task-dep-list">
 		for _, d := range deps {
 			<li class="flex flex-wrap items-center gap-2" data-krill="task-dep">
 				<a href={ templ.URL(d.DetailPath) } class="link link-primary" data-krill="task-dep-link">{ d.Title }</a>
-				// The lane is a badge rather than a word, through the shared
-				// TaskLaneBadge, so a dependency reads the same as a row in
-				// the Tasks table and a card on the Board. A dependency
-				// whose own task could not be read carries no lane, and an
-				// empty badge would claim a lane the page never learned.
+				// A dependency whose task could not be read has no lane, so no badge.
 				if d.Lane != "" {
 					@TaskLaneBadge(d.Lane)
 				}
@@ -200,16 +140,11 @@ type TaskDetailPage struct {
 	Body  string
 	Lane  string
 
-	// Crumbs is product -> milestone -> milepebble -> this task's title.
-	// The milepebble crumb is present only for a task that sits on a cut
-	// milepebble; a task on an uncut milestone has no such level, and
-	// inventing one would put a crumb in the path that cannot be walked
-	// back down.
+	// Crumbs is product -> milestone -> milepebble -> title; the milepebble
+	// crumb appears only for a task on a cut milepebble.
 	Crumbs []TaskCrumb
 
-	// Steps is the lane step strip, one entry per lane of the task's own
-	// lane_sequence. It replaces the "Lane sequence" row this page used to
-	// spell the same sequence out as prose: one rendering, not two.
+	// Steps is the lane step strip, one entry per lane of lane_sequence.
 	Steps           []TaskLaneStep
 	Attempts        string // e.g. "2 of 3"
 	ClaimID         string
@@ -223,120 +158,72 @@ type TaskDetailPage struct {
 	SliceJSON       string
 	SliceError      string
 
-	// The rail's Claim row, split rather than pre-joined into one string:
-	// the live claimant, whether that claim's lease has lapsed, and -- for
-	// a task nobody holds -- the session that held it last. Exactly one of
-	// ClaimHolder and LastClaimHolder is ever set, which is what makes
-	// "None. Last held by X" and "claimed by X" mutually exclusive rather
-	// than two facts about one task that could both be rendered.
+	// The rail's Claim row parts. At most one of ClaimHolder and LastClaimHolder
+	// is set, so "claimed by" and "last held by" never both render.
 	ClaimHolder     string
 	ClaimExpired    bool
 	LastClaimHolder string
 
-	// MilepebbleName/Path are the task's own container, carried only when
-	// that container IS a milepebble. A task on an uncut milestone has no
-	// milepebble, and a row naming its milestone again would say what the
-	// breadcrumb already says.
+	// MilepebbleName/Path are set only when the task's container is a milepebble.
 	MilepebbleName string
 	MilepebblePath string
 
-	// Escalation names the task's current escalation event, and
-	// EscalatedAt says when. EscalationReason is the store's own reason
-	// vocabulary ("thrash-cap", "attempt-cap", "manual"), carried for the
-	// properties rail and the Overview callout to present -- and
-	// deliberately not rendered as a bare word here, because every enum an
-	// operator reads is a badge through a variant mapper, and the reason's
-	// presentation belongs with the panel that explains it.
-	//
-	// All three are empty when the task carries no escalation: a task that
-	// was never escalated has no reason to show, and a blank row would read
-	// as one whose reason could not be read.
+	// Escalation, EscalatedAt and EscalationReason describe the current escalation
+	// event, for the rail and Overview callout; all empty when not escalated.
 	Escalation       string
 	EscalationReason string
 	EscalatedAt      string // RFC3339
 
-	// EscalationCounter/EscalationCap are the event's own counter and cap
-	// at the moment it fired, present only when HasEscalationCounter is
-	// true. They are the two automatic reasons' triggering numbers; a
-	// manual escalation has neither, and the store's CHECK refuses a
-	// mismatched pair, so one flag covers both or neither.
+	// EscalationCounter/EscalationCap are the event's trigger numbers, set only
+	// when HasEscalationCounter; a manual escalation has neither.
 	EscalationCounter     int
 	EscalationCap         int
 	HasEscalationCounter  bool
 
-	// AttemptCount/AttemptCap are the task's attempt bookkeeping, carried
-	// unformatted beside the rail's "n of m" label so the Overview callout
-	// can judge the cap against the same numbers the rail prints.
+	// AttemptCount/AttemptCap are carried raw so the callout judges the cap
+	// against the numbers the rail prints.
 	AttemptCount int
 	AttemptCap   int
 
-	// LatestNotes is the TAIL of Notes -- the most recent
-	// LatestNotesLimit of them -- and NotesTotal is how many the read
-	// returned in all. The Overview shows the tail; the Notes tab shows
-	// every note. The two counts are carried so the Overview can say which
-	// it is showing rather than presenting a truncated list as the whole
-	// one.
+	// LatestNotes is the most recent LatestNotesLimit of Notes; NotesTotal lets
+	// the Overview say it is showing a subset.
 	LatestNotes []TaskNoteRow
 	NotesTotal  int
 
-	// Callouts are the explanations of why this task is not simply in
-	// flight, in a fixed order: escalation first, then the attempt cap,
-	// then a lapsed lease. It is EMPTY for a healthy task, which renders
-	// no banner at all -- a neutral "nothing is wrong" box beside a real
-	// one is how an operator learns to ignore the box.
+	// Callouts explain why the task is not simply in flight, in order: escalation,
+	// attempt cap, lapsed lease. Empty for a healthy task, which shows no banner.
 	Callouts []TaskCallout
 
 	TasksPath     string
 	BoardPath     string
 	ContainerName string
 
-	// Actions is the task's intervention controls, built in package main
-	// from the ONE shared legality predicate (krill/ui/intervention_legality.go):
-	// the detail offers exactly the verbs the Needs attention rows offer for
-	// the same state and lane, and no verb a state forbids. It is nil when no
-	// verb is legal -- a cancelled task, or a ready one in the Done lane --
-	// and a nil component renders no callout at all rather than an empty
-	// Actions box claiming there is nothing to do.
+	// Actions is the intervention controls from the shared legality predicate, so
+	// the detail offers the same verbs as Needs attention. nil when none are legal.
 	Actions templ.Component
 
-	// Popovers is the reason popovers for those controls (FR 0cf360c5),
-	// rendered inside the same callout as Actions. A control's trigger points
-	// its popovertarget at one of these ids, so without them the button opens
-	// nothing and the optional reason is lost. It is nil exactly when Actions
-	// is -- no verbs, no callout, no popovers -- and it is rendered inside the
-	// section the controls swap, so a post-action re-render rebuilds it with
-	// fresh ids rather than leaving the triggers pointing at orphans.
+	// Popovers are the reason popovers for Actions; nil exactly when Actions is.
+	// Rendered inside the swapped section so a re-render rebuilds matching ids.
 	Popovers templ.Component
 
-	// ActionError names a refused intervention inline (FR c69a42b4). It is
-	// set only on a detail region re-derived after a refusal, so it is empty
-	// on the first render of the page: a refusal is never an empty region,
-	// and an alert that appeared on every load would be read past exactly
-	// when it means something.
+	// ActionError names a refused intervention inline; set only on a re-render
+	// after a refusal.
 	ActionError string
 
-	// Tab is the resolved tab key -- one of the four constants above, and
-	// never a raw ?tab= value: the handler resolves an unknown one to
-	// overview before the view model sees it, so a component never has to
-	// decide what an unrecognised tab means.
+	// Tab is the resolved tab key; the handler maps unknown values to overview.
 	Tab string
 
-	// Tabs is the strip's four entries in order. It is on the view model
-	// rather than derived in the component because each entry's href is
-	// the page's own path with the tab applied, and only the request
-	// knows that path (both detail routes reach this render).
+	// Tabs is the strip's entries; built by the handler since only the request
+	// knows the page path.
 	Tabs []TaskTab
 }
 
-// TaskDetailPanelAnchor is the DOM id of the panel body inside the swap
-// region -- what each tab's aria-controls points at. It is deliberately
-// NOT the swap target: the swap region wraps the strip and this, so a
-// swap brings the operator's controls back with the answer.
+// TaskDetailPanelAnchor is the panel body each tab's aria-controls names. It is
+// not the swap target: the region wraps the strip too.
 const TaskDetailPanelAnchor = "krill-task-panel-body"
 
-// TaskDetail renders the task detail region: the breadcrumb, the title
-// with the task's state badges, and the two-column frame the properties
-// rail and the tab panels slot into.
+// TaskDetail renders the breadcrumb, the title with state badges, and the
+// two-column frame for the rail and tab panels.
 templ TaskDetail(page TaskDetailPage) {
 	<section id={ TaskDetailAnchor } data-krill="task-detail" data-krill-task-id={ page.ID } data-krill-claim-id={ page.ClaimID } data-krill-lease-expires-at={ page.LeaseExpiresAt }>
 		@taskDetailCrumbs(page.Crumbs)
@@ -374,10 +261,8 @@ templ TaskDetail(page TaskDetailPage) {
 	</section>
 }
 
-// taskActionError is the inline alert naming a refused intervention on the
-// detail region re-derived from fresh state (FR c69a42b4). It renders
-// nothing when no refusal is being presented, so the page's own first
-// render carries no alert at all.
+// taskActionError is the inline alert for a refused intervention; empty on
+// a first render.
 templ taskActionError(page TaskDetailPage) {
 	if page.ActionError != "" {
 		<div class="mt-4" data-krill="task-action-error">
@@ -386,21 +271,9 @@ templ taskActionError(page TaskDetailPage) {
 	}
 }
 
-// taskActionsCallout is the detail's actions region: the intervention
-// controls legal for the task's state, inside the section a post-action
-// re-render swaps so the header, the rail and this callout move together
-// (FR af61631d).
-//
-// It renders NOTHING when no verb is legal. A cancelled task offers no
-// action, and an empty "Actions" box beside it would read as a control that
-// failed to render rather than as the terminal state the task is in.
-//
-// The reason popovers ride here too, after the controls (FR 0cf360c5): each
-// control's trigger opens its popover by id, so a trigger whose popover is
-// not rendered is a dead button and an operator who clicks it loses the
-// optional reason. Keeping them inside the callout also keeps the callout
-// the page's ONE write surface -- every write affordance the page has, the
-// triggers and the popover submits both, sits in this one region.
+// taskActionsCallout holds the legal intervention controls and their popovers:
+// the page's one write surface, inside the swapped section. Renders nothing
+// when no verb is legal.
 templ taskActionsCallout(page TaskDetailPage) {
 	if page.Actions != nil {
 		<div class="flex flex-wrap items-center gap-2" role="group" aria-label="Actions" data-krill="task-actions">
@@ -410,13 +283,8 @@ templ taskActionsCallout(page TaskDetailPage) {
 	}
 }
 
-// taskPropertiesCard is the rail's properties card: one label/value row per
-// property the task actually has.
-//
-// A row with nothing behind it is omitted rather than rendered empty. A
-// blank "Escalated" or "Milepebble" row would read as a value the page
-// could not read, which is a different and untrue claim from "this task has
-// neither".
+// taskPropertiesCard renders one row per property the task has; an empty row
+// would falsely read as unreadable.
 templ taskPropertiesCard(page TaskDetailPage) {
 	<div class="card bg-base-100 border border-base-300" data-krill="task-properties">
 		<div class="card-body gap-3 p-4 text-sm">
@@ -439,14 +307,8 @@ templ taskPropertiesCard(page TaskDetailPage) {
 					<dt class="text-base-content/70">Claim</dt>
 					<dd data-krill="task-properties-claim">
 						if page.ClaimID != "" {
-							// The task row says a claim is held and the read
-							// that names its holder failed, so the row has a
-							// claim it cannot attribute. It says so, rather
-							// than printing "Claimed by" over an empty span --
-							// which would read as claimed-by-nobody, a value
-							// the page never learned. The same rule the
-							// Escalated row's unreadable-instant branch
-							// follows, and for the same reason.
+							// A claim is held but its holder could not be read; say so rather than
+							// render an empty "Claimed by".
 							if page.ClaimHolder != "" {
 								Claimed by <span class="font-mono text-xs">{ page.ClaimHolder }</span>
 							} else {
@@ -472,20 +334,13 @@ templ taskPropertiesCard(page TaskDetailPage) {
 						<dt class="text-base-content/70">Escalated</dt>
 						<dd data-krill="task-properties-escalated">
 							if page.EscalatedAt != "" {
-								// The visible text is relative, derived by the
-								// head's relativeAgeScript from the absolute
-								// instant in the attribute -- a fragment that
-								// carried its own relative string would be as
-								// old as the response, and nothing inside the
-								// swap could age it.
+								// Visible text is derived by relativeAgeScript from the absolute instant,
+								// so it ages after a swap.
 								<time data-krill="task-escalated-at" data-krill-updated-at={ page.EscalatedAt }
 									datetime={ page.EscalatedAt } title={ page.EscalatedAt }>{ page.EscalatedAt }</time>
 							} else {
-								// The task row says it is escalated but the
-								// event behind it could not be read, so there
-								// is no instant to state. The row stays: the
-								// Escalated badge beside the title comes from
-								// the task row and is still true.
+								// The escalation event could not be read; the row stays since the task row
+								// still says escalated.
 								<span class="text-base-content/70">When it was escalated could not be read.</span>
 							}
 						</dd>
@@ -502,28 +357,15 @@ templ taskPropertiesCard(page TaskDetailPage) {
 				<div>
 					<dt class="text-base-content/70">Task id</dt>
 					<dd data-krill="task-properties-id">
-						// Ships disabled: the clipboard is a client API, so
-						// without the head's copyTaskIdScript this button is
-						// guaranteed to do nothing, and a control that
-						// cannot work must not look live. The script removes
-						// disabled and swaps the title for what it does once
-						// it has. With scripting off the id is still the
-						// chip's own text -- readable and selectable.
+						// Disabled until copyTaskIdScript enables it, since the clipboard needs JS.
+						// Without scripting the id is still selectable text.
 						<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
 							aria-label="Copy task id" data-krill="copy-task-id" data-task-id={ page.ID }
 							disabled title="Copying the task id needs JavaScript">
 							{ idChipText(page.ID) }
 						</button>
-						// The confirmation lands here, beside the chip and
-						// never over it, so the id is still on screen while
-						// the operator reads the result. It is a polite live
-						// region, so it announces without stealing focus and
-						// without interrupting. Empty on arrival and empty
-						// again after the confirmation clears: a live region
-						// must exist before its content changes to be
-						// announced, so this is the one span here that is
-						// legitimately blank -- it is not a property row and
-						// says nothing about the task.
+						// Polite live region beside the chip for the copy confirmation. It must exist
+						// empty before its content changes to be announced.
 						<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
 					</dd>
 				</div>
@@ -532,15 +374,8 @@ templ taskPropertiesCard(page TaskDetailPage) {
 	</div>
 }
 
-// taskDependsOnCard is the rail's dependency card: a shortcut to the same
-// list the Dependencies tab renders, through taskDepList, so the two
-// cannot drift.
-//
-// A task that waits on nothing renders no card at all rather than an empty
-// one -- an empty box beside the content says something is missing where
-// the answer is "nothing". A read failure does render the card, because
-// there the difference between "no dependencies" and "could not tell" is
-// exactly what the operator is being asked to act on.
+// taskDependsOnCard is the rail's shortcut to the dependency list. No card for
+// a task with none; a read failure still renders it with the error.
 templ taskDependsOnCard(page TaskDetailPage) {
 	if len(page.Deps) > 0 || page.DepsError != "" {
 		<div class="card bg-base-100 border border-base-300" data-krill="task-depends-on">
@@ -556,19 +391,8 @@ templ taskDependsOnCard(page TaskDetailPage) {
 	}
 }
 
-// taskDetailCrumbs is the path from the product down to this task:
-// product -> milestone -> milepebble (only when the task sits on one) ->
-// the task's own title, which is the page they are already on and so is
-// plain text rather than a link.
-//
-// The product leads even though the milestone is the nearer ancestor: it
-// is the context the whole product area hangs off, and an operator
-// reaching a task through a copied link needs the first crumb to be the
-// one that says whose work this is.
-//
-// It renders inside the region rather than in the shell's top bar because
-// the region is what a Refresh swaps: the breadcrumb names this task's own
-// container, so it has to travel with the content it describes.
+// taskDetailCrumbs is product -> milestone -> milepebble -> plain-text title.
+// It renders inside the region so it travels with a Refresh swap.
 templ taskDetailCrumbs(crumbs []TaskCrumb) {
 	if len(crumbs) > 0 {
 		<nav class="breadcrumbs text-sm" aria-label="Breadcrumb" data-krill="task-breadcrumb">
@@ -587,16 +411,8 @@ templ taskDetailCrumbs(crumbs []TaskCrumb) {
 	}
 }
 
-// taskLaneSteps is the lane step strip: the task's own sequence, with
-// every lane before the current one marked as passed and the current one
-// marked as current.
-//
-// The strip reads over LaneSequence rather than over the store's
-// canonical lane order, because a task's lane_sequence is what it was
-// created with and is the authority on its own path (store/task.go
-// NFR5). A task created as Scaffold -> Validation -> Done shows those
-// three, and a strip that invented Implementation between them would be
-// describing a workflow this task is not on.
+// taskLaneSteps renders the task's own lane_sequence (not the canonical order),
+// marking earlier lanes passed and the current one current.
 templ taskLaneSteps(steps []TaskLaneStep) {
 	if len(steps) > 0 {
 		<ul class="steps w-full text-xs sm:text-base" data-krill="task-lane-steps">
@@ -612,10 +428,8 @@ templ taskLaneSteps(steps []TaskLaneStep) {
 	}
 }
 
-// taskLaneStepClasses is one step's daisyUI class. Both a passed and the
-// current step are step-primary -- daisyUI's own vocabulary for a step
-// the task has reached -- and they are told apart by the hook and by
-// aria-current rather than by colour alone.
+// taskLaneStepClasses marks passed and current as step-primary; the hook and
+// aria-current tell them apart.
 func taskLaneStepClasses(s TaskLaneStep) string {
 	if s.Passed || s.Current {
 		return "step step-primary"
@@ -623,9 +437,8 @@ func taskLaneStepClasses(s TaskLaneStep) string {
 	return "step"
 }
 
-// taskLaneStepHook is the step's data-krill hook: which of the three
-// states it is in, so a test can say which lanes are marked passed and
-// which is current rather than inferring it from a colour.
+// taskLaneStepHook is the step's data-krill state, so tests need not infer
+// it from colour.
 func taskLaneStepHook(s TaskLaneStep) string {
 	switch {
 	case s.Current:
@@ -636,24 +449,9 @@ func taskLaneStepHook(s TaskLaneStep) string {
 	return "task-step-upcoming"
 }
 
-// TaskDetailTabs is the detail's tabbed facet region: the strip and the
-// panel below it, together.
-//
-// The strip is INSIDE the swap region rather than outside it, which is the
-// second of the two ways the active tab can be re-marked (the first is an
-// out-of-band swap of the active class). It is chosen here because a
-// tab strip that is its own swap target needs the fragment to carry two
-// top-level nodes -- the panel and the re-marked strip -- and htmx's
-// outerHTML inserts EVERY top-level node of the response into the target.
-// Keeping both in one region keeps the served fragment to exactly one
-// root, which is what makes a tab click repeatable (README's swap-target
-// rule). The cost is that the operator's own controls are re-rendered
-// rather than left in the DOM, which is invisible because the response
-// carries a fresh, identically-marked strip.
-//
-// The whole rest of the page -- header, breadcrumbs, lane steps,
-// properties rail -- sits OUTSIDE this region, so a tab click swaps this
-// facet region alone and never re-derives the rest of the page.
+// TaskDetailTabs is the strip plus panel as one swap region: outerHTML inserts
+// every top-level node, so a separate strip would duplicate. The rest of the
+// page sits outside and is never re-derived by a tab click.
 templ TaskDetailTabs(page TaskDetailPage) {
 	<div id={ TaskPanelAnchor } data-krill="task-panel" data-krill-task-tab={ page.Tab }>
 		@taskDetailTabStrip(page.Tabs)
@@ -672,35 +470,16 @@ templ TaskDetailTabs(page TaskDetailPage) {
 	</div>
 }
 
-// taskDetailTabState is the region's carried tab: a hidden input naming
-// the tab this fragment rendered.
-//
-// It is rendered INSIDE the swap region, which is the whole point. The
-// Refresh button lives outside that region, so nothing a tab click swaps
-// re-renders the button -- a tab written into the button's own hx-get at
-// page-load time describes the page as LOADED, and a tab click changes
-// the address bar and the panel without touching it. An input the region
-// re-renders on every click is the one place the current tab is
-// readable from the button at press time.
-//
-// Overview renders NO input: the default state is the bare address, so a
-// Refresh taken there re-requests the bare path rather than a URL
-// spelling out the absence of a choice.
+// taskDetailTabState renders the hidden tab input inside the swap region, so
+// Refresh (outside it) reads the current tab. Overview renders none.
 templ taskDetailTabState(tab string) {
 	if tab != TaskTabOverview {
 		<input type="hidden" id={ TaskTabStateID } name={ TaskTabQueryParam } value={ tab } data-krill="task-tab-state" />
 	}
 }
 
-// taskDetailTabStrip is the tablist: four real links, each carrying the
-// htmx attributes that swap the panel region in place and push the tab's
-// own URL.
-//
-// The href is the whole mechanism. htmx's hx-get takes the address, but
-// the href is what a reload, a shared link, a no-JS click and the
-// browser's Back button follow -- the same rule README states for paging.
-// Because the pushed URL is the tab's own href, the address bar, the
-// served page and the strip's active marking can never disagree.
+// taskDetailTabStrip renders real links that also swap in place and push their
+// own href, so address bar, page and active marking always agree.
 templ taskDetailTabStrip(tabs []TaskTab) {
 	<div role="tablist" class="tabs tabs-border" data-krill="task-tabs">
 		for _, t := range tabs {
@@ -722,9 +501,7 @@ templ taskDetailTabStrip(tabs []TaskTab) {
 	</div>
 }
 
-// taskTabClasses is one tab's daisyUI class. The active tab is
-// tab-active; every other is not, so the strip has exactly one active
-// marking whichever tab the URL resolved to.
+// taskTabClasses marks exactly one tab active.
 func taskTabClasses(active bool) string {
 	if active {
 		return "tab tab-active"
@@ -732,10 +509,8 @@ func taskTabClasses(active bool) string {
 	return "tab"
 }
 
-// taskTabSelected is the tab's aria-selected, as the string the attribute
-// takes. It is emitted on both active and inactive tabs rather than
-// omitted when false: an omitted aria-selected on a role="tab" element
-// leaves its state undefined rather than false.
+// taskTabSelected is emitted on every tab, since an omitted aria-selected is
+// undefined rather than false.
 func taskTabSelected(active bool) string {
 	if active {
 		return "true"
@@ -743,12 +518,8 @@ func taskTabSelected(active bool) string {
 	return "false"
 }
 
-// taskOverviewPanel is the Overview facet, in the order an operator reads
-// it: why this task is stuck (if it is), what it asks for, and what has
-// been said about it lately.
-//
-// The strip, the swap mechanics and the URL state belong to FR 7e463e31
-// and are untouched here -- this panel is one region a fill-in owns.
+// taskOverviewPanel is the Overview facet: why it is stuck, what it asks for,
+// and recent notes.
 templ taskOverviewPanel(page TaskDetailPage) {
 	<div class="space-y-4" data-krill="task-panel-overview" data-krill-panel-host="overview">
 		@taskOverviewCallouts(page.Callouts)
@@ -757,25 +528,16 @@ templ taskOverviewPanel(page TaskDetailPage) {
 	</div>
 }
 
-// taskOverviewCallouts is the explanation banner for a task that is not
-// simply in flight -- one Alert per state, in the order the builder fixed
-// (escalation, attempt cap, lapsed lease).
-//
-// It renders NOTHING for a healthy task. A task with nothing wrong gets no
-// banner at all rather than a neutral one: an operator who sees the box
-// appear for every task learns to read past it, and the one escalation it
-// does carry would be read past too.
+// taskOverviewCallouts renders one Alert per state in builder order, and
+// nothing for a healthy task so the banner is never read past.
 templ taskOverviewCallouts(callouts []TaskCallout) {
 	for _, c := range callouts {
 		@htmxui.Alert(c.Variant, c.Message, templ.Attributes{"data-krill": "task-callout", "data-krill-callout": c.Key})
 	}
 }
 
-// taskDescriptionCard is the task's own body, whitespace preserved.
-//
-// The card is omitted entirely for a task with no body. An empty card
-// titled "Description" is a claim that there is a description and it is
-// blank -- a different and untrue statement from "this task has none".
+// taskDescriptionCard is the task body, whitespace preserved; omitted when
+// there is none.
 templ taskDescriptionCard(body string) {
 	if body != "" {
 		<div class="card bg-base-100 border border-base-300" data-krill="task-description">
@@ -787,17 +549,8 @@ templ taskDescriptionCard(body string) {
 	}
 }
 
-// taskLatestNotesCard is the tail of the task's notes: the most recent
-// few, with each one's kind and status badges.
-//
-// The card names its own count, because it is a SUBSET. When notes were
-// dropped to fit, it says so; a truncated list presented as "Latest notes"
-// with no visible boundary is how an operator concludes there are three
-// notes when there are thirty.
-//
-// A failed notes read renders no card rather than an empty one. The Notes
-// tab owns that alert -- the same rule the tab's own panel follows, and
-// for the same reason: an unreadable list must never render as a read one.
+// taskLatestNotesCard shows the recent notes and states its count, since it
+// is a subset. A failed read renders no card; the Notes tab owns that alert.
 templ taskLatestNotesCard(page TaskDetailPage) {
 	if page.NotesError == "" && len(page.LatestNotes) > 0 {
 		<div class="card bg-base-100 border border-base-300" data-krill="task-latest-notes">
@@ -819,24 +572,13 @@ templ taskLatestNotesCard(page TaskDetailPage) {
 	}
 }
 
-// taskLatestNotesCount is the card's honest count: "All n notes" when the
-// tail is the whole list, and "Showing the k most recent of n" when it is
-// not.
-//
-// Without this line the card's title ("Latest notes") is the only signal
-// that it is a subset, and it is the kind of signal nobody reads twice.
+// taskLatestNotesCount renders whether the card shows all notes or a subset.
 templ taskLatestNotesCount(page TaskDetailPage) {
 	<span class="text-xs text-base-content/70" data-krill="task-latest-notes-count">{ taskLatestNotesCountText(page) }</span>
 }
 
-// taskLatestNotesCountText is the card's count, stated so it cannot be
-// misread: "All 4 notes." when the tail IS the whole list, and "Showing
-// the 3 most recent of 12. The Notes tab has all of them." when it is not.
-//
-// The two arms differ in more than wording. "All" is a claim that the read
-// returned everything; the other arm is a claim that it did not, with the
-// number that says so. A single phrasing for both would be a lie in one of
-// them.
+// taskLatestNotesCountText is "All n notes." when the tail is the whole list,
+// else "Showing the k most recent of n...".
 func taskLatestNotesCountText(page TaskDetailPage) string {
 	shown := len(page.LatestNotes)
 	if shown < page.NotesTotal {
@@ -846,8 +588,7 @@ func taskLatestNotesCountText(page TaskDetailPage) string {
 	return "All " + strconv.Itoa(page.NotesTotal) + " " + taskNotesNoun(page.NotesTotal) + "."
 }
 
-// taskNotesNoun is the count's noun, so a single note does not render "All
-// 1 notes".
+// taskNotesNoun avoids "All 1 notes".
 func taskNotesNoun(n int) string {
 	if n == 1 {
 		return "note"
@@ -855,15 +596,8 @@ func taskNotesNoun(n int) string {
 	return "notes"
 }
 
-// taskNotesPanel lists EVERY note on the task, each with its kind badge
-// and its lifecycle-status badge through the shared TaskNoteBadges, in the
-// store's own order (see TaskNoteRow).
-//
-// A failed notes read alerts INSIDE this panel only: the header, the lane
-// steps and the properties rail are outside the swap region, and the
-// other panels are not rendered while this one is. An unreadable list
-// never renders as an empty one -- NotesError is what this panel reads,
-// and the empty state is what a READ THAT SUCCEEDED with nothing says.
+// taskNotesPanel lists every note in store order. A failed read alerts here
+// only; the empty state is for a successful read with no notes.
 templ taskNotesPanel(page TaskDetailPage) {
 	<div data-krill="task-panel-notes" data-krill-panel-host="notes">
 		<h2 class="text-lg font-semibold">Notes</h2>
@@ -888,12 +622,8 @@ templ taskNotesPanel(page TaskDetailPage) {
 	</div>
 }
 
-// taskDependenciesPanel lists EVERY dependency through the same
-// taskDepList the rail's Depends-on card renders, so the two facets are
-// one list rather than two that can drift.
-//
-// DepsError is read here and nowhere else: a failed dependencies read
-// must cost this panel alone.
+// taskDependenciesPanel lists every dependency via taskDepList; a failed read
+// costs this panel alone.
 templ taskDependenciesPanel(page TaskDetailPage) {
 	<div data-krill="task-panel-dependencies" data-krill-panel-host="dependencies">
 		<h2 class="text-lg font-semibold">Dependencies</h2>
@@ -911,22 +641,9 @@ templ taskDependenciesPanel(page TaskDetailPage) {
 	</div>
 }
 
-// taskSlicePanel is the Spec slice host (task b70e8d21 owns its contents,
-// including the closed disclosure the raw JSON sits behind).
-//
-// The document is the raw wire get_task returns -- machine-readable, and
-// far too long to be the page's first impression. So it sits behind a
-// disclosure that is CLOSED on arrival: an operator reading the task wants
-// the description, the notes and the claim, and wants the JSON only when
-// they are checking what an agent was actually handed. The disclosure's
-// own label is the panel's label, which is why this host carries no
-// heading of its own -- a "Spec slice" <h2> directly above a "Spec slice
-// (raw JSON)" summary would name one thing twice.
-//
-// It is the ONLY place on the page the document renders. A read failure
-// alerts here instead of an empty disclosure, because a closed disclosure
-// with nothing in it reads as "this task has no slice" -- a claim about
-// the task that a failed read is not entitled to make.
+// taskSlicePanel shows get_task's raw JSON behind a closed disclosure, whose
+// label serves as the heading. A failed read alerts instead, since an empty
+// disclosure would read as "no slice".
 templ taskSlicePanel(page TaskDetailPage) {
 	<div data-krill="task-panel-slice" data-krill-panel-host="slice">
 		if page.SliceError != "" {

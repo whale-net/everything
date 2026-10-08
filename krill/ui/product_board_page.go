@@ -1,18 +1,6 @@
-// The Board view of the product-wide task scope (FR cf000440): one
-// swimlane per milestone that has tasks, each with five counted lane
-// columns, laid out to scroll sideways inside the board rather than
-// sideways across the page.
-//
-// Two reads answer it and neither is derived from the other. The task read
-// (product_task_scope.go) says which container each row belongs to and in
-// which lane it sits, in the read's own order; the per-container progress
-// read says how far along each container is. Both are asked for the very
-// same resolved scope, so a lane's cards and the "N of M done" printed in
-// its header can never describe different filters.
-//
-// The builder is pure: it takes the rows and the progress aggregate and
-// returns the view model, so the shape of a board is testable without a
-// server.
+// The Board view of the product-wide task scope: one swimlane per milestone with tasks,
+// five lane columns each. The task read and the per-container progress read are asked for
+// the same resolved scope, so a lane's cards and its "N of M done" share filters.
 package main
 
 import (
@@ -26,12 +14,7 @@ import (
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
-// boardProgressRead reads the per-container progress aggregate for a
-// resolved scope -- the read the Overview's in-flight panel already uses,
-// asked here of the same scope the board's rows were read with.
-//
-// It returns its zero value alongside the error rather than an error alone
-// so a caller cannot accidentally render a board from an absent aggregate.
+// boardProgressRead reads the per-container progress aggregate for a resolved scope.
 func (app *App) boardProgressRead(ctx context.Context, productID uuid.UUID, scope resolvedProductTaskScope) (store.ProductTaskProgress, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
@@ -44,20 +27,12 @@ func (app *App) boardProgressRead(ctx context.Context, productID uuid.UUID, scop
 	})
 }
 
-// boardProgressError is a failed progress read in the operator's words.
-//
-// It is a sentence in place of the swimlanes rather than an empty board,
-// for the Overview panel's reason: "this scope has no tasks" and "we could
-// not check how far along it is" are different answers, and a board with
-// no lanes in it states the first one while the second is true.
+// boardProgressError replaces the swimlanes when progress is unreadable; an empty board
+// would falsely claim the scope has no tasks.
 const boardProgressError = "How far along each milestone is could not be read. See the logs."
 
-// productBoardPageOf builds the Board view model from one scope's rows and
-// its per-container progress.
-//
-// tasksPath is the Tasks view of this same scope and filter set -- the way
-// out of the board when the read paged and the board cannot show
-// everything.
+// productBoardPageOf builds the Board view model. tasksPath is the Tasks view of the same
+// scope and filters, for when the read paged.
 func productBoardPageOf(
 	product store.Product,
 	region pages.ProductTaskRegion,
@@ -78,9 +53,7 @@ func productBoardPageOf(
 		OnlyStuck:  region.OnlyStuck,
 		UpdatedAt:  now.UTC().Format(time.RFC3339),
 		TasksPath:  tasksPath,
-		// Read off the region rather than derived here, so the Board cannot
-		// disagree with the Tasks view about where "back to the roadmap"
-		// goes for this scope.
+		// From the region so Board and Tasks agree on where "back to the roadmap" goes.
 		MilestonesPath: region.MilestonesPath,
 		Shown:          len(rows),
 		Total:          region.Total,
@@ -94,23 +67,14 @@ func productBoardPageOf(
 	return board
 }
 
-// boardProgressIndex is one progress aggregate indexed by the two ids a
-// swimlane can be keyed by, so the lane a row belongs to can be found
-// without a scan per row.
-//
-// byMilestone holds the MILESTONE rows only. A milepebble's own row is
-// deliberately kept out of it: that row's PerLane covers the milepebble
-// alone, while the milestone row's covers the whole cut, and letting the
-// two answer for one id is how a header's "N of M done" comes to disagree
-// with the columns under it.
+// boardProgressIndex indexes progress by container and by milestone. byMilestone holds
+// milestone rows only: a milepebble row's PerLane covers just itself, not the whole cut.
 type boardProgressIndex struct {
 	byContainer map[uuid.UUID]store.ContainerTaskProgress
 	byMilestone map[uuid.UUID]store.ContainerTaskProgress
 }
 
-// indexBoardProgress builds the two indexes. A milepebble row never
-// overwrites its parent milestone's entry in byMilestone; in byContainer
-// the two are separate keys and both survive.
+// indexBoardProgress builds both indexes; a milepebble row never overwrites its parent in byMilestone.
 func indexBoardProgress(containers []store.ContainerTaskProgress) boardProgressIndex {
 	idx := boardProgressIndex{
 		byContainer: make(map[uuid.UUID]store.ContainerTaskProgress, len(containers)),
@@ -127,49 +91,25 @@ func indexBoardProgress(containers []store.ContainerTaskProgress) boardProgressI
 	return idx
 }
 
-// boardLaneKeyOf is the swimlane one task row belongs to.
-//
-// A task scoped to a milepebble aggregates under its milestone whenever the
-// milestone is itself in scope -- that is the whole point of a milestone's
-// PerLane covering the cut -- and gets a lane of its own when it is not.
-// The case is a shipped milestone with a milepebble still in design: the
-// parent has dropped out of the all-incomplete scope and its lane would
-// claim to describe work the board is not showing.
-//
-// The milepebble scope keys on the milepebble itself, which is the one
-// case FR cf000440 asks to be named and badged on its own terms.
+// boardLaneKeyOf is a row's swimlane. A milepebble task aggregates under its milestone while
+// the milestone is in scope (e.g. not when a shipped milestone has a milepebble in design);
+// the milepebble scope always keys on the milepebble.
 func boardLaneKeyOf(row store.ProductTaskRow, milepebbleScope bool, idx boardProgressIndex) uuid.UUID {
 	if row.Milepebble == nil {
 		return row.Milestone.ID
 	}
-	// The milepebble scope is about the milepebble, full stop: it names one
-	// container and the board is about that one.
 	if milepebbleScope {
 		return row.Milepebble.ID
 	}
-	// Everywhere else a milepebble's task aggregates under its milestone,
-	// for as long as the milestone is itself in scope.
 	if _, parentInScope := idx.byMilestone[row.Milestone.ID]; parentInScope {
 		return row.Milestone.ID
 	}
 	return row.Milepebble.ID
 }
 
-// boardLanesOf partitions the scope's rows into swimlanes.
-//
-// The lanes come out in the order the rows arrive -- the task read's own
-// milestone position DESCENDING order, which is also the order the store's
-// product-wide read and FR cf000440 both name -- so the board's lane order
-// is the read's, not a second sort spelled out here that could disagree
-// with it.
-//
-// A lane exists only where a card sits in it. A container the active lane
-// or only-stuck filter emptied out would otherwise render five columns
-// headed by zeros, which reads as a milestone that has fallen behind rather
-// than one whose tasks were filtered away.
-//
-// now is the read instant, handed to every card so one lease is judged
-// against the same clock as the next -- see boardCardOf.
+// boardLanesOf partitions rows into swimlanes in the read's order (milestone position
+// descending). Only lanes with a card exist, so filtered-away containers do not render
+// as zero columns.
 func boardLanesOf(productID uuid.UUID, scope resolvedProductTaskScope, rows []store.ProductTaskRow, progress store.ProductTaskProgress, now time.Time) []pages.BoardLane {
 	idx := indexBoardProgress(progress.Containers)
 	milepebbleScope := scope.Parsed.Kind == store.ProductTaskScopeMilepebble
@@ -189,10 +129,7 @@ func boardLanesOf(productID uuid.UUID, scope resolvedProductTaskScope, rows []st
 		column.Cards = append(column.Cards, boardCardOf(productID, row, now))
 	}
 
-	// The counts are the cards' own length, counted once the lane is
-	// built. They are the board's own rendering, not the progress read's:
-	// the read answers for the whole container while these answer for what
-	// this scope and these filters put on the board.
+	// Counts are what this scope and filter put on the board, not the progress read's figures.
 	for i := range lanes {
 		for c := range lanes[i].Columns {
 			lanes[i].Columns[c].Count = len(lanes[i].Columns[c].Cards)
@@ -201,25 +138,14 @@ func boardLanesOf(productID uuid.UUID, scope resolvedProductTaskScope, rows []st
 	return lanes
 }
 
-// boardLaneOf is a new lane's header, taken from the progress read's own
-// row for that container.
-//
-// The figures are that row's Done() and Total() handed over whole. Summing
-// the five lanes again here would be a second definition of how a
-// cancelled task counts, and that is exactly how a header comes to
-// disagree with the breakdown printed beside it.
-//
-// A container the read did not answer for -- a read that was asked about
-// the same scope and did not cover it -- falls back to the row's own
-// milestone ref for the name and badge, with no figures rather than invented
-// ones.
+// boardLaneOf is a new lane's header from the progress read's row; Done/Total are handed
+// over whole so cancelled-task counting has one definition. A container missing from the
+// read falls back to the row's milestone ref with no figures.
 func boardLaneOf(productID, key uuid.UUID, row store.ProductTaskRow, idx boardProgressIndex) pages.BoardLane {
 	lane := pages.BoardLane{
 		ID:         key.String(),
 		DetailPath: milestoneDetailHref(productID, key),
-		// Five columns from the start, whatever the read covered: a lane
-		// with one card in one of them still shows the other four, headed
-		// by zero.
+		// Always five columns, so empty ones show zero.
 		Columns: emptyBoardColumns(),
 	}
 	if container, ok := idx.byContainer[key]; ok {
@@ -248,14 +174,8 @@ func boardLaneOf(productID, key uuid.UUID, row store.ProductTaskRow, idx boardPr
 	return lane
 }
 
-// boardCardOf is one task's card (FR f6b62cc7): the title linking to the
-// detail page, the milepebble it came from when the milestone is cut, its
-// state badges, its attempts against the cap, and the claim identity the
-// row observed with its lease expiry.
-//
-// The badges come from the same derivation the Tasks table makes over this
-// same read's row -- one state mapper, applied once -- so a task that is
-// Claimed on the list cannot read as lease-expired on the board.
+// boardCardOf is one task's card, with the same badge derivation as the Tasks table so a
+// task cannot read differently on list and board.
 func boardCardOf(productID uuid.UUID, row store.ProductTaskRow, now time.Time) pages.TaskRow {
 	badges := boardCardBadges(row, now)
 	card := pages.TaskRow{
@@ -265,18 +185,13 @@ func boardCardOf(productID uuid.UUID, row store.ProductTaskRow, now time.Time) p
 		DetailPath: taskDetailPath(productID, row.Milestone.ID, row.TaskID),
 		Attempts:   taskAttemptsLabel(row.AttemptCount),
 		Badges:     badges,
-		// The carve-out: a Done-lane task with nothing outstanding is
-		// finished work, and a card badging its attempts would read as
-		// work still to do.
+		// A Done task with nothing outstanding is finished work; badging attempts would read as to-do.
 		Quiet: row.CurrentLane == store.LaneDone && len(badges) == 0,
 	}
 	if row.Milepebble != nil {
 		card.Milepebble = row.Milepebble.Name
 	}
-	// Both halves, or neither -- the rule the read's own row guarantees
-	// and the Tasks table follows: a claim whose expiry was not reported
-	// cannot be judged live or lapsed, so badging it would contradict the
-	// claim id the card does or does not carry.
+	// Both claim halves or neither: a claim without a reported expiry cannot be judged live or lapsed.
 	if row.ClaimID != nil && row.LeaseExpiresAt != nil {
 		card.ClaimID = row.ClaimID.String()
 		card.LeaseExpiresAt = row.LeaseExpiresAt.UTC().Format(time.RFC3339)
@@ -284,20 +199,8 @@ func boardCardOf(productID uuid.UUID, row store.ProductTaskRow, now time.Time) p
 	return card
 }
 
-// boardCardBadges is one card's state badges, derived over the product
-// read's own row.
-//
-// It is the same derivation taskStateBadges makes over a TaskSummary, and
-// the same one the Tasks table makes over this row: a claim whose lease
-// has lapsed is "lease-expired" and never "claimed", and a task in no
-// state yields no badges -- which is what leaves a Done card's badge row
-// empty. The colours come from components.TaskStateStyle, so the badge's
-// appearance cannot drift from the list's or the detail's.
-//
-// The cap is store.DefaultAttemptCap rather than the row's own AttemptCap
-// field for the same reason taskAttemptsLabel uses it: that is the cap the
-// read reports and the one every view counts against, so two spellings
-// would be two answers to "when is this capped".
+// boardCardBadges is taskStateBadges over a product read row: a lapsed lease is
+// "lease-expired", never "claimed", and the cap is store.DefaultAttemptCap like every view.
 func boardCardBadges(row store.ProductTaskRow, now time.Time) []pages.TaskBadge {
 	var badges []pages.TaskBadge
 	if row.ClaimID != nil && row.LeaseExpiresAt != nil {
@@ -320,9 +223,7 @@ func boardCardBadges(row store.ProductTaskRow, now time.Time) []pages.TaskBadge 
 	return badges
 }
 
-// emptyBoardColumns is store.CanonicalLaneOrder's five lanes as empty
-// columns, so a lane that has one card in one lane still carries all five
-// and the zeros are visible rather than absent.
+// emptyBoardColumns is store.CanonicalLaneOrder's five lanes as empty columns.
 func emptyBoardColumns() []pages.BoardColumn {
 	cols := make([]pages.BoardColumn, 0, len(store.CanonicalLaneOrder))
 	for _, lane := range store.CanonicalLaneOrder {
@@ -331,11 +232,8 @@ func emptyBoardColumns() []pages.BoardColumn {
 	return cols
 }
 
-// boardColumnIndex is a task's lane as a position in the five columns.
-// A lane outside store.CanonicalLaneOrder cannot be stored
-// (task.current_lane is CHECK-constrained to exactly these five), so
-// anything else is treated as the first column rather than panicking a
-// read-only page over a row that should not exist.
+// boardColumnIndex is a lane's column position. task.current_lane is CHECK-constrained to the
+// five lanes, so an unknown lane falls to column 0 rather than panicking.
 func boardColumnIndex(lane store.Lane) int {
 	for i, l := range store.CanonicalLaneOrder {
 		if l == lane {
@@ -345,10 +243,8 @@ func boardColumnIndex(lane store.Lane) int {
 	return 0
 }
 
-// boardTasksPath is the Tasks view of this board's own scope and filter
-// set: the same product, the same query, the other view -- so the link the
-// "Showing X of Y" line offers lands on exactly the rows the board was
-// showing rather than on an unfiltered list.
+// boardTasksPath is the Tasks view of this board's scope and filters, so "Showing X of Y"
+// links to the same rows.
 func boardTasksPath(productID uuid.UUID, query url.Values) string {
 	path := productHref(productID, tasksSuffix)
 	if len(query) == 0 {

@@ -1,25 +1,6 @@
-// Command ui is krill's operator web UI. It is two things layered on one
-// binary: the Keycloak sign-in flow that gives //libs/go/auth's
-// `/authorize` endpoint (mounted here) somewhere to redirect a
-// not-yet-signed-in caller, per ProviderConfig.SignInURL -- before this
-// binary existed, `/authorize` had no SignInURL configured and just 401ed
-// on an unresolved caller (see ARCHITECTURE.md "krill/ui and the auth front
-// door") -- and, behind that sign-in, the workspace shell: a drawer
-// sidebar (nav.go) whose grouped nav links the ops console, the
-// design-session browser, and the spec+delivery browser, plus the
-// credential widget that shell inherited from the original single-page
-// UI. Its home is the Overview (overview_page.go), served at both "/" and
-// /products/{pid}/overview.
-//
-// Every signed-in page renders in that one chrome, from the one seam
-// (renderShellStatus in templ_render.go), so the product switcher, the
-// Needs-attention badge, and the toast host are never a per-page decision.
-//
-// The OAuth2 authorization-code + PKCE flow (discovery -> registration ->
-// sign-in -> `/authorize` -> `/token`) must stay completable regardless of
-// what the shell grows: every one of its pages sits behind
-// app.auth.RequireAuthFunc, and none of them is on the OAuth2 path
-// (auth.go's setupMCPAuth mounts that, plus the self-serve credential API).
+// Command ui is krill's operator web UI: the Keycloak sign-in that the
+// OAuth2 `/authorize` endpoint redirects to, and behind it the workspace shell
+// whose pages all render through renderShellStatus.
 package main
 
 import (
@@ -44,72 +25,49 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 )
 
-// faviconIco is served at /favicon.ico, which htmxbase's layout links on
-// every page. Embedded rather than served from disk so the image stays a
-// pure-Go cross-compile with no asset pipeline.
-//
-// The directive is load-bearing: without it this stays nil and
-// FaviconHandler serves a zero-byte image with a 200, which is harder to
-// notice than a 404 but just as wrong. krill/ui/BUILD.bazel's embedsrcs
-// makes the file a dep of this package.
+// faviconIco is embedded so FaviconHandler never serves a zero-byte 200;
+// BUILD.bazel's embedsrcs must list the file.
 //
 //go:embed favicon.ico
 var faviconIco []byte
 
-// config holds `ui`'s configuration, loaded entirely from environment
-// variables -- no config files (see ../ENV.md).
+// config is loaded entirely from environment variables (see ../ENV.md).
 type config struct {
-	// Addr is the address this binary's HTTP surface listens on.
 	Addr string
 
-	// AuthMode is the HTTP-facing auth mode: "none" (dev-only, synthetic
-	// dev-user -- see htmxauth.AuthModeNone) or "oidc" (real Keycloak
-	// sign-in).
+	// AuthMode is "none" (dev-only synthetic user) or "oidc" (Keycloak).
 	AuthMode string
 
-	// OIDC configuration (required when AuthMode == "oidc").
+	// OIDC configuration, required when AuthMode == "oidc".
 	OIDCIssuer string
-	// RoleOperator/RoleReader (KRILL_ROLE_OPERATOR / KRILL_ROLE_READER) are
-	// the realm roles that resolve to the operator and reader personas.
+	// RoleOperator/RoleReader are the realm roles for the operator and reader
+	// personas.
 	RoleOperator     string
 	RoleReader       string
 	OIDCClientID     string
 	OIDCClientSecret string
 	OIDCRedirectURL  string
 
-	// SessionSecret encrypts the DB-backed session store's access/refresh
-	// tokens (htmxauth.NewDBSessionManager).
+	// SessionSecret encrypts the DB session store's tokens.
 	SessionSecret string
 
-	// DatabaseURL backs both htmxauth's DB-backed session manager
-	// (ui_sessions table, migration 007) and auth's Postgres-backed
-	// credential/client/auth-code stores (mcp_credential/mcp_oauth_client/
-	// mcp_auth_code, migration 006) -- always required, never falls back
-	// to cookie-only sessions, mirroring whagent_net/ui/main.go's config.
+	// DatabaseURL backs the UI session store and the MCP credential, client,
+	// and auth-code stores. Always required.
 	DatabaseURL string
 
-	// UIPublicURL is this binary's own externally-reachable base URL --
-	// auth.ProviderConfig.Issuer, the base every auth endpoint URL
-	// (`/authorize`, `/token`, `/register`,
-	// `/.well-known/oauth-authorization-server`) is built from.
+	// UIPublicURL is this binary's external base URL and the OAuth2 issuer.
 	UIPublicURL string
 
-	// MCPPublicURL is `mcp`'s own externally-reachable base URL --
-	// auth.ProviderConfig.Resource, the OAuth2 `resource` identifier.
-	// Must be byte-identical to what `mcp` itself advertises
-	// (KRILL_MCP_PUBLIC_URL, see krill/mcp/main.go) -- a mismatch breaks
-	// an MCP client's RFC 9728 discovery chain.
+	// MCPPublicURL is the OAuth2 `resource`; it must byte-match `mcp`'s
+	// KRILL_MCP_PUBLIC_URL or RFC 9728 discovery breaks.
 	MCPPublicURL string
 
-	// APIBaseURL is krill `api`'s own base URL, the target this binary's
-	// app write client mints krill sessions against and issues every
-	// mutating request to (writeclient.go). Required: a UI with no
-	// configured `api` cannot attribute a write to a real operator
-	// identity, so it refuses to boot rather than run write-less.
+	// APIBaseURL is krill `api`, which every write goes to. Required: without
+	// it no write can be attributed to an operator.
 	APIBaseURL string
 
-	// DevAPIToken (KRILL_DEV_API_TOKEN) is the static bearer forwarded to
-	// api under AUTH_MODE=none; must equal api's KRILL_DEV_AUTH_TOKEN.
+	// DevAPIToken is the bearer forwarded to api under AUTH_MODE=none; it must
+	// equal api's KRILL_DEV_AUTH_TOKEN.
 	DevAPIToken string
 }
 
@@ -139,96 +97,59 @@ func getEnv(key, def string) string {
 	return def
 }
 
-// App holds this binary's application state.
 type App struct {
 	auth *htmxauth.Authenticator
 
-	// oidcIssuer is cfg.OIDCIssuer verbatim -- the fixed issuer every
-	// signed-in operator's encoded identity carries (auth.go's
-	// mcpCallerResolver).
+	// oidcIssuer is the fixed issuer every operator's encoded identity carries.
 	oidcIssuer string
 
 	// devAPIToken is set only under AUTH_MODE=none; see requireOperator.
 	devAPIToken string
 
-	// devAuth is true under AUTH_MODE=none, where the synthetic dev user
-	// holds the operator persona (as api's dev token does) so readerRoute
-	// admits it; see readerRoute.
+	// devAuth admits the synthetic dev user as an operator under AUTH_MODE=none.
 	devAuth bool
 
-	// sessionRoles overrides how a request's realm roles are read; nil
-	// means the signed-in user's session roles. Tests set it because the
-	// cookie-backed test session does not persist roles (DB sessions do).
+	// sessionRoles overrides how realm roles are read; nil uses the session.
+	// Tests set it because cookie-backed test sessions do not persist roles.
 	sessionRoles func(r *http.Request) ([]string, error)
 
 	// roles maps realm roles to personas at credential-mint time.
 	roles server.RoleConfig
 
-	// mcpProvider is auth's OAuth2 authorization-server front end,
-	// constructed in NewApp and mounted on this binary's mux in
-	// setupRoutes on unauthenticated routes (discovery metadata and
-	// dynamic client registration must be reachable before an MCP client
-	// has any credential at all). Its Resolver reads this binary's own
-	// Keycloak session (mcpCallerResolver, auth.go) -- `/authorize`
-	// mints a credential only once the operator is already signed in via
-	// app.auth.
+	// mcpProvider is the OAuth2 authorization server. Its routes are
+	// unauthenticated; `/authorize` mints only once the operator is signed in.
 	mcpProvider *auth.Provider
 
-	// credentials is the store behind both the self-serve JSON API and the
-	// credentials page's htmx handlers (credentials_page.go). It is the
-	// named variant because the page mints with an operator-chosen name;
-	// the JSON API and /authorize's code path use the unnamed Mint.
+	// credentials backs the self-serve credential API and credentials page;
+	// the named variant lets the page mint with an operator-chosen name.
 	credentials auth.NamedCredentialStore
 
-	// writes is the client this binary's own app pages use to issue krill
-	// writes (writeclient.go): it mints a krill session whose acting /
-	// on-behalf-of subjects are the signed-in operator's real (iss, sub)
-	// pair, then presents that session on every mutating request.
+	// writes issues krill writes under a session minted for the signed-in
+	// operator (writeclient.go).
 	writes *writeClient
 
-	// scopes is the read-only `scope` view this binary uses to resolve the
-	// scope a krill session is minted under (writes.go's withKrillSession)
-	// -- a browser has no way to learn a scope id, and there is exactly
-	// one, so GetSole is the whole of it.
+	// scopes resolves the deployment's sole scope for minted sessions.
 	scopes store.ScopeStore
 
-	// tasks is the console query surface the ops read views (ops.go) call
-	// directly. Reads are role-gated (readerRoute) and the
-	// views resolve the sole scope themselves, so -- unlike writes -- they
-	// reach the same List* store methods the MCP ops mount and
-	// GET /console/* serve, over the same store/paging.go pagination
-	// contract, with no krill session in between.
+	// tasks is the console query surface the ops views read directly; reads
+	// need no krill session.
 	tasks store.TaskStore
 
-	// designSessions and revisionEvents back the design-session read
-	// surface (design_page.go): the exact store accessors the MCP tools'
-	// get_design_session / list_open_questions call, reused directly so a
-	// browser and an MCP client see one session, one ordering, and one
-	// open-question derivation. A read carries no attribution, so -- unlike
-	// app.writes -- it needs no krill session and reads the store in
-	// process; the route's readerRoute gate mirrors api's reader check.
+	// designSessions and revisionEvents are the same store accessors the MCP
+	// design tools use, so browser and MCP see one session and ordering.
 	designSessions store.DesignSessionStore
 	revisionEvents store.RevisionEventStore
 
-	// spec reads the spec axis (products, the capability map, decisions,
-	// personas, non-goals, and the delivery/roadmap view) for the /spec
-	// pages. Unlike writes it is not a session-attributed HTTP client:
-	// reads are gated by readerRoute, and the reader calls the same //krill/slice.Querier
-	// and //krill/store methods the MCP spec tools wrap, so a page and the
-	// matching tool agree (see readclient.go). Held as the specReadClient
-	// interface so the view assembly is testable against a fake.
+	// spec reads the spec axis for /spec pages (readclient.go); an interface so
+	// view assembly is testable against a fake.
 	spec specReadClient
 
-	// now is the clock the Overview's time-windowed figures are measured
-	// from. Nil in production, where clock() reads the wall time; a test
-	// sets it to hold time still and assert that a sub-line agrees with
-	// the figure it is derived from.
+	// now is the Overview's clock; nil means wall time. Tests freeze it.
 	now func() time.Time
 }
 
-// NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A
-// failure here is always a startup-fatal condition -- see run()'s
-// logger.Error call at the call site -- never a degrade-and-serve path.
+// NewApp wires Keycloak sign-in and the OAuth2 provider. Any error is
+// startup-fatal.
 func NewApp(ctx context.Context, cfg config) (*App, error) {
 	var authMode htmxauth.AuthMode
 	switch cfg.AuthMode {
@@ -258,9 +179,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		return nil, fmt.Errorf("failed to connect to session DB: %w", err)
 	}
 
-	// NewDBSessionManager probes the ui_sessions table before returning; a
-	// missing table (migration 007) fails boot here rather than at the
-	// first sign-in.
+	// Probes ui_sessions so a missing migration fails boot, not first sign-in.
 	sessionStore, err := htmxauth.NewDBSessionManager(ctx, pool, cfg.SessionSecret, "krill_ui_session")
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize session store: %w", err)
@@ -276,9 +195,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		OIDCRedirectURL:  cfg.OIDCRedirectURL,
 	}
 
-	// initOIDC (inside NewAuthenticatorWithDB, oidc.NewProvider) performs
-	// Keycloak discovery -- a failure here means the UI cannot start at
-	// all, so the caller logs it at ERROR (AGENTS.md "Logging Levels").
+	// Performs Keycloak discovery; failure means the UI cannot start.
 	auth, err := htmxauth.NewAuthenticatorWithDB(ctx, authConfig, sessionStore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize authenticator (keycloak discovery): %w", err)
@@ -298,11 +215,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		spec:           newSpecReader(entities),
 	}
 
-	// auth.NewCredentialStore/NewPostgresClientRegistry/
-	// NewPostgresAuthCodeStore each preflight their own table (migration
-	// 006) and fail loudly, naming the table, if it hasn't been applied
-	// yet -- exactly like htmxauth.NewDBSessionManager's ui_sessions probe
-	// above.
+	// Each store preflights its own table and fails naming it if unmigrated.
 	mcpProvider, credentials, err := setupMCPAuth(ctx, pool, cfg, app.mcpCallerResolver())
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize auth provider: %w", err)
@@ -310,9 +223,6 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	app.mcpProvider = mcpProvider
 	app.credentials = credentials
 
-	// The write client is what this binary's own app pages call krill's
-	// write API through; an unusable APIBaseURL is startup-fatal for the
-	// same reason the two URLs above are.
 	writes, err := newWriteClient(writeClientConfig{BaseURL: cfg.APIBaseURL})
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize write client: %w", err)
@@ -389,41 +299,18 @@ func run() error {
 	return nil
 }
 
-// setupRoutes registers every route this binary serves. "/healthz" is the
-// only unauthenticated app route; "/login", "/auth/callback", and
-// "/logout" are the Keycloak sign-in flow's own public routes; every
-// other app route requires a signed-in operator.
-//
-// The signed-in app surface is the workspace shell: "/{$}" is its home
-// page and each nav area's own prefix is registered here (see nav.go's
-// navGroupTable). The home page is registered as "/{$}" rather than the
-// old catch-all "/" so an unknown path 404s instead of silently rendering
-// the landing page.
-//
-// "/login" is this binary's chosen route name, but
-// libs/go/htmxauth.Authenticator's RequireAuth/WithAccessToken hardcode
-// their own unauthenticated-redirect target to "/auth/login" (not
-// configurable), so "/auth/login" is registered as an alias for the exact
-// same handler rather than moved or duplicated in logic (mirrors
-// whagent_net/ui/main.go's setupRoutes).
-// mountStaticRoutes registers the browser's unauthenticated static
-// assets. Split out of setupRoutes so a test can mount the real
-// registration -- newTestMux builds its own mux and only calls
-// mountShellRoutes, so a route wired inline in setupRoutes is not
-// reachable from any test, which is how the favicon shipped serving an
-// empty 200 with nothing failing.
+// mountStaticRoutes registers unauthenticated static assets. Separate from
+// setupRoutes so tests can mount the real registration.
 func mountStaticRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/favicon.ico", htmxbase.FaviconHandler(faviconIco))
 }
 
+// setupRoutes registers every route. "/auth/login" aliases "/login" because
+// htmxauth hardcodes that redirect target.
 func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", handleHealthz)
 
-	// htmxbase's layout links /favicon.ico by default; serving it from
-	// the embedded bytes keeps every page from 404-ing a favicon it
-	// asked for. Unauthenticated on purpose -- it is a static asset, and
-	// gating it would mean a redirect loop's worth of state on a request
-	// that carries none.
+	// Unauthenticated on purpose: a static asset needs no session.
 	mountStaticRoutes(mux)
 
 	mux.HandleFunc("/login", app.auth.HandleLogin)
@@ -431,92 +318,47 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
 	mux.HandleFunc("/logout", app.auth.HandleLogout)
 
-	// auth's OAuth2 authorization-server endpoints (/authorize, /token,
-	// /register, and both discovery metadata documents) are registered
-	// directly on mux here, outside app.auth.RequireAuth -- discovery and
-	// dynamic client registration must be reachable before an MCP client
-	// has any credential at all; /authorize itself is where
-	// app.mcpProvider's own Resolver + SignInURL gate access to a
-	// signed-in operator, not RequireAuth.
+	// OAuth2 endpoints sit outside RequireAuth: discovery and client
+	// registration must work before a client has any credential.
 	app.mcpProvider.Mount(mux)
 
-	// The self-serve credential API (POST/GET /credentials, DELETE
-	// /credentials/{id}) lets an already-signed-in operator mint a static
-	// bearer token for a non-OAuth2 MCP client (any harness that can't run
-	// the authorization-code + PKCE dance) without ever needing DB access.
-	// Gated the same way /authorize is -- app.mcpCallerResolver reads the
-	// same session cookie -- so it is safe to leave unauthenticated at the
-	// mux level; an unresolved caller gets a 401 from the handler itself.
-	// MountSelfServe only errors on a nil Resolver, which setupMCPAuth
-	// above never leaves unset, so a returned error here would be a
-	// programming mistake, not a runtime condition -- panic is correct.
+	// The self-serve credential API authenticates via the session cookie in its
+	// own handler, so it needs no mux-level gate. An error here is a bug.
 	if err := app.mcpProvider.MountSelfServe(mux); err != nil {
 		panic(err)
 	}
 
-	// The mutating actions this binary's own app pages perform. Each is
-	// mounted through operatorRoute, so a request without a signed-in
-	// operator never reaches the handler at all; writes.go's
-	// withKrillSession is then the only way any of them can reach krill,
-	// and it attributes what it does to the operator requireOperator
-	// resolved (LB4).
+	// Operator writes. operatorRoute guarantees a resolved operator, and
+	// withKrillSession attributes the write to them.
 	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
 	mux.HandleFunc("POST /design-sessions", app.operatorRoute(app.handleOpenDesignSession))
 
-	// The console's four task interventions (interventions.go), one route per
-	// verb, reached from a console view's row action forms. Each is mounted
-	// through operatorRoute exactly like every other write here, so the
-	// browser's submission is attributed to the signed-in operator's real
-	// (iss, sub) by the same withKrillSession path, and forwarded to the same
-	// krill api endpoint the ops-mount MCP tools drive.
+	// The four task interventions (interventions.go), one route per verb.
 	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionRelease, app.operatorRoute(app.handleTaskIntervention(actionRelease)))
 	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionRequeue, app.operatorRoute(app.handleTaskIntervention(actionRequeue)))
 	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionEscalate, app.operatorRoute(app.handleTaskIntervention(actionEscalate)))
 	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionCancel, app.operatorRoute(app.handleTaskIntervention(actionCancel)))
-	// Cancel is the one irreversible verb, so its row control is a link to
-	// this confirmation page; nothing posts to the cancel route until the
-	// operator confirms here.
+	// Cancel is irreversible, so its row control links to this confirm page.
 	mux.HandleFunc("GET "+opsTaskActionBase+"{id}"+cancelConfirmSuffix, app.operatorRoute(app.handleCancelConfirm))
 
-	// The signed-in shell: the home page plus one root per nav area,
-	// every one of them rendered in the same chrome by
-	// renderShellStatus. Each area's sub-pages register under its prefix
-	// alongside its root.
 	app.mountShellRoutes(mux)
 }
 
-// mountShellRoutes registers the workspace shell's pages, each behind
-// the sign-in gate. Split out of setupRoutes so the shell's tests mount
-// the same registrations production does, rather than a copy that could
-// drift from it.
+// mountShellRoutes registers the shell's pages behind sign-in. Separate so
+// tests mount the same registrations production does.
 func (app *App) mountShellRoutes(mux *http.ServeMux) {
-	// Every pre-redesign URL (FR 2544224c), from one table: the ops console,
-	// the spec and delivery browser, the design-session browser and "/". Each
-	// serves its existing page inside the shell until the phase that ships
-	// that page's replacement moves it to a redirect. See legacyURLs.
+	// Legacy URLs (ops console, spec/delivery, design browser, "/"), served
+	// from one table; see legacyURLs.
 	app.mountLegacyRoutes(mux)
 	app.mountShellPages(mux)
 }
 
-// mountShellPages registers everything the shell serves that is not a
-// pre-redesign URL: the credential widget, the design root's product
-// browse and write surface, the product-scoped prefixes, and the Product
-// switcher.
-//
-// It is split out of mountShellRoutes so a test can mount the real pages
-// alongside a doctored copy of the legacy table -- the shape the phase
-// that replaces a page will actually mount.
+// mountShellPages registers every shell page that is not a legacy URL.
+// Separate so tests can pair it with a modified legacy table.
 func (app *App) mountShellPages(mux *http.ServeMux) {
-	// The list, the create blade's own URL, and the two writes. All of
-	// them sit behind the reader gate: a reader manages their own
-	// credentials, so the page is not an operator-only surface
-	// (FR 5e1af175).
-	//
-	// Revoke is two GETs and a POST at one address: the row's own URL
-	// (GET /account/credentials/{id}) renders the row in its default
-	// state, the revoke URL's GET renders it confirming, and its POST is
-	// the doubled form's answer. The confirm and dismiss steps are reads
-	// precisely so they work with JavaScript off; only the answer writes.
+	// Credentials are reader routes: readers manage their own. Revoke's confirm
+	// and dismiss steps are GETs so they work without JavaScript; only the POST
+	// writes.
 	mux.HandleFunc("GET "+credentialsPath, app.readerRoute(app.handleCredentials))
 	mux.HandleFunc("GET "+credentialsNewPath, app.readerRoute(app.handleNewCredentialBlade))
 	mux.HandleFunc("GET "+credentialsPath+"/{id}", app.readerRoute(app.handleCredentialRow))
@@ -524,114 +366,55 @@ func (app *App) mountShellPages(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+credentialsMintPath, app.readerRoute(app.handleMintCredential))
 	mux.HandleFunc("POST "+credentialsPath+"/{id}/revoke", app.readerRoute(app.handleRevokeCredential))
 
-	// The design root's JS-free product browse: the operator types a
-	// product id into a plain GET form and this 302s them to that
-	// product's session list. It replaces a window.location script; a
-	// read, so RequireAuthFunc and no operator identity. The id is
-	// uuid.Parse'd before it reaches the path, so it is not a
-	// user-controlled redirect target.
+	// JS-free product browse: 302 to the typed product's session list. The id
+	// is uuid.Parse'd first, so it is not an open redirect.
 	mux.HandleFunc("GET "+designGoPath, app.readerRoute(app.handleDesignGo))
 
-	// The design-session read routes that are not pre-redesign URLs: the
-	// product-scoped session DETAIL, which the list's rows link to and the
-	// pre-redesign unscoped detail 302s into (FR a77852a9). The list itself
-	// and the design root stay in legacyURLs -- they are pre-redesign URLs
-	// that happen not to have been replaced yet.
-	//
-	// It hangs beneath the product-scoped list because the canonical detail
-	// URL carries the pid: "is this session under the product in the URL?"
-	// is a question a copied link has to be answerable about. Registering
-	// the blade literal /design/products/{productID}/design-sessions/new
-	// alongside it is safe -- a literal segment outranks the {id} wildcard
-	// in the same Go 1.22 mux.
+	// Product-scoped session detail; the pid in the URL lets a copied link be
+	// checked against its product.
 	mux.HandleFunc("GET /design/products/{productID}/design-sessions/{id}", app.readerRoute(app.handleDesignSessionDetail))
 
-	// The new-session blade (FR 44d7f1e2): a GET that answers in both modes
-	// off one route -- the bare blade region for an htmx caller, the whole
-	// Design sessions page with the blade open for a browser -- so the blade
-	// URL is both the htmx target and an address that can be opened, shared
-	// and reloaded. It is a literal segment, which is what lets it sit at
-	// the same position as the {id} wildcard above without claiming a
-	// session: "new" is never a session id.
+	// The new-session blade answers both htmx (bare region) and browsers (full
+	// page). The literal "new" outranks the {id} wildcard in the Go 1.22 mux.
 	mux.HandleFunc("GET /design/products/{productID}/design-sessions/new", app.readerRoute(app.handleDesignSessionNew))
 
-	// The design-session write surface (design_write.go), hung off the read
-	// views: the list page's "open a session" form and a session detail
-	// page's "submit follow-up" form. Both are operatorRoute (RequireAuth
-	// + requireOperator), so a write only ever proceeds with the signed-in
-	// operator's real (iss, sub) resolved onto the request context, and both
-	// reach krill only through withKrillSession. The open form posts to the
-	// same product-scoped path as the list view (POST vs GET on one pattern);
-	// the answer form posts to a sub-path of the canonical detail, so the
-	// 303 back to the session it wrote to is one hop.
+	// Design-session writes, both operatorRoute. The answer form posts under
+	// the detail URL so the 303 back is one hop.
 	mux.HandleFunc("POST /design/products/{productID}/design-sessions", app.operatorRoute(app.handleOpenDesignSessionForm))
 	mux.HandleFunc("POST /design/products/{productID}/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
 
-	// The product-scoped prefixes (FR c4bd4bf8). Overview is the shell's
-	// home and serves its real page; every other sub-path serves a
-	// placeholder until its area's own page ships, so the current product
-	// becomes resolvable and carried in the path without moving any
-	// existing page. Registering a placeholder ahead of its content is safe
-	// precisely because the handler resolves the {pid} against the
-	// caller's scope first: an out-of-scope link is already an in-shell
-	// 404 by the time the placeholder would render.
-	//
-	// The legacy prefixes above stay registered alongside these; the task
-	// that retires them owns the redirects.
+	// Product-scoped pages. Each handler resolves {pid} against the caller's
+	// scope first, so an out-of-scope link is an in-shell 404.
 	mux.HandleFunc("GET "+productPathPrefix+overviewSuffix, app.readerRoute(app.handleProductOverview))
-	// Needs attention is the product-scoped page the four legacy /ops queues
-	// retire into (FR 5fd47f4d); it replaces the placeholder that used to
-	// stand here. The five /ops URLs themselves stay registered in
-	// legacyURLs as redirects.
+	// Needs attention replaces the /ops queues, which redirect here via
+	// legacyURLs.
 	mux.HandleFunc("GET "+productPathPrefix+needsAttentionSuffix, app.readerRoute(app.handleNeedsAttention))
-	// Tasks and Board are two views of one scope (FR ab5f4936): each has
-	// its own handler, both over the product-wide task read layer
-	// (product_task_scope.go, product_task_page.go).
+	// Tasks and Board are two views over the product-wide task read layer.
 	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix, app.readerRoute(app.handleProductTasks))
-	// The product-scoped task detail the Tasks table's rows link to
-	// (FR f41a352d), and the one the pre-redesign per-container detail URL
-	// 302s into (FR 0c03eac1). It hangs beneath the tasks prefix so a
-	// copied row link resolves its product before the id is even looked at.
+	// Task detail hangs beneath the tasks prefix so a copied link resolves its
+	// product before the id.
 	mux.HandleFunc("GET "+productPathPrefix+tasksSuffix+"/{tid}", app.readerRoute(app.handleProductTaskDetail))
 	mux.HandleFunc("GET "+productPathPrefix+boardSuffix, app.readerRoute(app.handleProductBoard))
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix, app.readerRoute(app.handleProductMilestones))
-	// The Milestone detail (FR ef0a0ded), which the Milestones table's
-	// names and the Overview's in-flight rows already link to. Milestone
-	// and milepebble ids share the one wildcard: a milepebble is its own
-	// milestone_ref row, and the handler resolves which of them the id is
-	// out of the product's delivery listing. Ids hang beneath the
-	// milestones prefix, so a copied link resolves its product before the
-	// id is even looked at.
+	// Milestone detail; milestones and milepebbles share {mid} since both are
+	// milestone_ref rows.
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}", app.readerRoute(app.handleProductMilestoneDetail))
-	// The status-history view the detail's rail links to (FR 9a6e7924),
-	// spelled from the rail's own milestoneStatusHistorySuffix rather than a
-	// second copy of the path -- a link is a claim about a URL, and the two
-	// sides of that claim have to be the same string.
+	// Status history, spelled from the rail's own suffix so link and route match.
 	mux.HandleFunc("GET "+productPathPrefix+milestonesSuffix+"/{mid}"+milestoneStatusHistorySuffix, app.readerRoute(app.handleProductMilestoneStatusHistory))
 
-	// The sidebar's Product switcher (FR c4bd4bf8). A reader route: it
-	// reads the scope, records the pick as the last-viewed product, and
-	// 302s to the same area's list page under it. It sits outside the
-	// product prefixes because it names no product of its own -- it is
-	// the hop between two.
+	// The Product switcher records the pick as last-viewed and 302s to the same
+	// area under the new product.
 	mux.HandleFunc("GET "+productSwitchPath, app.readerRoute(app.handleProductSwitch))
 }
 
-// operatorRoute is the wrapper every signed-in-operator route in this
-// binary wears: RequireAuth first (an unauthenticated browser is sent to
-// the Keycloak sign-in flow), then requireOperator, which resolves the
-// operator's real (iss, sub) Subject onto the request context and rejects
-// the request when it does not resolve. A handler mounted this way can
-// always read a Subject, and can never be reached without one.
+// operatorRoute wraps a route in RequireAuth then requireOperator, so the
+// handler always has a resolved Subject.
 func (app *App) operatorRoute(next http.HandlerFunc) http.HandlerFunc {
 	return app.auth.RequireAuthFunc(app.requireOperator(next))
 }
 
-// readerRoute is the wrapper every read page wears: RequireAuth, then a
-// reader-or-operator persona check via the same RoleConfig.ResolvePersona
-// api uses. A signed-in user holding neither role gets 403, matching api's
-// reader gate. Under AUTH_MODE=none the synthetic dev user is admitted as
-// an operator, the same identity api resolves for its dev token.
+// readerRoute wraps a route in RequireAuth then a reader-or-operator check
+// (403 otherwise). Under AUTH_MODE=none the dev user is an operator.
 func (app *App) readerRoute(next http.HandlerFunc) http.HandlerFunc {
 	return app.auth.RequireAuthFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !app.devAuth {

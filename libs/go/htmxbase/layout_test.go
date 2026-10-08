@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -136,6 +137,21 @@ func TestRender_AlpineCompatLoadsAfterCore(t *testing.T) {
 	}
 	if compatIdx < coreIdx {
 		t.Errorf("hx-alpine-compat (idx %d) must load after htmx core (idx %d)", compatIdx, coreIdx)
+	}
+}
+
+// TestRender_ScriptsPinExactVersions guards against a floating CDN range
+// (alpinejs@3.x.x, @latest): it ships a new release to every app with no commit.
+func TestRender_ScriptsPinExactVersions(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Render(&buf, LayoutData{Title: "T", Content: "<p>x</p>"}); err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	exact := regexp.MustCompile(`@\d+\.\d+\.\d+/`)
+	for _, m := range regexp.MustCompile(`<script[^>]*src="(https://[^"]+)"`).FindAllStringSubmatch(buf.String(), -1) {
+		if !exact.MatchString(m[1]) {
+			t.Errorf("script %s does not pin an exact version", m[1])
+		}
 	}
 }
 

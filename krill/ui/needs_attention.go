@@ -1,26 +1,6 @@
-// The Needs attention page (FR 5fd47f4d): one product-scoped page whose
-// tabs are the ops console's four queues -- Escalated, Claimed, Cancelled
-// and Open notes -- each labelled with its count, the selected tab carried
-// in the URL, and a tab switch swapping the results in place.
-//
-// The page IS the four queues, not a second rendering of them: each tab is
-// one of krill/ui/ops.go's four read views, called with the product
-// narrowing this page is scoped to (the current product across all its
-// milestones), and rendered by the same krill/ui/pages/ops.templ results
-// component the console view renders. A tab click therefore cannot show a
-// row set the matching console view would not, and the row shapes stay
-// where they are -- the tab-specific shapes are separate requirements
-// (772b044b, a149d28f, b22e1d60) and separate tasks.
-//
-// The Escalated tab has since taken its own shape (772b044b,
-// needsAttentionEscalatedResults): its columns are the ones an operator
-// scans for a stuck task, and they are not the console view's. Its rows
-// still come from the one store read, so "the same rows" holds even where
-// "the same table" no longer does.
-//
-// The four legacy /ops URLs are retired into these tabs (krill/ui/routes.go
-// names each one's successor), so a bookmarked /ops/escalated link opens
-// the Escalated tab of the resolved product rather than a page of its own.
+// The Needs attention page: one product-scoped page whose tabs are the ops
+// console's four queues (Escalated, Claimed, Cancelled, Open notes), each read
+// through ops.go's loaders so a tab and its console view show the same rows.
 package main
 
 import (
@@ -39,9 +19,8 @@ import (
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
-// The four tabs, in strip order. They are also the legacy URL's successor
-// tabs (legacyNeedsAttentionSuccessor), so one string names both the tab
-// and the URL that resolves to it.
+// The four tabs, in strip order; also the successor tabs of the legacy /ops
+// URLs.
 const (
 	needsAttentionTabEscalated = "escalated"
 	needsAttentionTabClaimed   = "claimed"
@@ -49,29 +28,20 @@ const (
 	needsAttentionTabNotes     = "notes"
 )
 
-// The filter bar's query parameters, named once in the page package that
-// writes them (pages.NeedsAttention*QueryParam) and aliased here for the
-// parse, so the select that submits a value and the parser that reads it
-// cannot disagree about its spelling. They are the names krill api's
-// console views read too, so one filter set has one spelling everywhere.
+// Filter query parameters, aliased from the pages package so the form and
+// the parser share one spelling (also krill api's console spelling).
 const (
-	// needsAttentionTabParam is the query parameter that carries the
-	// selected tab, so the page an operator shares is the tab they were
-	// reading.
+	// needsAttentionTabParam carries the selected tab, so a shared URL keeps it.
 	needsAttentionTabParam = pages.NeedsAttentionTabQueryParam
 
 	// needsAttentionMilestoneParam narrows every tab to one milestone_ref
-	// container -- a milestone or a milepebble.
+	// (milestone or milepebble).
 	needsAttentionMilestoneParam = pages.NeedsAttentionMilestoneQueryParam
 
-	// needsAttentionReasonParam narrows the Escalated tab to one
-	// EscalationReason.
 	needsAttentionReasonParam = pages.NeedsAttentionReasonQueryParam
 )
 
-// needsAttentionTabOrder is the strip's order, which is also the order the
-// FR names the tabs in. Escalated is first and is therefore the default:
-// it is the queue that means "something is stuck".
+// needsAttentionTabOrder is the strip order; Escalated is first and default.
 var needsAttentionTabOrder = []string{
 	needsAttentionTabEscalated,
 	needsAttentionTabClaimed,
@@ -79,8 +49,7 @@ var needsAttentionTabOrder = []string{
 	needsAttentionTabNotes,
 }
 
-// needsAttentionTabLabels is each tab's operator-facing name. "Open notes"
-// rather than the URL value "notes", which is the wire spelling.
+// needsAttentionTabLabels maps wire values to operator-facing tab names.
 var needsAttentionTabLabels = map[string]string{
 	needsAttentionTabEscalated: "Escalated",
 	needsAttentionTabClaimed:   "Claimed",
@@ -88,13 +57,8 @@ var needsAttentionTabLabels = map[string]string{
 	needsAttentionTabNotes:     "Open notes",
 }
 
-// needsAttentionTabOf resolves the request's ?tab= to one of the four tabs.
-//
-// An ABSENT value and an UNRECOGNISED one both resolve to Escalated, the
-// same degradation rule the task detail's tabs follow: the tab is
-// URL-carried, so a hand-edited or stale link reaches here as readily as a
-// copied one, and a value this build does not know must render the page
-// rather than 404 or render an empty region. Nothing here errors.
+// needsAttentionTabOf resolves ?tab=; absent or unrecognised values fall back
+// to Escalated, since stale or hand-edited links must still render.
 func needsAttentionTabOf(r *http.Request) string {
 	tab := r.URL.Query().Get(needsAttentionTabParam)
 	for _, known := range needsAttentionTabOrder {
@@ -105,24 +69,14 @@ func needsAttentionTabOf(r *http.Request) string {
 	return needsAttentionTabEscalated
 }
 
-// needsAttentionTabHref is one tab's own URL under a product with no
-// filters in force. An empty tab is the page's bare address, which is what
-// a successor with no matching tab (/ops, the console root) redirects to.
+// needsAttentionTabHref is a tab's unfiltered URL; an empty tab is the page's
+// bare address.
 func needsAttentionTabHref(pid uuid.UUID, tab string) string {
 	return needsAttentionTabHrefFor(pid, tab, needsAttentionFilter{})
 }
 
-// needsAttentionTabHrefFor is the tab strip's link builder: each tab's own
-// address carrying the filters in force, so switching tabs keeps the
-// milestone and the reason the operator selected (FR 6369e312's
-// "selections survive tab switching"). The tab is one query parameter
-// among the filters rather than the whole query.
-//
-// page_size and page_token are deliberately not carried: the first is a
-// page's size rather than a filter, and the second is a POSITION in one
-// read's keyset whose token binds the filter set that issued it
-// (store.DecodeFilteredContinuationToken), so carrying it into another
-// tab's read would be refused rather than resumed.
+// needsAttentionTabHrefFor builds a tab link that keeps the filters in force.
+// page_token is dropped: it binds the filter set and tab that issued it.
 func needsAttentionTabHrefFor(pid uuid.UUID, tab string, f needsAttentionFilter) string {
 	base := productHref(pid, needsAttentionSuffix)
 	q := url.Values{}
@@ -141,44 +95,33 @@ func needsAttentionTabHrefFor(pid uuid.UUID, tab string, f needsAttentionFilter)
 	return base + "?" + q.Encode()
 }
 
-// needsAttentionFilter is the filter bar's state, parsed from one request's
-// query string and nowhere else. It is the page's whole narrowing beyond
-// the current product: a milestone_ref container of either kind, and -- on
-// the Escalated tab -- an escalation reason.
+// needsAttentionFilter is the filter bar's state, parsed from the query: a
+// milestone_ref container and, on Escalated, a reason.
 type needsAttentionFilter struct {
 	MilestoneID *uuid.UUID
 	Reason      *store.EscalationReason
 }
 
-// narrows reports whether either selection is in force. The product is not
-// a filter in this sense: it is the page's scope, always set, so a whole
-// product's empty queue is an empty queue rather than a filter excluding
-// everything.
+// narrows reports whether a filter is in force; the product is the page's
+// scope, not a filter.
 func (f needsAttentionFilter) narrows() bool {
 	return f.MilestoneID != nil || f.Reason != nil
 }
 
-// console is the store narrowing the product and the milestone selection
-// render as (store.ConsoleFilter). The reason is not part of it: it is
-// ListEscalatedTasksParams' own field, meaningful only to the escalated
-// read.
+// console maps the product and milestone onto store.ConsoleFilter; the reason
+// belongs to ListEscalatedTasksParams.
 func (f needsAttentionFilter) console(productID uuid.UUID) store.ConsoleFilter {
 	return store.ConsoleFilter{ProductID: &productID, MilestoneID: f.MilestoneID}
 }
 
-// needsAttentionReasonValues is the reason select's values, in the order
-// the FR names them. The values ARE the store's own enumeration constants
-// (store.EscalationReasonThrashCap and friends) -- there is no UI-local
-// spelling of a reason -- and the labels are the shared
-// components.EscalationReasonLabel wording, so this select and the reason
-// badges on the rows below it cannot word one reason two ways.
+// needsAttentionReasonValues are the store's reason constants, labelled via
+// components.EscalationReasonLabel so select and badges agree.
 var needsAttentionReasonValues = []store.EscalationReason{
 	store.EscalationReasonThrashCap,
 	store.EscalationReasonAttemptCap,
 	store.EscalationReasonManual,
 }
 
-// needsAttentionReasonOf is membership in that fixed set by wire value.
 func needsAttentionReasonOf(raw string) (store.EscalationReason, bool) {
 	for _, reason := range needsAttentionReasonValues {
 		if string(reason) == raw {
@@ -188,9 +131,7 @@ func needsAttentionReasonOf(raw string) (store.EscalationReason, bool) {
 	return "", false
 }
 
-// needsAttentionReasonOptions is the reason select's options: "Any reason"
-// -- the empty value, which is the read's nil Reason -- then one per
-// store.EscalationReason.
+// needsAttentionReasonOptions is "Any reason" (nil) then one per reason.
 func needsAttentionReasonOptions(selected *store.EscalationReason) []pages.NeedsAttentionFilterOption {
 	out := make([]pages.NeedsAttentionFilterOption, 0, len(needsAttentionReasonValues)+1)
 	out = append(out, pages.NeedsAttentionFilterOption{Label: "Any reason", Selected: selected == nil})
@@ -204,12 +145,8 @@ func needsAttentionReasonOptions(selected *store.EscalationReason) []pages.Needs
 	return out
 }
 
-// needsAttentionMilestoneOptions is the milestone select's options: "All
-// milestones" -- the empty value, which is the read's nil MilestoneID --
-// then the product's own containers. A milestone is offered by name with
-// each of its milepebbles beneath it, because a milestone filter narrows
-// on a milestone_ref id of EITHER kind (store.ConsoleFilter's own rule)
-// and the select has to be able to echo either back.
+// needsAttentionMilestoneOptions is "All milestones" (nil) then each milestone
+// with its milepebbles beneath, since the filter accepts either kind.
 func needsAttentionMilestoneOptions(containers []taskContainer, selected *uuid.UUID) []pages.NeedsAttentionFilterOption {
 	out := make([]pages.NeedsAttentionFilterOption, 0, len(containers)+1)
 	out = append(out, pages.NeedsAttentionFilterOption{Label: "All milestones", Selected: selected == nil})
@@ -230,11 +167,8 @@ func needsAttentionMilestoneOptions(containers []taskContainer, selected *uuid.U
 	return out
 }
 
-// needsAttentionContainerLabel names one milestone_ref id for the empty
-// state's sentence: the container's own name when the product still
-// carries it, the raw id otherwise -- a hand-edited link can name a
-// container this page has no label for, and saying so is better than
-// dropping the filter from the sentence.
+// needsAttentionContainerLabel names a container for the empty-state
+// sentence, falling back to the raw id for an unknown container.
 func needsAttentionContainerLabel(containers []taskContainer, id uuid.UUID) string {
 	for _, m := range containers {
 		if m.ID == id {
@@ -249,8 +183,7 @@ func needsAttentionContainerLabel(containers []taskContainer, id uuid.UUID) stri
 	return id.String()
 }
 
-// needsAttentionFilterSentence names the filters in force, in the
-// operator's words, for the empty state to read back.
+// needsAttentionFilterSentence names the filters in force for the empty state.
 func needsAttentionFilterSentence(f needsAttentionFilter, containers []taskContainer) string {
 	var parts []string
 	if f.MilestoneID != nil {
@@ -262,13 +195,9 @@ func needsAttentionFilterSentence(f needsAttentionFilter, containers []taskConta
 	return strings.Join(parts, " and ")
 }
 
-// parseNeedsAttentionFilter reads the filter bar's two selections off the
-// request.
-//
-// A malformed milestone id or an unrecognised reason is the caller's error
-// (400), matching parseOpsPageParams: both are values the URL spelled
-// wrongly, and silently ignoring one would render a table whose rows
-// disagree with the filter the page still claims is in force.
+// parseNeedsAttentionFilter reads the filter selections. A malformed id or
+// unknown reason is a 400: ignoring it would show rows that contradict the
+// filter the page claims.
 func parseNeedsAttentionFilter(r *http.Request) (needsAttentionFilter, error) {
 	var f needsAttentionFilter
 	q := r.URL.Query()
@@ -289,32 +218,21 @@ func parseNeedsAttentionFilter(r *http.Request) (needsAttentionFilter, error) {
 	return f, nil
 }
 
-// needsAttentionPanelSwap reports whether this htmx request asked for the
-// whole tab region rather than the results inside it.
-//
-// htmx sends the resolved target's id in HX-Target, so the target is the
-// request's own statement of which region it is replacing: a tab names the
-// region (strip and results travel together), while the claimed tab's poll
-// and the Refresh button name the results block alone.
+// needsAttentionPanelSwap reports whether htmx targeted the whole tab region
+// (a tab click) rather than the results block (poll or Refresh).
 func needsAttentionPanelSwap(r *http.Request) bool {
 	return hxTargetID(r) == pages.NeedsAttentionAnchor
 }
 
-// handleNeedsAttention serves GET /products/{pid}/needs-attention in both
-// of its modes, mirroring the ops console's per-view structure: an htmx
-// request gets a bare fragment at 200 and a browser gets the shell.
-//
-// A request derives its rows exactly once, whichever branch it takes, so a
-// fragment cannot drift from the page it was swapped out of.
+// handleNeedsAttention serves the page: a fragment at 200 for htmx, the
+// shell for a browser. Rows are derived once per request.
 func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	r, product, ok := app.resolveProductFromPath(w, r)
 	if !ok {
 		return
 	}
 	htmx := isHtmxRequest(r)
-	// The browser flags a page view; a fragment swap inside a page the
-	// operator is already on is not one, and must not move where their next
-	// un-prefixed link lands (product_scope.go's own rule).
+	// Only a full page view records the last-viewed product, not a swap.
 	if !htmx {
 		setLastViewedProductCookie(w, product.ID)
 	}
@@ -331,14 +249,11 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tab := needsAttentionTabOf(r)
-	// The read instant is taken once, before the reads, and is the only
-	// clock the page's freshness stamp consults: a stamp judged against a
-	// second, later time.Now() would report an age the rows it describes
-	// were never read at.
+	// One read instant for the whole page, so the freshness stamp matches the
+	// rows.
 	readAt := app.clock()
-	// The product's own containers are read once and shared by the tab
-	// strip's links, the filter bar's options and the empty state's
-	// sentence, so the three cannot describe different containers.
+	// Containers are read once and shared by tab links, filter options, and the
+	// empty state.
 	containers := app.needsAttentionMilestoneContainers(r.Context(), product.ID)
 	view, err := app.needsAttentionResults(r.Context(), product.ID, filter,
 		needsAttentionFilterSentence(filter, containers), tab, page, opsSelfPath(r), readAt, "")
@@ -347,21 +262,14 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The results block alone: the claimed tab's poll and the Refresh
-	// button both name it, and neither may take the strip with it. The
-	// freshness stamp rides with the strip for that reason as well: its
-	// instant moves on every read, and a polled fragment owes byte-stable
-	// bytes for unchanged state. Neither the strip nor the footer is in this
-	// fragment, so the tab counts are not read on this branch -- the
-	// always-on poll must not re-count every queue every few seconds.
+	// Results block only (poll or Refresh): the strip and freshness stamp stay
+	// out so polled bytes stay stable, and tab counts are not re-read.
 	if htmx && !needsAttentionPanelSwap(r) {
 		renderFragment(w, r, view.Results)
 		return
 	}
 
-	// The strip is read once here and shared: its badge for the active tab
-	// is also the paging footer's total, so the two cannot disagree, and the
-	// count reads happen only on the responses that render the strip.
+	// The strip's active-tab count is also the footer total, so they agree.
 	tabs := app.needsAttentionTabs(r.Context(), product.ID, tab, filter)
 	total, hasTotal := needsAttentionActiveTotal(tabs, tab)
 
@@ -374,29 +282,16 @@ func (app *App) handleNeedsAttention(w http.ResponseWriter, r *http.Request) {
 	app.renderShell(w, r, "Needs attention", r.URL.Path, pages.NeedsAttention(d))
 }
 
-// writeNeedsAttentionQueryError answers a failed tab read in each of the
-// page's response shapes, so a failure never costs the operator the strip
-// they navigate with.
-//
-//   - A htmx request naming the results block (the claimed tab's poll, or
-//     Refresh) gets the bare refusal, exactly the block it asked for.
-//   - A htmx request naming the region gets the region, with the refusal in
-//     the results slot -- so the strip, its counts and the freshness stamp
-//     survive and the operator can still click another tab. Replacing the
-//     region with a bare fragment would delete the swap target itself, and
-//     the next tab click would silently no-op (ops.templ's OpsInlineError
-//     note, applied to the outer region).
-//   - A browser keeps the shell and gets the message with a way back, which
-//     is what the console's own query-error page is for.
+// writeNeedsAttentionQueryError answers a failed tab read in each response
+// shape while keeping the strip: htmx results-only gets the bare refusal,
+// htmx region gets the region with the refusal inline, a browser gets the shell.
 func (app *App) writeNeedsAttentionQueryError(w http.ResponseWriter, r *http.Request, productID uuid.UUID, filter needsAttentionFilter, containers []taskContainer, tab string, err error) {
 	status, message := consoleQueryError(err)
 	failure := pages.OpsInlineError(message)
 
 	if isHtmxRequest(r) {
 		if needsAttentionPanelSwap(r) {
-			// The strip survives the refusal, so its counts are read for the
-			// re-rendered panel. The footer is nil: a rejected read produced no
-			// rows to foot, and a refusal must never wear a table's summary.
+			// The strip survives; no footer, since a refused read has no rows.
 			tabs := app.needsAttentionTabs(r.Context(), productID, tab, filter)
 			renderFragment(w, r, pages.NeedsAttention(
 				app.needsAttentionPage(r, filter, containers, tab, app.clock(), tabs, failure, nil)))
@@ -409,12 +304,8 @@ func (app *App) writeNeedsAttentionQueryError(w http.ResponseWriter, r *http.Req
 		pages.OpsQueryError(message, opsRecoveryPath(r)), status)
 }
 
-// needsAttentionPage is the one assembly of the page's view model, so the
-// success and failure answers cannot describe different strips. readAt is
-// the instant the freshness stamp reports as when this view was read, tabs is
-// the strip the caller already read (so its counts and the footer's total are
-// one read), and paging is the active tab's footer, nil where a refusal left
-// no table to foot.
+// needsAttentionPage assembles the view model for both success and failure.
+// paging is nil where a refusal left no table.
 func (app *App) needsAttentionPage(r *http.Request, filter needsAttentionFilter, containers []taskContainer, tab string, readAt time.Time, tabs []pages.NeedsAttentionTab, results templ.Component, paging *pages.NeedsAttentionPaging) pages.NeedsAttentionData {
 	return pages.NeedsAttentionData{
 		Tabs:            tabs,
@@ -428,14 +319,8 @@ func (app *App) needsAttentionPage(r *http.Request, filter needsAttentionFilter,
 	}
 }
 
-// needsAttentionFilterBar assembles the filter bar: the selects' options
-// from the product's own containers and the store's reason enumeration,
-// and the Open notes sentence a milestone filter turns on.
-//
-// The reason select is offered on the Escalated tab alone -- it is the one
-// queue whose rows carry a reason -- but a reason in the URL still rides
-// along on the other tabs' links, so a round trip through another tab
-// brings the operator back to the selection they made.
+// needsAttentionFilterBar assembles the filter bar. The reason select shows
+// only on Escalated, but a reason in the URL rides along on other tabs' links.
 func (app *App) needsAttentionFilterBar(r *http.Request, filter needsAttentionFilter, containers []taskContainer, tab string) pages.NeedsAttentionFilterBar {
 	bar := pages.NeedsAttentionFilterBar{
 		Path:       r.URL.Path,
@@ -451,17 +336,8 @@ func (app *App) needsAttentionFilterBar(r *http.Request, filter needsAttentionFi
 	return bar
 }
 
-// needsAttentionMilestoneContainers reads the product's own delivery
-// listing and shapes it as the filter bar's containers -- the same read,
-// through the same taskContainersOf shaping, behind
-// product_task_scope.go's milestone and milepebble option builders, so the
-// filter bar offers the product's own containers rather than a second
-// milestones query.
-//
-// A listing that could not be read is logged and leaves the select with
-// its "All milestones" default alone: the tabs still read, and a filter
-// bar that failed the page would cost the operator the queues over an
-// option list.
+// needsAttentionMilestoneContainers reads the product's delivery listing as
+// filter options. A failed read is logged and leaves only "All milestones".
 func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID uuid.UUID) []taskContainer {
 	listing, err := app.spec.Delivery(ctx, productID, nil)
 	if err != nil {
@@ -472,50 +348,17 @@ func (app *App) needsAttentionMilestoneContainers(ctx context.Context, productID
 	return taskContainersOf(listing)
 }
 
-// needsAttentionTabView is one tab read's answer: the results to render, plus
-// the two facts a paging footer needs about the table inside them -- how many
-// rows it rendered and where its following page lives (FR 7f10bd5d).
-//
-// The footer itself is not built here. The total it needs is the tab badge's
-// own count read, which the strip supplies only on the responses that render
-// the strip (a tab click or a full page, never the results-only poll), so the
-// caller pairs this answer with the strip's figure. Shown is 0 where the tab
-// rendered no table (its filtered-empty or genuinely-empty state), and the
-// caller foots nothing in that case.
+// needsAttentionTabView is one tab's results plus what a paging footer needs.
+// Shown is 0 where no table rendered; the caller supplies the total.
 type needsAttentionTabView struct {
 	Results  templ.Component
 	Shown    int
 	NextHref string
 }
 
-// needsAttentionResults reads the selected tab's rows and renders them with
-// the matching console view's own component, so the tab and the console
-// view are one derivation (ops.go's four loaders) and one table.
-//
-// filter is the filter bar's narrowing, applied to every tab's read: the
-// milestone selection rides on the store.ConsoleFilter all four reads take,
-// and the reason on ListEscalatedTasksParams' own field, which only the
-// escalated read has. filterLabel names those filters in the operator's
-// words, for the empty state a filtered tab renders instead of its generic
-// "No claimed tasks."
-//
-// message is an inline refusal to carry above the rows, empty for an
-// ordinary GET. The intervention path passes one to re-derive the region
-// after a refused write, so it renders through this same loader rather than
-// a second reading of the tab.
-//
-// The Escalated tab is the exception on row SHAPE: its columns are its own
-// (FR 772b044b, needsAttentionEscalatedResults below), because what the
-// operator scans there is not the console view's. Its rows are still the one
-// store read, narrowed by the same filter as every other tab.
-//
-// now is the request's read instant, so the escalated tab's relative
-// timestamps are judged against the same moment the freshness stamp reports.
-//
-// The answer carries the facts a footer needs about the table it rendered
-// (FR 7f10bd5d) rather than a footer itself: the total belongs to the strip's
-// per-tab count read, which is taken only where the strip is rendered, so the
-// caller pairs this answer's Shown and NextHref with that figure.
+// needsAttentionResults reads the selected tab with the filter applied and
+// renders it with the console view's component (Escalated has its own
+// columns). message is an inline refusal to show above the rows.
 func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, filterLabel, tab string, page store.PageParams, selfPath string, now time.Time, message string) (needsAttentionTabView, error) {
 	console := filter.console(productID)
 	switch tab {
@@ -578,18 +421,8 @@ func (app *App) needsAttentionResults(ctx context.Context, productID uuid.UUID, 
 	}
 }
 
-// needsAttentionFooter builds one tab's paging footer (FR 7f10bd5d) from the
-// table that tab rendered and the count the strip already read for it.
-//
-// A tab that rendered no table -- its filtered-empty state, or a genuinely
-// empty queue's own empty state -- gets no footer: an empty read is a whole
-// answer, not a truncated page, and "Showing 0 of 0" under an empty state
-// would be furniture for a table that does not exist.
-//
-// total is the figure on the active tab's badge (needsAttentionActiveTotal),
-// so the footer and the badge are one store read for one filter set; hasTotal
-// is false where that read failed, and the footer then names only what is on
-// screen rather than rendering an unreadable count as a confident zero.
+// needsAttentionFooter builds a tab's footer, or nil when no table rendered.
+// total is the active badge's count; !hasTotal names only what is on screen.
 func needsAttentionFooter(shown, total int, hasTotal bool, nextHref string) *pages.NeedsAttentionPaging {
 	if shown == 0 {
 		return nil
@@ -597,12 +430,8 @@ func needsAttentionFooter(shown, total int, hasTotal bool, nextHref string) *pag
 	return needsAttentionPagingOf(shown, total, hasTotal, nextHref)
 }
 
-// needsAttentionActiveTotal reads the resolved tab's figure off the strip the
-// page already built. The badge and the footer are the same question -- how
-// many rows this tab's filters match -- answered by the same store read, so
-// the strip supplies the footer's total rather than a second count that could
-// disagree with it. hasTotal is false when that count could not be read,
-// which the footer renders by naming only what is on screen.
+// needsAttentionActiveTotal reads the active tab's count off the strip, so
+// footer and badge share one read.
 func needsAttentionActiveTotal(tabs []pages.NeedsAttentionTab, tab string) (int, bool) {
 	for _, t := range tabs {
 		if t.Key == tab {
@@ -612,23 +441,8 @@ func needsAttentionActiveTotal(tabs []pages.NeedsAttentionTab, tab string) (int,
 	return 0, false
 }
 
-// needsAttentionPagingOf builds the active tab's footer (FR 7f10bd5d) from
-// one tab read's own page: how many rows it rendered, the total the
-// matching count read answered for the SAME filters, and the address of the
-// following page the store issued a token for.
-//
-// total is meaningful only when hasTotal: the total comes from the tab's own
-// Count* read taken with the identical params the rows were read with, and a
-// count that could not be read leaves hasTotal false so the footer names
-// only what is on screen rather than rendering an unreadable count as a
-// confident zero -- the rule the tab badges already follow.
-//
-// Previous is rendered disabled rather than linked: the store's keyset
-// paging issues tokens forward only, so no address for the preceding page
-// exists in this layer. Guessing one would land the operator on a page they
-// did not ask for -- the failure this whole footer exists to prevent -- so
-// the control says why it is inert and the browser's Back button remains the
-// way back.
+// needsAttentionPagingOf builds the footer. Previous is disabled: keyset
+// tokens only go forward, so there is no address for the prior page.
 func needsAttentionPagingOf(shown, total int, hasTotal bool, nextHref string) *pages.NeedsAttentionPaging {
 	paging := &pages.NeedsAttentionPaging{
 		Shown:    shown,
@@ -645,10 +459,8 @@ func needsAttentionPagingOf(shown, total int, hasTotal bool, nextHref string) *p
 	return paging
 }
 
-// needsAttentionPagingSummary is the footer's one sentence. With a total it
-// reads "Showing X of Y tasks"; without one -- a count that could not be
-// read -- it names only what is on screen rather than inventing a total or
-// silently reading as if the page were complete.
+// needsAttentionPagingSummary reads "Showing X of Y tasks", or only X when
+// the count could not be read.
 func needsAttentionPagingSummary(shown, total int, hasTotal bool) string {
 	if !hasTotal {
 		return fmt.Sprintf("Showing %d tasks", shown)
@@ -656,19 +468,9 @@ func needsAttentionPagingSummary(shown, total int, hasTotal bool) string {
 	return fmt.Sprintf("Showing %d of %d tasks", shown, total)
 }
 
-// needsAttentionEscalatedResults reads one page of the Escalated tab (FR
-// 772b044b) and builds its own row contract.
-//
-// It is the one derivation of this tab's data, called by the tab's GET and
-// -- once the intervention path accepts this page's URL -- by a post-write
-// re-derivation, so neither can render a row set the other would not. The
-// read is ListEscalatedTasks under the same ConsoleFilter and reason narrowing
-// every other tab's read takes, so the tab's content matches
-// list_escalated_tasks for the same filters.
-//
-// productID is the page's scope and goes to both the read's narrowing and
-// each row's links, so a row cannot link into a different product than the
-// one it was read for.
+// needsAttentionEscalatedResults reads one page of the Escalated tab under
+// the same filters as list_escalated_tasks. productID scopes both the read
+// and each row's links.
 func (app *App) needsAttentionEscalatedResults(ctx context.Context, productID uuid.UUID, filter needsAttentionFilter, page store.PageParams, selfPath string, now time.Time) (pages.NeedsAttentionEscalatedData, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
@@ -695,15 +497,8 @@ func (app *App) needsAttentionEscalatedResults(ctx context.Context, productID uu
 	}, nil
 }
 
-// needsAttentionEscalatedRowOf builds one Escalated-tab row from the read's
-// own row.
-//
-// returnTo is the tab's own URL: the row's controls carry it so an
-// intervention knows which view to re-derive, and it is read back from the
-// request rather than rebuilt, so a paged or filtered tab returns to itself.
-//
-// now is the read instant, so relativeTime answers against the same clock
-// the freshness stamp does.
+// needsAttentionEscalatedRowOf builds one Escalated row. returnTo is the
+// tab's own URL, so a paged or filtered tab returns to itself.
 func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID, returnTo string, now time.Time) pages.NeedsAttentionEscalatedRow {
 	return pages.NeedsAttentionEscalatedRow{
 		TaskID:     r.TaskID.String(),
@@ -713,12 +508,8 @@ func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID,
 		Milestone:  r.DeliveryRef.Title,
 		Lane:       string(r.Lane),
 		Reason:     string(r.Reason),
-		// The count against the ATTEMPT cap, never the escalation's own
-		// CapValue: for a thrash-cap escalation that figure is the thrash
-		// cap, and labelling an attempt count with it would misreport every
-		// such row. There is no per-task cap column, so the package-wide
-		// default is the cap -- the same fallback taskAttemptsLabel makes
-		// for every other row (task_page.go).
+		// Use the attempt cap, never the escalation's CapValue, which for a
+		// thrash-cap escalation is the thrash cap.
 		Attempts:            taskAttemptsLabel(r.AttemptCount),
 		EscalatedAt:         r.EscalatedAt.UTC().Format(time.RFC3339),
 		EscalatedAtRelative: relativeTime(r.EscalatedAt, now),
@@ -728,43 +519,26 @@ func needsAttentionEscalatedRowOf(r store.EscalatedTaskRow, productID uuid.UUID,
 	}
 }
 
-// escalatedGuardField is the form field the Escalated tab's controls submit
-// their observed escalation id under. It is the api request body's own
-// field name (handlers.requeueTaskRequest.ExpectedEscalationID and
-// handlers.cancelTaskRequest.ExpectedEscalationID), so a submitted guard
-// reaches krill api unchanged rather than being renamed on the way through.
+// escalatedGuardField matches api's ExpectedEscalationID field name.
 const escalatedGuardField = "expected_escalation_id"
 
-// escalatedRowActions builds one escalated row's controls (FR 772b044b) from
-// the shared legality predicate: Requeue, and Cancel only where the predicate
-// allows it, and never Release -- an escalated task holds no claim, so there
-// is nothing to force-close.
-//
-// Both controls carry the escalation id THIS row observed -- as a hidden
-// expected_escalation_id input, on both halves of a doubled control -- and
-// title is what the destructive verb's browser confirmation names. The id is
-// taken from the row and never typed, so an escalation that changed since the
-// page loaded is refused against what the operator saw rather than against
-// whatever is current.
+// escalatedRowActions offers Requeue, and Cancel where legal; never Release,
+// since an escalated task holds no claim. Each carries the observed
+// escalation id so a changed escalation is refused.
 func escalatedRowActions(taskID, title, escalationID string, lane store.Lane, returnTo string) templ.Component {
 	return renderEscalatedTaskActions(taskID, title, escalationID, returnTo,
 		legalInterventions(taskInterventionEscalated, lane)...)
 }
 
-// escalatedRowPopovers is escalatedRowActions' other half (FR 0cf360c5): the
-// reason popovers for the same legal verbs, rendered after the table rather
-// than in the row. It calls the same legality predicate, so the two halves
-// offer exactly the same verbs.
+// escalatedRowPopovers renders the reason popovers for the same legal verbs,
+// after the table.
 func escalatedRowPopovers(taskID, title string, lane store.Lane, returnTo string) templ.Component {
 	return renderTaskActionPopovers(taskID, title, returnTo,
 		legalInterventions(taskInterventionEscalated, lane)...)
 }
 
-// observedEscalationID is the row's observed escalation id as a string,
-// empty when the read somehow reported none. An escalated row always
-// carries one (ListEscalatedTasks reads current_escalation_id IS NOT
-// NULL), and the empty spelling is what keeps a row that did not from
-// rendering a zero-UUID guard -- a guard that would refuse every action.
+// observedEscalationID returns "" rather than a zero-UUID guard, which would
+// refuse every action.
 func observedEscalationID(r store.EscalatedTaskRow) string {
 	if r.EscalationID == uuid.Nil {
 		return ""
@@ -772,11 +546,8 @@ func observedEscalationID(r store.EscalatedTaskRow) string {
 	return r.EscalationID.String()
 }
 
-// escalatedByLine is the escalation's own subjects, as the row's sub-line:
-// who escalated it, and who they were acting for when they did. A
-// subject-less side reads as "-" through opsActor/opsSubject, and an
-// escalation with no on-behalf-of states only the acting half rather than
-// "for -".
+// escalatedByLine renders who escalated the task and for whom, omitting
+// "for -" when there is no on-behalf-of.
 func escalatedByLine(r store.EscalatedTaskRow) string {
 	by := opsActor(r.EscalatedByActing)
 	if of := opsSubject(r.EscalatedByOnBehalfOf); of != "-" {
@@ -785,14 +556,9 @@ func escalatedByLine(r store.EscalatedTaskRow) string {
 	return "by " + by
 }
 
-// needsAttentionEmptyData is the empty state a filtered tab renders, or ok
-// false when the tab's own table (with its generic empty state) is the
-// right answer.
-//
-// Two conditions, both required: the read came back empty, and a filter is
-// in force. An empty tab with no filter is the queue genuinely being
-// empty, which the tab's own "No escalated tasks." already says honestly;
-// naming filters that are not in force would invent a cause for it.
+// needsAttentionEmptyData returns the filtered empty state only when the read
+// is empty and a filter is in force; otherwise the tab's own empty state is
+// correct.
 func needsAttentionEmptyData(rows int, filter needsAttentionFilter, filterLabel, queue string) (pages.NeedsAttentionEmptyData, bool) {
 	if rows > 0 || !filter.narrows() {
 		return pages.NeedsAttentionEmptyData{}, false
@@ -803,20 +569,8 @@ func needsAttentionEmptyData(rows int, filter needsAttentionFilter, filterLabel,
 	}, true
 }
 
-// needsAttentionTabs builds the strip: the four tabs, each at its own
-// product-scoped URL and each labelled with its count, with the request's
-// tab marked active.
-//
-// Each count is the store's dedicated count read (CountClaimedTasks and
-// friends) under the SAME params type -- and therefore the same
-// ConsoleFilter -- the matching list was read with, so a badge and the
-// table beneath it cannot disagree about how many rows there are. The
-// figure is the whole filtered set, never the current page's length.
-//
-// A count that could not be read carries NO badge rather than a zero. Zero
-// is a claim about the queue and we could not read the queue; a tab with no
-// badge says nothing, which is the honest state (nav.go's unreadableBadge,
-// applied to a tab).
+// needsAttentionTabs builds the strip with per-tab counts read under the same
+// filter as the lists. An unreadable count shows no badge rather than zero.
 func (app *App) needsAttentionTabs(ctx context.Context, productID uuid.UUID, active string, filter needsAttentionFilter) []pages.NeedsAttentionTab {
 	tabs := make([]pages.NeedsAttentionTab, 0, len(needsAttentionTabOrder))
 	scopeID, scopeErr := app.soleScopeID(ctx)
@@ -844,12 +598,8 @@ func (app *App) needsAttentionTabs(ctx context.Context, productID uuid.UUID, act
 	return tabs
 }
 
-// needsAttentionCount reads one tab's count through the params type the
-// matching list read takes, narrowed the SAME way -- the same
-// ConsoleFilter, and for the escalated queue the same reason -- so the
-// count and the list are the same question asked of the same store query
-// (store.CountClaimedTasks shares its FROM/JOIN/WHERE with
-// ListClaimedTasks, and so on for the other three).
+// needsAttentionCount reads one tab's count with the same params as its list
+// read; each Count* shares its query with the matching List*.
 func (app *App) needsAttentionCount(ctx context.Context, scopeID, productID uuid.UUID, filter needsAttentionFilter, tab string) (int, error) {
 	console := filter.console(productID)
 	switch tab {
@@ -868,21 +618,11 @@ func (app *App) needsAttentionCount(ctx context.Context, scopeID, productID uuid
 // cancelled and open-notes row shapes
 // ---------------------------------------------------------------------------
 
-// The Cancelled and Open notes tabs' view-models (FR b22e1d60), moved out
-// of the ops console's own loaders (krill/ui/ops.go) because the tab --
-// not the console -- is what their columns are specified against now. The
-// two loaders still call these constructors, so there is one shape per
-// row kind rather than a tab copy that could drift from the console's.
+// Cancelled and Open notes row view-models, shared by the tabs and the ops
+// console loaders.
 
-// productTaskLinkOf is the product-scoped task-detail link a row's title
-// points at, or "" when the read named no product.
-//
-// The ops console's own views read scope-wide (a nil ConsoleFilter
-// ProductID), so they have no product to build a link from and render
-// unlinked; a Needs attention tab always carries the product it is
-// scoped to, so its rows link. The page is derived from the same filter
-// the store read was narrowed by, so a link can never name a product the
-// row did not come from.
+// productTaskLinkOf is the product-scoped task link for a row, or "" when the
+// read was not product-scoped.
 func productTaskLinkOf(pid *uuid.UUID, tid uuid.UUID) string {
 	if pid == nil {
 		return ""
@@ -890,10 +630,7 @@ func productTaskLinkOf(pid *uuid.UUID, tid uuid.UUID) string {
 	return productTaskDetailPath(*pid, tid)
 }
 
-// newCancelledRow builds one Cancelled tab row (FR b22e1d60): the task
-// and its detail link, the milestone it was cancelled under, the lane it
-// was cancelled out of, who cancelled it and when, and the intervention's
-// optional reason.
+// newCancelledRow builds one Cancelled tab row.
 func newCancelledRow(r store.CancelledTaskRow, taskHref string) pages.CancelledRow {
 	reason := ""
 	if r.Reason != nil {
@@ -912,19 +649,11 @@ func newCancelledRow(r store.CancelledTaskRow, taskHref string) pages.CancelledR
 	}
 }
 
-// newNoteRow builds one Open notes tab row (FR b22e1d60).
-//
-// targetHref is set by the caller only for a task-targeted note, so a
-// note on a spec-axis entity is never given a link it has no page for.
-// Status is read from the store's own lifecycle enumeration rather than
-// spelled as a literal: ListOpenNotes is defined as "every note still at
-// NoteLifecycleStatusNoted", so that is the one status this view can
-// carry, and it says so by naming the constant.
+// newNoteRow builds one Open notes row. targetHref is set only for
+// task-targeted notes, which have a page to link to.
 func newNoteRow(r store.OpenNoteRow, taskHref string) pages.NoteRow {
-	// Exactly one of TaskContext/EntityContext is set (task_note's own
-	// exactly-one-target CHECK), so at most one branch fills Target. The
-	// target's id is rendered next to its title so the row names the same
-	// entity the note points at, not just its human label.
+	// task_note's CHECK guarantees exactly one target, so at most one branch
+	// fills Target.
 	target := "-"
 	if r.TaskContext != nil {
 		target = "task: " + r.TaskContext.Title + " (" + r.TaskContext.TaskID.String() + ")"
@@ -943,25 +672,13 @@ func newNoteRow(r store.OpenNoteRow, taskHref string) pages.NoteRow {
 }
 
 // ---------------------------------------------------------------------------
-// the Claimed tab's rows (FR a149d28f)
+// the Claimed tab's rows
 // ---------------------------------------------------------------------------
 
-// newClaimedRow builds one Claimed tab row from the store's claimed-task
-// row (store.ClaimedTaskRow), which is the one read every field here comes
-// from -- nothing is derived from a second query, so the row and
-// list_claimed_tasks cannot disagree.
-//
-// pid is the product the read was narrowed to; it is what the task's detail
-// link is spelled against, and uuid.Nil (a read with no product narrowing,
-// such as the retired console view) leaves the title unlinked rather than
-// inventing a product id.
-//
-// returnTo is the view a no-JS action form returns to, exactly as the
-// console's own rows spell it.
+// newClaimedRow builds one Claimed row from store.ClaimedTaskRow alone. A nil
+// pid leaves the title unlinked.
 func newClaimedRow(r store.ClaimedTaskRow, pid uuid.UUID, returnTo string) pages.ClaimedRow {
-	// A read that observed no claim (a zero id) carries none: an all-zero
-	// uuid is not a claim any write could be guarded against, so the row
-	// states nothing rather than stating a false id.
+	// A zero claim id cannot guard a write, so the row carries none.
 	claimID := ""
 	if r.ClaimID != uuid.Nil {
 		claimID = r.ClaimID.String()
@@ -981,9 +698,7 @@ func newClaimedRow(r store.ClaimedTaskRow, pid uuid.UUID, returnTo string) pages
 	}
 }
 
-// claimedTaskHref is the product-scoped detail URL for a claimed task, the
-// same address the product-wide Tasks table's rows link to. An unresolved
-// product (uuid.Nil) yields no link at all.
+// claimedTaskHref is the product-scoped task URL, or "" for uuid.Nil.
 func claimedTaskHref(pid, taskID uuid.UUID) string {
 	if pid == uuid.Nil {
 		return ""
@@ -991,15 +706,8 @@ func claimedTaskHref(pid, taskID uuid.UUID) string {
 	return productTaskDetailPath(pid, taskID)
 }
 
-// claimedBy renders a claim's holder the way the tab's claimant column
-// reads it: "by <acting> for <on-behalf-of>" (the FR's own wording). The
-// on-behalf-of half is dropped when the claim names none -- a claim taken
-// for nobody reads "by worker-3", never "by worker-3 for -".
-//
-// The acting subject keeps its kind ("(human)"/"(service)") for the reason
-// opsActor gives: an operator scanning for who is holding a claim needs to
-// tell a person from a service, and the on-behalf-of subject does not carry
-// that question (opsSubject's rule).
+// claimedBy renders "by <acting> for <on-behalf-of>", dropping the second
+// half when absent. The acting subject keeps its (human)/(service) kind.
 func claimedBy(acting, onBehalfOf store.Subject) string {
 	by := "by " + opsActor(acting)
 	if forWhom := opsSubject(onBehalfOf); forWhom != "-" {
@@ -1008,19 +716,15 @@ func claimedBy(acting, onBehalfOf store.Subject) string {
 	return by
 }
 
-// claimedRowActions renders a claimed row's controls with the verbs the
-// shared legality predicate allows for a claimed task in its lane, each
-// carrying the claim the row observed so the action's guard is checked
-// against the state the operator actually saw.
+// claimedRowActions renders the legal verbs for a claimed task, each guarded
+// by the claim the row observed.
 func claimedRowActions(r store.ClaimedTaskRow, returnTo string) templ.Component {
 	return renderClaimedTaskActions(r.TaskID.String(), r.Title, r.ClaimID, returnTo,
 		legalInterventions(taskInterventionClaimed, r.CurrentLane)...)
 }
 
-// claimedRowPopovers is claimedRowActions' other half (FR 0cf360c5): the
-// reason popovers for the same legal verbs, rendered after the table rather
-// than in the row. It calls the same legality predicate, so the two halves
-// offer exactly the same verbs.
+// claimedRowPopovers renders the reason popovers for the same legal verbs,
+// after the table.
 func claimedRowPopovers(r store.ClaimedTaskRow, returnTo string) templ.Component {
 	return renderTaskActionPopovers(r.TaskID.String(), r.Title, returnTo,
 		legalInterventions(taskInterventionClaimed, r.CurrentLane)...)

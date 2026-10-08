@@ -5,100 +5,53 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// The design-session read surface, as page bodies. The pure builders that
-// populate the view models below stay in //krill/ui (package main) so the
-// package-main tests keep compiling unchanged; only the markup moved here.
-//
-// Every region that a test needs to isolate carries a stable id
-// (design-sessions, revision-events, open-questions, session-nav). A test
-// slices on those ids rather than on a heading's literal markup, so
-// restyling a heading can never break a section-scoped assertion --
-// htmxui ARCHITECTURE §14: assert the claim, not the byte layout.
+// The design-session read surface, as page bodies; the builders stay in //krill/ui.
+// Regions carry stable ids (design-sessions, revision-events, open-questions, session-nav)
+// so tests assert on regions, not heading markup.
 
-// DesignSessionRow is one row of a product's session list.
-//
-// Stage is the store's own derived stage (store.Stage, spelled as a string
-// so this package keeps no //krill/store dependency) rather than a
-// re-derivation from a signoff flag: the aggregate read owns that
-// derivation, and a view computing a second one is how a list and a detail
-// come to disagree about what stage a session is in. The badge resolves it
-// through components.DesignSessionStageStyle/Label.
-//
-// OpenedRelative is the age an operator scans for and OpenedExact the
-// instant behind it, both handed over pre-rendered for the reason the
-// status register's rows are: relative text needs a clock, and a view that
-// reads one cannot be asserted on.
+// DesignSessionRow is one row of a product's session list. Stage is the store's derived
+// stage, never re-derived here. Times arrive pre-rendered because relative text needs a clock.
 type DesignSessionRow struct {
-	// ID is the session's own id, carried so the row is addressable and so
-	// a detail link can be checked against it.
+	// ID is the session's own id.
 	ID string
 
-	// OpeningRequest is the opening submission's FIRST LINE, which is what
-	// the list shows; the full submission is the detail page's subject.
+	// OpeningRequest is the opening submission's first line; the full text is on the detail page.
 	OpeningRequest string
 
-	// DetailPath is the canonical, product-scoped detail URL (FR a77852a9).
+	// DetailPath is the canonical, product-scoped detail URL.
 	DetailPath string
 
 	// Stage is the derived stage's wire value.
 	Stage string
 
-	// OpenBlockingQuestions is the session's currently-open BLOCKING
-	// question count. The non-blocking count is deliberately not shown
-	// here: it is on the detail page's rail, where a question's text is,
-	// and a number here would be an action with nowhere to go.
+	// OpenBlockingQuestions is the open blocking question count; non-blocking ones live on the
+	// detail rail, where their text is.
 	OpenBlockingQuestions int
 
 	OpenedRelative string
 	OpenedExact    string
 }
 
-// DesignSessionNewBlade is the "new design session" blade (FR 44d7f1e2):
-// what the operator types when the blade is open, and where it goes.
-//
-// ProductName is READ-ONLY context -- the product the blade's own URL named,
-// resolved server-side, never a field. There is deliberately no product id
-// input, no session id input, and no identity input anywhere in this blade:
-// the write body carries product_id and opening_submission only, and the
-// product reaches krill from the path the operator arrived on.
-//
-// Error and OpeningSubmission are set only when a submission is refused and
-// the blade is re-rendered: Error is the readable api status + message shown
-// inline, and OpeningSubmission is the operator's typed text, preserved so a
-// rejection is not a data-loss event (FR 4304fe60).
+// DesignSessionNewBlade is the "new design session" blade. ProductName is read-only context;
+// there is no product, session or identity input. Error and OpeningSubmission are set when a
+// refused submission re-renders, preserving the operator's text.
 type DesignSessionNewBlade struct {
 	ProductID         string
 	ProductName       string
 	OpeningSubmission string
 	Error             string
 
-	// FormAction is the blade form's own POST target and ListPath is the URL
-	// Cancel returns to, both supplied by the caller so the path shapes stay
-	// owned by package main rather than being rebuilt here.
+	// FormAction is the blade's POST target and ListPath where Cancel returns; both caller-supplied.
 	FormAction string
 	ListPath   string
 }
 
-// DesignSessionNewBladeAnchor is the DOM id of the region the new-session
-// blade swaps into: the hx-target the list's "New design session" action
-// names, and the id the served blade fragment's ROOT must carry. Without it
-// on the root, htmx's outerHTML deletes the element it was asked to replace
-// and the region is gone for good.
-//
-// It is rendered even with no blade open -- an empty region of the same id
-// -- because the list's action has to resolve whether or not a blade is
-// showing.
+// DesignSessionNewBladeAnchor is the blade region's id: the list action's hx-target and the
+// fragment root (outerHTML would otherwise delete the region). Rendered empty when closed.
 const DesignSessionNewBladeAnchor = "design-session-new-blade"
 
-// DesignSessionListPage is the product-scoped session list.
-//
-// NewBlade is the blade region: nil is the CLOSED blade -- the placeholder
-// the list always carries -- and a value is an open blade. NewBladePath is
-// the URL the "New design session" action and the empty state's action point
-// at, which is a real href so a no-JS click, a reload and a shared link all
-// reach the same blade. FormAction is that blade form's own POST target,
-// supplied by the caller so the path shape stays owned by package main's
-// designProductSessionsPath rather than being rebuilt here.
+// DesignSessionListPage is the product-scoped session list. NewBlade nil means the blade is
+// closed; NewBladePath is a real href so no-JS clicks and shared links reach the blade.
 type DesignSessionListPage struct {
 	ProductID    string
 	ProductName  string
@@ -123,39 +76,18 @@ type OpenQuestionDeltaRow struct {
 	Blocking   string // "blocking" or "non-blocking"
 }
 
-// RevisionEventRow is one round of a session's ordered log.
-//
-// AtRelative and AtExact are the instant behind the round handed over
-// pre-rendered for the reason the sessions list's rows are: relative text
-// needs a clock, and a view that read one could not be asserted on. The
-// timeline shows AtRelative and carries AtExact in the time element's
-// datetime, title and data-krill-updated-at, so hovering answers "exactly
-// when" with or without the head script.
-//
-// Summary is the one sentence describing what this round DID, composed by
-// package main from the round's own content (see revisionEventSummary there).
-// It exists because revision_event has no prose column -- migration 008
-// stores entity_deltas and open_questions_delta and nothing else -- so the
-// text an operator reads in a timeline box has to be derived rather than
-// read, and deriving it in one helper is what lets a test pin it.
+// RevisionEventRow is one round of a session's log. AtRelative/AtExact arrive pre-rendered.
+// Summary is derived in package main (revisionEventSummary) because revision_event has no prose column.
 type RevisionEventRow struct {
 	ID string
-	// SeqNo is the round's position in the session's log; the timeline
-	// renders it in the entry's own hook so a test can assert log order
-	// without parsing prose.
+	// SeqNo is the round's position in the log, exposed in a hook for order assertions.
 	SeqNo     int
 	EventType string
-	// Acting is the acting subject the server recorded, in the composite
-	// form ("kind sub@iss") the rest of krill's surfaces use.
+	// Acting is the recorded acting subject in composite "kind sub@iss" form.
 	Acting string
-	// OnBehalfOf is that subject's on-behalf-of counterpart, rendered only
-	// when it differs from Acting: repeating "on behalf of yourself" on
-	// every entry of a timeline reads as a second, different actor.
+	// OnBehalfOf is the on-behalf-of subject, shown only when it differs from Acting.
 	OnBehalfOf string
-	// OnBehalfOfDiffers reports whether OnBehalfOf is worth showing at
-	// all. A revision_event carries no persona column, so nothing here is
-	// inferred -- this is only the recorded pair, deciding whether it is
-	// worth a second line.
+	// OnBehalfOfDiffers reports whether OnBehalfOf is worth a second line.
 	OnBehalfOfDiffers bool
 	VerifiedAgainst   string
 	SignoffStatus     string
@@ -177,37 +109,9 @@ type OpenQuestionRow struct {
 	OpenedAtSeqNo int
 }
 
-// DesignSessionDetailPage is one session: its row, its full ordered
-// revision-event log, and its currently-open questions. Error, FollowUp,
-// and CheckedResolve are set only when a "submit follow-up" round is
-// rejected and the form is re-rendered: Error is the readable api status +
-// message, FollowUp is the operator's typed text, and CheckedResolve holds
-// the question ids whose resolve box was ticked, all preserved so a
-// rejection is not a data-loss event.
-//
-// AnswersPath is the follow-up form's own POST target, supplied by the
-// caller so the path shape stays owned by package main.
-//
-// OpeningRequest is the opening submission's FIRST LINE -- the same string
-// the sessions list links by, so the two pages agree on what this session
-// is called -- while OpeningSubmission is the full prose, rendered as
-// markdown in the main column because this page is the only place it is
-// readable in full.
-//
-// Stage is the store's own derived stage, spelled as a string, exactly as
-// DesignSessionRow.Stage is: the badge beside the h1 resolves through the
-// same components mapper the list's Stage cell uses, so the two cannot
-// render one session's stage two different ways.
-//
-// OpenedBy is the operator's subject -- what the server read, never what a
-// reader typed (LB4) -- and OpenedByTitle the full (subject, issuer) pair
-// for the title attribute. Both are empty when the krill_session row could
-// not be read, which is rendered as an absent "Opened by" line rather than
-// a blank or invented one.
-//
-// OpenedByKrillSessionID is the session's PROVENANCE -- the krill session it
-// was opened through -- and is deliberately not what the properties card's
-// copy chip carries; the chip is ID, this page's own subject.
+// DesignSessionDetailPage is one session: row, ordered log, and open questions. Error, FollowUp
+// and CheckedResolve preserve a rejected follow-up's input. OpenedBy is the server-read subject,
+// empty when unreadable; OpenedByKrillSessionID is provenance, not what the copy chip carries.
 type DesignSessionDetailPage struct {
 	ID                     string
 	ProductID              string
@@ -223,72 +127,33 @@ type DesignSessionDetailPage struct {
 	ProductSessionsPath    string
 	Events                 []RevisionEventRow
 	OpenQuestions          []OpenQuestionRow
-	// LogError and QuestionsError are the two reads whose failure
-	// degrades this page rather than taking it down (FR e5ad1a5b, NFR
-	// ca90dc03): a log read that breaks renders an inline alert IN PLACE
-	// OF the timeline and a question read that breaks renders one inside
-	// the rail, while the rest of the page still renders.
-	//
-	// They carry an operator-facing sentence and never a store's own error
-	// text -- the log can fail for reasons naming an internal URL or a
-	// driver, and a browser is not the place for that.
-	//
-	// A read that FAILED is never rendered as an empty list: "No revision
-	// events yet." and "this session's timeline is unavailable" are
-	// different facts, and conflating them tells an operator their session
-	// is empty when in fact krill could not read it.
+	// LogError and QuestionsError degrade one region to an inline alert instead of failing the
+	// page. They hold operator-facing text, never store errors, and a failed read is never shown
+	// as an empty list.
 	LogError              string
 	QuestionsError        string
 	Error                  string
 	FollowUp               string
 	CheckedResolve         map[string]bool
 	AnswersPath            string
-	// SignedOff hides the follow-up form outright. It is the SAME
-	// derivation the stage badge shows -- the session's derived stage
-	// being store.StageApproved, which the store derives from its latest
-	// signoff -- read once here rather than restated as a second rule
-	// about which rounds a session may still be sent.
+	// SignedOff hides the follow-up form; it is the same derived stage (store.StageApproved)
+	// the badge shows.
 	SignedOff bool
 }
 
-// LogError and QuestionsError are the two reads whose failure degrades this
-// page rather than taking it down (FR e5ad1a5b, NFR ca90dc03). The session
-// itself is still read fatally -- an unknown or foreign session is the 404
-// path -- but a log or question read that breaks renders an inline alert in
-// place of that one region while the rest of the page, including the rail,
-// still renders.
-//
-// They carry an operator-facing sentence and NEVER a store's own error text:
-// the log can fail for reasons that name an internal URL or a driver, and the
-// browser is not the place for that.
-// IsChecked reports whether a resolve box for the given question id was
-// ticked, so a rejected follow-up round re-renders the form with the
-// operator's original ticks intact. A nil CheckedResolve reads every id as
-// unticked, which is the GET handler's normal case.
+// IsChecked reports whether the resolve box for id was ticked, so a rejected round keeps
+// the operator's ticks. A nil CheckedResolve reads every id as unticked.
 func (p DesignSessionDetailPage) IsChecked(id string) bool { return p.CheckedResolve[id] }
 
-// FollowUpFormAnchor is the DOM id of the follow-up form, and -- the reason
-// it is exported rather than spelled twice -- the id the rail's resolve
-// checkboxes name in their `form` attribute.
-//
-// The wireframe puts the boxes in the rail and the submit control in the
-// main column, so the boxes belong to the form BY REFERENCE: HTML's `form`
-// attribute associates an input with a form anywhere in the document, which
-// is what keeps one submission carrying the operator's ticks with no
-// JavaScript and no second set of boxes. An input that duplicated the boxes
-// inside the form would be the same question answered twice.
+// FollowUpFormAnchor is the follow-up form's id, which the rail's resolve checkboxes name
+// in their `form` attribute so they submit with it from outside the form, without JavaScript.
 const FollowUpFormAnchor = "follow-up-form"
 
-// designSessionListAnchor is the DOM id this page's region carries, so a
-// test -- and the empty state's own action -- name one element rather than
-// a heading's markup.
+// designSessionListAnchor is the DOM id of this page's region.
 const designSessionListAnchor = "design-sessions"
 
-// designSessionStageBadge renders one row's stage. The colour, size and
-// soft treatment come from components.DesignSessionStageStyle and the
-// wording from components.DesignSessionStageLabel, so this file knows no
-// daisyUI class and the stage vocabulary has exactly one owner -- the same
-// chain statusBadge runs for the milestone statuses.
+// designSessionStageBadge renders a row's stage via components.DesignSessionStageStyle/Label,
+// so the stage vocabulary has one owner.
 templ designSessionStageBadge(stage string) {
 	{{ s := components.DesignSessionStageStyle(stage) }}
 	@htmxui.Badge(components.DesignSessionStageLabel(stage), s.Variant, s.Size, s.Soft, templ.Attributes{
@@ -296,16 +161,8 @@ templ designSessionStageBadge(stage string) {
 	})
 }
 
-// designSessionBlockingCell renders the Open questions cell: the error
-// "N blocking" badge when the session owes at least one blocking answer,
-// and a plain 0 when it owes none.
-//
-// The two are different answers and never share a branch -- "one blocking
-// question is waiting" and "nothing is owed" are different facts, and
-// rendering the second with a badge would put a page with nothing to do in
-// the same visual register as one an operator is being held up by. The
-// badge's colour comes from components.DesignSessionBlockingCountStyle so
-// this cell has no daisyUI class of its own.
+// designSessionBlockingCell renders an error "N blocking" badge when answers are owed, and a
+// plain 0 otherwise, so nothing-to-do never looks urgent.
 templ designSessionBlockingCell(s DesignSessionRow) {
 	if s.OpenBlockingQuestions > 0 {
 		{{ style := components.DesignSessionBlockingCountStyle() }}
@@ -317,32 +174,15 @@ templ designSessionBlockingCell(s DesignSessionRow) {
 	}
 }
 
-// designSessionOpenedAt renders one row's opening instant: the relative age
-// as the visible text, the exact instant in the datetime and the title so
-// hovering answers "exactly when", and the data-krill-updated-at hook the
-// status register and the task detail's Escalated row share.
-//
-// Relative is what renders server-side, so the page says something
-// readable with the head script absent; the exact instant is in the title
-// either way.
+// designSessionOpenedAt renders the relative age as text, with the exact instant in datetime,
+// title and data-krill-updated-at; it reads fine without the head script.
 templ designSessionOpenedAt(s DesignSessionRow) {
 	<time class="text-sm text-base-content/70" data-krill="design-session-opened-at"
 		data-krill-updated-at={ s.OpenedExact } datetime={ s.OpenedExact } title={ s.OpenedExact }>{ s.OpenedRelative }</time>
 }
 
-// DesignSessionList is the product's session table: every session of the
-// product newest-first, with its derived stage and its open blocking
-// question count.
-//
-// The primary action is a link to the new-session blade (FR 44d7f1e2), not
-// an inline form: the action carries a real href to the blade's own URL, so
-// a no-JS click, a reload and a shared link all open the same blade, while
-// htmx swaps it into DesignSessionNewBladeAnchor in place. The empty state's
-// action is that same link -- one affordance to open a session.
-//
-// The blade region itself lives inside this section, so opening and closing
-// the blade are both a swap of this page's own body rather than of two
-// regions an operator has to correlate.
+// DesignSessionList is the product's session table, newest first. The primary action is a real
+// link to the blade URL (htmx swaps it in place); the blade region lives inside this section.
 templ DesignSessionList(page DesignSessionListPage) {
 	<section id={ designSessionListAnchor } class="space-y-4">
 		<div class="flex flex-wrap items-center justify-between gap-3">
@@ -385,17 +225,8 @@ templ DesignSessionList(page DesignSessionListPage) {
 	</section>
 }
 
-// newDesignSessionAction is the list's primary action: a link to the
-// new-session blade's own URL.
-//
-// It is doubled the way every mutating control in this binary is: the href
-// is the whole no-JS half, and hx-get of that same URL into
-// DesignSessionNewBladeAnchor is the htmx half. hx-push-url makes the blade
-// URL the address bar, so a reload or a copied address reopens the blade --
-// the blade is an address, not only a pane.
-//
-// A <button> rather than an <a> would break the no-JS half outright: a
-// button has no destination to fall back on when htmx never runs.
+// newDesignSessionAction links to the blade URL; href is the no-JS half and hx-get with
+// hx-push-url the htmx half. An <a>, since a <button> has no no-JS destination.
 templ newDesignSessionAction(bladePath string) {
 	<a href={ templ.URL(bladePath) }
 		class="btn btn-primary btn-sm"
@@ -408,11 +239,8 @@ templ newDesignSessionAction(bladePath string) {
 	</a>
 }
 
-// NewDesignSessionBlade is the blade region itself: empty with no blade, and
-// the blade with one. Both spellings carry DesignSessionNewBladeAnchor, so
-// opening the blade can swap one for the other without the region's identity
-// moving -- which is what the list action's hx-target resolves against
-// whether or not a blade is already showing.
+// NewDesignSessionBlade is the blade region: empty or open, always carrying
+// DesignSessionNewBladeAnchor so the list action's hx-target resolves either way.
 templ NewDesignSessionBlade(blade *DesignSessionNewBlade) {
 	<div id={ DesignSessionNewBladeAnchor } data-krill="design-session-new-blade">
 		if blade != nil {
@@ -421,24 +249,9 @@ templ NewDesignSessionBlade(blade *DesignSessionNewBlade) {
 	</div>
 }
 
-// newDesignSessionBladeBody is the open blade: the product it opens a
-// session under, the one thing the operator types, and the two controls
-// that commit or abandon it.
-//
-// The form is doubled (htmxui ARCHITECTURE 9: the <form> element and its
-// hx-* wiring stay app-owned): method+action is the no-JS path, which
-// answers 303 to the new session's detail page, and hx-post+hx-target+
-// hx-swap is the htmx path, which answers HX-Redirect to that same page.
-// Both target the BLADE REGION rather than the form, because a refusal
-// re-renders the whole blade -- the form is not the only thing in it.
-//
-// It carries one input. There is no product field (the product came from the
-// URL), no session id field, and no identity field (LB4, FR 6d8c70b2): the
-// krill session the write rides is minted from the sign-in, and the api body
-// this form produces has no field for any of them.
-//
-// Blades go one level deep: nothing in here is a link or an hx-get except
-// Cancel, which is a plain link back to the list.
+// newDesignSessionBladeBody is the open blade. method+action is the no-JS path (303 to the
+// session), hx-post the htmx path (HX-Redirect); both target the blade region so a refusal
+// re-renders it. One input only: product comes from the URL, identity from the sign-in.
 templ newDesignSessionBladeBody(blade DesignSessionNewBlade) {
 	<article class="card bg-base-100 border border-base-300 shadow-sm" data-krill="design-session-new-blade-body">
 		<div class="card-body gap-3">
@@ -482,9 +295,7 @@ templ newDesignSessionBladeBody(blade DesignSessionNewBlade) {
 	</article>
 }
 
-// designSessionDetailRegions are the stable ids the two columns carry.
-// Tests slice on these rather than on a heading's markup, so restyling a
-// card never breaks a section-scoped assertion (htmxui ARCHITECTURE §14).
+// designSessionDetailRegions are the stable ids the two columns carry, for tests.
 const (
 	designSessionDetailAnchor    = "design-session-detail"
 	designSessionEventsAnchor     = "revision-events"
@@ -492,43 +303,19 @@ const (
 	designSessionPropertiesAnchor = "session-properties"
 )
 
-// DesignSessionRoundAnchor is the ONE region a follow-up write re-derives
-// and swaps in place: the timeline, the rail's open questions, and the
-// form itself all live inside it, because all three are what an answer
-// round changes -- it appends an event, it closes the ticked questions,
-// and it empties the textarea.
-//
-// It is exported for the same reason FollowUpFormAnchor is: the form's own
-// hx-target names it, the write handler renders it as the fragment, and
-// the tests slice on it, and those three must never disagree about one
-// string. A swap that named the form alone would leave the timeline and
-// the rail showing the state from before the answer, and a refusal that
-// swapped the form alone would drop the operator's ticked questions on the
-// floor (FR 1942d934).
+// DesignSessionRoundAnchor is the one region a follow-up re-derives and swaps: timeline, open
+// questions and form, since an answer changes all three. Swapping the form alone would leave
+// stale state and drop ticked questions on refusal.
 const DesignSessionRoundAnchor = "design-session-round"
 
-// DesignSessionCrumb is one breadcrumb entry on the session detail. Href is
-// empty for the session's own title -- the page the reader is already on,
-// and so the one crumb that is not a link.
+// DesignSessionCrumb is one breadcrumb entry; Href is empty for the current page.
 type DesignSessionCrumb struct {
 	Label string
 	Href  string
 }
 
-// DesignSessionDetail is one session: its opening statement, its full
-// ordered revision-event log, and its currently-open questions.
-//
-// The shape is the wireframe's two columns -- a main column that reads
-// (opening statement, then the log) and a rail that keeps the questions and
-// the properties beside it -- and the regions inside them carry the stable
-// ids the tests slice on. What goes in each region is deliberately this
-// page's existing markup: the log and the question table move wholesale
-// into their new homes rather than being rewritten, so this page's
-// structure can merge without also renegotiating its contents.
-//
-// Nothing here asks for an identity. The properties card shows who the
-// server read, and there is no input anywhere on the page for an operator
-// to say they are someone else (LB4).
+// DesignSessionDetail is one session in two columns: opening statement and log in main, questions
+// and properties in the rail. No input anywhere lets an operator claim another identity.
 templ DesignSessionDetail(page DesignSessionDetailPage) {
 	<section id={ designSessionDetailAnchor } class="space-y-4">
 		@designSessionDetailCrumbs(page)
@@ -543,21 +330,8 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 	</section>
 }
 
-// DesignSessionRound is everything one follow-up round changes: the
-// session's log, its currently-open questions, and the form that appends
-// the next one. It is the swap target of the follow-up form, and the
-// fragment a successful or refused answer is answered with, so the three
-// can never be rendered from two different reads.
-//
-// The header stays OUTSIDE it. The stage badge is the page's subject line
-// and a round never changes the opening request, so re-rendering them would
-// churn a region whose content did not move -- and an answer on a
-// now-signed-off session has to be able to make the form disappear without
-// taking the breadcrumb with it.
-//
-// A signed-off session renders no form at all, which is why the round
-// region's contents are conditional while its own id is not: the id is the
-// swap target either way.
+// DesignSessionRound is everything one follow-up round changes: log, open questions, and form.
+// The header stays outside it. A signed-off session renders no form, but the region id stays.
 templ DesignSessionRound(page DesignSessionDetailPage) {
 	<section id={ DesignSessionRoundAnchor } class="space-y-4">
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -593,10 +367,8 @@ templ DesignSessionRound(page DesignSessionDetailPage) {
 	</section>
 }
 
-// designSessionDetailCrumbs is where the operator has been: the product,
-// its Design sessions list, and then this session -- named by its own
-// opening request, the same string the list links by, so the trail reads
-// as the list's own row expanded.
+// designSessionDetailCrumbs is product, Design sessions list, then this session by its
+// opening request (the same string the list links by).
 templ designSessionDetailCrumbs(page DesignSessionDetailPage) {
 	<nav class="breadcrumbs text-sm" aria-label="Breadcrumb" data-krill="design-session-breadcrumb">
 		<ul>
@@ -613,14 +385,8 @@ templ designSessionDetailCrumbs(page DesignSessionDetailPage) {
 	</nav>
 }
 
-// designSessionCrumbs assembles the trail. The product crumb and the list
-// crumb are links; the session's own title is not, because it is where the
-// reader already is.
-//
-// A product whose name could not be read contributes no crumb rather than
-// an empty one: a blank link in a breadcrumb looks like a rendering fault
-// and navigates nowhere useful, while its absence leaves the list crumb,
-// which is the one that navigates.
+// designSessionCrumbs assembles the trail; only the current session is unlinked. An unreadable
+// product name contributes no crumb rather than a blank link.
 func designSessionCrumbs(page DesignSessionDetailPage) []DesignSessionCrumb {
 	var crumbs []DesignSessionCrumb
 	if page.ProductName != "" {
@@ -632,14 +398,8 @@ func designSessionCrumbs(page DesignSessionDetailPage) []DesignSessionCrumb {
 	)
 }
 
-// designSessionEventsRegion is the session's ordered log, in the main
-// column.
-//
-// A read that FAILED and a log that is genuinely empty render differently,
-// and must keep doing so (NFR ca90dc03): "this timeline is unavailable" and
-// "this session has no rounds yet" are different facts, and rendering both
-// as "No revision events yet." tells an operator their session is empty when
-// in fact krill could not read it.
+// designSessionEventsRegion is the session's log. A failed read and an empty log must render
+// differently.
 templ designSessionEventsRegion(page DesignSessionDetailPage) {
 	<section id={ designSessionEventsAnchor } class="card bg-base-100 border border-base-300">
 		<div class="card-body gap-3">
@@ -657,13 +417,8 @@ templ designSessionEventsRegion(page DesignSessionDetailPage) {
 	</section>
 }
 
-// revisionEventTimeline is the session's log as a vertical daisyUI
-// timeline: every round in ListBySession's own order, which is ascending
-// seq_no -- the exact list get_design_session returns, so a browser and an
-// MCP client read one history in one order (FR a1b955e4).
-//
-// A <ol> rather than a <ul> because the order IS the content: the numbers
-// are the store's, not decoration.
+// revisionEventTimeline is the log as a daisyUI timeline in ascending seq_no, the same order
+// get_design_session returns. An <ol> because order is content.
 templ revisionEventTimeline(events []RevisionEventRow) {
 	<ol class="timeline timeline-vertical timeline-compact timeline-snap-icon" data-krill="revision-event-timeline">
 		for i, ev := range events {
@@ -672,9 +427,8 @@ templ revisionEventTimeline(events []RevisionEventRow) {
 	</ol>
 }
 
-// designSessionQuestionsRegion is the rail's open-questions card. Same rule
-// as the timeline: a failed read is an alert in the rail, never an empty
-// card body that reads as "nothing is waiting on you".
+// designSessionQuestionsRegion is the rail's open-questions card; a failed read is an alert,
+// never an empty card.
 templ designSessionQuestionsRegion(page DesignSessionDetailPage) {
 	<section id={ designSessionQuestionsAnchor } class="card bg-base-100 border border-base-300">
 		<div class="card-body gap-3 p-4 text-sm">
@@ -690,15 +444,8 @@ templ designSessionQuestionsRegion(page DesignSessionDetailPage) {
 	</section>
 }
 
-// designSessionQuestionList is the rail's card body: one entry per
-// question that is open RIGHT NOW, or an empty state saying so when none
-// are (NFR ca90dc03 -- an empty result renders EmptyState rather than an
-// empty card body).
-//
-// "Open now" is not derived here: the list is the store's
-// last-event-wins ListOpenQuestions, the same accessor list_open_questions
-// reads, so a question resolved by any later round is already absent and
-// this card cannot show one (FR db08d930).
+// designSessionQuestionList is one entry per currently-open question, or an empty state. The list
+// is the store's last-event-wins ListOpenQuestions, so resolved questions are already absent.
 templ designSessionQuestionList(page DesignSessionDetailPage) {
 	if len(page.OpenQuestions) > 0 {
 		<ul class="space-y-3">
@@ -712,22 +459,8 @@ templ designSessionQuestionList(page DesignSessionDetailPage) {
 	}
 }
 
-// openQuestionEntry is one open question: a box to say the follow-up answers
-// it, and the text and severity that say why it is still here.
-//
-// checked comes from the page's own ticked-id set rather than being read
-// here, so a refused follow-up re-renders the rail with the operator's
-// original ticks intact (FR 1942d934).
-//
-// The box is inside the label, so clicking the question text ticks it -- an
-// operator reading a question and wanting to close it should not have to
-// find the box first.
-//
-// It belongs to the follow-up form BY REFERENCE. The wireframe puts the
-// boxes here in the rail and the submit control in the main column, and
-// HTML's `form` attribute associates an input with a form anywhere in the
-// document, so one submission carries these ticks with no JavaScript and no
-// second copy of the same questions inside the form.
+// openQuestionEntry is one open question with a resolve box. checked comes from the page so a
+// refused round keeps ticks. The box joins the follow-up form via the `form` attribute.
 templ openQuestionEntry(q OpenQuestionRow, checked bool) {
 	<label class="flex gap-2" data-krill="open-question-row" data-krill-question-id={ q.QuestionID }>
 		<input
@@ -746,10 +479,8 @@ templ openQuestionEntry(q OpenQuestionRow, checked bool) {
 	</label>
 }
 
-// questionBlockingBadge is one question's severity, through the one mapper
-// that vocabulary has. The rail and the sessions table's blocking count are
-// the same fact read at two scales -- what a session is waiting on -- so
-// they wear one register (FR dcecb049, f2a2dfce).
+// questionBlockingBadge is a question's severity, via the same mapper as the sessions table's
+// blocking count.
 templ questionBlockingBadge(blocking string) {
 	{{ s := components.QuestionBlockingStyle(blocking) }}
 	@htmxui.Badge(components.QuestionBlockingLabel(blocking), s.Variant, s.Size, s.Soft, templ.Attributes{
@@ -757,8 +488,7 @@ templ questionBlockingBadge(blocking string) {
 	})
 }
 
-// designSessionEventTypeBadge is one round's kind in the timeline, through
-// the one mapper the five-round vocabulary has.
+// designSessionEventTypeBadge is a round's kind, via the round vocabulary's one mapper.
 templ designSessionEventTypeBadge(eventType string) {
 	{{ s := components.DesignSessionEventTypeStyle(eventType) }}
 	@htmxui.Badge(components.DesignSessionEventTypeLabel(eventType), s.Variant, s.Size, s.Soft, templ.Attributes{
@@ -766,32 +496,9 @@ templ designSessionEventTypeBadge(eventType string) {
 	})
 }
 
-// designSessionPropertiesCard is the rail's properties card: who opened the
-// session, and the design session's own id.
-//
-// The id is the copy chip the whole app shares -- same data-krill hook, same
-// data attribute, same head script -- so the clipboard behaviour is the one
-// already in use on the task detail, the milestone detail and the spec
-// blade. The chip shows the first eight characters with the whole value on
-// hover and in the clipboard, which is what a UUID read at a glance needs.
-//
-// Which id the chip carries is the whole of this card's naming: page.ID, the
-// design session's own id, the one this page is ABOUT and the one the URL
-// addresses. It is NOT opened_by_krill_session_id -- a chip whose label,
-// aria-label and data-krill hook all say "design session" while carrying the
-// krill session is how the two came to be confused in the first place.
-//
-// The krill session is not lost by that: it renders as its own "Krill
-// session" row below the chip, which is what FR d8146d9e asks for ("Opened
-// by ... plus the krill session it was opened through") and what
-// get_design_session returns. Two ids, two rows, neither standing in for
-// the other -- collapsing them was the defect.
-//
-// A session whose krill_session row could not be read shows the id chip and
-// NO "Opened by" line. The card does not offer an input to supply one: the
-// page's subject is a recorded conversation, and letting an operator type
-// an identity into it would put a name on a session nobody typed it for
-// (LB4).
+// designSessionPropertiesCard shows who opened the session and its id. The shared copy chip
+// carries page.ID (the design session), never the krill session, which gets its own row.
+// No "Opened by" input is offered when the subject cannot be read.
 templ designSessionPropertiesCard(page DesignSessionDetailPage) {
 	<section id={ designSessionPropertiesAnchor } class="card bg-base-100 border border-base-300">
 		<div class="card-body gap-3 p-4 text-sm">
@@ -806,12 +513,8 @@ templ designSessionPropertiesCard(page DesignSessionDetailPage) {
 			<div>
 				<dt class="text-base-content/70">Design session</dt>
 				<dd data-krill="design-session-id">
-					// The app's own id chip: disabled until the head script
-					// binds it, so a control that cannot work never looks
-					// live. It sits in a <dd> because that is the scope the
-					// shared script looks in. It carries page.ID -- the
-					// design session this page is about -- so the value an
-					// operator copies is the id the URL addresses.
+					// Disabled until the head script binds it; it sits in a <dd> because that is where the
+					// shared script looks. Carries page.ID, the id the URL addresses.
 					<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
 						aria-label="Copy design session id" data-krill="copy-task-id"
 						data-task-id={ page.ID }
@@ -822,13 +525,8 @@ templ designSessionPropertiesCard(page DesignSessionDetailPage) {
 				</dd>
 			</div>
 			if page.OpenedByKrillSessionID != "" {
-				// FR d8146d9e's "Opened by ... plus the krill session it
-				// was opened through", as its OWN row rather than as the
-				// chip's value: get_design_session returns both ids, the
-				// page renders both, and neither is asked to impersonate
-				// the other. Rendered even with no "Opened by" line above,
-				// because the design_session row holds this id whether or
-				// not the krill_session behind it could be read.
+				// The krill session the design session was opened through, as its own row; rendered even
+				// when "Opened by" is absent, since the design_session row always holds it.
 				<div>
 					<dt class="text-base-content/70">Krill session</dt>
 					<dd class="font-mono text-xs break-all" data-krill="design-session-opened-by-krill-session">{ page.OpenedByKrillSessionID }</dd>
@@ -839,11 +537,8 @@ templ designSessionPropertiesCard(page DesignSessionDetailPage) {
 	</section>
 }
 
-// idChipText is what an id chip shows: the first eight characters of a
-// UUID, or the whole value when it is shorter (which only a malformed id
-// ever is). Truncated because a full 36-character id is unreadable at chip
-// size; the whole value stays in data-task-id, in the title the script sets,
-// and in what the clipboard receives.
+// idChipText is an id chip's text: a UUID's first eight characters (or the whole value if
+// shorter); the full value stays in data-task-id, the title and the clipboard.
 func idChipText(id string) string {
 	if len(id) <= 8 {
 		return id
@@ -851,22 +546,9 @@ func idChipText(id string) string {
 	return id[:8]
 }
 
-// revisionEvent is one round of the session's log, as a daisyUI timeline
-// entry: a node on the spine, then a box carrying the round's kind, who
-// acted, when, and what it did.
-//
-// The box's header line is what an operator scans -- kind, actor, age --
-// and the sentence under it is the round's own content, composed in package
-// main (revisionEventSummary) because migration 008 stores no prose for it.
-//
-// connector draws the spine segment BETWEEN this entry and the one above it,
-// so the first round has none: a connector above the first node reads as a
-// round that happened before the session did.
-//
-// The detail disclosure underneath is not decoration: the event's own id and
-// its verified_against are the parity surface design_page_test.go compares
-// field by field against get_design_session's wire, so they stay rendered on
-// the page rather than being dropped in a redesign.
+// revisionEvent is one round as a timeline entry: kind, actor, age, and summary. The first
+// round has no connector above it. The detail disclosure keeps event id and verified_against
+// rendered, as they are compared against get_design_session's wire.
 templ revisionEvent(ev RevisionEventRow, connector bool) {
 	<li class="grid-cols-[0_auto_minmax(0,1fr)]" data-krill="revision-event" data-krill-seq-no={ itoa(ev.SeqNo) } data-krill-event-type={ ev.EventType }>
 		if connector {
@@ -890,18 +572,8 @@ templ revisionEvent(ev RevisionEventRow, connector bool) {
 	</li>
 }
 
-// revisionEventNode is the spine node: an unlabelled badge in this round's
-// own colour, so a reader scanning the timeline sees the shape of the
-// session -- draft, answer, signoff -- before reading a word of any of it.
-//
-// It goes through the same shared Badge primitive and the same mapper as the
-// round's labelled badge above it rather than a hand-written class string
-// (FR 21f5f0d0), which is also what makes the two impossible to drift: a
-// sixth round added to the mapper appears on the spine the day it is added.
-//
-// aria-hidden because it carries no information the labelled badge beside it
-// does not: a screen reader announcing an empty badge tells an operator
-// nothing.
+// revisionEventNode is the spine node: an unlabelled badge in the round's colour via the same
+// mapper as the labelled badge. aria-hidden since it adds nothing for screen readers.
 templ revisionEventNode(eventType string) {
 	{{ s := components.DesignSessionEventTypeStyle(eventType) }}
 	@htmxui.Badge("", s.Variant, htmxui.BadgeSizeXS, s.Soft, templ.Attributes{
@@ -910,27 +582,15 @@ templ revisionEventNode(eventType string) {
 	})
 }
 
-// revisionEventAt renders one round's instant: the relative age as the
-// visible text, the exact instant carried in the datetime, the title and
-// the data-krill-updated-at hook, so hovering answers "exactly when".
-//
-// This is statusTransitionAt's shape from the milestone status register,
-// reused rather than re-invented: a timeline whose age is relative-only
-// cannot be dated, and one whose exact time is visible-only cannot be
-// scanned.
+// revisionEventAt renders a round's relative age as text with the exact instant in datetime,
+// title and data-krill-updated-at.
 templ revisionEventAt(ev RevisionEventRow) {
 	<time class="text-sm text-base-content/70" data-krill="revision-event-at"
 		data-krill-updated-at={ ev.AtExact } datetime={ ev.AtExact } title={ ev.AtExact }>{ ev.AtRelative }</time>
 }
 
-// revisionEventDetail is the round's own record: what it changed, what it
-// opened, what it resolved, and the identifiers a reader needs to find the
-// same round through the API.
-//
-// It is a disclosure rather than always-visible body text because it is the
-// audit half of the entry: an operator scanning the timeline wants the
-// sentence, and an operator checking the record wants the ids, and showing
-// both at the same weight makes neither readable.
+// revisionEventDetail is a disclosure with the round's changes and API identifiers, kept apart
+// from the scannable summary.
 templ revisionEventDetail(ev RevisionEventRow) {
 	<details class="collapse collapse-arrow mt-2" data-krill="revision-event-detail">
 		<summary class="collapse-title min-h-0 py-1 text-xs text-base-content/70">Round detail</summary>
@@ -991,32 +651,9 @@ templ revisionEventDetail(ev RevisionEventRow) {
 	</details>
 }
 
-// FollowUpForm is the "submit follow-up" form, and the hx-post of the round
-// region -- doubled exactly as the new-session blade's form is:
-// method+action is the no-JS path (303 back to this session's detail page),
-// hx-post+hx-target+hx-swap is the htmx path.
-//
-// Its swap target is DesignSessionRoundAnchor, NOT itself. A round changes
-// three things at once -- the log gains the event, the rail loses the
-// questions it closed, and this form's textarea empties -- and all three
-// live in that one region. Swapping only the form would leave the other two
-// showing the state from before the answer, and on a refusal it would drop
-// the operator's ticked questions entirely, because those boxes are in the
-// rail (FR 1942d934).
-//
-// It carries NO resolve checkboxes. The rail owns them: the wireframe puts
-// the boxes beside the timeline and the submit control here, and HTML's
-// `form` attribute lets an input join a form it is not a descendant of, so
-// the boxes in the rail post with this form under no JavaScript at all. A
-// second copy inside the form would be the same question answered twice, and
-// an operator ticking one and not the other would have their answer
-// silently disagree with themselves.
-//
-// The textarea is deliberately not required: an answer round is meaningful
-// with follow-up text OR at least one ticked resolve box, so the empty
-// round is refused server-side (renderAnswerFormFailure) and the error is
-// shown inline here. The old inline <script> that blocked it client-side
-// was a second, worse copy of that rule.
+// FollowUpForm is the "submit follow-up" form: method+action for no-JS (303), hx-post for htmx.
+// It swaps DesignSessionRoundAnchor, not itself. Resolve boxes live in the rail via `form`. The
+// textarea is optional: an empty round is refused server-side (renderAnswerFormFailure).
 templ FollowUpForm(page DesignSessionDetailPage) {
 	<form
 		id={ FollowUpFormAnchor }
@@ -1033,15 +670,7 @@ templ FollowUpForm(page DesignSessionDetailPage) {
 			})
 		}
 		if len(page.OpenQuestions) == 0 && len(page.CheckedResolve) > 0 {
-			// The open questions could not be re-read, so there is nothing
-			// to show a checkbox against -- but the ids the operator ticked
-			// are still known, and a resubmit must not silently drop them.
-			// Carried as hidden inputs rather than fake checkboxes: the
-			// operator is not being asked to re-approve anything, we are
-			// preserving what they already chose.
-			//
-			// This is the one place a resolve id travels inside the form,
-			// and it is the case where there is no rail to render a box in.
+			// Questions could not be re-read, so carry the ticked ids as hidden inputs to preserve them.
 			<fieldset class="fieldset" data-krill="degraded-resolve">
 				<legend class="fieldset-legend">Still selected (this session's open questions could not be reloaded)</legend>
 				for qid := range page.CheckedResolve {

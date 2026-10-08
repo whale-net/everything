@@ -1,31 +1,6 @@
-// The Milestones table: every milestone of a product, highest position
-// first, with its status, its task progress, its FR budget and its outcome
-// (FR 5aec68f6).
-//
-// It is served at /products/{pid}/milestones, the console's own answer to
-// "where is this product's delivery" -- the view the pre-redesign delivery
-// page is superseded by, and the one a milestone's name links into.
-//
-// The rows come from two reads that are deliberately not merged. The
-// listing is app.spec's Delivery -- the same //krill/slice.Querier the MCP
-// tool list_product_delivery calls underneath, so a row's name, status,
-// outcome and FR budget are the delivery scope's own answers and cannot
-// drift from the tool's. The progress figures come from
-// SummarizeProductTaskProgress under ProductTaskScopeAll, because this
-// table lists EVERY milestone including the shipped ones whose bars the
-// in-flight scope would leave out (task_progress.go).
-//
-// The status filter is a query parameter, not a client-side hide: the rows
-// come back already filtered, so a reload, a shared link and a no-JS submit
-// all land on the same table. htmx layers an in-place swap on top of that
-// GET form, so changing the select never reloads the page around it.
-//
-// A milestone's milepebbles expand inline beneath their row (FR
-// a6a316e5), through the same arrangement: the expanded milestone's id is a
-// query parameter, and every expander href re-spells the status filter
-// beside it. Expanding therefore cannot drop the filter, because the filter
-// is in the URL the expander points at rather than in state the swap
-// happens to preserve.
+// The Milestones table at /products/{pid}/milestones: every milestone, highest position
+// first. Rows come from app.spec's Delivery (the list_product_delivery read) plus progress
+// under ProductTaskScopeAll; status filter and expansion live in the URL so reload/no-JS work.
 package main
 
 import (
@@ -43,28 +18,15 @@ import (
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
-// milestonesStatusQueryParam names the status filter. It is absent (or
-// empty) for "All statuses", mirroring the delivery read's own contract
-// that an empty statuses slice means every status rather than none.
+// milestonesStatusQueryParam names the status filter; absent or empty means all statuses.
 const milestonesStatusQueryParam = "status"
 
-// milestonesExpandQueryParam names the one milestone whose milepebbles are
-// shown. It is a query parameter for the reason the status filter is one
-// too -- see MilestonesPage's own note -- but its failure mode is milder: an
-// id that is not on this page (filtered away, or copied from another
-// product) expands nothing, which is a table that renders, not an error.
-//
-// It carries one id rather than a list because the table expands one row at
-// a time. A second expand while one is open replaces it, so the expander's
-// href for a collapsed row is the page's own URL plus its own id.
+// milestonesExpandQueryParam names the one milestone whose milepebbles are shown. An id
+// not on this page expands nothing; a second expand replaces the first.
 const milestonesExpandQueryParam = "expand"
 
-// milestonesStatusFilterError is the in-shell 400 a status outside the
-// store's eight is answered with. The refusal is deliberate rather than a
-// silent fallback to "All statuses": a hand-edited URL naming a status
-// that does not exist has a typo in it, and quietly showing the whole
-// table instead would leave the operator believing their filter applied
-// when it did not.
+// parseMilestoneStatusFilter rejects a status outside the store's eight rather than
+// silently showing all, so a typo is not mistaken for an applied filter.
 func (app *App) parseMilestoneStatusFilter(r *http.Request, productID uuid.UUID) (store.MilestoneStatus, error) {
 	raw := r.URL.Query().Get(milestonesStatusQueryParam)
 	if raw == "" {
@@ -79,20 +41,11 @@ func (app *App) parseMilestoneStatusFilter(r *http.Request, productID uuid.UUID)
 	return "", errUnknownMilestoneStatus
 }
 
-// errUnknownMilestoneStatus is the sentinel parseMilestoneStatusFilter
-// returns for a status the store's enumeration does not carry. It is
-// package-level so no caller can construct a different error for the same
-// refusal and answer it differently.
+// errUnknownMilestoneStatus is returned for a status the store does not define.
 var errUnknownMilestoneStatus = errors.New("milestone status is not one of the store's eight")
 
-// handleProductMilestones serves the product's Milestones table.
-//
-// The product is resolved from the URL first, so an id outside the
-// caller's scope is already an in-shell 404 before any read. The two reads
-// that follow are independent: a progress read that fails costs the
-// Progress column alone, never the names and statuses beside it, because a
-// table that dropped every row to report one unreadable figure would hide
-// the roadmap an operator came for.
+// handleProductMilestones serves the product's Milestones table. A failed progress read
+// costs only the Progress column, never the rows.
 func (app *App) handleProductMilestones(w http.ResponseWriter, r *http.Request) {
 	r, product, ok := app.resolveProductFromPath(w, r)
 	if !ok {
@@ -118,37 +71,21 @@ func (app *App) handleProductMilestones(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// milestoneExpansion is this request's row-level state: which milestone is
-// expanded, on which URL, under which status filter.
-//
-// It is one value rather than three arguments because all three travel
-// together -- the expander's href has to spell the filter back out beside
-// the expansion, and a caller that could pass a path from one request and a
-// filter from another would build a link that silently drops the operator's
-// filter on the way to the expanded row.
+// milestoneExpansion is this request's row state: path, status filter, expanded milestone.
+// Bundled so expander hrefs always re-spell the filter from the same request.
 type milestoneExpansion struct {
-	// Path is this page's own URL, the base every expander href is built
-	// on -- so a link can never point at a different page than the one the
-	// operator is looking at.
+	// Path is this page's own URL, the base of every expander href.
 	Path string
 
 	// Status is the active filter, carried into every expander href.
 	Status store.MilestoneStatus
 
-	// Expanded is the milestone whose milepebbles this request shows, or
-	// uuid.Nil for none. uuid.Nil is the zero state rather than a separate
-	// bool so "which row is open" has exactly one spelling.
+	// Expanded is the milestone whose milepebbles are shown, or uuid.Nil for none.
 	Expanded uuid.UUID
 }
 
-// parseMilestoneExpansion reads the expanded milestone id from the request.
-//
-// An absent, empty or unparseable value is uuid.Nil -- the same "nothing is
-// expanded" answer -- rather than an error. The difference from the status
-// filter is the consequence: a status outside the eight would make the
-// select lie about what it is showing, whereas an expand id that names no
-// row on this page expands nothing and leaves a table that still renders
-// every milestone it would have rendered anyway.
+// parseMilestoneExpansion reads the expanded id. Absent or invalid is uuid.Nil, not an error:
+// an unknown id just expands nothing.
 func parseMilestoneExpansion(r *http.Request) uuid.UUID {
 	raw := r.URL.Query().Get(milestonesExpandQueryParam)
 	if raw == "" {
@@ -161,31 +98,20 @@ func parseMilestoneExpansion(r *http.Request) uuid.UUID {
 	return id
 }
 
-// expandHref is the page's URL with mid expanded and the status filter
-// carried through unchanged.
-//
-// The filter is re-spelled on every link rather than assumed to survive,
-// because "expanding must not lose the status filter" is a property of the
-// URL the expander actually points at -- not of the request that happened to
-// render it. Without the status value here, an expander under a "shipped"
-// filter would hand back the whole table.
+// expandHref is the page URL with mid expanded; the status filter is re-spelled so
+// expanding never drops it.
 func (e milestoneExpansion) expandHref(mid uuid.UUID) string {
 	return e.href(map[string][]string{
 		milestonesExpandQueryParam: {mid.String()},
 	})
 }
 
-// collapseHref is the same URL with mid no longer expanded: the filter is
-// carried, the expansion is dropped. It is what the expander points at once
-// its row is open, so closing a row is the same in-place swap opening one
-// was.
+// collapseHref is the page URL with the filter kept and the expansion dropped.
 func (e milestoneExpansion) collapseHref(mid uuid.UUID) string {
 	return e.href(nil)
 }
 
-// href assembles the page's own URL with the status filter plus whatever
-// extra parameters the caller adds, dropping empty values so an unfiltered
-// table's links carry no stray "?status=".
+// href builds the page URL with the status filter plus extra params, omitting empty values.
 func (e milestoneExpansion) href(extra map[string][]string) string {
 	q := url.Values{}
 	if e.Status != "" {
@@ -202,16 +128,8 @@ func (e milestoneExpansion) href(extra map[string][]string) string {
 	return e.Path + "?" + q.Encode()
 }
 
-// renderMilestones writes the table: the whole page for a browser, and
-// the region's own fragment for an htmx request -- which is what the
-// status select's swap asks for, so changing the filter replaces the
-// region rather than the page around it.
-//
-// The expander swaps the same region, for the same reason: it is the one
-// element that must not be re-rendered around. The select showing the
-// filter that produced these rows lives inside the region, so a swap that
-// replaced only the table would leave the control showing a choice the
-// rows no longer answer to.
+// renderMilestones writes the full page, or the region fragment for htmx. The status select
+// lives inside the swapped region so it always matches the rows.
 func (app *App) renderMilestones(w http.ResponseWriter, r *http.Request, product store.Product, listing slice.DeliveryListing, expansion milestoneExpansion) {
 	page := app.buildMilestonesPage(r, product, listing, expansion)
 	if r.Header.Get("HX-Request") != "" {
@@ -221,19 +139,8 @@ func (app *App) renderMilestones(w http.ResponseWriter, r *http.Request, product
 	app.renderShell(w, r, "Milestones", r.URL.Path, pages.Milestones(page))
 }
 
-// buildMilestonesPage assembles the region's view model from the delivery
-// listing and the product-wide progress read.
-//
-// The two reads are joined by milestone id, and only by milestone id: a
-// row's name, status, outcome and FR budget come from the listing, its
-// progress figures from the progress read. Neither read's fields are
-// re-derived from the other, so a row cannot show a status from one read
-// beside progress counted by a different rule.
-//
-// A failed progress read is not a failed page: ProgressError carries the
-// sentence every row shows in place of its bar, and the rest of the table
-// still answers. Only the listing read failing takes the page down,
-// because the table IS the listing.
+// buildMilestonesPage joins the delivery listing and progress read by milestone id only.
+// A failed progress read sets ProgressError; only a failed listing fails the page.
 func (app *App) buildMilestonesPage(r *http.Request, product store.Product, listing slice.DeliveryListing, expansion milestoneExpansion) pages.MilestonesPage {
 	page := pages.MilestonesPage{
 		Product:  productHeaderOf(product),
@@ -241,11 +148,6 @@ func (app *App) buildMilestonesPage(r *http.Request, product store.Product, list
 		Statuses: milestoneStatusOptions(expansion.Status),
 	}
 
-	// A failed progress read costs the Progress column, not the table: the
-	// rows are still built from the listing alone, so the operator keeps
-	// the names, statuses, budgets and outcomes and each Progress cell
-	// says what could not be read. A table that vanished entirely would
-	// leave them with neither the roadmap nor the reason it is missing.
 	progress, err := app.milestoneProgressByID(r.Context(), product.ID)
 	if err != nil {
 		logger.Error("milestones progress read failed", "product", product.ID.String(), "error", err)
@@ -259,15 +161,8 @@ func (app *App) buildMilestonesPage(r *http.Request, product store.Product, list
 	return page
 }
 
-// milestonesEmptyDetail is the empty state's second sentence, naming the
-// filter that produced it.
-//
-// The two cases are genuinely different and must not read alike: a product
-// with no milestone in the chosen status has plenty of milestones under
-// "All statuses", while a product with no milestones at all is a
-// different page. Without the filter named, both render as "no
-// milestones", and an operator filtering to "shipped" concludes their
-// product was never built.
+// milestonesEmptyDetail names the active filter so "none in this status" is not mistaken
+// for "no milestones at all".
 func milestonesEmptyDetail(status store.MilestoneStatus) string {
 	if status == "" {
 		return "This product has no milestones yet."
@@ -276,28 +171,12 @@ func milestonesEmptyDetail(status store.MilestoneStatus) string {
 		"”. Choose “All statuses” to see every milestone."
 }
 
-// milestonesProgressError is the sentence the Progress column shows when
-// the read failed. It is a package-level constant so the alert above the
-// table and every row's cell say one thing.
+// milestonesProgressError is shared by the table alert and every row's cell.
 const milestonesProgressError = "Task progress could not be read. See the logs."
 
-// milestoneProgressByID reads every milestone and milepebble of the
-// product's progress under the all-containers scope, indexed by the
-// container's own id -- the milestone's for a milestone row, the
-// milepebble's for a milepebble one.
-//
-// The scope is ProductTaskScopeAll, not the default incomplete one: this
-// table lists the WHOLE roadmap, and a shipped milestone is a row here --
-// its bar at full is the answer an operator wants, and the incomplete
-// scope would answer "No tasks yet" for work that is finished.
-//
-// Indexing by the container's own id is what lets a milepebble's row show
-// the milepebble's own figures. The milestone id would not do: a milepebble
-// is its own `milestone_ref` row, and the read hands back the PARENT's id
-// in Milestone for a milepebble's container, so a milestone-keyed index
-// would collide a parent and each of its milepebbles onto one entry --
-// which is exactly the mistake this table made before the inline expansion
-// existed, and which the expansion is what now needs undone.
+// milestoneProgressByID reads progress under ProductTaskScopeAll (shipped milestones are rows
+// too), keyed by the container's own id: a milepebble's row carries its parent's id in
+// Milestone, so a milestone-keyed index would collide parent and children.
 func (app *App) milestoneProgressByID(ctx context.Context, productID uuid.UUID) (map[uuid.UUID]store.ContainerTaskProgress, error) {
 	scopeID, err := app.soleScopeID(ctx)
 	if err != nil {
@@ -322,35 +201,11 @@ func (app *App) milestoneProgressByID(ctx context.Context, productID uuid.UUID) 
 	return byContainer, nil
 }
 
-// milestoneRowsOf builds one row per milestone, with its figures from the
-// progress read, in the FR's order: highest roadmap position first, then
-// id.
-//
-// The sort is here rather than inherited because the listing arrives
-// position ASC -- ascending is the renderer's creation order, and this
-// table reads newest-first. Position is carried on the listing entry for
-// exactly this: reversing a sorted slice would also reverse the id
-// tiebreak within one position, which is not the same order.
-//
-// The rows are the listing's milestones, re-filtered on each milestone's
-// OWN status. The delivery read's filter deliberately keeps a milestone
-// whose milepebble matched even when the milestone itself did not (see
-// //krill/slice's ListProductDelivery), which is right for a wire shape
-// that nests milepebbles under their parent and wrong for this table: a
-// row badged "in progress" under a "shipped" filter would be the one
-// obvious way for the select to lie. So the read narrows the work and
-// this filter decides the rows -- and it is the milestone's own status
-// either way, never a milepebble's.
-//
-// A milestone's milepebbles come through this same filter, so expanding a
-// row under a status filter shows the milepebbles in that status and not
-// the whole cut. The alternative -- showing all of them regardless -- would
-// put statuses the operator filtered away directly under the filter that
-// excluded them.
+// milestoneRowsOf builds rows sorted by position DESC then id; reversing the ASC listing
+// would flip the tiebreak. Rows are re-filtered on each milestone's own status, since the
+// delivery read keeps a milestone whose milepebble matched.
 func milestoneRowsOf(productID uuid.UUID, listing slice.DeliveryListing, progress map[uuid.UUID]store.ContainerTaskProgress, expansion milestoneExpansion) []pages.MilestoneRow {
-	// The listing's own slice is not sorted: a caller may still be
-	// holding it, and sorting it in place would reorder the delivery
-	// page's rows under this one.
+	// Copy before sorting: a caller may still hold the listing's slice.
 	entries := make([]slice.MilestoneListingEntry, 0, len(listing.Milestones))
 	for _, m := range listing.Milestones {
 		if expansion.Status == "" || m.Status == expansion.Status {
@@ -361,11 +216,7 @@ func milestoneRowsOf(productID uuid.UUID, listing slice.DeliveryListing, progres
 		if entries[i].Position != entries[j].Position {
 			return entries[i].Position > entries[j].Position
 		}
-		// The FR's tiebreak, and the same pair the product task read
-		// sorts its own rows by (task_product_list.go's ORDER BY
-		// m.position DESC, m.id ASC), so a milestone and its tasks appear
-		// in one consistent order. The uuid's own bytes compare the way
-		// Postgres compares the id column.
+		// Matches the product task read's ORDER BY m.position DESC, m.id ASC.
 		return entries[i].ID.String() < entries[j].ID.String()
 	})
 
@@ -376,20 +227,13 @@ func milestoneRowsOf(productID uuid.UUID, listing slice.DeliveryListing, progres
 	return rows
 }
 
-// milestoneRowsWithoutProgress is milestoneRowsOf with the figures the
-// failed read could not supply, for the case where it failed at all.
+// milestoneRowsWithoutProgress builds rows when the progress read failed.
 func milestoneRowsWithoutProgress(productID uuid.UUID, listing slice.DeliveryListing, expansion milestoneExpansion) []pages.MilestoneRow {
 	return milestoneRowsOf(productID, listing, nil, expansion)
 }
 
-// milestoneRow is one milestone's row: the listing entry's own fields, its
-// progress figures, and the milepebbles the expander reveals.
-//
-// Figures are read off the progress read's own Done() and Total() rather
-// than summed from the lane counts, for the reason the read documents: it
-// owns how a cancelled task counts, and re-deriving the arithmetic here is
-// how a progress column comes to disagree with the lane breakdown beside
-// it.
+// milestoneRow is one milestone's row. Figures are the read's own Done() and Total(),
+// so cancelled-task counting has one definition.
 func milestoneRow(productID uuid.UUID, m slice.MilestoneListingEntry, progress map[uuid.UUID]store.ContainerTaskProgress, expansion milestoneExpansion) pages.MilestoneRow {
 	row := pages.MilestoneRow{
 		ID:           m.ID.String(),
@@ -409,12 +253,8 @@ func milestoneRow(productID uuid.UUID, m slice.MilestoneListingEntry, progress m
 	return row
 }
 
-// milestoneRowContainer is the milestone a table row links from, in the
-// form the product-wide scope query needs.
-//
-// It is built here rather than read back through resolveTaskContainer: the
-// listing already holds the milestone and its kind, so resolving it again
-// would make a row's links depend on a second read of the same product.
+// milestoneRowContainer is a row's milestone as a taskContainer, built from the listing to
+// avoid a second read.
 func milestoneRowContainer(m slice.MilestoneListingEntry) taskContainer {
 	return taskContainer{
 		ID:     m.ID,
@@ -424,34 +264,18 @@ func milestoneRowContainer(m slice.MilestoneListingEntry) taskContainer {
 	}
 }
 
-// progressCell is one container's progress figures, or the sentence saying
-// they could not be read.
-//
-// The id argument is the container this cell is FOR, and it is compared
-// rather than trusted by map presence: a missing key and a zero-valued row
-// both read as absent from the map, and only the comparison says which
-// container the read actually accounted for.
+// progressCell is a container's figures, or an error sentence when the read did not account
+// for id; a zero-valued map entry is not proof the read covered it.
 func progressCell(progress store.ContainerTaskProgress, id uuid.UUID) pages.ProgressCell {
 	if !progressAccountsFor(progress, id) {
-		// The figures stay zero, which renders as "No tasks yet" -- but the
-		// cell says otherwise instead. The honest reading of a container
-		// the read did not account for is not the same as one it counted
-		// as empty: a read that came back short is a different fact from a
-		// milestone with no work, and this branch exists so the two are not
-		// silently the same.
+		// A container the read skipped is not the same as one counted as empty.
 		return pages.ProgressCell{ProgressError: milestonesProgressError}
 	}
 	return pages.ProgressCell{Done: progress.Done(), Total: progress.Total()}
 }
 
-// progressAccountsFor reports whether this progress row is the one for the
-// container id names.
-//
-// For a milepebble that means the row's OWN Milepebble ref, not the
-// Milestone ref beside it: the read carries the parent milestone's id in
-// Milestone for a milepebble's container, so checking Milestone alone would
-// match a milepebble's figures against its parent and, on a parent the
-// read skipped, match a zero row as if the read had answered.
+// progressAccountsFor reports whether this row is id's. For a milepebble it checks the
+// Milepebble ref, since Milestone holds the parent's id.
 func progressAccountsFor(progress store.ContainerTaskProgress, id uuid.UUID) bool {
 	if id == uuid.Nil {
 		return false
@@ -462,13 +286,7 @@ func progressAccountsFor(progress store.ContainerTaskProgress, id uuid.UUID) boo
 	return progress.Milepebble == nil && progress.Milestone.ID == id
 }
 
-// milepebbleRows is one milestone's milepebbles, in the listing's own
-// order, with each one's figures from the progress read.
-//
-// A milestone with none cut yields nil rather than an empty slice, so the
-// row's HasMilepebbles answers the same way for "none" and "not built" --
-// the expander renders off that, and an empty slice would render identically
-// anyway.
+// milepebbleRows is a milestone's milepebbles in listing order; nil when none are cut.
 func milepebbleRows(productID uuid.UUID, m slice.MilestoneListingEntry, progress map[uuid.UUID]store.ContainerTaskProgress) []pages.MilepebbleRow {
 	if len(m.Milepebbles) == 0 {
 		return nil
@@ -479,10 +297,7 @@ func milepebbleRows(productID uuid.UUID, m slice.MilestoneListingEntry, progress
 			ID:     mp.ID.String(),
 			Name:   mp.Name,
 			Status: string(mp.Status),
-			// The milepebble's own two work views, scoped to the
-			// milepebble rather than the milestone: an operator expanding a
-			// milepebble is asking for the work cut from THAT cut, and links
-			// to the parent's would answer a different question.
+			// Scoped to the milepebble itself, not its parent milestone.
 			TasksPath: productTaskContainerHref(productID, tasksSuffix, taskContainer{
 				ID:     mp.ID,
 				Name:   mp.Name,
@@ -501,13 +316,8 @@ func milepebbleRows(productID uuid.UUID, m slice.MilestoneListingEntry, progress
 	return rows
 }
 
-// milestoneStatusOptions is the status select's options: "All statuses"
-// first, then the store's eight in its own order, with the one this
-// request filtered to marked.
-//
-// The set is store.MilestoneStatusOrder rather than a UI copy, so the
-// select offers exactly what the parser accepts and a ninth status appears
-// in both without a second edit.
+// milestoneStatusOptions is "All statuses" then store.MilestoneStatusOrder, so the select
+// offers exactly what the parser accepts.
 func milestoneStatusOptions(selected store.MilestoneStatus) []pages.MilestoneStatusOption {
 	options := make([]pages.MilestoneStatusOption, 0, len(store.MilestoneStatusOrder)+1)
 	options = append(options, pages.MilestoneStatusOption{
@@ -515,18 +325,15 @@ func milestoneStatusOptions(selected store.MilestoneStatus) []pages.MilestoneSta
 	})
 	for _, status := range store.MilestoneStatusOrder {
 		options = append(options, pages.MilestoneStatusOption{
-			Value:     string(status),
-			Label:     string(status),
-			Selected:  status == selected,
+			Value:    string(status),
+			Label:    string(status),
+			Selected: status == selected,
 		})
 	}
 	return options
 }
 
-// milestonesStatusFilter is the filter the delivery read takes: nil for
-// every status, the one-element slice for a chosen one -- the querier's
-// own contract treats an empty slice as "all" too, but nil is what says
-// "no filter was chosen" in the shape every other caller of the read uses.
+// milestonesStatusFilter is the delivery read's filter: nil for all, else one status.
 func milestonesStatusFilter(status store.MilestoneStatus) []store.MilestoneStatus {
 	if status == "" {
 		return nil
@@ -534,9 +341,7 @@ func milestonesStatusFilter(status store.MilestoneStatus) []store.MilestoneStatu
 	return []store.MilestoneStatus{status}
 }
 
-// renderMilestonesStatusProblem answers a status the store's enumeration
-// does not carry: a 400 naming the eight that exist, rendered inside the
-// shell with a way back to the unfiltered table.
+// renderMilestonesStatusProblem renders an in-shell 400 for an unknown status.
 func (app *App) renderMilestonesStatusProblem(w http.ResponseWriter, r *http.Request, product store.Product) {
 	app.renderShellStatus(w, r, "Unknown status", r.URL.Path, pages.SpecStatus(pages.StatusPage{
 		Title:    "That is not one of the eight statuses",
@@ -546,8 +351,7 @@ func (app *App) renderMilestonesStatusProblem(w http.ResponseWriter, r *http.Req
 	}), http.StatusBadRequest)
 }
 
-// milestoneStatusFilterDetail names the values the select accepts, so a
-// mistyped status says which spellings would have worked.
+// milestoneStatusFilterDetail lists the accepted statuses for the 400 message.
 func milestoneStatusFilterDetail() string {
 	quoted := make([]string, 0, len(store.MilestoneStatusOrder))
 	for _, status := range store.MilestoneStatusOrder {
@@ -561,12 +365,8 @@ func milestonesPath(productID uuid.UUID) string {
 	return productHref(productID, milestonesSuffix)
 }
 
-// renderMilestonesReadError maps the delivery read's failure onto a page.
-//
-// store.ErrNotFound -- an unknown or superseded product -- is a 404 the
-// operator can act on; anything else is a genuine read failure, logged at
-// ERROR before a 500. Both render inside the shell rather than as a bare
-// http.Error string, for the reason every other route here does it.
+// renderMilestonesReadError renders store.ErrNotFound as a 404 and anything else as a
+// logged 500, both inside the shell.
 func (app *App) renderMilestonesReadError(w http.ResponseWriter, r *http.Request, product store.Product, err error) {
 	if errors.Is(err, store.ErrNotFound) {
 		app.renderShellStatus(w, r, "Not found", r.URL.Path, pages.SpecStatus(pages.StatusPage{

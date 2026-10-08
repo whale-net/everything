@@ -1,25 +1,11 @@
 package pages
 
-// The Spec page's tab strip and the swap region the four tabs share.
-//
-// The four per-product spec URLs ARE the four tabs' addresses, so this
-// file owns no routing: the strip is built from the paths the handlers
-// already serve, and each tab's href is the real address its own page is
-// served at. A tab link is therefore both a plain link and an hx-get of
-// the same address -- with JavaScript off it navigates and lands on the
-// same tab, with it on the panel swaps in place.
-//
-// The strip is INSIDE the region rather than beside it. A strip that were
-// its own swap target would need the served fragment to carry two
-// top-level nodes -- the panel and the re-marked strip -- and htmx's
-// outerHTML inserts EVERY top-level node into the target, so each click
-// would splice a duplicate strip into the page (README's swap-target
-// rule, applied the way TaskDetailTabs applies it).
+// The Spec page's tab strip and shared swap region. Each tab's href is the
+// real page address, also used as its hx-get. The strip lives inside the region:
+// outerHTML inserts every top-level node, so a separate strip would duplicate.
 
-// SpecPanelAnchor is the DOM id of the swap region: the hx-target every
-// tab names, and the id the served fragment's ROOT must carry. Without it
-// on the root, htmx deletes the element it was asked to replace and every
-// later tab click is a no-op that never reaches the server.
+// SpecPanelAnchor is the swap region's id; the served fragment's root must
+// carry it or htmx drops the element and later tab clicks become no-ops.
 const SpecPanelAnchor = "krill-spec-panel"
 
 // SpecPanelBodyAnchor is the inner region the active panel renders into,
@@ -49,14 +35,8 @@ type SpecTab struct {
 	Active bool
 }
 
-// SpecTabsPage is the whole Spec page: the strip and the active panel,
-// together, as one swap region.
-//
-// Blade is the quick-look region the panel's Feature links open into. It
-// lives inside the swap region so a tab click replaces it along with the
-// panel -- a blade belongs to the panel it was opened from -- and it is
-// rendered whether or not a blade is showing, because its id is the target
-// those links name.
+// SpecTabsPage is the whole Spec page as one swap region. Blade lives inside
+// it so a tab click replaces it, and always renders since links target its id.
 type SpecTabsPage struct {
 	Tabs  []SpecTab
 	Tab   string
@@ -64,11 +44,8 @@ type SpecTabsPage struct {
 	Blade templ.Component
 }
 
-// SpecTabs renders the strip above the active panel, both inside the one
-// region every tab swaps. The rest of the page -- shell, header, product
-// banner -- sits outside it and is never re-derived by a tab click.
-// SpecPage is the full-page frame around the tab region: the page heading
-// sits outside the swap region, so a tab click never re-renders it.
+// SpecPage is the full-page frame around the tab region; the heading sits
+// outside the swap region, so a tab click never re-renders it.
 templ SpecPage(productName string, tabs templ.Component) {
 	<div class="space-y-4" data-krill="spec-page">
 		<div class="flex flex-wrap items-center gap-3">
@@ -97,12 +74,8 @@ templ SpecTabs(page SpecTabsPage) {
 	</div>
 }
 
-// specTabStrip is the tablist: four real links, each carrying the htmx
-// attributes that swap the region in place and push the tab's own URL.
-//
-// aria-selected is emitted on every tab rather than only the active one,
-// because an omitted aria-selected on a role="tab" leaves its state
-// undefined rather than false.
+// specTabStrip is the tablist: real links that also swap in place and push
+// their URL. aria-selected is on every tab, since omitted means undefined.
 templ specTabStrip(tabs []SpecTab) {
 	<div role="tablist" class="tabs tabs-border" data-krill="spec-tabs">
 		for _, t := range tabs {
