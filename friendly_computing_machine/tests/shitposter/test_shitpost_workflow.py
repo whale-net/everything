@@ -465,3 +465,17 @@ def test_summon_writer_unavailable_sends_notice_and_no_skip(engine, slack, monke
     assert res.outcome == ShitpostOutcome.FAILED_GENERATION
     assert slack.ephemerals[0]["text"] == NO_SHITPOST_NOTICE
     assert _skips(engine) == []
+
+
+def test_riff_writer_unavailable_sends_notice_and_no_skip(engine, slack, monkeypatch):
+    w = FakeWhagent([])
+    w.start_session = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("whagent down"))
+    res = _run(w, monkeypatch, ShitpostParams(
+        CHAN, "riff", principal_iss=HUMAN[0], principal_sub=HUMAN[1],
+        thread_ts="99.000001", thread_owner_slack_user_id="U_OWNER",
+        notice_slack_user_id="U_S",
+    ))
+    assert res.outcome == ShitpostOutcome.FAILED_GENERATION
+    assert slack.posts == []
+    assert slack.ephemerals[0]["text"] == NO_SHITPOST_NOTICE
+    assert _skips(engine) == []
