@@ -406,3 +406,13 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# Retired/merged attribute and stale lore folds into consolidated lore (reflector and snapshot hooks).
+py_test(
+    name = "test_shitposter_fold",
+    size = "small",
+    srcs = [
+        "shitposter/test_fold_consolidated_lore.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
