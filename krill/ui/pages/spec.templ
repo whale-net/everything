@@ -1,25 +1,8 @@
 package pages
 
-// The spec browser's page bodies: the product index, and a product's
-// capability map, load-bearing decisions, personas, and non-goals -- each
-// a templ component the shell seam composes into either the full chrome
-// (renderShell) or a bare fragment (renderFragment).
-//
-// The four per-product bodies are the four PANELS of one tabbed Spec
-// page; the tab strip and the region they swap live in spec_tabs.templ.
-// Each component below still renders its own section root and its own
-// Refresh button, so a panel can be swapped on its own -- which is what
-// a Refresh press asks for.
-//
-// Each view-model struct is declared here, beside the component that
-// renders it; the pure builders that populate them stay in //krill/ui
-// (package main), so the field-parity tests keep exercising the same
-// functions the HTTP handlers call.
-//
-// Path is the page's own URL, carried on the view model rather than
-// recomputed in the component: it is what the manual Refresh button
-// re-requests, and a component that rebuilt its own route would be
-// guessing at the routing table's spelling.
+// The spec browser's page bodies. The four per-product bodies are the panels of
+// the tabbed Spec page (spec_tabs.templ); each keeps its own root and Refresh so
+// it can swap alone. Path is carried so Refresh never guesses the route.
 
 import (
 	"strconv"
@@ -28,9 +11,7 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// Stable DOM ids each spec page's content region carries, so that page's
-// own Refresh button can target the region it replaces. Only one product
-// page renders at a time, so the ids need not be per-product.
+// DOM ids of each spec page's content region, targeted by its Refresh button.
 const (
 	ProductsAnchor     = "krill-spec-products"
 	CapabilityMapAnchor = "krill-spec-capability-map"
@@ -39,59 +20,43 @@ const (
 	NonGoalsAnchor     = "krill-spec-non-goals"
 )
 
-// ProductHeader is the common "which product am I looking at" banner the
-// per-product pages show.
+// ProductHeader is the per-product banner.
 type ProductHeader struct {
 	Name   string
 	Vision string
 	Href   string // the product's capability-map page
 }
 
-// ProductListItem is one row of the product index.
 type ProductListItem struct {
 	Name        string
 	Vision      string
 	CapabilityH string // /spec/products/{id} -- the capability map
 }
 
-// ProductsPage is the product index: every current product an operator
-// can browse into.
 type ProductsPage struct {
 	Path  string
 	Items []ProductListItem
 }
 
-// CapabilityFeatureSet is one FeatureSet and the Features nested under it.
-//
-// A feature set is a COLLAPSIBLE section: FeatureCount heads it, and the
-// expansion lives in Expanded plus the two hrefs its toggle points at,
-// rather than in a <details open> the browser alone owns -- so a reload, a
-// shared link and the later quick-look round-trip all restore it (FR
-// 18afc5a8).
+// CapabilityFeatureSet is one FeatureSet and its Features. Expansion lives in the
+// URL, not a browser-owned <details>, so reloads and shared links restore it.
 type CapabilityFeatureSet struct {
 	ID          string // EntityRef.ID -- the surrogate id, as get_product_slice returns it
 	Name        string
 	Description string
 	Features    []CapabilityFeature
 
-	// FeatureCount is len(Features), shown as the heading's badge. It is a
-	// field rather than a count the template recomputes, so the badge and
-	// the table beneath it cannot disagree.
+	// FeatureCount is a field so the badge and the table cannot disagree.
 	FeatureCount int
 
-	// Expanded is whether THIS request shows the section's table. Only one
-	// section is open at a time, and which one is the URL's answer.
+	// Expanded is whether this request shows the section; the URL opens at most one.
 	Expanded bool
 
-	// ExpandHref / CollapseHref are the toggle's two targets: the page's
-	// own tab path with this section open, and with it closed.
 	ExpandHref   string
 	CollapseHref string
 }
 
-// ToggleHref is where the section's expander points right now -- the
-// collapse URL while it is open, the expand URL while it is closed -- so
-// the link and the rendered state cannot drift apart.
+// ToggleHref is the expander's current target, derived from Expanded.
 func (fs CapabilityFeatureSet) ToggleHref() string {
 	if fs.Expanded {
 		return fs.CollapseHref
@@ -99,8 +64,7 @@ func (fs CapabilityFeatureSet) ToggleHref() string {
 	return fs.ExpandHref
 }
 
-// ToggleLabel is the expander's accessible name, saying what pressing it
-// does rather than which icon it shows.
+// ToggleLabel says what pressing the expander does.
 func (fs CapabilityFeatureSet) ToggleLabel() string {
 	if fs.Expanded {
 		return "Collapse " + fs.Name
@@ -108,9 +72,7 @@ func (fs CapabilityFeatureSet) ToggleLabel() string {
 	return "Expand " + fs.Name
 }
 
-// ToggleAriaExpanded is the toggle's aria-expanded value. It is a method
-// rather than a raw bool because aria-expanded takes the strings "true" and
-// "false", and emitting "false" is not emitting nothing.
+// ToggleAriaExpanded returns "true"/"false"; aria-expanded needs the literal string.
 func (fs CapabilityFeatureSet) ToggleAriaExpanded() string {
 	if fs.Expanded {
 		return "true"
@@ -118,93 +80,60 @@ func (fs CapabilityFeatureSet) ToggleAriaExpanded() string {
 	return "false"
 }
 
-// CapabilityFeature is one Feature and the Requirements nested under it.
 type CapabilityFeature struct {
 	ID          string // EntityRef.ID
 	Number      int    // Cn -- the stored DisplayNumber, the number a reader cites
 	Name        string
 	Description string
 
-	// RequirementCount is the count the table's Requirements column shows.
-	// It is len(Requirements) -- the same slice rows the nested list below
-	// renders -- so the number an operator reads is never a second read's
-	// disagreeing answer about the same feature.
+	// RequirementCount is len(Requirements), so the count matches the nested list.
 	RequirementCount int
 	Requirements     []CapabilityRequirement
 
-	// Milestone is the Milestone column's cell: which milestone delivers
-	// this feature, if any (FR 18afc5a8).
 	Milestone CapabilityMilestone
 
-	// QuickLookHref is the feature's own blade URL -- the address the
-	// name below is a real link to, so the quick look opens by
-	// navigation with JavaScript off and by an in-place swap with it on
-	// (FR f7eee645). It is carried rather than rebuilt in the template
-	// because the path is the routing table's spelling, not the
-	// component's.
+	// QuickLookHref is the feature's blade URL: a real link without JS, an in-place
+	// swap with it.
 	QuickLookHref string
 }
 
-// CapabilityMilestone is one feature row's Milestone cell: the milestone
-// that delivers the feature, a count of the several that deliver its
-// requirements, or the reason nothing could be said.
-//
-// The three states are separate fields rather than one optional struct so
-// the component never has to infer which case it is in: a feature nothing
-// delivers is an ordinary answer (Kind none, cell blank), while an
-// unreadable delivery listing is a failure the operator has to be told
-// about (Kind unread, cell carries Message).
+// CapabilityMilestone is one feature row's Milestone cell. "Nothing delivers it"
+// (blank) and "listing unreadable" (Message) are distinct states.
 type CapabilityMilestone struct {
-	// Kind is which of the three states this cell is: CapabilityMilestoneNamed,
-	// CapabilityMilestoneSeveral, CapabilityMilestoneNone or
-	// CapabilityMilestoneUnread.
+	// Kind is one of the CapabilityMilestone* constants.
 	Kind string
 
-	// Name is the delivering milestone's name, set only for
-	// CapabilityMilestoneNamed.
+	// Name is set only for CapabilityMilestoneNamed.
 	Name string
 
-	// Status is that milestone's derived status string -- one of the
-	// eight-value store.MilestoneStatus set, spelled as the wire word.
-	// The badge's colour comes from components.MilestoneStatusStyle on this
-	// value, the same call the Milestones table makes, so the two pages can
-	// never disagree about what a status looks like.
+	// Status is the milestone's wire status; colour comes from the same
+	// MilestoneStatusStyle the Milestones table uses.
 	Status string
 
-	// Count is how many distinct milestones deliver this feature's
-	// requirements, set only for CapabilityMilestoneSeveral (and for
-	// CapabilityMilestoneNamed it is 1).
+	// Count is the number of delivering milestones (1 for Named).
 	Count int
 
-	// Message is what an unreadable delivery read states in every cell,
-	// set only for CapabilityMilestoneUnread. It is never empty there: a
-	// failed read must not render as a blank cell, which would be a claim
-	// about delivery that nobody could make.
+	// Message is set, never empty, for CapabilityMilestoneUnread: a failed read must
+	// not render as a blank cell.
 	Message string
 }
 
-// The four states a Milestone cell can be in.
+// The states a Milestone cell can be in.
 const (
-	// CapabilityMilestoneNamed: exactly one milestone delivers this
-	// feature, or -- when none delivers the feature itself -- exactly one
-	// delivers its requirements. The cell names it.
+	// CapabilityMilestoneNamed: one milestone delivers the feature (or, failing that,
+	// all its requirements).
 	CapabilityMilestoneNamed = "named"
 
-	// CapabilityMilestoneSeveral: more than one milestone delivers the
-	// feature's requirements. The cell is a neutral "N milestones" badge
-	// rather than a name, because there is no single milestone to name.
+	// CapabilityMilestoneSeveral: several milestones deliver its requirements.
 	CapabilityMilestoneSeveral = "several"
 
-	// CapabilityMilestoneNone: nothing delivers this feature or any of its
-	// requirements. The cell is blank -- a real answer, not a failure.
+	// CapabilityMilestoneNone: nothing delivers it; a blank cell, not a failure.
 	CapabilityMilestoneNone = "none"
 
 	// CapabilityMilestoneUnread: the delivery listing could not be read.
-	// The cell carries Message; it is never blank.
 	CapabilityMilestoneUnread = "unread"
 )
 
-// CapabilityRequirement is one FR or NFR under a Feature.
 type CapabilityRequirement struct {
 	ID   string // EntityRef.ID -- the surrogate id, so a reader can cite the exact row
 	Kind string // "FR" or "NFR"
@@ -212,14 +141,12 @@ type CapabilityRequirement struct {
 	Body string
 }
 
-// CapabilityPage is one product's capability map, nested by parent.
 type CapabilityPage struct {
 	Product     ProductHeader
 	Path        string
 	FeatureSets []CapabilityFeatureSet
 }
 
-// DecisionItem is one load-bearing decision row.
 type DecisionItem struct {
 	ID     string // EntityRef.ID
 	Number int    // LBn -- the stored DisplayNumber
@@ -227,28 +154,24 @@ type DecisionItem struct {
 	Body   string
 }
 
-// DecisionsPage is one product's load-bearing decisions.
 type DecisionsPage struct {
 	Product   ProductHeader
 	Path      string
 	Decisions []DecisionItem
 }
 
-// PersonaItem is one persona row.
 type PersonaItem struct {
 	ID          string // the surrogate id, as list_personas returns it
 	Name        string
 	Description string
 }
 
-// PersonasPage is one product's personas.
 type PersonasPage struct {
 	Product  ProductHeader
 	Path     string
 	Personas []PersonaItem
 }
 
-// NonGoalItem is one non-goal row.
 type NonGoalItem struct {
 	ID   string // the surrogate id, as list_non_goals returns it
 	Kind string // "permanent" or "deferred"
@@ -256,24 +179,20 @@ type NonGoalItem struct {
 	Body string
 }
 
-// NonGoalGroup is one kind's worth of non-goals, split so the page shows
-// the permanent vs deferred distinction the brief makes load-bearing.
+// NonGoalGroup is one kind's non-goals; the permanent/deferred split is load-bearing.
 type NonGoalGroup struct {
 	Kind     string // "permanent" or "deferred"
 	Heading  string // the human-facing label for that kind
 	NonGoals []NonGoalItem
 }
 
-// NonGoalsPage is one product's non-goals, bucketed by kind.
 type NonGoalsPage struct {
 	Product ProductHeader
 	Path    string
 	Groups  []NonGoalGroup
 }
 
-// StatusPage is the spec area's error body: a heading, a detail line, and
-// a way back. The HTTP status itself stays with the render seam
-// (renderShellStatus), which owns the response.
+// StatusPage is the spec area's error body; renderShellStatus owns the HTTP status.
 type StatusPage struct {
 	Title    string
 	Detail   string
@@ -281,12 +200,8 @@ type StatusPage struct {
 	BackText string
 }
 
-// specRefresh is the manual refresh control every read-only spec page
-// carries. It is deliberately not a timer: these are pages an operator
-// may be reading a spec from, and a poll would swap the content out from
-// under them mid-read. hx-swap is outerHTML because the fragment the
-// handler serves is the page's whole content region, so the target is
-// that region rather than the button itself.
+// specRefresh is a manual refresh rather than a poll, so content never swaps
+// mid-read. It replaces the whole content region via outerHTML.
 templ specRefresh(anchor, selfPath string) {
 	<button type="button" class="btn btn-ghost btn-sm shrink-0" data-krill="refresh"
 		hx-get={ templ.URL(selfPath) }
@@ -296,8 +211,6 @@ templ specRefresh(anchor, selfPath string) {
 	</button>
 }
 
-// pageHeader is the heading row every data page opens with: the h2, the
-// product's vision, and the manual Refresh button.
 templ pageHeader(anchor, selfPath, title, vision string) {
 	<div class="flex items-start justify-between gap-4 mb-2">
 		<div>
@@ -310,16 +223,12 @@ templ pageHeader(anchor, selfPath, title, vision string) {
 	</div>
 }
 
-// entityID renders a surrogate id as the citable anchor an operator
-// quotes when citing a row. data-krill is the stable hook; the classes
-// are presentation only. The left margin is what separates the id from
-// the name before it -- templ drops the whitespace between two elements,
-// so a literal space would not survive.
+// entityID renders a citable surrogate id. ml-1 provides the gap because templ
+// drops whitespace between elements.
 templ entityID(id string) {
 	<code data-krill="entity-id" class="ml-1 font-mono text-xs opacity-70">{ id }</code>
 }
 
-// Products is the product index an operator browses into.
 templ Products(page ProductsPage) {
 	<section id={ ProductsAnchor } data-krill="products">
 		@pageHeader(ProductsAnchor, page.Path, "Products", "")
@@ -340,12 +249,8 @@ templ Products(page ProductsPage) {
 	</section>
 }
 
-// CapabilityMap renders a product's FeatureSets, Features, and
-// Requirements (current revisions only) as a navigable capability map --
-// get_product_slice's shape, nested by parent. FR 638a7e5f.
-//
-// Each feature set is a collapsible section, the first open by default
-// (FR 18afc5a8).
+// CapabilityMap renders a product's current FeatureSets, Features and
+// Requirements, nested by parent; each feature set is collapsible.
 templ CapabilityMap(page CapabilityPage) {
 	<section id={ CapabilityMapAnchor } data-krill="capability-map">
 		@pageHeader(CapabilityMapAnchor, page.Path, page.Product.Name+" — capability map", page.Product.Vision)
@@ -361,17 +266,8 @@ templ CapabilityMap(page CapabilityPage) {
 	</section>
 }
 
-// capabilityFeatureSet is one feature set's collapsible section: the
-// heading carries the name, the feature count as a badge and the
-// description; the content is the Feature/Requirements table.
-//
-// It is a daisyUI collapse driven by collapse-open rather than a <details>,
-// because its open state is the URL's answer rather than something the
-// browser remembers -- a <details> would open and close in the DOM while
-// the address bar went on claiming a different section, and a reload, a
-// shared link and the later quick-look round-trip would all land back on
-// the default. The expander is a real link to that URL, so the
-// no-JavaScript path is an ordinary GET that renders the same expansion.
+// capabilityFeatureSet uses daisyUI collapse-open rather than <details> so the
+// open state follows the URL; the expander is a real link for the no-JS path.
 templ capabilityFeatureSet(fs CapabilityFeatureSet) {
 	<div id={ fs.ID } class={ capabilityFeatureSetClasses(fs.Expanded) } data-krill="feature-set" data-krill-feature-set-id={ fs.ID } data-krill-feature-set-open={ fs.ToggleAriaExpanded() }>
 		<div class="collapse-title flex flex-wrap items-center gap-2 pr-8">
@@ -388,9 +284,7 @@ templ capabilityFeatureSet(fs CapabilityFeatureSet) {
 	</div>
 }
 
-// capabilityFeatureSetClasses is one section's daisyUI class, so the
-// rendered markup and the expander's aria-expanded cannot disagree about
-// whether the section is open -- both read the same Expanded flag.
+// capabilityFeatureSetClasses derives the class from Expanded, like aria-expanded.
 func capabilityFeatureSetClasses(open bool) string {
 	classes := "collapse collapse-arrow bg-base-100 border border-base-300"
 	if open {
@@ -399,10 +293,8 @@ func capabilityFeatureSetClasses(open bool) string {
 	return classes
 }
 
-// capabilityFeatureSetExpander is the per-section toggle. It points at the
-// collapse URL while the section is open and the expand URL while it is
-// closed, and swaps the capability panel's own region so the tab strip
-// around it survives the swap.
+// capabilityFeatureSetExpander swaps only the capability panel so the tab strip
+// around it survives.
 templ capabilityFeatureSetExpander(fs CapabilityFeatureSet) {
 	<a href={ templ.URL(fs.ToggleHref()) }
 		class="btn btn-ghost btn-xs"
@@ -423,12 +315,8 @@ templ capabilityFeatureSetExpander(fs CapabilityFeatureSet) {
 	</a>
 }
 
-// capabilityFeatureTable is one open section's features: the number and
-// name an operator cites, the feature's own description beneath it, the
-// count of its requirements, and the milestone that delivers it.
-//
-// The count is the same slice rows the nested requirement list renders, so
-// the number and the list are one read (README's tab-count rule).
+// capabilityFeatureTable lists an open section's features; the requirement count
+// comes from the same slice as the nested list.
 templ capabilityFeatureTable(fs CapabilityFeatureSet) {
 	if len(fs.Features) == 0 {
 		<p class="text-sm text-base-content/70" data-krill="feature-set-empty">No features in this feature set yet.</p>
@@ -486,16 +374,8 @@ templ capabilityFeatureTable(fs CapabilityFeatureSet) {
 	}
 }
 
-// capabilityMilestoneCell is one feature row's Milestone cell (FR
-// 18afc5a8): the name of the one milestone that delivers the feature, a
-// neutral count when several deliver its requirements, a blank cell when
-// nothing does, and an explicit message when the delivery listing could not
-// be read.
-//
-// The blank and the failed read are deliberately different: nothing
-// delivering a feature is a real answer, while "we could not tell" must
-// say so rather than rendering as a blank cell -- which would be a claim
-// about delivery that nobody could make.
+// capabilityMilestoneCell renders a Milestone cell. A blank cell means nothing
+// delivers the feature; an unreadable listing always says so.
 templ capabilityMilestoneCell(m CapabilityMilestone) {
 	switch m.Kind {
 		case CapabilityMilestoneNamed:
@@ -509,29 +389,20 @@ templ capabilityMilestoneCell(m CapabilityMilestone) {
 	}
 }
 
-// milestoneNameBadge is a milestone's NAME in the colour its status earns.
-//
-// It goes through components.MilestoneStatusStyle exactly as the shared
-// statusBadge does -- a named milestone here is the same colour that
-// milestone's status badge is on the Milestones page, so the two can never
-// disagree about it. The text is the name rather than the status word,
-// which is what this cell is for.
+// milestoneNameBadge shows a milestone's name in its status colour, via the same
+// MilestoneStatusStyle as statusBadge.
 templ milestoneNameBadge(name, status string) {
 	{{ s := components.MilestoneStatusStyle(status) }}
 	@htmxui.Badge(name, s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "feature-milestone-name"})
 }
 
-// milestoneCountBadge is the neutral "N milestones" cell: several
-// milestones deliver this feature's requirements and there is no single one
-// to name. Neutral, because there is no status to colour it by.
+// milestoneCountBadge is the neutral "N milestones" cell.
 templ milestoneCountBadge(count int) {
 	{{ s := components.MilestoneCountStyle() }}
 	@htmxui.Badge(strconv.Itoa(count)+" milestones", s.Variant, s.Size, s.Soft, templ.Attributes{"data-krill": "feature-milestone-count"})
 }
 
-// Decisions lists a product's current LoadBearingDecisions with their
-// full body text -- get_product_slice's decisions, unchanged (FR
-// 6aa70e3a).
+// Decisions lists a product's current load-bearing decisions with full bodies.
 templ Decisions(page DecisionsPage) {
 	<section id={ DecisionsAnchor } data-krill="decisions">
 		@pageHeader(DecisionsAnchor, page.Path, "Load-bearing decisions", "")
@@ -553,8 +424,6 @@ templ Decisions(page DecisionsPage) {
 	</section>
 }
 
-// Personas lists a product's current Personas -- list_personas' shape
-// (FR b4c1c77f).
 templ Personas(page PersonasPage) {
 	<section id={ PersonasAnchor } data-krill="personas">
 		@pageHeader(PersonasAnchor, page.Path, "Personas", "")
@@ -576,13 +445,8 @@ templ Personas(page PersonasPage) {
 	</section>
 }
 
-// NonGoals lists a product's current Non-Goals, both the permanent and
-// deferred kinds -- list_non_goals' shape (FR b4c1c77f).
-//
-// Each row carries its kind as a badge of its own, not only under the
-// group heading: the heading says which kind a WHOLE section is, and a
-// row quoted or skimmed on its own would otherwise lose that (FR
-// fe0ebe94).
+// NonGoals lists a product's current non-goals by kind. Each row carries its own
+// kind badge so a row read alone keeps that distinction.
 templ NonGoals(page NonGoalsPage) {
 	<section id={ NonGoalsAnchor } data-krill="non-goals">
 		@pageHeader(NonGoalsAnchor, page.Path, "Non-goals", "")
@@ -614,14 +478,8 @@ templ NonGoals(page NonGoalsPage) {
 	</section>
 }
 
-// nonGoalKindBadge is one non-goal's own permanent-or-deferred badge. The
-// colour and the wording both come from //krill/ui/components, so this
-// file spells no badge of its own (README: never hand-roll a badge) and a
-// kind shown here reads the same as one shown anywhere else.
-//
-// The label is capitalised rather than the raw wire value, so
-// data-krill-non-goal-kind carries the wire value a test can assert on
-// independently of how the label is worded.
+// nonGoalKindBadge styles and labels a kind via //krill/ui/components;
+// data-krill-non-goal-kind carries the raw wire value.
 templ nonGoalKindBadge(kind string) {
 	{{ s := components.NonGoalKindStyle(kind) }}
 	@htmxui.Badge(components.NonGoalKindLabel(kind), s.Variant, s.Size, s.Soft, templ.Attributes{
@@ -630,25 +488,9 @@ templ nonGoalKindBadge(kind string) {
 	})
 }
 
-// SpecStatus is the spec area's error body: a heading, the detail, and a
-// way back to the product index. The 400 / 404 / 500 that goes with it
-// is applied by renderShellStatus, which owns the response.
-// SpecInlineError is the fragment an htmx caller gets when a spec read
-// fails. Every spec page's Refresh button re-requests its own route, so
-// this is reachable by htmx, and htmx does not swap on a non-2xx -- a
-// status-coded page here would leave the operator clicking Refresh with
-// no feedback at all.
-//
-// anchor must be the id the requesting page's Refresh button targets.
-// htmx's outerHTML inserts the response in place of the target and then
-// REMOVES the target, so a fragment without that id would delete the swap
-// target itself -- and the next Refresh would find no target, at which
-// point htmx returns before issuing the request. The page would freeze
-// with no request ever reaching the server.
-//
-// One component serves all six spec/delivery pages, which is why the
-// anchor is a parameter rather than hardcoded: the fragment has to land on
-// the id of whichever page asked for it.
+// SpecInlineError is the htmx fragment for a failed spec read (htmx skips non-2xx).
+// Its root must carry the requester's anchor, or outerHTML deletes the target and
+// later Refreshes silently stop.
 templ SpecInlineError(anchor, message string) {
 	<section id={ anchor } data-krill="spec-status">
 		@htmxui.Alert(htmxui.AlertError, message, templ.Attributes{

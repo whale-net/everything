@@ -9,36 +9,24 @@ import (
 	"github.com/whale-net/everything/krill/ui/pages"
 )
 
-// Route prefixes for the shell's own pages. Each area's sub-pages hang
-// off its prefix, so the nav can mark the active item by prefix. The
-// first three are the legacy, un-prefixed areas; the product-scoped
-// prefixes below are where every link in the sidebar now points.
+// Route prefixes for the legacy, un-prefixed areas; the nav marks the active item
+// by prefix.
 const (
 	opsPath    = "/ops"
 	designPath = "/design"
 	specPath   = "/spec"
 
-	// credentialsPath is the human-facing credential-widget page. It
-	// deliberately lives outside the "/credentials" prefix:
-	// app.mcpProvider.MountSelfServe already owns GET/POST /credentials
-	// and DELETE /credentials/{id} as its JSON self-serve API
-	// (libs/go/auth/selfserve.go), and ServeMux rejects a page registered
-	// anywhere under that prefix -- the {id} wildcard outranks it and the
-	// two would panic the binary at boot.
+	// credentialsPath sits outside "/credentials" because MountSelfServe owns that
+	// prefix's JSON API; its {id} wildcard would conflict and panic the mux at boot.
 	credentialsPath = "/account/credentials"
 )
 
-// The product-scoped prefixes (FR c4bd4bf8). The current product is
-// carried in the path rather than in a cookie or a query parameter, so a
-// copied link opens on the same product for whoever follows it. Each
-// area's sub-pages hang off productsPath, mirroring the legacy areas
-// above, which stay registered until the cutover task retires them.
+// Product-scoped prefixes. The product lives in the path so a copied link opens
+// the same product for whoever follows it.
 const (
 	productsPath      = "/products"
 	productPathPrefix = productsPath + "/{pid}"
 
-	// The sub-paths a product-scoped page hangs off. overview is the
-	// shell home; the rest are the areas the shell's nav reaches.
 	overviewSuffix       = "/overview"
 	needsAttentionSuffix = "/needs-attention"
 	tasksSuffix          = "/tasks"
@@ -46,28 +34,15 @@ const (
 	milestonesSuffix     = "/milestones"
 )
 
-// productHref builds the product-scoped href for a sub-path suffix -- the
-// one place a link under productsPath is spelled, so a page can never
-// hand out a URL the mux does not serve.
+// productHref is the one place a link under productsPath is spelled, so pages
+// never hand out a URL the mux does not serve.
 func productHref(pid uuid.UUID, suffix string) string {
 	return productsPath + "/" + pid.String() + suffix
 }
 
-// handleShellHome renders the landing page, which is the Overview for
-// whichever product this deployment resolves.
-//
-// "/" names no product, so it resolves one (the last-viewed cookie when
-// still in scope, else the first in scope) and then serves exactly the
-// page /products/{pid}/overview serves -- one Overview, two URLs.
-//
-// A product read that fails does not take the landing page down with it:
-// an un-prefixed page whose body was already serviceable must stay
-// serviceable (product_scope.go's own rule). With no product resolved the
-// page has nothing to summarise, so it says so and points at the product
-// index, which is the one place a missing product can be looked up.
-//
-// It passes the product's own overview URL as the nav key rather than its
-// own path, because that is the path the sidebar's Overview item owns.
+// handleShellHome serves the Overview for the product "/" resolves (last-viewed
+// cookie in scope, else first in scope). A failed or empty resolve renders the
+// empty state; the nav key is the Overview item's own path.
 func (app *App) handleShellHome(w http.ResponseWriter, r *http.Request) {
 	product, err := app.resolveProductForUnprefixed(r)
 	if err != nil {
@@ -85,58 +60,26 @@ func (app *App) handleShellHome(w http.ResponseWriter, r *http.Request) {
 	app.renderOverview(w, withCurrentProduct(r, product), product)
 }
 
-// ── legacy URL continuity (FR 2544224c) ─────────────────────────────────────
+// ── legacy URL continuity ───────────────────────────────────────────────────
 
-// legacyURL is one pre-redesign URL and how it resolves during the
-// operator UI facelift. It is the unit later phases retire URLs with.
-//
-// Exactly one of Serve and Successor is set. Serve is the URL's existing
-// page, rendered inside the shell at 200. Successor is where the URL goes
-// once its redesigned page has shipped; leaving it nil keeps the old page
-// serving, which is what every entry does until its successor lands.
-// Naming the successor is the whole cutover for that URL, and it is why a
-// replaced page's old link can never go dark: the URL is already accounted
-// for here, so replacing the page and repointing the link is one edit in
-// one file rather than a route registration someone has to remember.
+// legacyURL is one legacy URL and how it resolves. Exactly one of Serve
+// (render the existing page) or Successor (redirect) is set.
 type legacyURL struct {
-	// Pattern is the pre-redesign URL exactly as the mux spells it,
-	// including any method prefix and id wildcards.
+	// Pattern is the URL exactly as the mux spells it, including method and wildcards.
 	Pattern string
 
-	// Serve renders the URL's existing page while Successor is nil.
 	Serve func(app *App, w http.ResponseWriter, r *http.Request)
 
-	// Successor builds the redesigned page's URL for this request. ok is
-	// false when no product could be resolved to build it, which is the
-	// one case a legacy URL cannot redirect on: an un-prefixed URL must
-	// always land somewhere, so an empty scope renders the product index
-	// rather than answering with a redirect to nowhere.
+	// Successor builds the replacement URL; ok is false when no product resolves, and
+	// the product index renders instead of a redirect to nowhere.
 	Successor func(app *App, r *http.Request) (target string, ok bool)
 }
 
-// legacyURLs is every pre-redesign URL the operator UI facelift must keep
-// resolving, in one table the next phases extend rather than a set of
-// ad-hoc handlers.
-//
-// An entry serves its existing page while its replacement has not shipped,
-// and that is deliberate rather than unfinished: a redesigned page that has
-// not landed renders a placeholder, so redirecting to one would send an
-// operator who followed a working link -- "what is escalated?" -- to a page
-// saying nothing is there yet. Once the replacement ships, the entry moves
-// from Serve to Successor and the old URL redirects into it. The per-
-// milestone task list and board were the first to move, because the
-// product-wide Tasks and Board have replaced them (FR f41a352d), and the
-// per-milestone task detail followed, because the product-scoped detail has
-// replaced it (FR 0c03eac1). The ops console's four read views moved last,
-// into the Needs attention page's four tabs (FR 5fd47f4d).
+// legacyURLs is every legacy URL that must keep resolving. An entry keeps
+// serving until its replacement ships, then moves to Successor.
 func legacyURLs() []legacyURL {
 	return []legacyURL{
-		// The ops console. Its four read views ARE the Needs attention
-		// page's tabs now (FR 5fd47f4d), so the five GET pages retire into
-		// that page's matching tab -- the same cutover the per-container
-		// task URLs made into the product-wide views. "/" is named by
-		// c4bd4bf8 among the un-prefixed URLs; it renders the Overview at
-		// every phase of the facelift.
+		// The ops console's read views retire into Needs attention's matching tabs.
 		{Pattern: "/{$}", Serve: (*App).handleShellHome},
 		{Pattern: opsPath, Successor: legacyNeedsAttentionSuccessor("")},
 		{Pattern: opsClaimedPath, Successor: legacyNeedsAttentionSuccessor(needsAttentionTabClaimed)},
@@ -144,81 +87,45 @@ func legacyURLs() []legacyURL {
 		{Pattern: opsCancelledPath, Successor: legacyNeedsAttentionSuccessor(needsAttentionTabCancelled)},
 		{Pattern: opsNotesPath, Successor: legacyNeedsAttentionSuccessor(needsAttentionTabNotes)},
 
-		// The spec and delivery browser.
 		{Pattern: specPath, Serve: (*App).handleSpec},
 		{Pattern: specProductsPath, Serve: (*App).handleSpecProducts},
 		{Pattern: specProductPath, Serve: (*App).handleCapabilityMap},
-		// The feature quick-look blade, opened from the Capabilities
-		// table's Feature link (FR f7eee645). It is a read like every
-		// other page here -- readerRoute, no form, no write route -- and
-		// it hangs off the product prefix so a shared blade link resolves
-		// its product before the feature id is even looked at.
+		// The feature quick-look blade; under the product prefix so a shared link resolves
+		// its product first.
 		{Pattern: specProductPath + specFeatureSuffix, Serve: (*App).handleSpecFeature},
 		{Pattern: specProductPath + "/decisions", Serve: (*App).handleSpecDecisions},
 		{Pattern: specProductPath + "/personas", Serve: (*App).handleSpecPersonas},
 		{Pattern: specProductPath + "/non-goals", Serve: (*App).handleSpecNonGoals},
-		// The delivery browser is the Milestones table, retitled and
-		// re-laid-out (FR 31cbd3eb), so this retires the same way the
-		// per-container task URLs do: a 302 into the replacement, carrying
-		// the query -- see legacyDeliverySuccessor for why that last part
-		// is the whole difficulty.
+		// Delivery redirects to the Milestones table, carrying the query.
 		{Pattern: specProductPath + "/delivery", Successor: legacyDeliverySuccessor},
-		// The per-container list and board have been replaced by the
-		// product-wide Tasks and Board, scoped to the container this URL
-		// named (FR f41a352d). Both retire the same way: a 302 into the
-		// new view carrying that container, so a bookmarked milestone URL
-		// still opens that milestone's work.
+		// Per-container list and board redirect to the product-wide views scoped to the
+		// same container.
 		{Pattern: specProductPath + "/milestones/{mid}/tasks", Successor: legacyTaskSuccessor(tasksSuffix)},
-		// The per-container task DETAIL retires too (FR 0c03eac1), but
-		// into the product-scoped detail rather than a list: the successor
-		// carries the tid alone, because that URL resolves the task's own
-		// container from the task rather than from the path.
+		// The per-container task detail redirects to the product-scoped detail by tid alone.
 		{Pattern: specProductPath + "/milestones/{mid}/tasks/{tid}", Successor: legacyTaskDetailSuccessor},
 		{Pattern: specProductPath + "/milestones/{mid}/board", Successor: legacyTaskSuccessor(boardSuffix)},
 
-		// The design-session browser. The list URL is pre-redesign (it
-		// named the sessions before the redesign) and keeps serving; the
-		// design root keeps serving too, and now serves the resolved
-		// product's list rather than a landing that asked for an id.
+		// The design-session browser. The root serves the resolved product's session list.
 		{Pattern: designPath, Serve: (*App).handleDesign},
 		{Pattern: "GET /design/products/{productID}/design-sessions", Serve: (*App).handleDesignSessionList},
-		// The pre-redesign session DETAIL retires into the product-scoped
-		// one: the canonical URL carries the pid because "is this session
-		// under the product the reader is looking at?" is answerable only
-		// with it (FR a77852a9), and the successor resolves the pid from
-		// the session row so a bookmarked link still opens that session.
+		// The old session detail redirects to the product-scoped one, with the pid read
+		// from the session row.
 		{Pattern: "GET /design/design-sessions/{id}", Successor: legacyDesignSessionDetailSuccessor},
 	}
 }
 
-// bind closes an App method over the receiver, turning a method expression
-// into the handler the mux registers. legacyURLs stores method expressions
-// rather than bound handlers so the table stays plain data that does not
-// need an App to build.
+// bind closes an App method expression over app, so legacyURLs stays plain data.
 func bind(app *App, h func(*App, http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { h(app, w, r) }
 }
 
-// mountLegacyRoutes registers every pre-redesign URL from legacyURLs,
-// behind the sign-in gate, redirecting to its successor when one is named
-// and otherwise serving its existing page inside the shell.
-//
-// The registrations live in one table so that "no pre-redesign URL 404s"
-// is checkable rather than assumed: the acceptance test walks this same
-// table, so a URL dropped from it fails a test instead of quietly 404ing
-// for an operator who had it bookmarked.
+// mountLegacyRoutes registers every legacy URL behind the sign-in gate.
 func (app *App) mountLegacyRoutes(mux *http.ServeMux) {
 	app.mountLegacyTable(mux, legacyURLs())
 }
 
-// mountLegacyTable registers one table of pre-redesign URLs, and is
-// mountLegacyRoutes with the table as an argument.
-//
-// Entries that name a successor take the redirect branch, so the branch is
-// live in production and reached by the production registrations — the
-// retired per-milestone list, board and detail all answer through it.
-// Taking the table as a parameter additionally lets a test mount a
-// doctored copy and drive a successor for a URL that has not retired yet.
+// mountLegacyTable registers one table of legacy URLs; taking it as a parameter
+// lets tests mount a doctored copy.
 func (app *App) mountLegacyTable(mux *http.ServeMux, table []legacyURL) {
 	for _, l := range table {
 		switch {
@@ -227,32 +134,18 @@ func (app *App) mountLegacyTable(mux *http.ServeMux, table []legacyURL) {
 		case l.Serve != nil:
 			mux.HandleFunc(l.Pattern, app.readerRoute(bind(app, l.Serve)))
 		default:
-			// A programming mistake rather than a runtime condition: an
-			// entry with neither field would register a route that serves
-			// nothing, which is the one outcome this table exists to make
-			// impossible.
+			// An entry with neither field is a programming error.
 			panic("legacy URL " + l.Pattern + " names neither a page nor a successor")
 		}
 	}
 }
 
-// serveLegacy is a legacy URL's redirect-to-successor handler. The status
-// is 302 rather than 301: a pre-redesign URL is a live link an operator
-// may keep following, and 302 is the one that does not let a browser pin
-// the old URL in its cache past the page it now names.
-//
-// It is 302 rather than 307 or 308 for the same reason from the other side:
-// a successor is a page, registered for GET alone, and 302 is the status a
-// client may re-issue as a GET, so a request that arrived carrying another
-// method still lands on the page. 307 and 308 preserve the method and would
-// land it on a 405.
+// serveLegacy redirects to the successor with 302: not 301, so browsers do not
+// cache the hop, and not 307/308, which would preserve a non-GET method and 405.
 func (app *App) serveLegacy(l legacyURL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		target, ok := l.Successor(app, r)
 		if !ok {
-			// An un-prefixed URL must always land somewhere, so a scope
-			// with no product to resolve renders the product index rather
-			// than a redirect with nowhere to go.
 			app.renderShell(w, r, "No products in this scope", specProductsPath,
 				pages.NoProductsInScope())
 			return
@@ -261,18 +154,11 @@ func (app *App) serveLegacy(l legacyURL) http.HandlerFunc {
 	}
 }
 
-// legacyTaskSuccessor is the successor for a pre-redesign per-container
-// tasks or board URL: the product-wide view of the same area, scoped to the
-// container the old URL named.
-//
-// So a bookmarked milestone URL keeps opening that milestone's work rather
-// than the whole product's -- the redirect carries the scope, it does not
-// merely change the page. A per-container task DETAIL is not one of these
-// (see legacyTaskDetailSuccessor): it retires into the detail, not a list.
+// legacyTaskSuccessor redirects a per-container tasks or board URL to the
+// product-wide view scoped to that same container.
 func legacyTaskSuccessor(suffix string) func(*App, *http.Request) (string, bool) {
 	return func(app *App, r *http.Request) (string, bool) {
-		// specProductPath's own wildcard is {id}, and the container is
-		// {mid}: the two the legacy pattern declares.
+		// specProductPath's wildcard is {id}; the container is {mid}.
 		pid, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
 			return "", false
@@ -285,24 +171,9 @@ func legacyTaskSuccessor(suffix string) func(*App, *http.Request) (string, bool)
 	}
 }
 
-// legacyNeedsAttentionSuccessor is the successor for a pre-redesign ops
-// console URL: the Needs attention page's matching tab, under the product
-// an un-prefixed URL resolves to (FR 5fd47f4d).
-//
-// tab is the tab that URL's queue became. The empty string is /ops, the
-// console root, which names no queue of its own and so targets the page's
-// bare address -- which is the default tab, the same address /ops and the
-// sidebar's Needs attention item both open.
-//
-// The product is resolved exactly as any un-prefixed page resolves one
-// (product_scope.go): a prefixed target needs a product in its path, and a
-// browser has no way to learn one. A scope holding no product resolves none,
-// and serveLegacy then renders the product index rather than a redirect to
-// nowhere -- the one case this successor cannot answer with a target.
-//
-// The page the redirect lands on is what records the last-viewed product;
-// this successor only reads, so a hop never moves where the operator's
-// next un-prefixed link lands.
+// legacyNeedsAttentionSuccessor redirects an ops console URL to the Needs attention
+// tab for the un-prefixed product; "" is the default tab. It only reads, so the
+// landing page records the last-viewed product.
 func legacyNeedsAttentionSuccessor(tab string) func(*App, *http.Request) (string, bool) {
 	return func(app *App, r *http.Request) (string, bool) {
 		product, err := app.resolveProductForUnprefixed(r)
@@ -313,25 +184,8 @@ func legacyNeedsAttentionSuccessor(tab string) func(*App, *http.Request) (string
 	}
 }
 
-// legacyDeliverySuccessor is the successor for the pre-redesign delivery
-// URL: the product's own Milestones table.
-//
-// Unlike the per-container successors this one makes no read -- the product
-// is in the path, and the replacement page resolves everything else -- so it
-// cannot fail the way those two can, and it answers for a product that has
-// no milestones at all just as readily as one that has thirty.
-//
-// The QUERY is the part worth stating. serveLegacy hands the successor a
-// bare path and hands http.Redirect that string, so a successor that
-// returns only the path silently drops every parameter the operator
-// arrived with -- and this URL is the one URL of the three whose arrival
-// can carry state: the status select and the inline expansion both submit
-// here. An operator who filtered the table to "shipped", followed a
-// bookmark, and came back would land on the unfiltered one and read the
-// loss as the data having changed. The parameters are therefore re-attached
-// from the request's own RawQuery rather than rebuilt from a list of the
-// names this page happens to use, so a filter added to the Milestones page
-// later survives this redirect without a second edit here.
+// legacyDeliverySuccessor redirects to the product's Milestones table, re-attaching
+// the raw query so status filters and expansions survive without listing names here.
 func legacyDeliverySuccessor(app *App, r *http.Request) (string, bool) {
 	pid, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -344,17 +198,9 @@ func legacyDeliverySuccessor(app *App, r *http.Request) (string, bool) {
 	return target, true
 }
 
-// legacyTaskContainer is the container a pre-redesign per-container URL
-// named, in the form the product-wide scope query needs: its id, and which
-// of the two single-container modes it belongs to.
-//
-// The kind is read from the product's own delivery listing rather than
-// assumed, because the legacy URL served a milepebble's tasks at the same
-// path a milestone's used and only the id says which. A listing that cannot
-// be read, or an id it does not carry, answers as a milestone: the scope
-// query is then one the product-wide page resolves or refuses in its own
-// right -- an in-shell 404 for an id this product does not own -- which is
-// a better answer than a redirect with nowhere honest to go.
+// legacyTaskContainer resolves the container a legacy URL named, reading its kind
+// from the delivery listing. An unreadable listing or unknown id falls back to a
+// milestone scope, which the target page resolves or 404s itself.
 func legacyTaskContainer(app *App, r *http.Request, pid uuid.UUID) (taskContainer, bool) {
 	mid, err := uuid.Parse(r.PathValue("mid"))
 	if err != nil {
@@ -375,17 +221,9 @@ func legacyTaskContainer(app *App, r *http.Request, pid uuid.UUID) (taskContaine
 	return container, true
 }
 
-// legacyDesignSessionDetailSuccessor is the successor for the pre-redesign
-// session detail: the product-scoped detail, resolved from the session row
-// itself (FR a77852a9).
-//
-// The pid is not in the old URL, so this is the one successor that has to
-// read the store: the session's own ProductID is the pid the canonical URL
-// names, and it is the same row the page it redirects to reads. A session
-// that cannot be read resolves to no successor, and serveLegacy then
-// renders the product index -- an old link to a session that no longer
-// exists lands somewhere an operator can navigate out of, rather than on a
-// redirect to nowhere.
+// legacyDesignSessionDetailSuccessor redirects to the product-scoped session
+// detail, reading the pid from the session row; an unreadable session renders the
+// product index.
 func legacyDesignSessionDetailSuccessor(app *App, r *http.Request) (string, bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -400,28 +238,9 @@ func legacyDesignSessionDetailSuccessor(app *App, r *http.Request) (string, bool
 	return designSessionPath(ds.ProductID, id), true
 }
 
-// legacyTaskDetailSuccessor is the successor for the pre-redesign
-// per-container task detail: the product-scoped detail, carrying the tid
-// alone (FR 0c03eac1).
-//
-// Unlike the list and the board, this is not scoped to the {mid} the old
-// URL named. The product-scoped detail resolves the task's own container
-// from the task itself, so the target needs no container and a task that
-// moved between the old URL's milestone and another still lands on it --
-// which is the point: an operator following an old link reads the task.
-//
-// The {mid} is still parsed, because an unparseable one is not a URL this
-// table kept alive, and serveLegacy renders the product index rather than
-// a redirect nowhere.
-//
-// A recognised ?tab= rides along, because the tab is the detail's own URL
-// state (FR 7e463e31) and a shared ".../tasks/{tid}?tab=slice" link that
-// silently lost its tab across the redirect would land the operator on
-// Overview behind an address bar that no longer says so. The value is
-// resolved through taskDetailTabOf rather than copied: only a key the
-// detail page itself knows survives, so a hand-edited ?tab= cannot reach
-// the successor's address. Overview resolves to the bare path, which is
-// already its own href, so nothing is appended for it.
+// legacyTaskDetailSuccessor redirects to the product-scoped detail by tid alone,
+// since that page resolves the task's container itself. A recognised ?tab= is
+// carried through taskDetailTabOf so only known tabs survive.
 func legacyTaskDetailSuccessor(app *App, r *http.Request) (string, bool) {
 	pid, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -441,44 +260,20 @@ func legacyTaskDetailSuccessor(app *App, r *http.Request) (string, bool) {
 	return target, true
 }
 
-// The area handlers below own the shell's per-area roots. Each renders the
-// chrome; the read and write surfaces under these prefixes are registered
-// alongside these roots.
-
-// handleDesign is the design-session browser root. "/design" names no
-// product, so it resolves one server-side and serves that product's session
-// list -- one page, two URLs, exactly as "/" and /products/{pid}/overview
-// are one Overview at two URLs (FR c4bd4bf8).
-//
-// It used to render a landing that asked the operator which product to
-// look at by typing an id. That form is gone: the operator is never asked
-// to type an id, and the page they are sent to is the page they wanted.
+// handleDesign resolves a product server-side and serves its session list, so the
+// operator never types an id.
 func (app *App) handleDesign(w http.ResponseWriter, r *http.Request) {
 	r, product, ok := app.resolveUnprefixedProduct(w, r)
 	if !ok {
 		return
 	}
-	// designPath as the nav key, not the product-scoped list path: the
-	// sidebar's Design sessions item owns the product-scoped path, and the
-	// area root is a second address for the same page rather than the
-	// nav item's own page.
+	// designPath as nav key: the sidebar item owns the product-scoped path.
 	app.renderDesignSessionList(w, r, product.ID, designPath)
 }
 
-// handleSpec is the spec + delivery browser root. It is a static landing
-// (like the ops and design roots) that links into the store-backed spec
-// pages under specProductsPath -- the product index, and per product the
-// capability map, load-bearing decisions, personas, and non-goals (all in
-// spec_page.go). The landing itself reads nothing, so the area root stays
-// cheap.
+// handleSpec is a static landing linking into the spec pages; it reads nothing.
 func (app *App) handleSpec(w http.ResponseWriter, r *http.Request) {
 	app.renderShell(w, r, "Spec & delivery", specPath, pages.AreaIndex("Spec & delivery", []pages.AreaLink{
 		{Path: specProductsPath, Label: "Products", Blurb: "Browse a product's capability map, load-bearing decisions, personas, and non-goals."},
 	}))
 }
-
-// handleProductPlaceholder is gone: every product-scoped sub-path now
-// serves its own page -- the last holdout was the Needs attention prefix,
-// which the page in needs_attention.go replaced (FR 5fd47f4d). The
-// resolver and the in-shell 404 it shared live on in product_scope.go, and
-// each real page resolves its product through them.

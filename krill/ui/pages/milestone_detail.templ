@@ -1,112 +1,59 @@
 package pages
 
-// The Milestone detail page (FR ef0a0ded): one container -- a milestone, or
-// a milepebble cut from one -- named by its own status and linked to the
-// work it holds.
-//
-// The header is the whole page today. The cards under it (the outcome and
-// its milepebbles, the shipped/unshipped delivery tables) and the
-// properties rail are separate tasks that build ON this page rather than
-// beside it, so the region is a frame they compose into: it owns the
-// anchor, the breadcrumb, the h1 and the two work links, and each later
-// task adds its own section inside the same grid.
-//
-// Both kinds of container answer at the same URL, because a milepebble is
-// its own milestone_ref row and an operator reaches one the way they reach
-// its parent: by name, from the table or the breadcrumb.
+// The Milestone detail page: one milestone or milepebble, its status, and links to
+// the work it holds. Both kinds answer at the same URL.
 
-// MilestoneDetailAnchor is the DOM id this page's region carries, so the
-// later sections and the tests that assert on them all name one element.
+// MilestoneDetailAnchor is the DOM id of this page's region.
 const MilestoneDetailAnchor = "krill-milestone-detail"
 
-// MilestoneCrumb is one breadcrumb entry. Href is empty for the page the
-// operator is already on, which is the one crumb that is not a link.
-//
-// It carries the same two fields as TaskCrumb and is deliberately its own
-// type rather than a rename of that one: the task detail's walk is
-// product -> milestone -> milepebble -> task and this one stops one or two
-// levels short, and each page owns the walk it renders.
+// MilestoneCrumb is one breadcrumb entry; Href is empty for the current page.
+// Kept separate from TaskCrumb because each page owns the walk it renders.
 type MilestoneCrumb struct {
 	Label string
 	Href  string
 }
 
-// MilestoneDetailPage is the detail's view model.
-//
-// The header's facts are the container's own: the name, the status it is
-// in, and the two views of the work it holds. Every one is read off the
-// same resolved container, so the badge cannot show a status the links
-// beside it contradict.
+// MilestoneDetailPage is the detail's view model; every header fact comes from the
+// same resolved container so the badge and links cannot disagree.
 type MilestoneDetailPage struct {
-	// Product is the banner: the product this container belongs to.
 	Product ProductHeader
 
-	// Path is this page's own URL, so a refresh and a shared link are the
-	// same page.
+	// Path is this page's own URL.
 	Path string
 
-	// ID is the container's own id, carried so the region is addressable
-	// and so a test can check a rendered link against the id it was built
-	// from.
 	ID string
 
-	// Kind is "milestone" or "milepebble". It rides on the region as a
-	// data attribute rather than being rendered, because the header reads
-	// the same either way -- what differs is what hangs below it.
+	// Kind is "milestone" or "milepebble", exposed as a data attribute only.
 	Kind string
 
-	// Crumbs walks product -> Milestones -> the container's name, with
-	// the name carrying no href because the operator is already here.
+	// Crumbs walks product -> Milestones -> the container's name.
 	Crumbs []MilestoneCrumb
 
-	// Title is the container's name. Status renders through the same
-	// statusBadge the Milestones table and the delivery page use, so one
-	// status is one colour on every page.
+	// Status renders through the shared statusBadge so a status has one colour everywhere.
 	Title  string
 	Status string
 
-	// TasksPath and BoardPath are the product-wide Tasks and Board scoped
-	// to THIS container -- the mode and the id in the query, the product
-	// in the path -- so both views arrive with the scope control already
-	// preselected rather than the operator reselecting it.
+	// TasksPath and BoardPath are the product-wide views preselected to this container.
 	TasksPath string
 	BoardPath string
 
-	// Outcome is this container's own outcome sentence, markdown-rendered
-	// by the card exactly as the Milestones table renders it. Empty means
-	// the container declares none, and the Outcome card renders nothing --
-	// the region is only an answer where there is an answer to give.
+	// Outcome is the container's markdown outcome; empty renders no card.
 	Outcome string
 
-	// Milepebbles are the containers cut from THIS one, in the delivery
-	// listing's own order, each with its own status and its own progress
-	// (FR 0f1fb763). Empty means none are cut, and the Milepebbles card
-	// renders nothing rather than a card with an empty table in it.
+	// Milepebbles are the containers cut from this one, in listing order; empty renders
+	// no card.
 	Milepebbles []MilestoneDetailMilepebble
 
-	// Delivery is this container's delivered scope, split into the items
-	// that have a shipment record and the items that do not. It is the
-	// get_delivery_breakdown read of the container named above, so the card
-	// and that tool cannot describe the same container differently.
-	//
-	// Nil when the read failed: the field is set either way, because a
-	// failed read is a real answer about what this page could not show, and
-	// it renders as its own error rather than as an empty card.
+	// Delivery is the get_delivery_breakdown read of this container, split by shipment
+	// record. A failed read renders its own error rather than an empty card.
 	Delivery *DeliveryBreakdown
 
-	// Rail is the properties rail beside the content: the container's
-	// status, FR budget, task progress, status-history link and id. It is
-	// one value built from the page's own reads rather than something the
-	// template assembles, so a rail fact and the header fact it repeats
-	// come from the same resolved container.
+	// Rail is built from the page's own reads so it cannot contradict the header.
 	Rail MilestoneRail
 }
 
-// milestoneDetailCrumbs renders the breadcrumb trail.
-//
-// It uses daisyUI's breadcrumbs and one <li> per level, the same shape as
-// the task detail's trail, rather than inventing a second breadcrumb for
-// the second detail page.
+// milestoneDetailCrumbs renders the breadcrumb with the same daisyUI shape as the
+// task detail.
 templ milestoneDetailCrumbs(crumbs []MilestoneCrumb) {
 	if len(crumbs) > 0 {
 		<nav class="breadcrumbs text-sm" aria-label="Breadcrumb" data-krill="milestone-breadcrumb">
@@ -125,14 +72,8 @@ templ milestoneDetailCrumbs(crumbs []MilestoneCrumb) {
 	}
 }
 
-// milestoneDetailHeader is the page header: the breadcrumb, the name with
-// its status badge, and the two links to the work this container holds.
-//
-// "Open tasks" is the page's one primary action -- an operator who opened a
-// milestone is asking what work it holds, and that is the answer. "Board"
-// is the same scope read the other way, so it sits beside it as a ghost
-// button rather than as a second primary: they are two views of one
-// question, not two different jobs.
+// milestoneDetailHeader renders the breadcrumb, name, status and work links.
+// "Open tasks" is the primary action; "Board" is the same scope viewed differently.
 templ milestoneDetailHeader(page MilestoneDetailPage) {
 	@milestoneDetailCrumbs(page.Crumbs)
 	<div class="flex flex-wrap items-center gap-3" data-krill="milestone-detail-header">
@@ -149,13 +90,8 @@ templ milestoneDetailHeader(page MilestoneDetailPage) {
 	</p>
 }
 
-// MilestoneDetail renders the Milestone detail page: the header, and the
-// grid the outcome, delivery and rail sections compose into.
-//
-// The grid is the frame those sections share, and the content cell is where
-// they compose: each card lands in the same <div>, so the column's spacing
-// and the page's section order are decided once here rather than per card.
-// Below lg the grid stacks, which is where the rail ends up once it exists.
+// MilestoneDetail renders the header and the grid the cards and rail compose into;
+// below lg the rail stacks under the content.
 templ MilestoneDetail(page MilestoneDetailPage) {
 	<section id={ MilestoneDetailAnchor } data-krill="milestone-detail"
 		data-krill-container-id={ page.ID } data-krill-container-kind={ page.Kind } class="space-y-4">
@@ -172,59 +108,32 @@ templ MilestoneDetail(page MilestoneDetailPage) {
 	</section>
 }
 
-// MilestoneRail is the detail page's properties rail: five label/value rows
-// naming one container, beside the content at lg and stacked below it under.
-//
-// It is a value the handler reads rather than a second view: Status and Id
-// are the container's own facts, FR budget and Tasks come from the two reads
-// the page already makes, and the Status history row is a link whose count is
-// the length of the very list the status-history view renders. So a row here
-// cannot disagree with the page it sits beside.
+// MilestoneRail is the detail page's properties rail. Each row is a read's own
+// answer, so it cannot disagree with the page beside it.
 type MilestoneRail struct {
-	// Status renders through the same statusBadge the header and the
-	// Milestones table use, so one status is one colour on every page.
-	// The header already shows it; the rail repeats it because under lg
-	// the rail is the only thing below the name, and a stacked page must
-	// still say what state the container is in.
+	// Status repeats the header's badge because below lg the rail stacks under the name.
 	Status string
 
-	// FRBudget is the container's stored budget as the operator reads it,
-	// empty when the container declares none. A milepebble has no budget
-	// of its own (only a milestone does), so the row renders the same
-	// "not declared" empty value rather than a zero that reads as a plan.
+	// FRBudget is empty when undeclared; milepebbles have no budget of their own.
 	FRBudget string
 
-	// Tasks carries the "N of M done" figures from the progress read,
-	// taken whole from the read's own Done()/Total() -- never re-summed
-	// here -- so this figure and the Milestones table's bar are one count.
+	// Tasks uses the read's own Done()/Total() so it matches the Milestones table bar.
 	Tasks ProgressCell
 
-	// StatusHistoryPath is the status-history view's URL for this
-	// container; StatusChanges is how many transitions that view will
-	// list. The two are read from one call, so the label's number and the
-	// page's rows cannot disagree.
+	// StatusHistoryPath and StatusChanges come from one read, so the count matches
+	// the history page's rows.
 	StatusHistoryPath string
 	StatusChanges      int
 
-	// HistoryError is set when the status-history read failed. The link
-	// still renders -- the page it names may well answer -- but the count
-	// is replaced by the failure sentence, because "0 changes" printed
-	// over a failed read is a claim about the container the page never
-	// made.
+	// HistoryError replaces the count when the history read failed, so a failure never
+	// renders as "0 changes".
 	HistoryError string
 
-	// ID is the container's own id, rendered as the copy chip.
 	ID string
 }
 
-// TasksLabel is the rail's Tasks sentence: "N of M done", or "No tasks yet"
-// for a container that holds none.
-//
-// It is the FR's own wording rather than the table's "N/M tasks done" bar
-// caption: this is a rail cell an operator reads as a fact, not a chart it
-// reads against an axis. The arithmetic is still ProgressCell's -- a
-// container that holds nothing renders as "No tasks yet" rather than "0 of 0
-// done", which would read as a stalled milestone rather than a new one.
+// TasksLabel is "N of M done", or "No tasks yet" for an empty container so it does
+// not read as stalled.
 func (r MilestoneRail) TasksLabel() string {
 	if !r.Tasks.HasTasks() {
 		return "No tasks yet"
@@ -232,16 +141,11 @@ func (r MilestoneRail) TasksLabel() string {
 	return itoa(r.Tasks.Done) + " of " + itoa(r.Tasks.Total) + " done"
 }
 
-// TasksErrored reports whether the Tasks figures could not be read, so the
-// rail shows the failure sentence in place of a count it does not have.
+// TasksErrored reports whether the Tasks figures could not be read.
 func (r MilestoneRail) TasksErrored() bool { return r.Tasks.ProgressError != "" }
 
-// HistoryLabel is the Status history link's text: "N changes", and "1 change"
-// for a container whose register holds a single row.
-//
-// It is a method rather than a field so the singular case cannot be spelled
-// twice -- and it returns the failure sentence outright when the read failed,
-// so the count never renders as zero over a read that did not answer.
+// HistoryLabel is the Status history link's text, or the failure sentence when the
+// read failed.
 func (r MilestoneRail) HistoryLabel() string {
 	if r.HistoryError != "" {
 		return r.HistoryError
@@ -252,14 +156,8 @@ func (r MilestoneRail) HistoryLabel() string {
 	return itoa(r.StatusChanges) + " changes"
 }
 
-// milestoneDetailRail renders the properties card: the FR's five rows, in
-// the FR's order.
-//
-// Each row's value is a read's own answer rather than anything re-derived
-// here, and a row with nothing behind it renders that "nothing" explicitly
-// rather than being dropped: the FR names five rows on this page, and an
-// absent FR-budget row would read as a rendering bug rather than as "this
-// container declares none".
+// milestoneDetailRail renders the five property rows; an empty value is rendered
+// explicitly rather than dropping the row.
 templ milestoneDetailRail(rail MilestoneRail) {
 	<div class="card bg-base-100 border border-base-300" data-krill="milestone-properties">
 		<dl class="card-body gap-3 text-sm">
@@ -275,9 +173,7 @@ templ milestoneDetailRail(rail MilestoneRail) {
 					if rail.FRBudget != "" {
 						{ rail.FRBudget }
 					} else {
-						// The container declares no budget. Said plainly,
-						// because an empty cell would read as a value the
-						// page could not read.
+						// Said plainly; an empty cell would read as an unreadable value.
 						<span class="text-base-content/70">No FR budget declared</span>
 					}
 				</dd>
@@ -303,15 +199,8 @@ templ milestoneDetailRail(rail MilestoneRail) {
 			<div>
 				<dt class="text-base-content/70">Id</dt>
 				<dd data-krill="milestone-properties-id">
-					// The task detail's id chip, carrying that chip's own
-					// data attributes verbatim so the head script already
-					// in every page binds this one too. Reusing the markers
-					// is what keeps there exactly ONE clipboard
-					// implementation: a chip that named its own attributes
-					// would render as a control that looks live and does
-					// nothing, which is the failure the script's disabled
-					// chip exists to prevent. So this ships disabled, and
-					// the script enables it.
+					// Reuses the task detail's copy-chip attributes so the shared head script binds it;
+					// ships disabled until that script enables it.
 					<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
 						aria-label="Copy milestone id" data-krill="copy-task-id" data-task-id={ rail.ID }
 						disabled title="Copying the id needs JavaScript">
