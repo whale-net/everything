@@ -1,9 +1,17 @@
 # mcpobs — shared MCP tracing/logging middleware
 
 The observability half of the MCP contract every domain's MCP server and
-MCP client should share: each MCP tool call shows up as its own trace
-containing that call and its DB work, and a client's outbound calls carry
-a trace so the two ends can be correlated.
+MCP client should share: each MCP tool call gets its own span, nested
+under the POST that carried it, with its DB work underneath — and a
+client's outbound calls carry a trace so both ends land in one trace.
+
+## Server HTTP handler: `NewHTTPHandler`
+
+Use `mcpobs.NewHTTPHandler(handler, "<service>")` in place of
+`otelhttp.NewHandler` around an MCP server's streamable-HTTP handler
+(outside the auth middleware). It is `otelhttp.NewHandler` plus one step:
+it rewrites the request's `traceparent` header to name the server span,
+which is how tool-call spans find the POST to nest under (see below).
 
 ## Server side: `InstrumentToolCall`
 
@@ -18,8 +26,8 @@ var (
     logger = logging.Get("mcp/server")
 )
 
-func instrumentToolCall[Out any](ctx context.Context, toolName string, fn func(context.Context) (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
-    return mcpobs.InstrumentToolCall(ctx, tracer, logger, toolName, func(ctx context.Context) (string, string, bool) {
+func instrumentToolCall[Out any](ctx context.Context, toolName string, req *mcp.CallToolRequest, fn func(context.Context) (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
+    return mcpobs.InstrumentToolCall(ctx, tracer, logger, toolName, mcpobs.RequestHeader(req), func(ctx context.Context) (string, string, bool) {
         if caller := CallerFromContext(ctx); caller != nil {
             return "caller_id", caller.ID.String(), true
         }
@@ -48,7 +56,7 @@ srv.AddReceivingMiddleware(mcpobs.ToolCallMiddleware(
 `TokenInfo`), since inner middleware has not resolved it yet; pass `nil` to
 omit it.
 
-### Why each tool call is its own trace, not a child of the HTTP span
+### Why the tool span is parented from the request header, not `ctx`
 
 `InstrumentToolCall` deliberately does **not** nest the tool span under
 whatever span `ctx` already carries. On the streamable-HTTP transport
@@ -58,27 +66,27 @@ The go-sdk builds one jsonrpc2 connection per MCP **session**, at
 `initialize` time, from *that request's* context (`mcp.connect` →
 `jsonrpc2.NewConnection(ctx, …)`). Tool handlers are dispatched off that
 connection's read loop, so their context descends from the `initialize`
-request — not from the POST that carried the call. The transport never
-threads the per-request HTTP context down: `servePOST` publishes the bare
-JSON-RPC message onto the connection's incoming channel, and
-`RequestExtra` exposes only `TokenInfo`/`Header`, no `Context`.
+request — not from the POST that carried the call. Inheriting it welds
+every call in a session into one trace whose duration is the session's
+lifetime (observed: 989 spans over 7 minutes).
 
-Inheriting that context produces two failure modes that look like
-unrelated bugs in a tracing backend:
+What the transport *does* thread down is the POST's headers
+(`mcp.RequestExtra.Header`). `NewHTTPHandler` writes the server span into
+`traceparent`, and `InstrumentToolCall` extracts it, giving one trace per
+call across services:
 
-- **The POST span looks empty.** Each tool call's own POST produces a
-  span whose only child is the auth `UPDATE mcp_credential SET
-  last_used_at`. The tool span and its queries are in a *different* trace.
-- **One trace accumulates the whole session.** Every tool call in the
-  session shares the dead `initialize` span as ancestor, so the trace's
-  duration is the session's lifetime and its span count grows without
-  bound (observed: 989 spans over 7 minutes), with children that start
-  minutes after their parent ended.
+```
+caller span (e.g. whagent_net worker, via WrapClientTransport)
+└── POST                   (NewHTTPHandler)
+    ├── auth credential queries
+    └── mcp.tool/<name>
+        └── tool's DB / gRPC spans
+```
 
-Starting a fresh trace per call costs the trace-level link to the HTTP
-request, which carries no information the tool span doesn't already have
-(same tool, same persona) and cannot be recovered from the transport
-anyway.
+Without `NewHTTPHandler` the header still holds the *caller's*
+traceparent, so the tool span joins the caller's trace as a sibling of
+the POST. With no `traceparent` at all (nil header, or a client that
+doesn't propagate), the tool span starts a new root trace.
 
 ## Client side: `WrapClientTransport`
 
@@ -93,7 +101,7 @@ transport := &mcp.StreamableClientTransport{
 }
 ```
 
-Without this, a domain MCP server's own `otelhttp.NewHandler` wrap has no
-incoming trace context to extract, and every tool call starts a brand new
-disconnected root trace instead of continuing the caller's. See
+Without this, a domain MCP server's `NewHTTPHandler` wrap has no incoming
+trace context to extract, so each POST starts a new root trace instead of
+continuing the caller's. See
 `whagent_net/worker/tools/client.go` for the real call site.

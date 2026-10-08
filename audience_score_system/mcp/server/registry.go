@@ -38,7 +38,7 @@ func NewRegistry(srv *mcp.Server, st *store.Store) *Registry {
 // rejected -- is traced and logged by instrumentToolCall (observability.go).
 func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
+		return instrumentToolCall(ctx, tool.Name, req, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
 			var zero Out
 			person := PersonFromContext(ctx)
 			if person == nil {
@@ -95,7 +95,7 @@ type WriteRender[Out any] func(ctx context.Context, ref uuid.UUID) (*mcp.CallToo
 // rejected -- is traced and logged by instrumentToolCall (observability.go).
 func RegisterWrite[In, Out any](reg *Registry, tool *mcp.Tool, mutate WriteMutate[In], render WriteRender[Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
+		return instrumentToolCall(ctx, tool.Name, req, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
 			var zero Out
 			person := PersonFromContext(ctx)
 			if person == nil {

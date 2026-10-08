@@ -43,13 +43,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpobs"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
 	"github.com/whale-net/everything/whagent_net/mcpscope"
 	pb "github.com/whale-net/everything/whagent_net/protos"
@@ -330,7 +330,7 @@ func run() error {
 
 	httpServer := &http.Server{
 		Addr:         cfg.MCPAddr,
-		Handler:      otelhttp.NewHandler(server.NewHTTPHandler(srv, auth.credentials, resourceMeta), "whagent-net-mcp"),
+		Handler:      mcpobs.NewHTTPHandler(server.NewHTTPHandler(srv, auth.credentials, resourceMeta), "whagent-net-mcp"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

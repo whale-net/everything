@@ -42,7 +42,7 @@ var readPersonas = []Persona{PersonaReader, PersonaSwarmOperator, PersonaAgent}
 // traced and logged by instrumentToolCall (observability.go).
 func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
+		return instrumentToolCall(ctx, tool.Name, req, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
 			var zero Out
 			persona := PersonaFromContext(ctx)
 			if persona == "" {
@@ -106,7 +106,7 @@ func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerF
 // either.
 func RegisterWrite[In, Out any](reg *Registry, tool *mcp.Tool, allowedPersonas []Persona, h mcp.ToolHandlerFor[In, Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
+		return instrumentToolCall(ctx, tool.Name, req, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
 			var zero Out
 			persona := PersonaFromContext(ctx)
 			if persona == "" {
@@ -140,7 +140,7 @@ func personaAllowed(persona Persona, allowed []Persona) bool {
 // gate first.
 func registerOpsGated[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
+		return instrumentToolCall(ctx, tool.Name, req, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
 			var zero Out
 			persona := PersonaFromContext(ctx)
 			if persona == "" {

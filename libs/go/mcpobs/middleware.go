@@ -31,7 +31,7 @@ func ToolCallMiddleware(tracer trace.Tracer, logger *slog.Logger, callerAttr Req
 			if callerAttr != nil {
 				attr = func(context.Context) (string, string, bool) { return callerAttr(req) }
 			}
-			_, res, err := InstrumentToolCall(ctx, tracer, logger, name, attr,
+			_, res, err := InstrumentToolCall(ctx, tracer, logger, name, RequestHeader(req), attr,
 				func(ctx context.Context) (*mcp.CallToolResult, mcp.Result, error) {
 					res, err := next(ctx, method, req)
 					return nil, res, err

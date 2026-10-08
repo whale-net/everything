@@ -47,17 +47,16 @@ func spanNames(spans tracetest.SpanStubs) []string {
 	return names
 }
 
-// A tool call must not inherit the span its context happens to carry. The
-// streamable-HTTP transport hands tool handlers a context rooted at the
-// session's `initialize` request, so inheriting would weld every call in
-// a session onto one dead span and merge them into a single mega-trace.
+// With no traceparent header, a tool call must not inherit the span its
+// context carries: go-sdk roots that context at the session's `initialize`
+// request, which would merge every call in a session into one mega-trace.
 func TestInstrumentToolCall_StartsNewTrace(t *testing.T) {
 	tracer, exporter := testTracer(t)
 
 	outerCtx, outerSpan := tracer.Start(context.Background(), "POST /mcp/design")
 	outerSpanID := outerSpan.SpanContext().SpanID()
 
-	_, _, err := InstrumentToolCall(outerCtx, tracer, noopLogger(), "get_task", nil,
+	_, _, err := InstrumentToolCall(outerCtx, tracer, noopLogger(), "get_task", nil, nil,
 		func(context.Context) (*mcp.CallToolResult, int, error) {
 			return nil, 0, nil
 		})
@@ -78,7 +77,7 @@ func TestInstrumentToolCall_StartsNewTrace(t *testing.T) {
 func TestInstrumentToolCall_NestsChildSpans(t *testing.T) {
 	tracer, exporter := testTracer(t)
 
-	_, _, err := InstrumentToolCall(context.Background(), tracer, noopLogger(), "get_task", nil,
+	_, _, err := InstrumentToolCall(context.Background(), tracer, noopLogger(), "get_task", nil, nil,
 		func(ctx context.Context) (*mcp.CallToolResult, int, error) {
 			_, span := tracer.Start(ctx, "db.query")
 			span.End()
@@ -105,7 +104,7 @@ func TestInstrumentToolCall_PreservesContextValues(t *testing.T) {
 	defer cancel()
 
 	var seen any
-	_, _, err := InstrumentToolCall(ctx, tracer, noopLogger(), "get_task", nil,
+	_, _, err := InstrumentToolCall(ctx, tracer, noopLogger(), "get_task", nil, nil,
 		func(ctx context.Context) (*mcp.CallToolResult, int, error) {
 			seen = ctx.Value(ctxKey{})
 			return nil, 0, nil

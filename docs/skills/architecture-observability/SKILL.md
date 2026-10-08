@@ -47,7 +47,7 @@ defer logging.Shutdown(ctx) //nolint:errcheck
 | gRPC server | `grpc.StatsHandler(otelgrpc.NewServerHandler())` plus `logging.New{Unary,Stream}ServerLoggingInterceptor` first in the chain |
 | gRPC client | `libs/go/grpcclient` (adds `otelgrpc` for you) |
 | HTTP client | `otelhttp.NewTransport`, or `logging.WrapDefaultHTTPTransport()` for `http.DefaultClient` |
-| MCP server | `otelhttp` on the HTTP handler **and** `libs/go/mcpobs` per tool call (below) |
+| MCP server | `mcpobs.NewHTTPHandler` on the HTTP handler (not bare `otelhttp`) **and** `libs/go/mcpobs` per tool call (below) |
 | MCP client | `mcpobs.WrapClientTransport` |
 
 ## MCP servers need per-tool-call spans
@@ -55,10 +55,13 @@ defer logging.Shutdown(ctx) //nolint:errcheck
 The go-sdk streamable-HTTP transport hands tool handlers a context rooted at
 the session's `initialize` request, not the POST that carried the call.
 Without `mcpobs`, every tool call in a session (and its gRPC/DB children)
-lands in one ever-growing trace, and the per-POST span is empty. Pick one:
+lands in one ever-growing trace, and the per-POST span is empty.
+`mcpobs` re-parents each call from the POST's `traceparent` header, which
+`mcpobs.NewHTTPHandler` rewrites to the server span. Pick one:
 
 - **One registry choke point** (krill, audience_score_system): wrap each
-  registration with `mcpobs.InstrumentToolCall`.
+  registration with `mcpobs.InstrumentToolCall`, passing
+  `mcpobs.RequestHeader(req)`.
 - **Tools registered in many places** (manmanv2, whagent_net): add
   `mcpobs.ToolCallMiddleware` as the **last** `AddReceivingMiddleware`
   call, so it runs outermost and also traces auth refusals.

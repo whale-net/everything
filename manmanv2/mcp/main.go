@@ -17,7 +17,6 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
@@ -130,7 +129,7 @@ func run(logger *slog.Logger) error {
 		srv.AddReceivingMiddleware(server.WhagentMiddleware(*ex, identitylink.Store{DB: db}, server.LogAuditor{Logger: logging.Get("manmanv2/mcp/audit")}))
 		logger.Info("whagent-net credentials accepted", "issuer", whagentEnv.Issuer)
 	}
-	// Added last, so it runs outermost: each tool call is its own trace,
+	// Added last, so it runs outermost: each tool call gets its own span,
 	// including calls refused by persona or whagent auth.
 	srv.AddReceivingMiddleware(mcpobs.ToolCallMiddleware(logging.Tracer("manmanv2/mcp"), logging.Get("manmanv2/mcp/tools"), server.ToolCallCaller))
 	handler := server.NewHandler(mcpHandler, verify, authServer, os.Getenv("MCP_PUBLIC_URL"), os.Getenv("MCP_RESOURCE_METADATA_URL"), wrap)
@@ -142,7 +141,7 @@ func run(logger *slog.Logger) error {
 	if port == "" {
 		port = "8081"
 	}
-	httpSrv := &http.Server{Addr: ":" + port, Handler: otelhttp.NewHandler(handler, "manmanv2-mcp"), ReadHeaderTimeout: 10 * time.Second}
+	httpSrv := &http.Server{Addr: ":" + port, Handler: mcpobs.NewHTTPHandler(handler, "manmanv2-mcp"), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

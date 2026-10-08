@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
@@ -46,9 +47,13 @@ func NewClientCredentialsSource(ctx context.Context, cfg ClientCredentialsConfig
 	return cc.TokenSource(ctx), nil
 }
 
+var defaultBase = otelhttp.NewTransport(http.DefaultTransport)
+
 // Transport attaches a Bearer token to every request: the context's user
 // token when present, else Machine's token when configured. With neither,
 // the request goes out unauthenticated (an api in flag-off mode accepts it).
+// A nil Base uses an otelhttp-wrapped http.DefaultTransport so the caller's
+// trace continues into the api.
 type Transport struct {
 	Base    http.RoundTripper
 	Machine oauth2.TokenSource
@@ -66,7 +71,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	base := t.Base
 	if base == nil {
-		base = http.DefaultTransport
+		base = defaultBase
 	}
 	if !ok {
 		return base.RoundTrip(req)

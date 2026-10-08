@@ -1,7 +1,8 @@
 // Package mcpobs is the shared tracing/logging middleware every domain's
 // MCP server and MCP client should route through: InstrumentToolCall
-// (server side) gives every tool call its own self-contained trace --
-// one mcp.tool/<name> span with the call's DB spans underneath it -- and
+// (server side) gives every tool call its own mcp.tool/<name> span, with
+// the call's DB spans underneath it, nested under the POST that carried
+// the call (NewHTTPHandler, server.go) -- and
 // WrapClientTransport (client side, see transport.go) makes sure an
 // inbound request carries a trace at all by injecting a W3C traceparent
 // header on the way out. Before this package existed,
@@ -16,11 +17,13 @@ package mcpobs
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -41,31 +44,29 @@ type CallerAttr func(ctx context.Context) (key, value string, ok bool)
 // checks run before the product handler -- not just the product handler
 // itself. callerAttr may be nil to skip the caller attribute entirely.
 //
-// The span deliberately starts a NEW trace rather than nesting under the
-// span ctx already carries. go-sdk's streamable-HTTP transport gives a
-// tool handler a context descending from the jsonrpc2 connection, which
-// is built once per MCP session from the `initialize` request's context
-// (mcp.connect -> jsonrpc2.NewConnection) -- not from the POST that
-// actually carried this call, which the transport never threads down
-// (servePOST publishes the bare JSON-RPC message onto the connection's
-// incoming channel). Inheriting it therefore parents every tool call in a
-// session to one long-dead `initialize` span, so a "trace" accumulates
-// every call the session ever makes: the per-POST span shows nothing but
-// the auth UPDATE, while the tool's own span and all its queries land in
-// a sibling mega-trace whose duration is the whole session. Starting fresh
-// makes each tool call one self-contained trace -- tool span, then its DB
-// spans underneath -- at the cost of trace-level linkage to the HTTP
-// request, which names no additional information (same tool, same
-// persona) and cannot be recovered from the transport anyway.
+// The span is parented by the traceparent in header -- the headers of the
+// POST that carried this call (mcp.RequestExtra.Header; see RequestHeader)
+// -- never by the span ctx already carries. go-sdk's streamable-HTTP
+// transport gives a tool handler a context rooted at the session's
+// `initialize` request, so inheriting it would weld every call in a
+// session into one mega-trace. With NewHTTPHandler on the server, the
+// header names the POST's own server span, so the tool span nests under
+// the POST (and its auth queries) in the caller's trace. A nil header or
+// one with no traceparent starts a new root trace.
 func InstrumentToolCall[Out any](
 	ctx context.Context,
 	tracer trace.Tracer,
 	logger *slog.Logger,
 	toolName string,
+	header http.Header,
 	callerAttr CallerAttr,
 	fn func(context.Context) (*mcp.CallToolResult, Out, error),
 ) (*mcp.CallToolResult, Out, error) {
-	ctx, span := tracer.Start(trace.ContextWithSpanContext(ctx, trace.SpanContext{}), "mcp.tool/"+toolName)
+	parent := trace.ContextWithSpanContext(ctx, trace.SpanContext{})
+	if header != nil {
+		parent = propagation.TraceContext{}.Extract(parent, propagation.HeaderCarrier(header))
+	}
+	ctx, span := tracer.Start(parent, "mcp.tool/"+toolName)
 	defer span.End()
 	span.SetAttributes(attribute.String("mcp.tool", toolName))
 

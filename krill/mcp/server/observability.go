@@ -1,5 +1,5 @@
 // Per-tool-call observability. mcp/main.go's logging.Configure (tracing +
-// OTLP export) and the otelhttp.NewHandler wrap around the streamable-HTTP
+// OTLP export) and the mcpobs.NewHTTPHandler wrap around the streamable-HTTP
 // handler (transport.go) already give this binary process-level
 // startup/shutdown logs and a generic HTTP span per request -- but every
 // MCP tool call multiplexes over that single HTTP endpoint as JSON-RPC, so
@@ -37,8 +37,8 @@ var tracer = logging.Tracer("krill/mcp/server")
 // registered tool, so this always wraps the full call -- including the
 // unauthenticated/forbidden paths those functions check before invoking
 // the product handler -- not just the product handler itself.
-func instrumentToolCall[Out any](ctx context.Context, toolName string, fn func(context.Context) (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
-	return mcpobs.InstrumentToolCall(ctx, tracer, logger, toolName, func(ctx context.Context) (string, string, bool) {
+func instrumentToolCall[Out any](ctx context.Context, toolName string, req *mcp.CallToolRequest, fn func(context.Context) (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
+	return mcpobs.InstrumentToolCall(ctx, tracer, logger, toolName, mcpobs.RequestHeader(req), func(ctx context.Context) (string, string, bool) {
 		if persona := PersonaFromContext(ctx); persona != "" {
 			return "persona", string(persona), true
 		}
