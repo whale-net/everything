@@ -36,6 +36,10 @@ import (
 // No SSE extension in this PR: krill's ops console uses a
 // self-terminating poll instead, and wiring //libs/go/htmxsse would mean
 // a RabbitMQ dependency krill does not have today.
+//
+// The text/tailwindcss block carries no @import: the browser build adds
+// `@import "tailwindcss"` itself, and an explicit one makes Chrome's
+// preload scanner fetch a relative "tailwindcss" URL on every page load.
 func buildHead() string {
 	return fmt.Sprintf(`<script>
 (function(){var KEY=%q;var t=null;try{t=localStorage.getItem(KEY);}catch(e){t=null;}
@@ -44,7 +48,6 @@ document.documentElement.setAttribute('data-theme',t);})();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js"></script>
 <style type="text/tailwindcss">
-@import "tailwindcss";
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
 <style>%s</style>
@@ -364,6 +367,17 @@ func (app *App) renderShellStatus(w http.ResponseWriter, r *http.Request, title,
 	}); err != nil {
 		panic(err)
 	}
+}
+
+// hxTargetID is the id of the region an htmx request is swapping. htmx 4
+// sends HX-Target as "tag#id" (e.g. "div#krill-spec-panel"); earlier
+// versions sent the bare id, so both forms resolve to the id.
+func hxTargetID(r *http.Request) string {
+	target := r.Header.Get("HX-Target")
+	if i := strings.LastIndex(target, "#"); i >= 0 {
+		return target[i+1:]
+	}
+	return target
 }
 
 // withShellProduct guarantees the request carries a current product before

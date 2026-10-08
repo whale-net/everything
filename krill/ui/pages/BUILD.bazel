@@ -31,6 +31,8 @@ go_test(
     name = "pages_test",
     size = "small",
     srcs = glob(["*_test.go"]),
+    # templ_hygiene_test.go scans the template sources themselves.
+    data = glob(["*.templ"]),
     embed = [":pages"],
     deps = [
         "//krill/store",

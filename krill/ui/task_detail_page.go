@@ -205,7 +205,9 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 	if t.Body != nil {
 		page.Body = *t.Body
 	}
-	if t.CurrentEscalationID != nil {
+	// A cancelled task keeps its escalation on record but is terminal, so
+	// the page presents it as cancelled only.
+	if t.CurrentEscalationID != nil && t.CancelledAt == nil {
 		page.Escalation = "escalation " + t.CurrentEscalationID.String()
 		if in.Escalation != nil {
 			page.EscalationReason = string(in.Escalation.Reason)
@@ -649,7 +651,7 @@ func taskDetailActions(t store.Task, returnTo string) templ.Component {
 	if controls == nil {
 		return nil
 	}
-	return pages.TaskActions(controls)
+	return pages.TaskActionsMenu(controls)
 }
 
 // taskDetailActionPopovers renders the reason popovers for the detail's
@@ -832,7 +834,7 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 // taken while a non-default tab is open serve a bare panel, which the
 // section swap would then splice in beside the page.
 func tabSwapRequested(r *http.Request) bool {
-	return r.Header.Get("HX-Target") == pages.TaskPanelAnchor
+	return hxTargetID(r) == pages.TaskPanelAnchor
 }
 
 // renderProductTaskDetailNotFound is the in-shell 404 for a task detail

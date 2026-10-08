@@ -214,6 +214,7 @@ release_app(
 go_test(
     name = "ui_lib_test",
     srcs = [
+        "cancelled_badges_test.go",
         "shared_spec_readers_test.go",
         "nav_test.go",
         "nav_badge_test.go",

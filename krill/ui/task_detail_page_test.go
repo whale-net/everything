@@ -897,9 +897,12 @@ func TestTaskDetailStuckStates(t *testing.T) {
 	esc := uuid.New()
 	capped := f.add(store.Task{Title: "c", AttemptCount: store.DefaultAttemptCap, CurrentEscalationID: &esc, CancelledAt: &past})
 	_, html = f.get(capped.ID.String(), true)
-	for _, k := range []string{"capped", "escalated", "cancelled"} {
+	for _, k := range []string{"capped", "cancelled"} {
 		assert.Contains(t, html, `data-krill="task-badge-`+k+`"`)
 	}
+	assert.NotContains(t, html, `data-krill="task-badge-escalated"`,
+		"a cancelled task keeps its escalation on record but is not shown as escalated")
+	assert.NotContains(t, html, `data-krill-callout="escalated"`)
 }
 
 func TestTaskDetailNotFound(t *testing.T) {

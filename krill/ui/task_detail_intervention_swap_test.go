@@ -238,7 +238,7 @@ func newDetailSwapFixture(t *testing.T) *detailSwapFixture {
 	api := newFakeAPI(t)
 	idp := newFakeIDP(t, uuid.NewString())
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 
 	f := &detailSwapFixture{
 		pid:     uuid.New(),

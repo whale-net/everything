@@ -263,7 +263,8 @@ func TestTaskLaneAndStateBadgesAreIdenticalOnListBoardAndDetail(t *testing.T) {
 
 			assert.Contains(t, pair.lane, ">"+string(lane)+"<", "the lane badge must carry the lane's own name")
 			assert.Equal(t,
-				[]string{"task-badge-claimed", "task-badge-capped", "task-badge-escalated", "task-badge-cancelled"},
+				// Cancelled hides the escalation the task still has on record.
+				[]string{"task-badge-claimed", "task-badge-capped", "task-badge-cancelled"},
 				badgeKeys(t, pair.state))
 
 			// None of it reaches a page as text: not in the list row, not

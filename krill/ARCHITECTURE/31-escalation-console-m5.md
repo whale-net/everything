@@ -92,7 +92,9 @@ own "no resolution column, on purpose" comment):
 - **`cancel`** (FR7, issue #2873) moves the task to a dead-lettered
   terminal state instead (`cancelled_at`), leaving the resolved-or-not
   escalation's own history exactly as it was — cancel works identically
-  whether or not the task happens to be escalated.
+  whether or not the task happens to be escalated. The escalated console view (`ListEscalatedTasks`/`CountEscalatedTasks`)
+  excludes cancelled tasks, since a dead-lettered task has nothing left to
+  act on.
 
 ## Claimability: the predicate lives in the index, not only in Go
 

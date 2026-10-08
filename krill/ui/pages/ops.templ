@@ -710,6 +710,23 @@ templ TaskActions(controls []TaskActionControl) {
 	}
 }
 
+// TaskActionsMenu is the detail header's form of TaskActions: up to two
+// controls render inline; with more, the first stays a button and the rest
+// move into a "More" dropdown, as the wireframe's header shows.
+templ TaskActionsMenu(controls []TaskActionControl) {
+	if len(controls) <= 2 {
+		@TaskActions(controls)
+	} else {
+		@TaskActions(controls[:1])
+		<details class="dropdown dropdown-end" data-krill="task-actions-more">
+			<summary class="btn btn-ghost btn-sm" aria-label="More actions">More</summary>
+			<div class="dropdown-content z-10 mt-1 flex w-44 flex-col gap-1 rounded-box border border-base-300 bg-base-100 p-2 shadow [&_button]:w-full [&_button]:justify-start [&_form]:block">
+				@TaskActions(controls[1:])
+			</div>
+		</details>
+	}
+}
+
 // taskControlTarget is the DOM id one control's htmx half swaps: the region
 // the caller named, or the console results block a Needs attention row
 // swaps when its control names none.

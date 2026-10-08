@@ -429,12 +429,24 @@ func resolveMilepebbleScope(out resolvedProductTaskScope, listing slice.Delivery
 	if problem != productTaskScopeOK {
 		return out, problem
 	}
+	containerID := parsed.ContainerID
+	if containerID != uuid.Nil {
+		// Switching from Milestone mode submits the chosen milestone as the
+		// container. Read it as the parent (unless one is named) and offer
+		// its milepebbles; the read is never scoped to the milestone itself.
+		if asMilestone, p := resolveMilepebbleParent(listing, containerID); p == productTaskScopeOK {
+			if parent.ID == uuid.Nil {
+				parent = asMilestone
+			}
+			containerID = uuid.Nil
+		}
+	}
 	switch {
 	case parent.ID != uuid.Nil:
 		// The URL named the milestone whose milepebbles are on offer.
-	case parsed.ContainerID != uuid.Nil:
+	case containerID != uuid.Nil:
 		// It named only a milepebble, so its own parent is the offer.
-		parent, problem = milestoneOfMilepebble(listing, parsed.ContainerID)
+		parent, problem = milestoneOfMilepebble(listing, containerID)
 		if problem != productTaskScopeOK {
 			return out, problem
 		}
@@ -468,8 +480,8 @@ func resolveMilepebbleScope(out resolvedProductTaskScope, listing slice.Delivery
 	// against the product's own listing first, so an id the product does
 	// not own is a not-found no matter what the parent says -- and only
 	// then is the pair's disagreement considered.
-	if parsed.ContainerID != uuid.Nil {
-		named, found := resolveTaskContainer(listing, parsed.ContainerID)
+	if containerID != uuid.Nil {
+		named, found := resolveTaskContainer(listing, containerID)
 		if !found || named.Kind != string(store.MilestoneKindMilepebble) {
 			return out, productTaskScopeNotFound
 		}

@@ -656,7 +656,8 @@ func (app *App) handleDesignSessionDetail(w http.ResponseWriter, r *http.Request
 		renderFragment(w, r, pages.DesignSessionDetail(detail))
 		return
 	}
-	r, _ = app.rememberUnprefixedProduct(w, r)
+	// The product is the URL's own; the shell reads it from the path.
+	setLastViewedProductCookie(w, productID)
 	app.renderShell(w, r, "Design session", r.URL.Path, pages.DesignSessionDetail(detail))
 }
 

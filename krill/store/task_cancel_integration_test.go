@@ -681,3 +681,34 @@ func TestTaskStore_CancelTask_BothExpectedIDs_EitherMismatchRefused(t *testing.T
 	require.NotNil(t, got.CurrentEscalationID)
 	assert.Equal(t, matchingEscalationID, *got.CurrentEscalationID, "the escalation that is current now must survive")
 }
+
+// TestTaskStore_CancelTask_EscalatedTask_LeavesTheEscalatedView: cancel keeps
+// the escalation's history (current_escalation_id is left as it was), but a
+// dead-lettered task has nothing left to act on, so the escalated console
+// view and its count drop it.
+func TestTaskStore_CancelTask_EscalatedTask_LeavesTheEscalatedView(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+	task := createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "escalated then cancelled", self)
+	setTaskEscalated(t, ctx, db, task.ID)
+
+	params := store.ListEscalatedTasksParams{ScopeID: scopeID}
+	before, err := s.Tasks().CountEscalatedTasks(ctx, params)
+	require.NoError(t, err)
+	require.Equal(t, 1, before)
+
+	_, err = s.Tasks().CancelTask(ctx, store.CancelTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	page, err := s.Tasks().ListEscalatedTasks(ctx, params)
+	require.NoError(t, err)
+	assert.Empty(t, page.Items, "a cancelled task is not in the escalated view")
+	after, err := s.Tasks().CountEscalatedTasks(ctx, params)
+	require.NoError(t, err)
+	assert.Zero(t, after, "nor in its count")
+}

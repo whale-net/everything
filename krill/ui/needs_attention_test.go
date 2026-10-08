@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/ui/pages"
 )
 
 // needsAttentionNow is the instant these tests hold the clock at, so the
@@ -977,4 +978,15 @@ func TestNeedsAttentionNotesTabEmptyState(t *testing.T) {
 	got := fetchHX(t, f.mux, f.path(needsAttentionTabNotes), "").Body.String()
 	assert.Contains(t, got, "No open notes.", "an empty open-notes tab says so")
 	assert.NotContains(t, got, `data-krill="needs-attention-note-row"`, "and renders no rows")
+}
+
+// TestNeedsAttentionTabSwapAcceptsTheHtmx4TargetHeader guards the tab swap
+// against htmx 4's "tag#id" HX-Target: a tab click must get the whole region
+// back (strip included), not the bare results that wipe the strip off the page.
+func TestNeedsAttentionTabSwapAcceptsTheHtmx4TargetHeader(t *testing.T) {
+	f := newNeedsAttentionFixture(t)
+
+	body := fetchHX(t, f.mux, f.path(needsAttentionTabClaimed), "div#"+pages.NeedsAttentionAnchor).Body.String()
+	assert.Contains(t, body, `id="`+pages.NeedsAttentionAnchor+`"`, "the swap returns the region it replaces")
+	assert.Contains(t, body, `data-krill="needs-attention-tabs"`, "and the tab strip travels with it")
 }

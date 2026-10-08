@@ -51,7 +51,7 @@ func readGateMux(t *testing.T, idpRoles []string) (*http.ServeMux, *http.Cookie)
 	t.Helper()
 	idp := newFakeIDP(t, testOperatorSub)
 	authenticator, cookie := newSignedInOperator(t, idp)
-	app := newTestApp(t, authenticator, idp.server.URL, "http://api.invalid")
+	app := newSignedInApp(t, authenticator, idp.server.URL, "http://api.invalid")
 	app.sessionRoles = func(*http.Request) ([]string, error) { return idpRoles, nil }
 	app.roles = server.RoleConfig{OperatorRole: "krill-operator", ReaderRole: "krill-reader"}
 	mux := http.NewServeMux()

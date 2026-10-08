@@ -950,11 +950,11 @@ func cancelObservedFrom(r *http.Request) cancelObservedIDs {
 // apart is which region htmx was swapping: a control targets the view it sits
 // on (a console row's the results block, a task detail's the detail section),
 // while the card's form targets the card. htmx sends the resolved target's id
-// in HX-Target -- the bare id, no leading "#" -- and omits the header when
+// in HX-Target (read through hxTargetID) and omits the header when
 // that target is the posting element itself, so the card is "no target named,
 // or the card's own id".
 func cancelRefusalFromTheCard(r *http.Request) bool {
-	switch r.Header.Get("HX-Target") {
+	switch hxTargetID(r) {
 	case "", pages.CancelConfirmAnchor:
 		return true
 	default:
@@ -973,7 +973,7 @@ func cancelRefusalFromTheCard(r *http.Request) bool {
 // target's id in HX-Target, so a request that names the results block is the
 // row's.
 func cancelRefusalFromTheRow(r *http.Request) bool {
-	return r.Header.Get("HX-Target") == pages.OpsResultsAnchor
+	return hxTargetID(r) == pages.OpsResultsAnchor
 }
 
 // freshCancelConfirmData rebuilds the cancel-confirm card from the task's

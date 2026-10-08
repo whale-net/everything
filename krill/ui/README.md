@@ -1257,8 +1257,8 @@ verb whose htmx post originates on the confirm card.
 A refusal rides the same region as an inline alert (`TaskDetailPage.ActionError`,
 `data-krill="task-action-error"`) per FR c69a42b4, and is empty on the
 page's first render. Which refusal shape a refused Cancel gets is decided by
-`cancelRefusalFromTheCard`: htmx names the resolved target's bare id in
-`HX-Target` (no leading `#`) and omits the header when the target is the
+`cancelRefusalFromTheCard`: htmx names the resolved target in `HX-Target`
+(read through `hxTargetID`, below) and omits the header when the target is the
 posting element itself, so "no header, or `cancel-confirm`" is the card
 (rebuild the card from fresh state) and every other origin — a row's results
 block, or the detail's section — re-derives the view it acted from. A failed
@@ -1299,6 +1299,13 @@ nodes (the panel and the re-marked strip), and htmx's `outerHTML` inserts
 duplicate strip into the page. One region keeps the fragment to exactly one
 root — the rule above, applied a second time — and the response carries a
 fresh, identically-marked strip, so the re-render is invisible.
+
+**Read `HX-Target` through `hxTargetID`, never directly.** htmx 4 sends it
+as `tag#id` (`div#krill-spec-panel`); htmx 1/2 sent the bare id. Comparing the
+raw header to an anchor constant never matches under htmx 4, so every swap
+falls through to the narrower region and wipes the controls around it (a tab
+click that removes the tab strip). `hxTargetID` (`templ_render.go`) resolves
+both forms to the id.
 
 **One route, three modes, told apart by `HX-Target`.** A tab names
 `#krill-task-panel` and gets the panel region; the Refresh button names
@@ -1543,6 +1550,12 @@ So, when adding a write surface:
   you delete an entry from it.
 - Match an **exact class token**, not a substring: `hasClass(body,
   "btn-error")`, because `"btn"` is a substring of every other `btn-*`.
+- **Markup tests cannot see CSS.** `pages/templ_hygiene_test.go` scans the
+  `.templ` sources for the bugs that compile and render wrong: a Go field
+  declaration inside a templ body (renders as page text), a display class
+  on a `popover` element (renders open), and `divide-<color>` utilities
+  (the CDN stylesheet does not define them). Before shipping a visual
+  change, also look at the page in a browser.
 
 ## Known exceptions
 

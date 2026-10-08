@@ -429,3 +429,23 @@ func TestRowControlsCarryNoIdentity(t *testing.T) {
 	assert.NotContains(t, got, "iss=")
 	assert.NotContains(t, got, "scope=")
 }
+
+// TestTaskActionsMenuFoldsExtraVerbsIntoMore pins the detail header's split:
+// two controls stay inline, and a third pushes all but the first into More.
+func TestTaskActionsMenuFoldsExtraVerbsIntoMore(t *testing.T) {
+	control := func(verb string) TaskActionControl {
+		return TaskActionControl{Kind: "form", Label: verb, Action: "/ops/tasks/t1/" + verb,
+			FormID: "f-" + verb, PopoverID: "p-" + verb}
+	}
+
+	two := render(t, TaskActionsMenu([]TaskActionControl{control("requeue"), control("cancel")}))
+	assert.NotContains(t, two, `data-krill="task-actions-more"`, "two verbs fit inline")
+	assert.Equal(t, 2, strings.Count(two, "<form "))
+
+	three := render(t, TaskActionsMenu([]TaskActionControl{control("release"), control("escalate"), control("cancel")}))
+	i := strings.Index(three, `data-krill="task-actions-more"`)
+	require.GreaterOrEqual(t, i, 0, "a third verb opens the More menu")
+	assert.Equal(t, 1, strings.Count(three[:i], "<form "), "only the first verb stays inline")
+	assert.Equal(t, 2, strings.Count(three[i:], "<form "), "the rest sit inside More")
+	assert.Less(t, strings.Index(three, "/release"), i)
+}

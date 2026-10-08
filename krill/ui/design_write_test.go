@@ -286,7 +286,7 @@ func newDesignWriteEnv(t *testing.T) *designWriteEnv {
 		OpeningSubmission: "operators need a rollback story",
 		CreatedAt:         time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC),
 	}
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 	// The scope listing carries the product under test as well as the
 	// deployment's own, so a re-rendered blade can be asked which product
 	// it is opening a session under.
@@ -786,12 +786,12 @@ func assertFollowUpErrorShown(t *testing.T, body string) {
 		"and it must be an announcement, not a success status: a refusal rendered as a success is a lie")
 }
 
-// formAttr is one attribute of the follow-up form, read off the SERVED
+// followUpFormAttr is one attribute of the follow-up form, read off the SERVED
 // element rather than off the template source, so a template that stops
 // emitting it fails here. The form is found by its data-krill hook, which
 // is what makes this a lookup rather than a scan for a substring that might
 // also appear inside the operator's own typed text.
-func formAttr(t *testing.T, body, attr string) string {
+func followUpFormAttr(t *testing.T, body, attr string) string {
 	t.Helper()
 	re := regexp.MustCompile(`<form[^>]*data-krill="design-session-follow-up-form"[^>]*>`)
 	tag := re.FindString(body)
@@ -834,9 +834,9 @@ func (e *designWriteEnv) getDetail(t *testing.T, target string) *httptest.Respon
 	return rec
 }
 
-// betweenTags slices body from the marker to the next occurrence of end,
+// sliceThrough slices body from the marker to the next occurrence of end,
 // so an assertion about what one element carries stays off its neighbours.
-func betweenTags(t *testing.T, body, marker, end string) string {
+func sliceThrough(t *testing.T, body, marker, end string) string {
 	t.Helper()
 	i := strings.Index(body, marker)
 	require.NotEqual(t, -1, i, "body must contain %q", marker)
@@ -852,9 +852,9 @@ func betweenTags(t *testing.T, body, marker, end string) string {
 // restyled without breaking a section-scoped assertion (htmxui ARCHITECTURE
 // §14).
 const (
-	regionRevisionLog  = `id="revision-events"`
-	regionOpenQuestion = `id="open-questions"`
-	regionSessionProps = `id="session-properties"`
+	writeRegionRevisionLog  = `id="revision-events"`
+	writeRegionOpenQuestion = `id="open-questions"`
+	writeRegionSessionProps = `id="session-properties"`
 )
 
 // pageSectionOf slices body between two region ids, so parsing one section
@@ -1065,7 +1065,7 @@ func TestDesignWrite_RejectedAnswer_HXReRendersTheRoundRegion(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(body, `data-krill="open-question-resolve"`),
 		"one box per open question, and the rail still owns them")
 	assert.Contains(t, body, `hx-post="`+env.answerPath()+`"`, "the doubled form keeps its htmx wiring across a re-render")
-	assert.Equal(t, "#"+pages.DesignSessionRoundAnchor, formAttr(t, body, "hx-target"),
+	assert.Equal(t, "#"+pages.DesignSessionRoundAnchor, followUpFormAttr(t, body, "hx-target"),
 		"the re-rendered form still points its swap at the round region, not at itself")
 }
 
@@ -1140,11 +1140,11 @@ func TestDesignWrite_Answer_HXSuccessSwapsTheRoundInPlace(t *testing.T) {
 	assert.Contains(t, body, answerSuccessToast)
 
 	// The three things a round changed, asserted through region ids.
-	log := pageSectionOf(t, body, regionRevisionLog, regionOpenQuestion)
+	log := pageSectionOf(t, body, writeRegionRevisionLog, writeRegionOpenQuestion)
 	assert.Contains(t, log, `data-krill-seq-no="4"`, "the timeline gained the appended round")
 	assert.Contains(t, log, `data-krill-event-type="answer"`)
 
-	rail := pageSectionOf(t, body, regionOpenQuestion, regionSessionProps)
+	rail := pageSectionOf(t, body, writeRegionOpenQuestion, writeRegionSessionProps)
 	assert.NotContains(t, rail, testClosedQuestion,
 		"the question the round closed has left the rail")
 	assert.Contains(t, rail, testKeptQuestion, "the question it did not close is still offered")
@@ -1606,7 +1606,7 @@ func TestDesignWrite_StaleAnswer_RefusedByTheUIWithAFreshlyReadRail(t *testing.T
 
 			// The rail is freshly read: a question krill no longer has
 			// open is not offered for answering again.
-			rail := pageSectionOf(t, body, regionOpenQuestion, regionSessionProps)
+			rail := pageSectionOf(t, body, writeRegionOpenQuestion, writeRegionSessionProps)
 			assert.NotContains(t, rail, testClosedQuestion,
 				"a question resolved since the page load is not offered as a box again")
 			assert.Contains(t, rail, testKeptQuestion, "the question still open is still offered")
@@ -1736,7 +1736,7 @@ func TestDesignWrite_MixedFreshAndStaleTicks_RefuseTheWholeRound(t *testing.T) {
 			assert.Contains(t, body, ">"+followUp+"</textarea>", "the typed text survives")
 			assert.True(t, resolveBoxChecked(t, body, testKeptQuestion),
 				"FR 1942d934: the still-open tick the operator made survives the refusal, so a resubmit does not lose it")
-			rail := pageSectionOf(t, body, regionOpenQuestion, regionSessionProps)
+			rail := pageSectionOf(t, body, writeRegionOpenQuestion, writeRegionSessionProps)
 			assert.NotContains(t, rail, testClosedQuestion,
 				"the stale question is gone from a freshly-read rail")
 		})
@@ -1796,7 +1796,7 @@ func TestDesignWrite_FreshTickPostsNormally(t *testing.T) {
 			// read -- a no-JS success navigates (303), so its outcome is
 			// whatever the page it lands on renders.
 			if hx {
-				rail := pageSectionOf(t, body, regionOpenQuestion, regionSessionProps)
+				rail := pageSectionOf(t, body, writeRegionOpenQuestion, writeRegionSessionProps)
 				assert.NotContains(t, rail, testKeptQuestion,
 					"the question this round closed must leave the rail")
 			}
@@ -2003,7 +2003,7 @@ func TestDesignWrite_SignedOffSessionRendersNoFollowUpForm(t *testing.T) {
 	// The rest of the page is untouched: the round region's id is still
 	// there (it is the swap target either way), and the rail still reads.
 	assert.Contains(t, html, `id="`+pages.DesignSessionRoundAnchor+`"`)
-	assert.Contains(t, html, regionOpenQuestion)
+	assert.Contains(t, html, writeRegionOpenQuestion)
 
 	// And the badge is the same derivation, so the two cannot disagree.
 	assert.Contains(t, html, components.DesignSessionStageLabel(string(store.StageApproved)),
@@ -2040,7 +2040,7 @@ func TestDesignWrite_Answer_FormCarriesNoIdentityField(t *testing.T) {
 	env := newDesignWriteEnv(t)
 	html := env.getDetail(t, designSessionPath(env.ProductID, env.SessionID)).Body.String()
 
-	form := betweenTags(t, html, `id="`+pages.FollowUpFormAnchor+`"`, "</form>")
+	form := sliceThrough(t, html, `id="`+pages.FollowUpFormAnchor+`"`, "</form>")
 	for _, forbidden := range []string{`name="acting"`, `name="on_behalf_of"`, `name="iss"`,
 		`name="sub"`, `name="scope_id"`, `name="session_id"`, `name="krill_session_id"`, `name="entity_id"`} {
 		assert.NotContains(t, form, forbidden,
@@ -2068,14 +2068,14 @@ func TestDesignWrite_Answer_FormIsDoubled(t *testing.T) {
 	env := newDesignWriteEnv(t)
 	html := env.getDetail(t, designSessionPath(env.ProductID, env.SessionID)).Body.String()
 
-	assert.Equal(t, env.answerPath(), formAttr(t, html, "action"),
+	assert.Equal(t, env.answerPath(), followUpFormAttr(t, html, "action"),
 		"the no-JS half posts to the answers action")
-	assert.Equal(t, "post", formAttr(t, html, "method"))
-	assert.Equal(t, env.answerPath(), formAttr(t, html, "hx-post"),
+	assert.Equal(t, "post", followUpFormAttr(t, html, "method"))
+	assert.Equal(t, env.answerPath(), followUpFormAttr(t, html, "hx-post"),
 		"the htmx half posts to the same route")
-	assert.Equal(t, "#"+pages.DesignSessionRoundAnchor, formAttr(t, html, "hx-target"),
+	assert.Equal(t, "#"+pages.DesignSessionRoundAnchor, followUpFormAttr(t, html, "hx-target"),
 		"and swaps the round region, because a round changes the timeline and the rail too")
-	assert.Equal(t, "outerHTML", formAttr(t, html, "hx-swap"))
+	assert.Equal(t, "outerHTML", followUpFormAttr(t, html, "hx-swap"))
 
 	// The swap target exists on the page the form is served into: an
 	// hx-target that resolves to nothing makes htmx return before it even

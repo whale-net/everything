@@ -298,9 +298,9 @@ templ NeedsAttentionPanel(page OverviewPage) {
 					@htmxui.EmptyState("Nothing needs attention.", "No task in this product carries an active escalation.", "", "", nil)
 				</div>
 			} else {
-				<ul class="divide-y divide-base-300" data-krill="needs-attention-list">
+				<ul data-krill="needs-attention-list">
 					for _, e := range page.NeedsAttention {
-						<li class="py-2 flex items-center gap-2">
+						<li class="py-2 flex items-center gap-2 border-b border-base-300 last:border-b-0">
 							@escalationReasonBadge(e)
 							<a class="link flex-1" href={ templ.URL(e.Href) } data-krill="needs-attention-task">{ e.Title }</a>
 							<span class="text-sm text-base-content/70" title={ e.EscalatedAtExact }>{ e.EscalatedAt }</span>
