@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 AGENT_DEADLINE_SECONDS = 20 * 60
 MAX_POST_CHARS = 280
+WRITER_AGENT_DEFINITION = "shitposter-drafter"
 
 
 def load_writer_agent_id() -> str:
