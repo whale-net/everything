@@ -199,6 +199,34 @@ class ShitposterPost(ShitposterPostBase, table=True):
     )
 
 
+class ShitposterPostEngagement(Base, table=True):
+    """Write-once engagement record for a bot post, written after its 24h window."""
+
+    post_id: int = Field(
+        primary_key=True, foreign_key="shitposterpost.id", nullable=False
+    )
+    persona_id: int = Field(
+        nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    finalized_at: datetime.datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    distinct_reactors: int
+    # emoji name -> count of distinct human reactions
+    reactions_by_emoji: dict = Field(
+        sa_column=Column(JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=False),
+    )
+    distinct_repliers: int
+    # reactions whose emoji is on FCM_SHITPOSTER_NEGATIVE_EMOJI, counted separately
+    negative_reactions: int
+    consumed_by_reflector_run_id: int | None = Field(
+        default=None, nullable=True, foreign_key="shitposterbrainjobrun.id"
+    )
+    consumed_by_lore_run_id: int | None = Field(
+        default=None, nullable=True, foreign_key="shitposterbrainjobrun.id"
+    )
+
+
 class ShitposterSuggestionStatusEnum(str, Enum):
     PENDING = "pending"
     PROMOTED = "promoted"
