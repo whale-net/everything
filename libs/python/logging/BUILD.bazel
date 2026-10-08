@@ -24,5 +24,11 @@ py_test(
     name = "config_test",
     size = "small",
     srcs = ["config_test.py"],
-    deps = [":logging"],
+    # Parent __init__.py files keep pytest from naming this module
+    # logging.config_test, which collides with the stdlib logging package.
+    deps = [
+        ":logging",
+        "//libs",
+        "//libs/python",
+    ],
 )
