@@ -266,6 +266,16 @@ def get_default_persona(session: Optional[Session] = None) -> ShitposterPersona 
         ).first()
 
 
+def list_persona_ids(session: Optional[Session] = None) -> list[int]:
+    """Return every persona id, ascending."""
+    with SessionManager(session) as session:
+        return list(
+            session.exec(
+                select(ShitposterPersona.id).order_by(ShitposterPersona.id)
+            ).all()
+        )
+
+
 def get_current_persona_revision(
     persona_id: int, session: Optional[Session] = None
 ) -> ShitposterPersonaRevision | None:

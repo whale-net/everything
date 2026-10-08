@@ -3,8 +3,8 @@
 The brain job runner is the shared shape for Shitposter persona jobs (harvest,
 reflect, write, snapshot). Each job kind plugs a compute step and an apply step
 into it. The harvest (`harvest.py`), snapshot (`snapshot.py`), and reflect (`reflect.py`) job bodies are
-registered, and so is write. Nothing schedules jobs by default yet; the runner, the per-kind schedule
-helper, and the operator trigger are the parts that exist.
+registered, and so is write. Worker startup registers the harvest, reflect and write schedules for
+every persona (see [Schedules](#schedules)); snapshot has none and runs after a successful reflect.
 
 Code: `src/friendly_computing_machine/temporal/shitposter_brain/`
 (`base.py` constants and job-body registry, `activity.py` lock/compute/apply/fail,
@@ -48,8 +48,7 @@ Rows go into `shitposterpostengagement` in the apply transaction. `post_id` is t
 primary key, so a finalized record is never rewritten. A rerun with nothing new
 records `no_op`.
 
-`register_harvest_schedule(...)` creates the hourly schedule. Nothing calls it at
-worker startup yet; `brain-trigger <persona_id> harvest` runs it on demand.
+`register_harvest_schedule(...)` creates the hourly schedule at worker startup. `brain-trigger <persona_id> harvest` runs it on demand.
 
 ## Reflect job
 
@@ -82,8 +81,7 @@ declined outcome for each consumed suggestion, all in the runner's transaction.
 `retire` and `merge` ops call the fold hook (`register_fold_hook`) inside that
 transaction if one is registered.
 
-`register_reflect_schedule(...)` creates the daily schedule. Nothing calls it at
-worker startup yet. `brain-trigger <persona_id> reflect` runs it on demand. The
+`register_reflect_schedule(...)` creates the daily schedule at worker startup. `brain-trigger <persona_id> reflect` runs it on demand. The
 snapshot job after a successful run: the workflow starts the persona's snapshot run as a
 child once the apply commits. No-op and failed runs enqueue nothing.
 
@@ -156,9 +154,8 @@ declined outcome for each consumed suggestion, all in the runner's transaction.
 `retire` and `merge` ops call the fold hook (`register_fold_hook`) inside that
 transaction if one is registered.
 
-`register_reflect_schedule(...)` creates the daily schedule. Nothing calls it at
-worker startup yet. `brain-trigger <persona_id> reflect` runs it on demand. The
-snapshot trigger after a successful run is not wired.
+`register_reflect_schedule(...)` creates the daily schedule at worker startup. `brain-trigger <persona_id> reflect` runs it on demand. The
+snapshot trigger after a successful run is wired (see the reflect section above).
 
 ## Timeouts
 
@@ -192,8 +189,13 @@ Needs `TEMPORAL_HOST` and the usual worker environment (see [ENV.md](../ENV.md))
 
 `register_brain_schedule(...)` in `control.py` creates a Temporal Schedule per
 persona and job kind, id `fcm-<app_env>-shitposter-brain-<kind>-<persona_id>`,
-with overlap policy `SKIP`. It is a no-op when the schedule already exists. Nothing
-calls it yet; the harvester/reflector/writer/snapshot tasks do.
+with overlap policy `SKIP`. It is a no-op when the schedule already exists.
+
+`temporal/shitposter_brain/schedules.py` `register_brain_schedules_async` runs at worker
+startup (from `run_worker`) and calls the harvest, reflect and write registrars for every
+row in `shitposter_dal.list_persona_ids()`. Each registration is logged and skipped on
+failure, so one bad persona or a Temporal error does not stop the worker. Restarts create
+no duplicates. Write cadence is `FCM_SHITPOSTER_WRITE_CADENCE_HOURS`.
 
 ## Verifying
 

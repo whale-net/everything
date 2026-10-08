@@ -92,6 +92,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     reflect as _reflect,  # noqa: F401  registers the reflect job body
     write as _write,  # noqa: F401  registers the write job body
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.schedules import (
+    register_brain_schedules_async,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.workflow import (
     ShitposterBrainJobWorkflow,
 )
@@ -194,6 +197,10 @@ async def run_worker(app_env: str):
         await reconcile_schedules_async(client, get_temporal_queue_name("main"), app_env)
     except Exception:
         logger.exception("shitposter schedule reconciliation failed")
+    try:
+        await register_brain_schedules_async(client, get_temporal_queue_name("main"), app_env)
+    except Exception:
+        logger.exception("shitposter brain schedule registration failed")
 
     # Run the worker
     with ThreadPoolExecutor(max_workers=100) as activity_executor:
