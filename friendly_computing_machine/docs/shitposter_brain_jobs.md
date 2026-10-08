@@ -85,7 +85,9 @@ transaction if one is registered.
 
 `register_reflect_schedule(...)` creates the daily schedule. Nothing calls it at
 worker startup yet. `brain-trigger <persona_id> reflect` runs it on demand. The
-snapshot trigger after a successful run is not wired.
+snapshot job after a successful run: the workflow starts the persona's snapshot run as a
+child once the apply commits. No-op and failed runs enqueue nothing.
+
 ## Snapshot job
 
 `snapshot.py` renders a persona's memory (attributes, then the top N ranked lore,
