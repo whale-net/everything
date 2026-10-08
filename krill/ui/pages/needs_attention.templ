@@ -7,154 +7,93 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// The filter bar's query parameters. They live here rather than in
-// //krill/ui because this file is what writes them: the selects below
-// submit these names, and //krill/ui aliases them for the parse -- one
-// spelling, so a filtered link and the request it re-issues agree.
-//
-// The names are the ones krill api's console views read
-// (api/handlers/console.go's milestoneIDQueryParam / reasonQueryParam), so
-// a filter set has one spelling whether the operator's browser or an MCP
-// client follows it.
+// Filter bar query parameters, written by the selects below and shared with
+// //krill/ui and krill api's console views so a filter has one spelling.
 const (
-	// NeedsAttentionTabQueryParam names the selected tab.
 	NeedsAttentionTabQueryParam = "tab"
-	// NeedsAttentionMilestoneQueryParam names the milestone or milepebble
-	// filter: a milestone_ref id of either kind, which the store's
-	// ConsoleFilter narrows on.
+	// NeedsAttentionMilestoneQueryParam filters by a milestone_ref id (milestone
+	// or milepebble).
 	NeedsAttentionMilestoneQueryParam = "milestone_id"
-	// NeedsAttentionReasonQueryParam names the escalation-reason filter,
-	// offered on the Escalated tab alone.
+	// NeedsAttentionReasonQueryParam filters by escalation reason (Escalated tab only).
 	NeedsAttentionReasonQueryParam = "reason"
 )
 
-// The Needs attention page (FR 5fd47f4d): the tab strip and the one
-// results region every tab swaps.
-//
-// It is to the four ops console queues what SpecTabs is to the four spec
-// pages: the strip lives INSIDE the swap region rather than beside it, so
-// a tab click's response is one root element carrying the re-marked strip
-// and the new table together. A strip that were its own target would need
-// the fragment to carry two top-level nodes, and htmx's outerHTML inserts
-// every top-level node into the target -- so each click would splice a
-// duplicate strip into the page (see pages/spec_tabs.templ, which applies
-// the same rule).
-//
-// The results inside the region are the console's own: ClaimedResults,
-// EscalatedResults, CancelledResults and NotesResults from ops.templ,
-// carrying the ops-results id every row swap and the claimed tab's poll
-// already target. This file adds only the strip around them.
+// Needs attention page: the tab strip and the one results region every tab
+// swaps. The strip lives inside the swap region because htmx outerHTML inserts
+// every top-level node, so a separate strip would be duplicated on each click.
 
-// NeedsAttentionAnchor is the DOM id of the swap region: the hx-target
-// every tab names, and the id the served fragment's ROOT must carry.
-// Without it on the root, htmx deletes the element it was asked to replace
-// and every later tab click is a no-op that never reaches the server.
+// NeedsAttentionAnchor is the swap region's DOM id and must be the served
+// fragment's root id, or htmx deletes the target and later tab clicks no-op.
 const NeedsAttentionAnchor = "krill-needs-attention-panel"
 
-// NeedsAttentionTab is one tab: the address it navigates to, whether it is
-// the one being shown, and its count.
-//
-// HasCount is separate from Count because a count that could not be read
-// is not a zero: the badge is rendered only when a figure was actually
-// read, so an unreadable queue shows nothing rather than a confident 0.
+// NeedsAttentionTab is one tab. HasCount separates an unreadable count from
+// zero, so an unreadable queue shows no badge.
 type NeedsAttentionTab struct {
 	Key    string
 	Label  string
 	Href   string
 	Active bool
 
-	// Count is the tab's queue size under this tab's filters, meaningful
-	// only when HasCount.
+	// Count is the queue size under this tab's filters, valid only when HasCount.
 	Count    int
 	HasCount bool
 }
 
-// NeedsAttentionData is the page's view model: the strip, the tab the
-// request resolved to, the freshness stamp, the way back to the view's own
-// address, and the results region itself.
+// NeedsAttentionData is the page's view model.
 type NeedsAttentionData struct {
 	Tabs []NeedsAttentionTab
 
-	// Tab is the resolved tab key, and the page's own statement of which
-	// one is showing -- so a test (and a reader) never has to infer it
-	// from which link carries the active class.
+	// Tab is the resolved tab key.
 	Tab string
 
-	// UpdatedAt is the exact UTC instant the page's data was read, and
-	// UpdatedRelative its age at render time. The exact instant is the
-	// element's title and datetime, so hovering answers "exactly when"
-	// with or without the head script; the relative form is what renders
-	// server-side, so the page says something readable either way.
+	// UpdatedAt is the exact UTC read instant (title and datetime);
+	// UpdatedRelative is its server-rendered age.
 	UpdatedAt       string
 	UpdatedRelative string
 
-	// RefreshHref is the view's own request URI. The manual refresh's
-	// hx-get re-requests the tab the operator is on, page and filters
-	// included, rather than a fixed route.
+	// RefreshHref is the view's own request URI, so Refresh keeps the tab, page,
+	// and filters.
 	RefreshHref string
 
-	// Filter is the page's filter bar: the milestone select every tab
-	// shares, the reason select the Escalated tab adds, and the sentence
-	// the Open notes tab carries while a milestone narrows it.
 	Filter NeedsAttentionFilterBar
 
 	// Results is the selected tab's table, or its inline refusal.
 	Results templ.Component
 
-	// Paging is the active tab's table footer (FR 7f10bd5d): how much of the
-	// filtered set is on screen, the total the matching count read answered
-	// for the SAME filters, and the two controls that move between pages.
-	//
-	// Nil where there is no pageable table to foot -- a filter that excluded
-	// every row (the tab renders its filtered-empty state instead), or a read
-	// that failed and never produced rows. A table with a footer that guessed
-	// its own total would be the silently truncated one this FR rules out, so
-	// the footer rides only where a table rode.
+	// Paging is the active tab's table footer. Nil when there is no table to foot
+	// (filtered empty or failed read), so a footer never guesses a total.
 	Paging *NeedsAttentionPaging
 }
 
-// NeedsAttentionFilterBar is the filter bar's view model: the two selects'
-// options, each marking the value this request resolved to, and the
-// Open-notes-only notice a milestone filter turns on.
+// NeedsAttentionFilterBar is the filter bar's view model.
 type NeedsAttentionFilterBar struct {
-	// Path is the page's own URL: the form's action and its hx-get, so the
-	// no-JavaScript submit and the in-place swap ask for the same query.
+	// Path is the page URL, used as both form action and hx-get.
 	Path string
 
-	// Milestones are the milestone select's options, "All milestones"
-	// first. Each value is a milestone_ref id -- a milestone or one of its
-	// milepebbles -- which is exactly what store.ConsoleFilter narrows on.
+	// Milestones are the milestone select's options, "All milestones" first;
+	// values are milestone_ref ids.
 	Milestones []NeedsAttentionFilterOption
 
-	// Reasons are the reason select's options, "Any reason" first. Empty
-	// when ShowReason is off.
+	// Reasons are the reason select's options, "Any reason" first.
 	Reasons []NeedsAttentionFilterOption
 
-	// ShowReason reveals the reason select. It is offered on the Escalated
-	// tab alone: it is the one queue whose rows carry a reason.
+	// ShowReason reveals the reason select; only escalated rows carry a reason.
 	ShowReason bool
 
-	// Notice is the Open notes tab's sentence when a milestone filter is
-	// in force. A note attached to a spec-axis entity has no delivery
-	// container, so a milestone filter excludes it outright
-	// (store.ListOpenNotesParams' own rule) and the tab has to say so
-	// rather than let the operator read the shortfall as all there is.
+	// Notice explains, on Open notes, that a milestone filter excludes notes on
+	// spec-axis entities, which have no delivery container.
 	Notice string
 }
 
-// NeedsAttentionFilterOption is one option of the filter bar's selects.
-// Value is the wire value the URL carries (empty for a select's "all"
-// default), Label what the operator reads.
+// NeedsAttentionFilterOption is one select option; Value is empty for "all".
 type NeedsAttentionFilterOption struct {
 	Value    string
 	Label    string
 	Selected bool
 }
 
-// NeedsAttention renders the strip and the active tab's results, both
-// inside the one region every tab swaps. The rest of the page -- shell,
-// nav, product switcher -- sits outside it and is never re-derived by a
-// tab click.
+// NeedsAttention renders the strip and active tab's results inside the one
+// swap region; shell chrome stays outside it.
 templ NeedsAttention(d NeedsAttentionData) {
 	<div id={ NeedsAttentionAnchor } data-krill="needs-attention" data-krill-tab={ d.Tab }>
 		<div class="mb-3 flex flex-wrap items-center justify-between gap-4">
@@ -186,17 +125,9 @@ templ NeedsAttention(d NeedsAttentionData) {
 	</div>
 }
 
-// needsAttentionFilterBar is the page's filter bar: a plain GET form whose
-// submits are the whole of the state, so a reload, a shared link and a
-// no-JavaScript submit all land on the same filters. htmx is layered on top
-// -- hx-get onto the same path, targeting the panel's own anchor -- so a
-// selection changes the table in place without the working case depending
-// on JavaScript.
-//
-// The tab rides as a hidden field because the form's query is what the URL
-// becomes: without it, changing a filter would silently drop the operator
-// onto the default tab. page_token deliberately does not ride: a filter
-// change is a different read, whose token the store would refuse.
+// needsAttentionFilterBar is a plain GET form, so reloads, links, and no-JS
+// submits agree; htmx swaps in place on top. The tab rides as a hidden field;
+// page_token does not, since a new filter invalidates it.
 templ needsAttentionFilterBar(d NeedsAttentionData) {
 	<form method="get" action={ templ.URL(d.Filter.Path) } class="mt-3 flex flex-wrap items-end gap-3"
 		data-krill="needs-attention-filters"
@@ -234,43 +165,22 @@ templ needsAttentionFilterBar(d NeedsAttentionData) {
 	</form>
 }
 
-// NeedsAttentionFilteredEmpty is the tab's empty state when a filter
-// excluded every row: it names the filters in force, so "no rows" reads as
-// "nothing matched these filters" rather than as a scope with no work.
-//
-// It is a DIFFERENT shape from the read-failed state (ops.templ's
-// OpsInlineError): that one reports a read that could not be answered,
-// this one reports a read that was answered with nothing. Rendering the
-// two the same way would tell an operator a filter excluded everything
-// when in fact nothing could be read.
-//
-// It carries OpsResultsAnchor because it is what the results block swaps to:
-// without the id the region's own target would be deleted and the next
-// Refresh would no-op.
+// NeedsAttentionFilteredEmpty is the empty state when filters excluded every
+// row, distinct from a failed read. It carries OpsResultsAnchor so the next
+// Refresh still has a target.
 templ NeedsAttentionFilteredEmpty(d NeedsAttentionEmptyData) {
 	<div id={ OpsResultsAnchor } data-krill="needs-attention-empty">
 		@htmxui.EmptyState(d.Headline, d.Detail, "", "", nil)
 	</div>
 }
 
-// NeedsAttentionEmptyData is that empty state's two sentences.
 type NeedsAttentionEmptyData struct {
-	// Headline names the queue and the filters in force.
 	Headline string
-	// Detail is the one sentence telling the operator which control to
-	// change.
 	Detail string
 }
 
-// needsAttentionFreshness is the header's "Updated N ago" stamp: the
-// relative age as the visible text, with the exact instant carried in the
-// datetime, the title and the data-krill-updated-at hook, so hovering
-// answers "exactly when".
-//
-// The server renders the relative form (relativeTime, in package main) so
-// the page reads correctly with JavaScript off, and the head's
-// relativeAgeScript re-derives "Updated N ago" from the attribute so the
-// stamp ages between swaps instead of freezing at the read.
+// needsAttentionFreshness is the "Updated N ago" stamp: server-rendered for
+// no-JS, re-aged client-side by relativeAgeScript from the exact instant.
 templ needsAttentionFreshness(d NeedsAttentionData) {
 	<time class="text-sm text-base-content/70" data-krill="needs-attention-updated-at"
 		data-krill-updated-at={ d.UpdatedAt } datetime={ d.UpdatedAt } title={ d.UpdatedAt }>
@@ -278,15 +188,9 @@ templ needsAttentionFreshness(d NeedsAttentionData) {
 	</time>
 }
 
-// needsAttentionTabStrip is the tablist: four real links, each carrying
-// the htmx attributes that swap the region in place and push the tab's own
-// URL, and each labelled with its count. Without JavaScript a tab click
-// still navigates to the same address, so the tab is never reachable only
-// through a script.
-//
-// aria-selected is emitted on every tab rather than only the active one,
-// because an omitted aria-selected on a role="tab" leaves its state
-// undefined rather than false.
+// needsAttentionTabStrip renders tabs as real links with htmx swap and push,
+// so they work without JavaScript. aria-selected is always emitted because an
+// omitted value is undefined, not false.
 templ needsAttentionTabStrip(tabs []NeedsAttentionTab) {
 	<div role="tablist" class="tabs tabs-border" data-krill="needs-attention-tabs">
 		for _, t := range tabs {
@@ -307,8 +211,6 @@ templ needsAttentionTabStrip(tabs []NeedsAttentionTab) {
 	</div>
 }
 
-// needsAttentionTabClasses is one tab's daisyUI class, so the strip carries
-// exactly one active marking whichever tab the URL resolved to.
 func needsAttentionTabClasses(active bool) string {
 	if active {
 		return "tab tab-active"
@@ -324,38 +226,18 @@ func needsAttentionTabSelected(active bool) string {
 }
 
 // ---------------------------------------------------------------------------
-// the Claimed tab's table (FR a149d28f)
+// Claimed tab
 // ---------------------------------------------------------------------------
 
-// ClaimedRow is one row of the Claimed tab: the task, the milestone it
-// belongs to, its lane, who holds the claim and for whom, when the claim
-// was taken, when its lease lapses, and the actions legal for a claimed
-// task. Every field is a pre-formatted plain string built by newClaimedRow
-// in package main, so this file stays free of store reach-in and pointer
-// logic.
-//
-// ClaimedSince and LeaseExpiresAt are absolute RFC3339 instants, never a
-// relative "in 4 min". This is the one results block the page polls
-// (claimedPollAttrs, chosen by claimedPollingDue), and a fragment whose
-// bytes shifted between two polls for no state change would make every
-// poll a spurious change. The lease's relative form is derived in the
-// browser from the element's datetime instead (leaseCountdownScript,
-// krill/ui/templ_render.go), which is also what keeps the exact UTC
-// instant available on hover.
-//
-// ClaimID is the claim the row OBSERVED, read from the store row and
-// carried untouched. It is what the row's actions are guarded by: every
-// control posts it back as expected_claim_id, so a claim that changed
-// since the page loaded is refused rather than acted on.
+// ClaimedRow is one Claimed tab row, pre-formatted in package main. Times are
+// absolute RFC3339 so polled fragments stay byte-stable; the browser derives
+// relative forms. ClaimID is the observed claim every action posts as a guard.
 type ClaimedRow struct {
 	TaskID string
 	Title  string
-	// TaskHref is the product-scoped task detail URL. Empty when the read
-	// was not product-narrowed, in which case the title renders unlinked
-	// rather than pointing at a nil product.
+	// TaskHref is empty when the read was not product-narrowed; the title then
+	// renders unlinked.
 	TaskHref string
-	// Milestone is the row's delivery reference (a milestone or milepebble
-	// title, store.ClaimedTaskDeliveryRef).
 	Milestone      string
 	Lane           string
 	Claimant       string
@@ -363,18 +245,12 @@ type ClaimedRow struct {
 	LeaseExpiresAt string
 	ClaimID        string
 	Actions        templ.Component
-	// Popovers is this row's reason popovers, rendered AFTER the table so no
-	// row contains a text input (FR 0cf360c5). Each popover's reason field
-	// and submit button name the form Actions rendered in this row.
+	// Popovers render after the table so no row contains a text input; each
+	// submits the form Actions rendered in this row.
 	Popovers templ.Component
 }
 
-// claimedTable is the Claimed tab's rows, in the order the read returned
-// them (soonest lease first).
-//
-// The lane renders through the shared TaskLaneBadge mapper the Tasks list,
-// the Board and the detail already use (FR de4d0e42), so one lane has one
-// colour everywhere.
+// claimedTable renders the Claimed rows, soonest lease first.
 templ claimedTable(rows []ClaimedRow) {
 	if len(rows) == 0 {
 		@htmxui.EmptyState("No claimed tasks.", "Nothing holds a claim in this scope right now.", "", "", nil)
@@ -394,8 +270,7 @@ templ claimedTable(rows []ClaimedRow) {
 				</thead>
 				<tbody>
 					for _, row := range rows {
-						// data-krill-claim-id is the claim this row observed:
-						// the same value its action controls post.
+						// data-krill-claim-id is the observed claim the row's actions post.
 						<tr class="hover" data-krill="claimed-row"
 							data-krill-task-id={ row.TaskID } data-krill-claim-id={ row.ClaimID }>
 							<td class="text-sm">
@@ -435,71 +310,45 @@ templ claimedTable(rows []ClaimedRow) {
 }
 
 // ---------------------------------------------------------------------------
-// the Escalated tab's table (FR 772b044b)
+// Escalated tab
 // ---------------------------------------------------------------------------
-//
-// The escalated queue's row shape is its own, not the ops console view's:
-// the operator's question here is "what is stuck, how far did it get, and
-// who do I need to talk to", which is the task, its milestone, its lane,
-// why it escalated, how many attempts it has burned, and when it happened.
-// The rows still come from the one store read (ListEscalatedTasks under the
-// same product filter the other tabs use), so the table cannot show a row
-// set list_escalated_tasks would not.
 
-// NeedsAttentionEscalatedRow is one row of the Escalated tab's table (FR
-// 772b044b). Every field is pre-formatted plain text built by
-// needsAttentionEscalatedRowOf in package main, so this file stays free of
-// store reach-in and pointer logic.
+// NeedsAttentionEscalatedRow is one Escalated tab row, pre-formatted in
+// package main.
 type NeedsAttentionEscalatedRow struct {
-	// TaskID is the row's data-krill-task-id.
 	TaskID string
 
-	// Title links to the task's product-scoped detail; DetailHref is that
-	// address. The table is not scoped to a milestone, so the per-container
-	// detail URL would name the wrong one for every row but the first.
+	// DetailHref is the product-scoped task detail; the table spans milestones.
 	Title      string
 	DetailHref string
 
-	// ByLine is "by <acting> for <on behalf of>", the escalation's own
-	// subjects -- never the operator's, who is not part of this read.
+	// ByLine is "by <acting> for <on behalf of>" from the escalation's subjects.
 	ByLine string
 
-	// Milestone is the delivery reference's own title.
 	Milestone string
 
-	// Lane renders through the shared TaskLaneBadge, so this table cannot
-	// drift from the Tasks list, the Board or the detail.
 	Lane string
 
-	// Reason is the store's wire value; the badge renders its human
-	// wording through components.EscalationReasonLabel.
+	// Reason is the store's wire value; the badge renders its label.
 	Reason string
 
 	// Attempts is the count against the cap, e.g. "2 of 3".
 	Attempts string
 
-	// EscalatedAt is the exact UTC instant, and EscalatedAtRelative its
-	// coarse age. The exact instant is the time element's datetime and
-	// title, so hovering answers "exactly when".
+	// EscalatedAt is the exact UTC instant; EscalatedAtRelative its coarse age.
 	EscalatedAt         string
 	EscalatedAtRelative string
 
-	// EscalationID is the escalation the READ observed -- the id the row's
-	// actions are guarded against, taken from the row and never typed.
-	// Empty when the read reported none, which carries no guard.
+	// EscalationID is the observed escalation the row's actions are guarded by;
+	// empty means no guard.
 	EscalationID string
 
-	// Actions is the row's intervention controls, built in package main
-	// from the observed escalation id.
 	Actions templ.Component
 
-	// Popovers is this row's reason popovers, rendered AFTER the table so no
-	// row contains a text input (FR 0cf360c5); each popover submits the form
-	// Actions rendered in this row.
+	// Popovers render after the table so no row contains a text input.
 	Popovers templ.Component
 }
 
-// NeedsAttentionEscalatedData is the Escalated tab's view-model.
 type NeedsAttentionEscalatedData struct {
 	Rows       []NeedsAttentionEscalatedRow
 	NextHref   string
@@ -508,10 +357,8 @@ type NeedsAttentionEscalatedData struct {
 	ReadFailed bool
 }
 
-// EscalatedQueueResults is the Escalated tab's results block. It shares
-// opsResults' swap target (the id every row action and the Refresh button
-// name) and its inline-refusal/next-page furniture, so the tab and the
-// console's other views answer a poll or an intervention the same way.
+// EscalatedQueueResults is the Escalated tab's results block, sharing
+// opsResults' swap target and refusal/next-page furniture.
 templ EscalatedQueueResults(d NeedsAttentionEscalatedData) {
 	@opsResults(OpsResultsData{
 		Table:      escalatedQueueTable(d.Rows),
@@ -521,10 +368,7 @@ templ EscalatedQueueResults(d NeedsAttentionEscalatedData) {
 	})
 }
 
-// escalatedQueueTable is the escalated rows, or the empty state when the
-// queue is genuinely empty. The escalation id rides the row as a data
-// attribute so "which escalation did this row show" is answerable from the
-// markup the operator is looking at.
+// escalatedQueueTable renders escalated rows, or the empty state.
 templ escalatedQueueTable(rows []NeedsAttentionEscalatedRow) {
 	if len(rows) == 0 {
 		@htmxui.EmptyState("No escalated tasks.", "No task in this scope carries an active escalation.", "", "", nil)
@@ -580,9 +424,8 @@ templ escalatedQueueTable(rows []NeedsAttentionEscalatedRow) {
 	}
 }
 
-// escalatedReasonBadge renders one escalation reason through the shared
-// reason vocabulary, so a reason added to the store later cannot render as
-// a blank badge.
+// escalatedReasonBadge renders a reason via the shared vocabulary, so an
+// unknown reason never renders blank.
 templ escalatedReasonBadge(reason string) {
 	{{ s := components.EscalationReasonStyle(reason) }}
 	@htmxui.Badge(components.EscalationReasonLabel(reason), s.Variant, s.Size, s.Soft,
@@ -590,68 +433,39 @@ templ escalatedReasonBadge(reason string) {
 }
 
 // ---------------------------------------------------------------------------
-// the tab paging footer (FR 7f10bd5d)
+// Tab paging footer
 // ---------------------------------------------------------------------------
 
-// NeedsAttentionPaging is the active tab's table footer (FR 7f10bd5d): how
-// much of the filtered set is on screen, the total the store answered for
-// the SAME filters the rows were read with, and the two controls that move
-// through the pages.
-//
-// Shown, Total and HasTotal are separate on purpose. Total is the count the
-// matching Count* read answered for the identical params the rows were read
-// with, so the footer and the table above it cannot describe different
-// filter sets; Shown is how many rows this page actually rendered; and
-// HasTotal keeps a count that could not be read distinct from a confident
-// zero -- the same rule the tab badges follow (NeedsAttentionTab.HasCount),
-// so an unreadable count is never rendered as "of 0".
+// NeedsAttentionPaging is the active tab's table footer. Total is counted with
+// the same params as the rows; HasTotal keeps an unreadable count from
+// rendering as "of 0".
 type NeedsAttentionPaging struct {
-	// Shown is how many rows this page rendered.
 	Shown int
 
-	// Total is the count read for this page's filters -- the whole set
-	// behind the rows, however many pages that is. Meaningful only when
-	// HasTotal.
+	// Total is the whole filtered set's count, valid only when HasTotal.
 	Total    int
 	HasTotal bool
 
-	// Summary is the footer's sentence, built in Go from Shown and Total so
-	// the markup is one string rather than text interleaved with numbers: a
-	// templ-generated comment between adjacent text and an expression would
-	// split "Showing 25 of 100" into pieces no reader -- and no assertion --
-	// sees whole.
+	// Summary is built in Go so templ does not split "Showing 25 of 100" around
+	// injected comments.
 	Summary string
 
-	// PrevHref is the preceding page, empty when none can be named. The
-	// store's keyset paging issues tokens forward only -- a token names a
-	// position to resume AFTER, and nothing in this layer names the position
-	// before the one being shown -- so in practice this is empty and
-	// Previous renders disabled (see PrevNote).
+	// PrevHref is the preceding page. Keyset tokens only page forward, so it is
+	// usually empty and Previous renders disabled.
 	PrevHref string
 
-	// NextHref is the following page, empty on the last one. The store
-	// issues a token exactly when a row remained beyond this page, so its
-	// presence IS the existence of a following page rather than a guess from
-	// comparing Shown against Total.
+	// NextHref is the following page; a store token exists exactly when more rows
+	// remain.
 	NextHref string
 
-	// PrevNote and NextNote are the disabled control's title: they say WHY
-	// the control is inert, so an operator reaching for it is not left to
-	// conclude the control is broken.
+	// PrevNote and NextNote title a disabled control with why it is inert.
 	PrevNote string
 	NextNote string
 }
 
-// NeedsAttentionPagingFooter is the active tab's table footer: the explicit
-// "Showing X of Y" and the two controls that move between pages, each
-// rendered as an explicitly DISABLED control at its end rather than omitted
-// (FR 7f10bd5d).
-//
-// A control that vanished at the end would read as a rendering bug; one
-// that is always present and titles why it is inert is the honest shape. The
-// control that can move is a real <a>, not a swap-only button: a page
-// position is a URL, and a URL is what a reload, a shared link and the
-// browser's own Back button all have to agree with.
+// NeedsAttentionPagingFooter renders "Showing X of Y" and Previous/Next. An
+// inert control renders disabled rather than vanishing; a live one is a real
+// link, since a page position is a URL.
 templ NeedsAttentionPagingFooter(p NeedsAttentionPaging) {
 	<div class="mt-3 flex flex-wrap items-center justify-between gap-2" data-krill="needs-attention-paging">
 		<span class="text-sm text-base-content/70" data-krill="paging-summary">{ p.Summary }</span>
@@ -672,12 +486,12 @@ templ NeedsAttentionPagingFooter(p NeedsAttentionPaging) {
 	</div>
 }
 
-// cancelled tab (FR b22e1d60)
+// ---------------------------------------------------------------------------
+// Cancelled tab
 // ---------------------------------------------------------------------------
 
-// NeedsAttentionCancelledResults renders the Cancelled tab's rows inside
-// the shared results block, so the manual Refresh target, the paging link
-// and the inline-refusal slot are the ones every tab already uses.
+// NeedsAttentionCancelledResults renders the Cancelled rows inside the shared
+// results block.
 templ NeedsAttentionCancelledResults(d CancelledData) {
 	@opsResults(OpsResultsData{
 		Table:      needsAttentionCancelledTable(d.Rows),
@@ -687,9 +501,6 @@ templ NeedsAttentionCancelledResults(d CancelledData) {
 	})
 }
 
-// needsAttentionCancelledTable is the Cancelled tab's table: Task (the
-// title, linking to the product-scoped detail), Milestone, Lane badge,
-// who cancelled it and when, and the reason when one was given.
 templ needsAttentionCancelledTable(rows []CancelledRow) {
 	if len(rows) == 0 {
 		@htmxui.EmptyState("No cancelled tasks.", "Nothing has been cancelled in this product.", "", "", nil)
@@ -732,11 +543,11 @@ templ needsAttentionCancelledTable(rows []CancelledRow) {
 }
 
 // ---------------------------------------------------------------------------
-// open-notes tab (FR b22e1d60)
+// Open notes tab
 // ---------------------------------------------------------------------------
 
-// NeedsAttentionNotesResults renders the Open notes tab's rows inside the
-// shared results block, exactly as the Cancelled tab does.
+// NeedsAttentionNotesResults renders the Open notes rows inside the shared
+// results block.
 templ NeedsAttentionNotesResults(d NotesData) {
 	@opsResults(OpsResultsData{
 		Table:      needsAttentionNotesTable(d.Rows),
@@ -746,10 +557,8 @@ templ NeedsAttentionNotesResults(d NotesData) {
 	})
 }
 
-// needsAttentionNotesTable is the Open notes tab's table: the note's
-// target (a link when the target is a task, and never a link when it is a
-// spec-axis entity, which has no task page), a kind badge, a lifecycle
-// status badge, the body as markdown, and the created time.
+// needsAttentionNotesTable renders open notes. Only task targets link; spec-axis
+// entities have no task page.
 templ needsAttentionNotesTable(rows []NoteRow) {
 	if len(rows) == 0 {
 		@htmxui.EmptyState("No open notes.", "No note in this product is still awaiting a decision.", "", "", nil)
