@@ -100,6 +100,16 @@ slack_app_token = os.environ.get('SLACK_APP_TOKEN', '')
 google_api_key = os.environ.get('GOOGLE_API_KEY', '')
 fcm_web_public_url = os.environ.get('FCM_WEB_PUBLIC_URL', '')
 
+# whagent-net service-account settings the workflow CLI requires at startup
+# (workflow_cli.py callback). Api and ui default to the local whagent-net
+# Tiltfile's services; Keycloak and the service-account credentials have no
+# local default and come from .env.
+whagent_api_url = os.environ.get('WHAGENT_API_URL', 'whagent-net-api.whagent-net-local-dev.svc.cluster.local:50051')
+whagent_ui_public_url = os.environ.get('WHAGENT_UI_PUBLIC_URL', 'http://localhost:8081')
+whagent_keycloak_token_url = os.environ.get('WHAGENT_KEYCLOAK_TOKEN_URL', '')
+whagent_client_id = os.environ.get('WHAGENT_CLIENT_ID', '')
+whagent_client_secret = os.environ.get('WHAGENT_CLIENT_SECRET', '')
+
 apps_config = build_apps_config(
     APPS,
     'friendly-computing-machine',
@@ -114,6 +124,11 @@ apps_config = build_apps_config(
         'SLACK_APP_TOKEN': slack_app_token,
         'GOOGLE_API_KEY': google_api_key,
         'FCM_WEB_PUBLIC_URL': fcm_web_public_url,
+        'WHAGENT_API_URL': whagent_api_url,
+        'WHAGENT_UI_PUBLIC_URL': whagent_ui_public_url,
+        'WHAGENT_KEYCLOAK_TOKEN_URL': whagent_keycloak_token_url,
+        'WHAGENT_CLIENT_ID': whagent_client_id,
+        'WHAGENT_CLIENT_SECRET': whagent_client_secret,
     }
 )
 
