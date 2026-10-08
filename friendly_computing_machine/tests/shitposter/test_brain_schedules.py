@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, create_engine, select
-from temporalio.client import ScheduleActionStartWorkflow
+from temporalio.client import ScheduleActionStartWorkflow, ScheduleAlreadyRunningError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -86,6 +86,24 @@ class _FakeScheduleClient:
         if sid in self.schedules:
             raise RPCError("schedule already exists", RPCStatusCode.ALREADY_EXISTS, b"")
         self.schedules[sid] = schedule
+
+
+class _SdkScheduleClient(_FakeScheduleClient):
+    """Raises the SDK's ScheduleAlreadyRunningError, as the real temporalio client does on a duplicate id."""
+
+    async def create_schedule(self, sid, schedule):
+        self.create_attempts += 1
+        if sid in self.schedules:
+            raise ScheduleAlreadyRunningError()
+        self.schedules[sid] = schedule
+
+
+class _UnavailableScheduleClient(_FakeScheduleClient):
+    """Fails every create with a non-duplicate RPC error."""
+
+    async def create_schedule(self, sid, schedule):
+        self.create_attempts += 1
+        raise RPCError("server unavailable", RPCStatusCode.UNAVAILABLE, b"")
 
 
 @pytest.fixture
@@ -234,6 +252,36 @@ def test_second_start_creates_no_duplicate_schedules(personas, monkeypatch, capl
     # every second-start attempt hit ALREADY_EXISTS, which is a no-op rather than a failure
     assert client.create_attempts == 2 * len(first)
     assert not [r for r in caplog.records if "registration failed" in r.getMessage()]
+
+
+def test_second_start_sdk_already_running_logs_no_error(personas, monkeypatch, caplog):
+    monkeypatch.setenv("FCM_SHITPOSTER_WRITE_CADENCE_HOURS", "3")
+    client = _SdkScheduleClient()
+
+    _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+    first = set(client.schedules)
+    with caplog.at_level(logging.WARNING):
+        _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+
+    assert set(client.schedules) == first == _expected_ids(personas)
+    assert client.create_attempts == 2 * len(first)
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_genuine_registration_failure_logs_error_and_startup_continues(
+    personas, monkeypatch, caplog
+):
+    monkeypatch.setenv("FCM_SHITPOSTER_WRITE_CADENCE_HOURS", "3")
+    client = _UnavailableScheduleClient()
+
+    with caplog.at_level(logging.ERROR):
+        _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+
+    # every registrar still runs for every persona despite each one failing
+    assert client.create_attempts == len(personas) * len(KINDS)
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == len(personas) * len(KINDS)
+    assert all("registration failed" in r.getMessage() for r in errors)
 
 
 def test_scheduled_reflect_run_triggers_snapshot(engine, personas, fake_bodies, monkeypatch):
