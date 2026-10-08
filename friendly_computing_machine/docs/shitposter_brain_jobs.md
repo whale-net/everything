@@ -194,10 +194,12 @@ persona and job kind, id `fcm-<app_env>-shitposter-brain-<kind>-<persona_id>`,
 with overlap policy `SKIP`. It is a no-op when the schedule already exists.
 
 `temporal/shitposter_brain/schedules.py` `register_brain_schedules_async` runs at worker
-startup (from `run_worker`) and calls the harvest, reflect and write registrars for every
-row in `shitposter_dal.list_persona_ids()`. Each registration is logged and skipped on
+startup (from `run_worker`) and calls the harvest, reflect, write and snapshot registrars for
+every row in `shitposter_dal.list_persona_ids()`. Each registration is logged and skipped on
 failure, so one bad persona or a Temporal error does not stop the worker. Restarts create
-no duplicates. Write cadence is `FCM_SHITPOSTER_WRITE_CADENCE_HOURS`.
+no duplicates. Write cadence is `FCM_SHITPOSTER_WRITE_CADENCE_HOURS`; snapshot cadence is
+`FCM_SHITPOSTER_SNAPSHOT_CADENCE_HOURS` (default 24). A successful reflect still enqueues a
+snapshot on top of the schedule.
 
 ## Verifying
 
