@@ -214,28 +214,11 @@ def reinforce_attribute(
     session: Optional[Session] = None,
 ) -> ShitposterPersonaAttribute:
     """Close and reopen the current attribute row, logging a reinforce."""
-    _require_cause(cause_kind, cause_post_id, cause_ref)
     now = _now(now)
     with SessionManager(session) as s:
-        current = _current_attribute(s, attribute_id)
-        if current.status != ShitposterAttributeStatusEnum.ACTIVE.value:
-            raise ValueError(f"attribute {attribute_id} is {current.status}, not active")
-        successor = _supersede_attribute(
+        successor = _reinforce_attribute(
             s,
-            current,
-            status=current.status,
-            text=current.text,
-            retired_by_operator=False,
-            now=now,
-        )
-        _log(
-            s,
-            persona_id=current.persona_id,
-            entity_kind=ShitposterMemoryEntityKindEnum.ATTRIBUTE.value,
-            entity_id=current.id,
-            operation=ShitposterMemoryOperationEnum.REINFORCE,
-            before_text=current.text,
-            after_text=current.text,
+            attribute_id,
             cause_kind=cause_kind,
             cause_post_id=cause_post_id,
             cause_ref=cause_ref,
@@ -245,6 +228,45 @@ def reinforce_attribute(
         s.commit()
         s.refresh(successor)
         return successor
+
+
+def _reinforce_attribute(
+    session: Session,
+    attribute_id: int,
+    *,
+    cause_kind: str,
+    cause_post_id: Optional[int],
+    cause_ref: Optional[str],
+    reflector_run_id: Optional[str],
+    now: datetime.datetime,
+) -> ShitposterPersonaAttribute:
+    _require_cause(cause_kind, cause_post_id, cause_ref)
+    current = _current_attribute(session, attribute_id)
+    if current.status != ShitposterAttributeStatusEnum.ACTIVE.value:
+        raise ValueError(f"attribute {attribute_id} is {current.status}, not active")
+    successor = _supersede_attribute(
+        session,
+        current,
+        status=current.status,
+        text=current.text,
+        retired_by_operator=False,
+        now=now,
+    )
+    _log(
+        session,
+        persona_id=current.persona_id,
+        entity_kind=ShitposterMemoryEntityKindEnum.ATTRIBUTE.value,
+        entity_id=current.id,
+        operation=ShitposterMemoryOperationEnum.REINFORCE,
+        before_text=current.text,
+        after_text=current.text,
+        cause_kind=cause_kind,
+        cause_post_id=cause_post_id,
+        cause_ref=cause_ref,
+        reflector_run_id=reflector_run_id,
+        now=now,
+    )
+    return successor
 
 
 def retire_attribute(
@@ -326,35 +348,12 @@ def merge_attributes(
     session: Optional[Session] = None,
 ) -> ShitposterPersonaAttribute:
     """Retire the source attribute as merged into the target, logging a merge."""
-    _require_cause(cause_kind, cause_post_id, cause_ref)
-    if from_attribute_id == into_attribute_id:
-        raise ValueError("cannot merge an attribute into itself")
     now = _now(now)
     with SessionManager(session) as s:
-        source = _current_attribute(s, from_attribute_id)
-        target = _current_attribute(s, into_attribute_id)
-        if source.persona_id != target.persona_id:
-            raise ValueError("attributes belong to different personas")
-        if source.status != ShitposterAttributeStatusEnum.ACTIVE.value:
-            raise ValueError(f"attribute {from_attribute_id} is not active")
-        if target.status != ShitposterAttributeStatusEnum.ACTIVE.value:
-            raise ValueError(f"attribute {into_attribute_id} is not active")
-        successor = _supersede_attribute(
+        successor = _merge_attributes(
             s,
-            source,
-            status=ShitposterAttributeStatusEnum.MERGED.value,
-            text=source.text,
-            retired_by_operator=False,
-            now=now,
-        )
-        _log(
-            s,
-            persona_id=source.persona_id,
-            entity_kind=ShitposterMemoryEntityKindEnum.ATTRIBUTE.value,
-            entity_id=source.id,
-            operation=ShitposterMemoryOperationEnum.MERGE,
-            before_text=source.text,
-            after_text=target.text,
+            from_attribute_id,
+            into_attribute_id,
             cause_kind=cause_kind,
             cause_post_id=cause_post_id,
             cause_ref=cause_ref,
@@ -364,6 +363,53 @@ def merge_attributes(
         s.commit()
         s.refresh(successor)
         return successor
+
+
+def _merge_attributes(
+    session: Session,
+    from_attribute_id: int,
+    into_attribute_id: int,
+    *,
+    cause_kind: str,
+    cause_post_id: Optional[int],
+    cause_ref: Optional[str],
+    reflector_run_id: Optional[str],
+    now: datetime.datetime,
+) -> ShitposterPersonaAttribute:
+    _require_cause(cause_kind, cause_post_id, cause_ref)
+    if from_attribute_id == into_attribute_id:
+        raise ValueError("cannot merge an attribute into itself")
+    source = _current_attribute(session, from_attribute_id)
+    target = _current_attribute(session, into_attribute_id)
+    if source.persona_id != target.persona_id:
+        raise ValueError("attributes belong to different personas")
+    if source.status != ShitposterAttributeStatusEnum.ACTIVE.value:
+        raise ValueError(f"attribute {from_attribute_id} is not active")
+    if target.status != ShitposterAttributeStatusEnum.ACTIVE.value:
+        raise ValueError(f"attribute {into_attribute_id} is not active")
+    successor = _supersede_attribute(
+        session,
+        source,
+        status=ShitposterAttributeStatusEnum.MERGED.value,
+        text=source.text,
+        retired_by_operator=False,
+        now=now,
+    )
+    _log(
+        session,
+        persona_id=source.persona_id,
+        entity_kind=ShitposterMemoryEntityKindEnum.ATTRIBUTE.value,
+        entity_id=source.id,
+        operation=ShitposterMemoryOperationEnum.MERGE,
+        before_text=source.text,
+        after_text=target.text,
+        cause_kind=cause_kind,
+        cause_post_id=cause_post_id,
+        cause_ref=cause_ref,
+        reflector_run_id=reflector_run_id,
+        now=now,
+    )
+    return successor
 
 
 def _add_lore(
