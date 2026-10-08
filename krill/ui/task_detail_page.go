@@ -1,6 +1,5 @@
-// The read-only task detail page, reached from the task list. Composes
-// store.GetTaskByID + ListDependencies + ListNotesForTask and the task's
-// spec slice; issues no write.
+// The read-only task detail page: task, dependencies, notes and spec slice, plus the
+// intervention controls bound to the shared legality predicate.
 package main
 
 import (
@@ -22,9 +21,8 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// taskSliceReader is the optional spec read that returns a task's embedded
-// spec slice (the same document get_task embeds). A reader without it
-// shows an inline slice error rather than an empty section.
+// taskSliceReader is the optional spec read for a task's embedded spec slice (as get_task
+// embeds); without it the page shows an inline slice error.
 type taskSliceReader interface {
 	MilestoneDeliversSlice(ctx context.Context, milestoneID uuid.UUID) (slice.Document, error)
 }
@@ -60,23 +58,16 @@ type taskDetailInputs struct {
 	Slice    slice.Document
 	SliceErr error
 
-	// Escalation is the event behind Task.CurrentEscalationID, read once
-	// so the properties rail and the Overview callout can both show why a
-	// task was escalated without either re-reading it (and without one of
-	// them rendering a reason the other contradicts).
+	// Escalation is the event behind Task.CurrentEscalationID, read once so the rail and the
+	// Overview callout cannot disagree on the reason.
 	Escalation *store.EscalationEvent
 
-	// LastClaim is the task's most recent claim row, read only when the
-	// task holds none. GetClaimByID resolves task.current_claim_id alone,
-	// which is NULL once the claim is released, so this is the only read
-	// that can answer "None. Last held by X" -- the question the rail asks
-	// of every task nobody is working on.
+	// LastClaim is the most recent claim, read only when the task holds none: GetClaimByID
+	// cannot answer "last held by X" once current_claim_id is NULL.
 	LastClaim *store.Claim
 }
 
-// taskDetailTabKeys is the fixed, ordered set of facet tabs. It is a
-// literal, not a map's keys, because the strip's ORDER is part of the
-// page: Overview, Notes, Dependencies, Spec slice.
+// taskDetailTabKeys is the ordered set of facet tabs; a slice because order matters.
 var taskDetailTabKeys = []string{
 	pages.TaskTabOverview,
 	pages.TaskTabNotes,
@@ -84,9 +75,7 @@ var taskDetailTabKeys = []string{
 	pages.TaskTabSlice,
 }
 
-// taskDetailTabLabels is each tab's operator-facing name. "Spec slice"
-// rather than the URL value "slice", which is the wire spelling and not
-// what a reader is shown.
+// taskDetailTabLabels is each tab's display name ("slice" is only the wire value).
 var taskDetailTabLabels = map[string]string{
 	pages.TaskTabOverview:     "Overview",
 	pages.TaskTabNotes:        "Notes",
@@ -94,14 +83,8 @@ var taskDetailTabLabels = map[string]string{
 	pages.TaskTabSlice:        "Spec slice",
 }
 
-// taskDetailTabOf resolves the request's ?tab= to one of the four tab
-// keys.
-//
-// An ABSENT value and an UNRECOGNISED one both resolve to overview. That
-// is the whole degradation rule: the tab is URL-carried, so a hand-edited
-// or stale link reaches this page as readily as a copied one, and a
-// value this build does not know must render the page rather than 404 or
-// render an empty panel. Nothing here errors.
+// taskDetailTabOf resolves ?tab= to a known tab. Absent or unknown values fall back to
+// overview, so stale or hand-edited links still render.
 func taskDetailTabOf(r *http.Request) string {
 	tab := r.URL.Query().Get("tab")
 	for _, known := range taskDetailTabKeys {
@@ -112,17 +95,8 @@ func taskDetailTabOf(r *http.Request) string {
 	return pages.TaskTabOverview
 }
 
-// taskDetailTabHref is one tab's own URL: the page's own path with the
-// tab applied.
-//
-// Overview's href is the bare path, with no ?tab= at all -- the default
-// state is the page's own address rather than a parameter that spells out
-// the absence of a choice, so the address an operator shares, bookmarks
-// or copies is the shortest true one.
-//
-// path is the request's own path, so this works for both detail routes
-// (the product-scoped one and the pre-redesign per-container one) without
-// either being named here.
+// taskDetailTabHref is one tab's URL on the request's own path; Overview is the bare path,
+// so the shared address is the shortest true one.
 func taskDetailTabHref(path, tab string) string {
 	if tab == pages.TaskTabOverview {
 		return path
@@ -130,19 +104,8 @@ func taskDetailTabHref(path, tab string) string {
 	return path + "?tab=" + tab
 }
 
-// taskDetailTabsOf builds the strip over the request's own path, marking
-// active the tab the URL resolved to.
-//
-// The Notes and Dependencies counts are the lengths of the lists the
-// panels render -- the SAME reads, already taken once by the caller. A
-// second read here would be a second number that could disagree with the
-// list an operator is about to click into, and the whole point of the
-// count is to agree with it.
-//
-// A failed read carries NO count rather than zero. Zero is a claim about
-// the list, and we could not read the list; a tab with no badge says
-// nothing, which is the honest state (README's "never render a read
-// failure as an empty view", applied to a count).
+// taskDetailTabsOf builds the tab strip. Counts are the lengths of the lists the panels
+// render; a failed read shows no count rather than a false zero.
 func taskDetailTabsOf(path, active string, notes []pages.TaskNoteRow, notesErr string, deps []pages.TaskDepLink, depsErr string) []pages.TaskTab {
 	tabs := make([]pages.TaskTab, 0, len(taskDetailTabKeys))
 	for _, key := range taskDetailTabKeys {
@@ -162,13 +125,7 @@ func taskDetailTabsOf(path, active string, notes []pages.TaskNoteRow, notesErr s
 	return tabs
 }
 
-// taskDetailPageOf assembles the detail view model. now is injected so a
-// lease's expiry is judged against the read time.
-//
-// product is the breadcrumb's product crumb. It is a header rather than an
-// id because the same banner every product-scoped page carries is already
-// this value; a second spelling of "the product this task belongs to"
-// would be one more thing to keep in step.
+// taskDetailPageOf assembles the detail view model; now judges lease expiry against read time.
 func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContainer, in taskDetailInputs, now time.Time) pages.TaskDetailPage {
 	t := in.Task
 	summary := store.TaskSummary{
@@ -186,18 +143,12 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 		Attempts: taskAttemptsLabel(t.AttemptCount),
 		LoadedAt: now.UTC().Format(time.RFC3339),
 		Badges:   taskStateBadges(summary, now),
-		// The way back is the product-wide list scoped to this task's own
-		// container, which is where the list an operator reaches a detail
-		// from now lives. The per-container list URL still redirects there,
-		// so the old link and the new one open the same page.
+		// Back to the product-wide list scoped to this task's container.
 		TasksPath:     productTaskContainerHref(pid, tasksSuffix, c),
 		BoardPath:     productTaskContainerHref(pid, boardSuffix, c),
 		ContainerName: c.Name,
 	}
-	// The rail's Milepebble row exists only for a task that sits on one.
-	// An uncut milestone's task would otherwise name its own container
-	// again, in the one place on the page where a second naming of it is
-	// not also a link the breadcrumb already offers.
+	// The rail's Milepebble row exists only for a task on a milepebble.
 	if c.Kind == string(store.MilestoneKindMilepebble) {
 		page.MilepebbleName = c.Name
 		page.MilepebblePath = page.TasksPath
@@ -205,17 +156,14 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 	if t.Body != nil {
 		page.Body = *t.Body
 	}
-	// A cancelled task keeps its escalation on record but is terminal, so
-	// the page presents it as cancelled only.
+	// A cancelled task keeps its escalation on record but is terminal, so it shows as cancelled only.
 	if t.CurrentEscalationID != nil && t.CancelledAt == nil {
 		page.Escalation = "escalation " + t.CurrentEscalationID.String()
 		if in.Escalation != nil {
 			page.EscalationReason = string(in.Escalation.Reason)
 			page.EscalatedAt = in.Escalation.CreatedAt.UTC().Format(time.RFC3339)
-			// The two automatic reasons carry the counter that tripped
-			// them and the cap it tripped against; manual carries
-			// neither. The store's CHECK refuses a mismatched pair, so
-			// one flag covers both-or-neither.
+			// Automatic reasons carry counter and cap, manual carries neither; the store's CHECK
+			// guarantees both-or-neither.
 			if in.Escalation.CounterValue != nil && in.Escalation.CapValue != nil {
 				page.EscalationCounter = *in.Escalation.CounterValue
 				page.EscalationCap = *in.Escalation.CapValue
@@ -237,9 +185,7 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 			page.ClaimExpired = true
 		}
 	} else if in.LastClaim != nil {
-		// Unclaimed, but not untouched: the session that held the task
-		// last is the whole answer to "why is nobody on this?", and
-		// GetClaimByID cannot supply it because the claim is released.
+		// Unclaimed: show who held it last.
 		page.LastClaimHolder = in.LastClaim.SessionID.String()
 	}
 	if t.LeaseExpiresAt != nil {
@@ -249,10 +195,7 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 		page.DepsError = "The dependencies could not be read. See the logs."
 	}
 	for _, d := range in.Deps {
-		// The product-scoped detail is the only address a dependency needs:
-		// a dependency may sit on any container under the product, so the
-		// retired per-container form would name the wrong one and cost a
-		// redirect to reach the same page.
+		// A dependency may sit on any container under the product, so link the product-scoped detail.
 		link := pages.TaskDepLink{
 			Title:      d.DependsOnTaskID.String(),
 			DetailPath: productTaskDetailPath(pid, d.DependsOnTaskID),
@@ -269,11 +212,8 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 	for _, n := range in.Notes {
 		page.Notes = append(page.Notes, pages.TaskNoteRow{Kind: string(n.Kind), Status: string(n.CurrentStatus), Body: n.Body})
 	}
-	// The Overview shows the TAIL of that list -- ListNotesForTask already
-	// returned them oldest-first, so the most recent are at the end. The
-	// full list stays on page.Notes for the Notes tab; the two are the
-	// same notes, and the Overview names how many it kept so a truncated
-	// list is never read as the whole one.
+	// The Overview shows the newest notes (the list is oldest-first) and the total, so a
+	// truncated list is not read as complete.
 	page.NotesTotal = len(page.Notes)
 	if len(page.Notes) > pages.LatestNotesLimit {
 		page.LatestNotes = page.Notes[len(page.Notes)-pages.LatestNotesLimit:]
@@ -291,26 +231,9 @@ func taskDetailPageOf(pid uuid.UUID, product pages.ProductHeader, c taskContaine
 	return page
 }
 
-// taskDetailCallouts composes the Overview panel's explanation banners for
-// the three states that mean a task is not simply in flight: escalated, at
-// the attempt cap, and holding a lapsed lease.
-//
-// It returns EMPTY for a healthy task, and that is the important case. A
-// banner that appeared for every task would teach an operator to read past
-// it, and the escalation that genuinely needs them would be the third
-// thing on the page they had already learned to skip. There is no neutral
-// "nothing is wrong" state here -- the absence of a banner IS that state.
-//
-// The three are independent and can co-occur: a task can be escalated AND
-// at the cap AND hold an expired lease. Each is named on its own line
-// rather than merged, because each carries a different counter and a
-// different fix, and a merged sentence would pick one of the three to be
-// the headline.
-//
-// Severity follows components.TaskStateStyle's mapping, so a banner and the
-// task's own state badge are the same colour: escalated is the state that
-// needs a human and is an error, while being capped or holding a lapsed
-// lease is the system catching up on its own bookkeeping and is a warning.
+// taskDetailCallouts builds Overview banners for escalated, capped and lapsed-lease tasks,
+// each on its own line since they can co-occur. A healthy task gets none, so banners stay
+// meaningful. Severity follows components.TaskStateStyle.
 func taskDetailCallouts(t store.Task, page pages.TaskDetailPage, now time.Time) []pages.TaskCallout {
 	var out []pages.TaskCallout
 	if c, ok := escalationCallout(page); ok {
@@ -337,15 +260,8 @@ func taskDetailCallouts(t store.Task, page pages.TaskDetailPage, now time.Time) 
 	return out
 }
 
-// escalationCallout is the banner for an escalated task, worded by the
-// event's own reason.
-//
-// The reason is the whole point of the banner, so it names which of the
-// three fired and -- for the two automatic ones -- the counter that tripped
-// it and the cap it tripped against. A task escalated with no event behind
-// it (the read failed) still gets a banner, because the task row's claim
-// that it is escalated is true even when the reason could not be read; that
-// banner says so rather than inventing a reason.
+// escalationCallout is an escalated task's banner, naming the reason and, for automatic
+// reasons, the counter and cap. An unreadable event still gets a banner saying so.
 func escalationCallout(page pages.TaskDetailPage) (pages.TaskCallout, bool) {
 	if page.Escalation == "" {
 		return pages.TaskCallout{}, false
@@ -359,18 +275,14 @@ func escalationCallout(page pages.TaskDetailPage) (pages.TaskCallout, bool) {
 	}
 	label := components.EscalationReasonLabel(page.EscalationReason)
 	if !page.HasEscalationCounter {
-		// A manual escalation is the one reason with no triggering
-		// counter at all, so there is no number to state -- the reason
-		// is the whole explanation.
+		// Manual escalation has no counter, so the reason is the whole explanation.
 		return pages.TaskCallout{
 			Key:     pages.TaskCalloutEscalated,
 			Variant: htmxui.AlertError,
 			Message: "Escalated (" + label + "), so no worker can claim it. Requeue returns it to the claimable queue.",
 		}, true
 	}
-	// Each reason trips its OWN counter, and they are independent
-	// bookkeeping: naming the counter rather than saying "after n" is what
-	// keeps a thrash-cap banner from reading as though n were attempts.
+	// Name the specific counter so a thrash-cap banner is not read as attempts.
 	return pages.TaskCallout{
 		Key:     pages.TaskCalloutEscalated,
 		Variant: htmxui.AlertError,
@@ -393,8 +305,7 @@ func escalationHeadline(page pages.TaskDetailPage) string {
 	}
 }
 
-// escalationCounterName is the counter a requeue resets for this reason --
-// the same mapping RequeueTask's ResetCounter implements.
+// escalationCounterName is the counter a requeue resets for this reason, matching RequeueTask.
 func escalationCounterName(reason string) string {
 	if reason == string(store.EscalationReasonThrashCap) {
 		return "thrash counter"
@@ -402,8 +313,7 @@ func escalationCounterName(reason string) string {
 	return "attempt counter"
 }
 
-// calloutPluralN picks the noun form for n, so "1 failing verdict" is not
-// "1 failing verdicts".
+// calloutPluralN picks the noun form for n.
 func calloutPluralN(n int, one, many string) string {
 	if n == 1 {
 		return one
@@ -411,30 +321,15 @@ func calloutPluralN(n int, one, many string) string {
 	return many
 }
 
-// taskDetailCrumbsOf is the breadcrumb from the product down to this
-// task: product -> milestone -> milepebble -> the task's own title.
-//
-// The milepebble crumb appears only when the task sits on a cut
-// milepebble. A task on an uncut milestone has no such level, and a
-// crumb naming one would offer a link into a container that does not
-// exist -- while a task's container is always a milepebble once its
-// milestone is cut, so "when the container is a milepebble" and "when
-// the task sits on one" are the same condition, decided by the
-// container's own Kind rather than by a second lookup.
-//
-// Each ancestor links to the page that names it: the milestone to its own
-// detail, the milepebble to its own task list. The task's title is the
-// page the operator is already on, so it is the one crumb with no href.
+// taskDetailCrumbsOf is the breadcrumb product -> milestone -> milepebble -> task title.
+// The milepebble crumb appears only when the container is a milepebble; the title has no href.
 func taskDetailCrumbsOf(product pages.ProductHeader, pid uuid.UUID, c taskContainer, title string) []pages.TaskCrumb {
 	crumbs := make([]pages.TaskCrumb, 0, 4)
 	if product.Name != "" {
 		crumbs = append(crumbs, pages.TaskCrumb{Label: product.Name, Href: product.Href})
 	}
 	if c.Kind == string(store.MilestoneKindMilepebble) {
-		// The parent is carried on the container rather than re-read: the
-		// delivery listing that named the milepebble also named its
-		// parent, and that listing is the check that decided this task
-		// belongs to this product at all.
+		// The parent comes from the same delivery listing that proved product membership.
 		if c.ParentName != "" {
 			crumbs = append(crumbs, pages.TaskCrumb{
 				Label: c.ParentName,
@@ -454,17 +349,8 @@ func taskDetailCrumbsOf(product pages.ProductHeader, pid uuid.UUID, c taskContai
 	return append(crumbs, pages.TaskCrumb{Label: title})
 }
 
-// taskLaneSteps is the detail's step strip: the task's OWN lane_sequence,
-// with every lane before the one it is in marked passed and that lane
-// marked current.
-//
-// The sequence is the task's rather than the store's canonical lane
-// order (store/task.go NFR5): a task created as Scaffold -> Validation ->
-// Done has said which lanes it is on, and a strip built from the
-// canonical order would show it passing through an Implementation lane it
-// never had. The current lane is looked up in the sequence rather than
-// compared against a position, so a task whose lane is somehow absent
-// marks no step current instead of marking one that is not.
+// taskLaneSteps is the step strip over the task's own lane_sequence, not the canonical order,
+// so it never shows lanes the task lacks. A current lane missing from the sequence marks none.
 func taskLaneSteps(sequence []store.Lane, current store.Lane) []pages.TaskLaneStep {
 	currentAt := -1
 	for i, lane := range sequence {
@@ -484,14 +370,8 @@ func taskLaneSteps(sequence []store.Lane, current store.Lane) []pages.TaskLaneSt
 	return steps
 }
 
-// taskDetailProductHeader is the breadcrumb's product crumb.
-//
-// The product-scoped route has already resolved the product and put it on
-// the request, so it is read from there. The pre-redesign per-container URL
-// resolves its own; a read that fails costs the page its first crumb and
-// nothing else, because the task itself was read separately and the page
-// is still answerable without it -- the same rule product_scope.go's
-// rememberUnprefixedProduct follows, for the same reason.
+// taskDetailProductHeader is the breadcrumb's product crumb, from the request when resolved;
+// a failed read costs only that crumb.
 func (app *App) taskDetailProductHeader(ctx context.Context, r *http.Request, pid uuid.UUID) pages.ProductHeader {
 	if p, ok := currentProduct(r.Context()); ok && p.ID == pid {
 		return productHeaderOf(p)
@@ -504,14 +384,8 @@ func (app *App) taskDetailProductHeader(ctx context.Context, r *http.Request, pi
 	return productHeaderOf(p)
 }
 
-// handleTaskDetail renders one task's detail at the pre-redesign
-// per-container URL, resolving the container from the path.
-//
-// No route mounts it: legacyURLs retires that URL into the product-scoped
-// detail (FR 0c03eac1). It stays because it is the one caller that resolves
-// the container by hand rather than from the task, so it is where the
-// per-container membership rule — a task belonging to another container
-// under the same product is not this page's answer — is exercised.
+// handleTaskDetail renders a task at the per-container URL. No route mounts it (legacyURLs
+// redirects); it remains where the container-membership rule is exercised.
 func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	pid, c, ok := app.resolveTaskRoute(w, r)
 	if !ok {
@@ -522,8 +396,6 @@ func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		app.taskDetailNotFound(w, r, c, pid)
 		return
 	}
-	// The per-container URL names the container, so a task belonging to
-	// another one under the same product is not this page's answer.
 	app.serveTaskDetail(w, r, pid, tid, func(task store.Task) (taskContainer, bool) {
 		if task.MilestoneID != c.ID {
 			return taskContainer{}, false
@@ -532,15 +404,8 @@ func (app *App) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleProductTaskDetail serves /products/{pid}/tasks/{tid} -- the
-// product-scoped detail the product-wide Tasks table's rows link to
-// (FR f41a352d).
-//
-// The container is the task's own rather than the URL's, because this URL
-// names only the product: the table is not scoped to a container, so a row
-// in it may belong to any milestone under the product. It is still resolved
-// against the product's own listing, so a task from another product is a
-// 404 rather than that product's task rendered under this one's chrome.
+// handleProductTaskDetail serves /products/{pid}/tasks/{tid}. The container is the task's
+// own, resolved against the product listing so another product's task is a 404.
 func (app *App) handleProductTaskDetail(w http.ResponseWriter, r *http.Request) {
 	r, product, ok := app.resolveProductFromPath(w, r)
 	if !ok {
@@ -563,12 +428,8 @@ func (app *App) handleProductTaskDetail(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// taskInterventionStateOf reads the state a task's intervention legality is
-// decided from: the same view-level reading the Needs attention rows make of
-// their own row, taken from the task the detail loaded. The states are
-// mutually exclusive and the terminal one wins -- a cancelled task carries no
-// intervention whatever else the row says -- then an escalation, then a live
-// claim, and otherwise the task is ready.
+// taskInterventionStateOf is the task's intervention state, as the Needs attention rows read it.
+// Precedence: cancelled, escalated, claimed, else ready.
 func taskInterventionStateOf(t store.Task) taskInterventionState {
 	switch {
 	case t.CancelledAt != nil:
@@ -582,31 +443,9 @@ func taskInterventionStateOf(t store.Task) taskInterventionState {
 	}
 }
 
-// taskDetailControls is the ONE builder of the detail's intervention controls
-// (FR af61631d) from the shared legality predicate, so the detail and the
-// Needs attention rows cannot drift into two readings of which verbs a state
-// offers. It returns nil when the predicate offers none, which the view model
-// renders as no callout and no popovers at all.
-//
-// Each control carries what THIS page observed -- the claim id for Release,
-// Escalate and Cancel on a claimed task, the escalation id for Requeue and
-// Cancel on an escalated one, and neither on a ready task -- taken from the
-// task the page loaded and never from typed input, so a claim or escalation
-// that changed since the read is refused against the state the operator
-// actually saw.
-//
-// Two things differ from a Needs attention row's controls, and both are the
-// FR's: they swap the detail SECTION rather than a queue's results block, so
-// the header, the rail and this callout move together; and an escalated
-// task's Requeue is rendered as the primary action. Nothing else about the
-// verbs -- their order, their guards, their confirmation -- is the detail's
-// own invention.
-//
-// The controls are built ONCE here and rendered twice: the triggers in the
-// callout (taskDetailActions) and the reason popovers beside them
-// (taskDetailActionPopovers, FR 0cf360c5). Deriving the popovers from a verb
-// set of their own would let a trigger point at a popover id that is never
-// rendered -- the dead-button regression this builder exists to prevent.
+// taskDetailControls is the one builder of the detail's intervention controls, from the shared
+// legality predicate. Controls carry the claim or escalation id this page observed, so a changed
+// state is refused. Triggers and popovers both derive from it, so no trigger points at a missing popover.
 func taskDetailControls(t store.Task, returnTo string) []pages.TaskActionControl {
 	state := taskInterventionStateOf(t)
 	verbs := legalInterventions(state, t.CurrentLane)
@@ -620,16 +459,11 @@ func taskDetailControls(t store.Task, returnTo string) []pages.TaskActionControl
 	controls := taskActionControls(opts, t.ID.String(), t.Title, returnTo, verbs...)
 	switch state {
 	case taskInterventionClaimed:
-		// A claimed task holds its claim id; all-zero is no claim any write
-		// could match, so a row that somehow read one stays unguarded rather
-		// than carrying it (the same rule renderClaimedTaskActions applies).
+		// An all-zero claim id matches no write, so leave the control unguarded.
 		if id := *t.CurrentClaimID; id != uuid.Nil {
 			observed := id.String()
 			for i := range controls {
-				// Both halves carry it as the same hidden expected_claim_id
-				// input: the htmx half posts it to the verb, the no-JS half
-				// hands it to the confirmation page, which carries it on to
-				// the verb's own form.
+				// Both htmx and no-JS halves carry it as the hidden expected_claim_id input.
 				controls[i].ObservedClaimID = observed
 			}
 		}
@@ -643,9 +477,7 @@ func taskDetailControls(t store.Task, returnTo string) []pages.TaskActionControl
 	return controls
 }
 
-// taskDetailActions renders the detail's intervention controls: the trigger
-// half of taskDetailControls. It is nil when the predicate offers no verb,
-// which the view model renders as no callout at all.
+// taskDetailActions renders the trigger half of taskDetailControls; nil when no verb applies.
 func taskDetailActions(t store.Task, returnTo string) templ.Component {
 	controls := taskDetailControls(t, returnTo)
 	if controls == nil {
@@ -654,12 +486,8 @@ func taskDetailActions(t store.Task, returnTo string) templ.Component {
 	return pages.TaskActionsMenu(controls)
 }
 
-// taskDetailActionPopovers renders the reason popovers for the detail's
-// controls (FR 0cf360c5): one per control, whose optional reason field and
-// submit button name exactly the form taskDetailActions rendered for the same
-// verb, so a reason typed here reaches the handler on both the htmx and the
-// no-JS path. It is nil exactly when the actions are, so no trigger is left
-// pointing at an id the page does not render.
+// taskDetailActionPopovers renders one reason popover per control, naming the same form as the
+// trigger; nil exactly when the actions are.
 func taskDetailActionPopovers(t store.Task, returnTo string) templ.Component {
 	controls := taskDetailControls(t, returnTo)
 	if controls == nil {
@@ -668,11 +496,8 @@ func taskDetailActionPopovers(t store.Task, returnTo string) templ.Component {
 	return pages.TaskActionPopovers(controls)
 }
 
-// taskDetailContainerOf resolves the container a task sits under, against the
-// product's own delivery listing -- the same rule handleProductTaskDetail
-// applies, so a task from another product (or from a container the product no
-// longer lists) is not this page's answer. A delivery read that fails is a
-// false, not a guess.
+// taskDetailContainerOf resolves a task's container against the product's delivery listing;
+// a failed read returns false.
 func (app *App) taskDetailContainerOf(ctx context.Context, pid uuid.UUID, task store.Task) (taskContainer, bool) {
 	listing, err := app.spec.Delivery(ctx, pid, nil)
 	if err != nil {
@@ -682,17 +507,8 @@ func (app *App) taskDetailContainerOf(ctx context.Context, pid uuid.UUID, task s
 	return resolveTaskContainer(listing, task.MilestoneID)
 }
 
-// taskDetailViewFor composes the detail view from reads the caller has
-// already resolved: the task, its container, and self -- the address the page
-// is being served at.
-//
-// self is a parameter rather than read off r because the two callers reach
-// here from different requests: a GET serves the page at its own address,
-// while an intervention re-derives it from the POST to the verb's route and
-// only knows the page's address from the control's return_to. Everything the
-// page bakes its address into -- the Refresh button, the tab strip's hrefs,
-// the actions' return_to -- reads self, so a re-derived section and a
-// reloaded one are the same markup.
+// taskDetailViewFor composes the detail view. self is the page's address, passed in because an
+// intervention POST only knows it from return_to; everything address-bound reads self.
 func (app *App) taskDetailViewFor(ctx context.Context, r *http.Request, pid uuid.UUID, task store.Task, c taskContainer, self *url.URL) pages.TaskDetailPage {
 	tid := task.ID
 	in := taskDetailInputs{Task: task, DepTasks: map[uuid.UUID]store.Task{}}
@@ -714,19 +530,13 @@ func (app *App) taskDetailViewFor(ctx context.Context, r *http.Request, pid uuid
 			in.Claim = &cl
 		}
 	} else if cl, ok, err := app.tasks.LatestClaimForTask(ctx, task.ScopeID, tid); err != nil {
-		// The rail still renders its Claim row -- it just cannot say who
-		// held the task last. A read failure on a convenience clause must
-		// not cost the operator the page.
+		// A failed last-claim read costs only the "last held by" clause.
 		logger.Warn("task last-claim read failed", "task", tid.String(), "error", err)
 	} else if ok {
 		in.LastClaim = &cl
 	}
 	if task.CurrentEscalationID != nil {
-		// The escalation event is read once and carried, so the rail and
-		// the Overview callout cannot disagree about why this task was
-		// escalated. A task whose escalation was resolved between the two
-		// reads is not an error the operator can act on -- the task row no
-		// longer claims one, and the next render says so.
+		// A task whose escalation resolved between reads is not actionable; the next render shows it.
 		ev, err := app.tasks.GetEscalationEventByID(ctx, *task.CurrentEscalationID)
 		switch {
 		case err == nil:
@@ -747,41 +557,20 @@ func (app *App) taskDetailViewFor(ctx context.Context, r *http.Request, pid uuid
 	}
 
 	page := taskDetailPageOf(pid, app.taskDetailProductHeader(ctx, r, pid), c, in, time.Now())
-	// Refresh re-requests whatever URL served this page, not the
-	// per-container detail: both routes reach here, and only the request
-	// knows which one the operator is on.
-	//
-	// The path alone, deliberately: the tab is NOT baked in here. The
-	// button sits outside the panel region, so a tab click never
-	// re-renders it, and a value fixed at page-load time is the value
-	// the page was LOADED with -- not the tab the operator is on. The
-	// button takes the tab from the panel region at press time instead
-	// (see the refresh button's hx-include).
+	// Refresh re-requests the serving path without the tab: the button sits outside the panel and
+	// takes the current tab via hx-include at press time.
 	page.Path = self.Path
-	// The tab is resolved from the address, and the strip is built over the
-	// page's own path with it applied -- so a tab survives a reload, a
-	// shared link and Back, and an unknown value renders the Overview
-	// rather than failing (FR 7e463e31).
+	// The tab comes from the address, so it survives reload, shared links and Back.
 	page.Tab = taskDetailTabOf(&http.Request{URL: self})
 	page.Tabs = taskDetailTabsOf(self.Path, page.Tab, page.Notes, page.NotesError, page.Deps, page.DepsError)
-	// The detail's own actions are bound to the shared legality predicate
-	// (FR af61631d). return_to is this page's own address -- path AND query,
-	// so the tab survives the round trip -- and it is validated on the way
-	// back by the same guard every other return path goes through
-	// (interventionReturnTo), so a detail-page control can never be pointed
-	// off-site or at a path this binary does not serve.
+	// return_to is path and query, so the tab survives; interventionReturnTo validates it on return.
 	page.Actions = taskDetailActions(task, self.RequestURI())
-	// The matching reason popovers (FR 0cf360c5). Not setting them is the
-	// defect this pairing guards: every control's trigger opens its popover,
-	// so a page without them has dead buttons and no optional reason.
+	// Popovers must accompany the actions, or every trigger is a dead button.
 	page.Popovers = taskDetailActionPopovers(task, self.RequestURI())
 	return page
 }
 
-// serveTaskDetail is the one read-and-render both detail routes share:
-// resolve the task, refuse it unless container says this URL's answer, then
-// compose and serve. That resolver is the only thing the two routes disagree
-// on, so the reads that build the page cannot drift between them.
+// serveTaskDetail is the read-and-render both detail routes share; only the container resolver differs.
 func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid uuid.UUID, container func(store.Task) (taskContainer, bool)) {
 	ctx := r.Context()
 	task, err := app.tasks.GetTaskByID(ctx, tid)
@@ -806,12 +595,8 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 	}
 
 	page := app.taskDetailViewFor(ctx, r, pid, task, c, r.URL)
-	// A tab click and a Refresh are the same route asked for different
-	// things. HX-Target is what tells them apart: the tabs target the
-	// panel region, the Refresh button targets the whole detail section.
-	// Reading the target rather than guessing from the URL keeps the two
-	// unambiguous -- a Refresh on ?tab=notes must re-render the whole
-	// section, not splice a bare panel into it.
+	// HX-Target distinguishes a tab click (panel) from Refresh (whole section), so Refresh on
+	// ?tab=notes re-renders the section rather than a bare panel.
 	if r.Header.Get("HX-Request") != "" && tabSwapRequested(r) {
 		renderFragment(w, r, pages.TaskDetailTabs(page))
 		return
@@ -824,24 +609,14 @@ func (app *App) serveTaskDetail(w http.ResponseWriter, r *http.Request, pid, tid
 	app.renderShell(w, r, "Task", r.URL.Path, body)
 }
 
-// tabSwapRequested reports whether this htmx request asked for the tab
-// panel region specifically.
-//
-// htmx sends the resolved target's id in HX-Target, so the target is the
-// request's own statement of which region it is replacing. A tab names
-// the panel; the Refresh button names the whole section. Deciding on
-// anything else -- the presence of ?tab=, say -- would make a Refresh
-// taken while a non-default tab is open serve a bare panel, which the
-// section swap would then splice in beside the page.
+// tabSwapRequested reports whether htmx targeted the tab panel region; checking ?tab= instead
+// would make a Refresh on a non-default tab return a bare panel.
 func tabSwapRequested(r *http.Request) bool {
 	return hxTargetID(r) == pages.TaskPanelAnchor
 }
 
-// renderProductTaskDetailNotFound is the in-shell 404 for a task detail
-// whose id belongs to no milestone under this product. It points back at the
-// product-wide Tasks page, which is the page a detail reached from a table
-// row should return to -- and the only one that exists for a task whose
-// container the URL never named.
+// renderProductTaskDetailNotFound is the in-shell 404 for a task outside this product,
+// linking back to the product-wide Tasks page.
 func (app *App) renderProductTaskDetailNotFound(w http.ResponseWriter, r *http.Request, pid uuid.UUID) {
 	app.renderSpecStatus(w, r, http.StatusNotFound, pages.StatusPage{
 		Title:    "Not found",

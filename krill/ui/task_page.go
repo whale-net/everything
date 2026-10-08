@@ -1,5 +1,4 @@
-// The read-only per-milestone/milepebble task list, reached from the
-// delivery page. Reads through app.tasks / app.spec.
+// The read-only per-milestone/milepebble task list, reached from the delivery page.
 package main
 
 import (
@@ -22,24 +21,14 @@ func milestoneBoardPath(pid, mid uuid.UUID) string {
 	return productPath(pid) + "/milestones/" + mid.String() + "/board"
 }
 
-// taskDetailPath is the pre-redesign per-container detail URL. It is no
-// longer served: legacyURLs retires it into productTaskDetailPath (FR
-// 0c03eac1), so a link spelled here costs one 302 before it resolves. The
-// per-container task list's rows and the product-wide Board's task cards
-// still spell it, which is why the redirect carries the tid alone —
-// those pages resolve the row's own milestone, so pinning the URL's
-// container could strand a task that moved.
+// taskDetailPath is the per-container detail URL; legacyURLs redirects it to
+// productTaskDetailPath by task id alone, since a task may have moved containers.
 func taskDetailPath(pid, mid, tid uuid.UUID) string {
 	return milestoneTasksPath(pid, mid) + "/" + tid.String()
 }
 
-// productTaskDetailPath is one task's product-scoped detail URL, the one the
-// product-wide Tasks table's rows link to.
-//
-// It is spelled by the table rather than derived from a row's milestone: the
-// table is not scoped to a container, so a row in it may belong to any
-// milestone under the product, and the per-container form would name the
-// wrong one for every row but the first.
+// productTaskDetailPath is a task's product-scoped detail URL. The product-wide
+// table is not container-scoped, so it cannot use the per-container form.
 func productTaskDetailPath(pid, tid uuid.UUID) string {
 	return productHref(pid, tasksSuffix) + "/" + tid.String()
 }
@@ -51,28 +40,18 @@ type taskContainer struct {
 	ID   uuid.UUID
 	Name string
 
-	// Kind is store.MilestoneKindMilestone or store.MilestoneKindMilepebble,
-	// carried so a caller that asked for one kind can tell a resolved id of
-	// the other kind from a resolved id of its own. The product-wide task
-	// scope needs that distinction, and re-deriving it from Milepebbles
-	// would guess wrong for an uncut milestone the listing gave no children.
+	// Kind is store.MilestoneKindMilestone or store.MilestoneKindMilepebble, so a caller
+	// can reject an id of the other kind; Milepebbles cannot tell an uncut milestone apart.
 	Kind string
 
-	// Status is the container's own current status, which the product-wide
-	// scope control judges "incomplete" by (store.IsIncompleteContainerStatus).
-	// Carried rather than re-read, so the control marks the containers the
-	// all-incomplete scope excludes from the same status the store's own
-	// query filtered on.
+	// Status is the container's current status, which the all-incomplete scope filters
+	// on (store.IsIncompleteContainerStatus); carried so the control matches the store query.
 	Status store.MilestoneStatus
 
 	Milepebbles []taskContainerChild // non-empty only for a cut milestone
 
-	// ParentID and ParentName are the milestone a milepebble container was
-	// cut from; both are uuid.Nil / "" for a milestone container. A
-	// milepebble is its own `milestone_ref` row, so nothing else on this
-	// struct names what it was cut from -- but the task detail's
-	// breadcrumb walks product -> milestone -> milepebble, and it is read
-	// here, where the listing that carried the parent is in hand.
+	// ParentID and ParentName are the milestone a milepebble was cut from (zero for a
+	// milestone), for the task detail breadcrumb.
 	ParentID   uuid.UUID
 	ParentName string
 }
@@ -81,9 +60,7 @@ type taskContainerChild struct {
 	ID   uuid.UUID
 	Name string
 
-	// Status is the milepebble's own current status, for the same reason
-	// taskContainer.Status is: the all-incomplete scope is judged per
-	// container, and a milepebble is a container.
+	// Status is the milepebble's current status; the all-incomplete scope is per container.
 	Status store.MilestoneStatus
 }
 
@@ -110,11 +87,8 @@ func resolveTaskContainer(listing slice.DeliveryListing, mid uuid.UUID) (taskCon
 	return taskContainer{}, false
 }
 
-// taskStateBadges derives a task's distinct state badges. A claim whose
-// lease has lapsed is "lease-expired", never "claimed": a task whose
-// worker has gone is not being worked on. A task in no state at all
-// yields no badges, which is why a Done task with nothing outstanding
-// shows no state badge.
+// taskStateBadges derives a task's state badges. A lapsed lease is "lease-expired",
+// never "claimed"; a task in no state yields no badges.
 func taskStateBadges(t store.TaskSummary, now time.Time) []pages.TaskBadge {
 	var badges []pages.TaskBadge
 	if t.CurrentClaimID != nil {
@@ -142,11 +116,8 @@ func taskAttemptsLabel(n int) string {
 	return taskAttemptsOf(n, store.DefaultAttemptCap)
 }
 
-// taskAttemptsOf is the same label against a cap the read supplied, for the
-// views that render rows the read built rather than rows this package
-// summarised. A cap of zero would render "2 of 0", so the default stands in
-// for it -- the store never reports one, and a "capped" badge off a cap of
-// zero would fire on every row.
+// taskAttemptsOf is taskAttemptsLabel against a read-supplied cap. A zero cap falls
+// back to the default so "capped" does not fire on every row.
 func taskAttemptsOf(n, cap int) string {
 	if cap <= 0 {
 		cap = store.DefaultAttemptCap

@@ -1,12 +1,6 @@
-// writeClient is how this binary's own app pages reach krill's write API:
-// it mints one krill session per (operator, scope) through
-// POST /sessions/init, then presents that session id on every mutating
-// request. api's write gate (api/handlers/gate.go) resolves the session
-// back into the acting / on-behalf-of Subject and scope the handler
-// attributes its mutation to, so the identity a UI write carries is
-// whatever InitSession recorded -- here, always the signed-in operator's
-// real (iss, sub) pair (identity.go), never a value taken from the request
-// body or a default.
+// writeClient mints one krill session per (operator, scope) and presents it on every
+// mutating request, so api attributes UI writes to the signed-in operator's real
+// (iss, sub) as recorded at session init, never to request-body values.
 package main
 
 import (
@@ -26,17 +20,14 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// sessionHeader is the header api's RequireSession gate reads a krill
-// session id from (api/handlers/gate.go's unexported sessionHeader).
+// sessionHeader is the header api's RequireSession gate reads the session id from.
 const sessionHeader = "X-Krill-Session-Id"
 
-// writeClientConfig configures a writeClient. BaseURL is this deployment's
-// krill `api` base URL (KRILL_API_URL).
+// writeClientConfig configures a writeClient. BaseURL is krill's api base URL (KRILL_API_URL).
 type writeClientConfig struct {
 	BaseURL string
 
-	// HTTPClient is optional; a client with a sane timeout is built when
-	// unset.
+	// HTTPClient is optional; a client with a timeout is built when unset.
 	HTTPClient *http.Client
 }
 
@@ -46,9 +37,8 @@ type writeClient struct {
 	http    *http.Client
 }
 
-// newWriteClient rejects an unset BaseURL rather than defaulting one: a UI
-// with no configured api to write to cannot attribute anything, and
-// silently pointing somewhere else would be worse than not booting.
+// newWriteClient rejects an unset BaseURL: a UI with no api to write to cannot
+// attribute anything, so it refuses to boot rather than default.
 func newWriteClient(cfg writeClientConfig) (*writeClient, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("KRILL_API_URL is required: krill-ui issues its writes against krill's api binary")
@@ -73,8 +63,7 @@ func newWriteClient(cfg writeClientConfig) (*writeClient, error) {
 // never sent: api derives both from the verified bearer token.
 type initSessionRequest struct{}
 
-// initSessionResponse is POST /sessions/init's response body
-// (api/handlers/session.go's InitSessionResponse).
+// initSessionResponse is POST /sessions/init's response body.
 type initSessionResponse struct {
 	SessionID string `json:"session_id"`
 	ScopeID   string `json:"scope_id"`

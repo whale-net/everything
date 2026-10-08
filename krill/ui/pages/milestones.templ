@@ -1,72 +1,44 @@
 package pages
 
-// The Milestones table (FR 5aec68f6): a product's every milestone with
-// its status, its task progress, its FR budget and its outcome, plus the
-// status select that filters the rows in place.
-//
-// One region, one anchor, one GET: the select is a form whose action is
-// this page's own URL, so a reload, a shared link and a no-JavaScript
-// submit all land on the same filtered table. htmx layers an in-place swap
-// on top of that GET, so changing the select replaces the table without
-// reloading the page around it -- the working case never depends on
-// JavaScript, exactly as the shared scope control's own contract is.
+// The Milestones table and its status select. The select is a GET form on this page's URL,
+// so reload, shared links and no-JS submits work; htmx swaps the region in place on top.
 
 import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// MilestonesAnchor is the DOM id this page's region carries: the id the
-// status select's hx-get targets, and the root id of the fragment an htmx
-// request gets back. A fragment without it would delete its own swap
-// target on the next change, leaving the select inert.
+// MilestonesAnchor is the region's DOM id: the select's hx-get target and the fragment root,
+// which must carry it or the next swap has no target.
 const MilestonesAnchor = "krill-milestones"
 
 // MilestoneStatusOption is one status the filter select offers.
 type MilestoneStatusOption struct {
-	// Value is the store's own wire value, so a status this select offers
-	// is a status the page's parser accepts.
+	// Value is the store's wire value, so offered statuses are ones the parser accepts.
 	Value string
-	// Label is what the operator reads. Equal to Value: the milestone
-	// status vocabulary has no display variant of its own.
+	// Label is what the operator reads; equal to Value.
 	Label string
 	// Selected marks the status this request filtered to.
 	Selected bool
 }
 
-// ProgressCell is the "N of M done" figures one container's progress cell
-// renders.
-//
-// It is its own type, embedded by every row that shows a bar, so a
-// milestone row and its milepebbles render the same figures through the
-// same three methods. A milepebble with its own copy of the arithmetic
-// would eventually disagree with its parent -- and with the read, which
-// owns how a cancelled task counts (store.CancelledTaskCounting).
+// ProgressCell is one container's "N of M done" figures, shared by milestone and milepebble
+// rows so both render through the same methods.
 type ProgressCell struct {
-	// ProgressError is set when these figures could not be read. It
-	// renders in place of the bar, because a progress column showing
-	// nothing would read as "no tasks" rather than "not checked".
+	// ProgressError replaces the bar when figures are unreadable, so "not checked" is not shown as "no tasks".
 	ProgressError string
 
 	Done  int
 	Total int
 }
 
-// HasTasks reports whether this cell's container holds any task at all. A
-// container that does not says so rather than rendering "0 of 0", which
-// reads as a stalled milestone rather than a new one.
+// HasTasks reports whether the container holds any task; an empty one avoids "0 of 0".
 func (p ProgressCell) HasTasks() bool { return p.Total > 0 }
 
-// IsComplete reports whether every task this container holds is Done --
-// the state a shipped container's bar shows at full. It is what colours
-// the bar: a full bar is finished work, and a partial one is work in
-// flight, whatever else the status badge beside it says.
+// IsComplete reports whether every task is Done; it colours the bar regardless of status.
 func (p ProgressCell) IsComplete() bool { return p.HasTasks() && p.Done == p.Total }
 
-// ProgressLabel is the bar's "N/M tasks done" sentence, built in Go so the
-// markup is one string rather than text interleaved with numbers: templ
-// separates adjacent text and expressions with HTML comments, which would
-// split the sentence into pieces no reader -- and no assertion -- sees as
-// one.
+// ProgressLabel is the bar's "N/M tasks done" sentence, built in Go because templ inserts HTML
+// comments between adjacent text and expressions, splitting the sentence.
 func (p ProgressCell) ProgressLabel() string {
 	if !p.HasTasks() {
 		return "No tasks yet"
@@ -74,95 +46,64 @@ func (p ProgressCell) ProgressLabel() string {
 	return itoa(p.Done) + "/" + itoa(p.Total) + " tasks done"
 }
 
-// MilepebbleRow is one milepebble's row, shown beneath its milestone when
-// the operator expands that milestone.
+// MilepebbleRow is one milepebble's row, shown beneath its expanded milestone.
 type MilepebbleRow struct {
-	// ID is the milepebble's own id, carried so the row is addressable and
-	// so its tasks link can be checked against it.
+	// ID is the milepebble's own id.
 	ID string
 
-	// Name links to this milepebble's own detail-free work: TasksPath and
-	// BoardPath are the two views of the tasks cut from the milepebble,
-	// not the milestone's whole cut, each scoped to the milepebble. What
-	// an operator expands a milepebble to reach is that milepebble's work,
-	// so both links name it.
+	// TasksPath and BoardPath are scoped to the milepebble, not the whole milestone cut.
 	Name      string
 	TasksPath string
 	BoardPath string
 
-	// Status renders through the shared statusBadge: a milepebble is its
-	// own container with its own status, and the parent's badge says
-	// nothing about it.
+	// Status is the milepebble's own, rendered via statusBadge.
 	Status string
 
 	ProgressCell
 }
 
-// MilestoneRow is one milestone's row.
-//
-// The progress figures are Done and Total as the progress read returned
-// them, handed over whole rather than re-derived here: the read owns how
-// a cancelled task counts (store.CancelledTaskCounting), and a view that
-// summed the lanes itself could disagree with the breakdown rendered
-// beside it.
+// MilestoneRow is one milestone's row. Done and Total are the progress read's own figures,
+// so cancelled-task counting (store.CancelledTaskCounting) has one definition.
 type MilestoneRow struct {
-	// ID is the milestone's own id, carried so the row is addressable and
-	// so a detail link can be checked against it.
+	// ID is the milestone's own id.
 	ID string
 
 	// Name links to the milestone's detail page.
 	Name       string
 	DetailPath string
 
-	// TasksPath and BoardPath are the two product-wide views of this
-	// milestone's work, each scoped to the milestone. They are separate
-	// from DetailPath rather than in place of it: the detail explains the
-	// cut, while these two are the two ways an operator actually works it,
-	// and FR 31cbd3eb asks every row to offer both.
+	// TasksPath and BoardPath are the milestone-scoped Tasks and Board views, offered beside the
+	// detail link on every row.
 	TasksPath string
 	BoardPath string
 
-	// Status renders through the shared statusBadge, so this table shows
-	// the same colour for a status as the delivery page and the Board do.
+	// Status renders through the shared statusBadge, matching delivery page and Board colours.
 	Status string
 
 	ProgressCell
 
-	// FRBudget is the stored budget as the operator reads it, empty when
-	// the milestone declares none.
+	// FRBudget is the stored budget for display, empty when none is declared.
 	FRBudget string
 
-	// Outcome is the milestone's own outcome sentence, markdown-rendered
-	// the same way the delivery page renders it.
+	// Outcome is the milestone's outcome sentence, markdown-rendered.
 	Outcome string
 
-	// Milepebbles are the containers cut from this milestone, in the
-	// listing's own order. Non-empty is what makes the row expandable: a
-	// milestone with none cut renders no expander, because there is
-	// nothing behind it to reveal.
+	// Milepebbles are the containers cut from this milestone, in listing order; non-empty makes
+	// the row expandable.
 	Milepebbles []MilepebbleRow
 
-	// Expanded is true when this request's expand parameter named this
-	// milestone. The milepebbles render beneath the row only then, and the
-	// expander's aria-expanded agrees with what is on screen.
+	// Expanded is true when the expand parameter named this milestone.
 	Expanded bool
 
-	// ExpandHref and CollapseHref are this row's expander's two targets:
-	// the page's own URL with this milestone added to the expanded set, and
-	// with it removed. Both carry the status filter through, so expanding
-	// cannot drop the filter the operator chose.
+	// ExpandHref and CollapseHref are the expander's two targets; both carry the status filter.
 	ExpandHref   string
 	CollapseHref string
 }
 
-// HasMilepebbles reports whether this row can be expanded at all. An
-// uncut milestone renders no expander rather than one that reveals an
-// empty block.
+// HasMilepebbles reports whether this row can be expanded.
 func (r MilestoneRow) HasMilepebbles() bool { return len(r.Milepebbles) > 0 }
 
-// ExpanderHref is where the row's expander points right now: the collapse
-// URL when the row is expanded, the expand URL when it is not. One
-// accessor so the control cannot show one state and link to the other.
+// ExpanderHref is the collapse URL when expanded, else the expand URL, so link and state agree.
 func (r MilestoneRow) ExpanderHref() string {
 	if r.Expanded {
 		return r.CollapseHref
@@ -170,8 +111,7 @@ func (r MilestoneRow) ExpanderHref() string {
 	return r.ExpandHref
 }
 
-// ExpanderLabel is the expander's accessible name, saying what pressing
-// it will do rather than which direction the chevron happens to point.
+// ExpanderLabel is the expander's accessible name, saying what pressing it does.
 func (r MilestoneRow) ExpanderLabel() string {
 	verb := "Show"
 	if r.Expanded {
@@ -184,13 +124,8 @@ func (r MilestoneRow) ExpanderLabel() string {
 	return verb + " the " + itoa(len(r.Milepebbles)) + " " + noun + " cut from " + r.Name
 }
 
-// ExpanderClass is the expander's daisyUI button classes, rotating the
-// chevron when the row is expanded.
-//
-// It is computed here rather than at each call site so the button never
-// renders as a bare square with no affordance, and the rotation is a
-// function of the same Expanded flag the aria-expanded and the rows below
-// read -- three things that cannot disagree about whether this row is open.
+// ExpanderClass is the expander's button classes, rotating the chevron off the same Expanded
+// flag as aria-expanded and the rows below.
 func (r MilestoneRow) ExpanderClass() string {
 	class := "btn btn-ghost btn-sm btn-square"
 	if r.Expanded {
@@ -199,10 +134,8 @@ func (r MilestoneRow) ExpanderClass() string {
 	return class
 }
 
-// ExpanderAriaExpanded is the expander's aria-expanded value. It is a
-// method rather than a raw bool because aria-expanded takes the strings
-// "true"/"false", and templ renders a bare bool through its own escaping
-// rules, which is not a contract this control should depend on.
+// ExpanderAriaExpanded is aria-expanded as "true"/"false" strings rather than relying on
+// templ's bool rendering.
 func (r MilestoneRow) ExpanderAriaExpanded() string {
 	if r.Expanded {
 		return "true"
@@ -210,76 +143,39 @@ func (r MilestoneRow) ExpanderAriaExpanded() string {
 	return "false"
 }
 
-// MilestonesPage is the whole region: the page header, the status filter
-// and the table.
-//
-// The row state the page carries -- the filter and the expanded milestone --
-// is already in the URL by the time it reaches here, so this view model has
-// no notion of a click: every row carries the two hrefs its expander
-// alternates between, and the template renders whichever one matches the
-// row's own Expanded flag. A control whose link and whose appearance could
-// disagree is a control that lies to half its users.
-//
-// The two error fields are separate answers, never both set at once. An
-// empty table is a real answer -- this product has no milestone in that
-// status -- and a failed read is not, so the two never share a branch.
+// MilestonesPage is the whole region: header, status filter and table. Filter and expansion
+// are already in the URL, so each row carries both expander hrefs. Empty and ProgressError
+// are distinct answers and never share a branch.
 type MilestonesPage struct {
 	Product ProductHeader
 
-	// Path is this page's own URL: the filter form's GET action and its
-	// hx-get, the same string either way, so the in-place swap and the
-	// full-page submit ask for exactly the same query.
+	// Path is this page's own URL, used as both the form action and hx-get.
 	Path string
 
-	// Statuses are the select's options, "All statuses" first, with the
-	// one this request filtered to marked.
+	// Statuses are the select's options, "All statuses" first.
 	Statuses []MilestoneStatusOption
 
-	// Rows are the milestones in the order the table renders them:
-	// highest roadmap position first, then id.
+	// Rows are in render order: highest roadmap position first, then id.
 	Rows []MilestoneRow
 
-	// Empty is set when the filter matched no milestone, so the region
-	// says so rather than reading as a table that failed. EmptyDetail
-	// names the active filter, so "no milestones here" is distinguishable
-	// from a product that has no milestones at all.
+	// Empty is set when the filter matched nothing; EmptyDetail names the filter so this is
+	// distinguishable from a product with no milestones.
 	Empty       bool
 	EmptyDetail string
 
-	// ProgressError is set when the progress read failed. The table still
-	// renders: a failed figure must not cost the operator the names,
-	// statuses and outcomes the other read answered, and each row carries
-	// the same sentence in its own cell.
+	// ProgressError is set when the progress read failed; rows still render with the sentence in each cell.
 	ProgressError string
 }
 
-// containerWorkLinks is the pair of links every container row carries: the
-// Tasks table and the Board, both scoped to that container.
-//
-// It is ONE component taking both paths rather than an anchor each caller
-// writes, because the failure this guards against is a row that grew a Tasks
-// link and not a Board one -- the two are the same fact about the same
-// container, and a row is only useful if it offers both (FR 31cbd3eb). The
-// callers are the Milestones table's milestone and milepebble rows and the
-// Milestone detail's milepebble card, and each passes its own data-krill
-// prefix so a test can say which row's pair it found.
+// containerWorkLinks is the Tasks + Board link pair every container row carries, one component
+// so a row cannot offer one without the other. The prefix scopes each caller's data-krill.
 templ containerWorkLinks(kind, tasksPath, boardPath string) {
 	<a href={ templ.URL(tasksPath) } class="link link-primary ml-2 text-sm" data-krill={ kind + "-tasks-link" }>Tasks</a>
 	<a href={ templ.URL(boardPath) } class="link link-primary ml-2 text-sm" data-krill={ kind + "-board-link" }>Board</a>
 }
 
-// milestoneProgress renders one container's progress cell: a bar and its
-// sentence, the sentence alone when the container holds no task, and the
-// failure sentence when the figures could not be read.
-//
-// It takes the ProgressCell rather than the row, so a milestone and a
-// milepebble render the same figures through the same branch -- there is
-// no second copy of this markup that could drift from the first.
-//
-// The three are distinct answers and never share a branch -- "no tasks",
-// "some tasks", and "we did not check" are three different facts, and
-// rendering the second as either of the others is how an operator comes
-// to trust a number that was never read.
+// milestoneProgress renders a progress cell: bar and sentence, sentence alone for no tasks,
+// or the failure sentence. "No tasks", "some tasks" and "not checked" never share a branch.
 templ milestoneProgress(cell ProgressCell) {
 	if cell.ProgressError != "" {
 		<span class="text-sm text-base-content/70" data-krill="milestone-progress-error">{ cell.ProgressError }</span>
@@ -299,13 +195,8 @@ templ milestoneProgress(cell ProgressCell) {
 	}
 }
 
-// MilestoneStatusForm renders the status filter: the eight statuses plus
-// "All statuses", which swaps the table in place and records the choice in
-// the URL.
-//
-// It is a plain GET form carrying the status, with htmx layered on top --
-// so the state is the URL either way, and a shared link and the browser's
-// own Back button both work.
+// MilestoneStatusForm renders the status filter: a GET form with htmx on top, so the URL
+// holds the state and Back and shared links work.
 templ MilestoneStatusForm(page MilestonesPage) {
 	<form method="get" action={ templ.URL(page.Path) } class="flex items-end gap-2"
 		data-krill="milestone-status-form"
@@ -331,18 +222,8 @@ templ MilestoneStatusForm(page MilestonesPage) {
 	</form>
 }
 
-// milestoneExpander is the per-row toggle that reveals a milestone's
-// milepebbles. A milestone with none cut renders nothing here at all.
-//
-// It is a real link to this page's own URL with the row's expansion added
-// or removed, carrying the status filter through, so the no-JavaScript path
-// is an ordinary GET that lands on the same table with the same filter and
-// this row expanded. htmx layers an in-place swap on top of that same URL,
-// so the working case swaps the region rather than reloading the page
-// around it -- which is what keeps the filter and the scroll position.
-//
-// The chevron rotates through a conditional class rather than carrying two
-// icons, so the expanded and collapsed states cannot drift apart.
+// milestoneExpander toggles a milestone's milepebbles; nothing renders for an uncut milestone.
+// It is a real link carrying the filter, so no-JS is a plain GET and htmx swaps in place.
 templ milestoneExpander(m MilestoneRow) {
 	<a href={ templ.URL(m.ExpanderHref()) }
 		class={ m.ExpanderClass() }
@@ -361,15 +242,8 @@ templ milestoneExpander(m MilestoneRow) {
 	</a>
 }
 
-// MilepebbleTable is one expanded milestone's milepebbles: each with its
-// name, its Tasks and Board links scoped to the milepebble, its own status
-// badge, and its own progress bar.
-//
-// It is a nested table inside the row it belongs to rather than columns of
-// its own on the milestone table: a milepebble has no FR budget and no
-// outcome of its own here (the shipped/unshipped breakdown and the outcome
-// live on the milestone detail page, FR 1d16afe2), so padding the parent
-// table with empty cells would invent columns the FR does not ask for.
+// MilepebbleTable is an expanded milestone's milepebbles as a nested table; milepebbles have
+// no FR budget or outcome here, so they do not get parent-table columns.
 templ MilepebbleTable(milepebbles []MilepebbleRow) {
 	<table class="table table-sm" data-krill="milepebble-table">
 		<thead>
@@ -394,11 +268,8 @@ templ MilepebbleTable(milepebbles []MilepebbleRow) {
 	</table>
 }
 
-// MilestoneTable is the table itself, in the order buildMilestonesPage put
-// the rows in.
-//
-// The whole table is one horizontal-scroll container rather than a fixed
-// grid, so a narrow viewport scrolls the table and not the page.
+// MilestoneTable is the table in buildMilestonesPage's order, inside a horizontal scroller so
+// narrow viewports scroll the table, not the page.
 templ MilestoneTable(rows []MilestoneRow) {
 	<div class="overflow-x-auto rounded-lg border border-base-300 bg-base-100">
 		<table class="table table-zebra" data-krill="milestone-table">
@@ -445,14 +316,8 @@ templ MilestoneTable(rows []MilestoneRow) {
 	</div>
 }
 
-// Milestones renders the product's Milestones table: the page header, the
-// status filter, and the table itself.
-//
-// The region carries its own anchor id, so the select's swap replaces the
-// whole region -- filter and table together -- rather than only the table
-// beneath it. A swap that replaced only the table would leave the select
-// showing the filter it was changed away from, which is the one thing a
-// control must never do.
+// Milestones renders the region. The swap replaces filter and table together, so the select
+// never shows a filter the rows no longer answer to.
 templ Milestones(page MilestonesPage) {
 	<section id={ MilestonesAnchor } data-krill="milestones" class="space-y-4">
 		<div class="flex flex-wrap items-center justify-between gap-3">
@@ -485,14 +350,8 @@ templ Milestones(page MilestonesPage) {
 	</section>
 }
 
-// MilestonesRows is the fragment the status select's swap receives: the
-// same region the full page renders, without the shell around it.
-//
-// It is deliberately the WHOLE region rather than just the table -- see
-// Milestones' own note -- and it carries the anchor id for the reason
-// SpecInlineError does: htmx's outerHTML removes the swap target, so a
-// fragment without that id would leave the next change with nothing to
-// swap into.
+// MilestonesRows is the whole region without the shell, for the select's swap. It keeps the
+// anchor id because outerHTML removes the swap target.
 templ MilestonesRows(page MilestonesPage) {
 	@Milestones(page)
 }

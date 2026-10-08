@@ -1,36 +1,23 @@
 package components
 
-// ProductOption is one product in the switcher: the id the form submits
-// and the name the operator reads. The id is a value, never a field the
-// operator types -- the select is the only way a product is ever chosen.
+// ProductOption is one product in the switcher; operators pick it, never type the id.
 type ProductOption struct {
 	ID       string
 	Name     string
 	Selected bool
 }
 
-// ProductSwitcherData is the sidebar's Product select.
-//
-// Action is the route the form posts to and From is the page being
-// rendered, which together are what let the switcher land on the same
-// area's list page under the newly picked product rather than on the
-// page it happened to be read from. Options is every product in the
-// caller's scope, in the order the read returned them; a scope holding
-// exactly one still renders, because the operator has to be able to see
-// which product they are in.
+// ProductSwitcherData is the sidebar's Product select. Action + From let the switch
+// land on the same area's list page under the new product; a single-product
+// scope still renders so the operator sees which product they are in.
 type ProductSwitcherData struct {
 	Action  string
 	From    string
 	Options []ProductOption
 }
 
-// ProductSwitcher is the sidebar's Product select.
-//
-// The form's method and action carry the whole control with JavaScript
-// disabled: the submit button is only revealed by the noscript block, so
-// a browser with scripting off still gets a working product switch rather
-// than a control that silently does nothing. With scripting on, changing
-// the select submits the same form.
+// ProductSwitcher is the sidebar's Product select. The noscript submit button keeps
+// the switch working with JavaScript disabled; otherwise onchange submits.
 templ ProductSwitcher(d ProductSwitcherData) {
 	<div class="px-3 pb-2">
 		<form method="get" action={ templ.URL(d.Action) } data-krill="product-switcher">
