@@ -23,6 +23,20 @@ try:
 except ImportError:
     OTEL_AVAILABLE = False
 
+try:
+    from opentelemetry import propagate, trace
+    from opentelemetry.baggage.propagation import W3CBaggagePropagator
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.propagators.composite import CompositePropagator
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    OTEL_TRACING_AVAILABLE = True
+except ImportError:
+    OTEL_TRACING_AVAILABLE = False
+
 
 # Global configuration state
 _configured = False
@@ -42,6 +56,7 @@ def configure_logging(
     # Configuration options
     log_level: str = "INFO",
     enable_otlp: bool = True,  # OTLP-first
+    enable_tracing: bool = False,
     otlp_endpoint: Optional[str] = None,
     enable_console: bool = True,  # DEPRECATED: always true now
     json_format: bool = False,  # Simple console for debug
@@ -75,6 +90,9 @@ def configure_logging(
         deployment_environment: Environment (auto-detected from APP_ENV if not provided)
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         enable_otlp: Enable OpenTelemetry Protocol (OTLP) export (default: True)
+        enable_tracing: Install a global TracerProvider exporting spans over OTLP
+            gRPC and a W3C tracecontext+baggage propagator (default: False).
+            Long-running services should enable it alongside enable_otlp.
         otlp_endpoint: OTLP collector endpoint (defaults to env or http://localhost:4317)
         json_format: Use JSON formatting for console (default: False, simple text for debug)
         force_reconfigure: Force reconfiguration even if already configured
@@ -161,6 +179,17 @@ def configure_logging(
             "Install with: pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp"
         )
     
+    # Env kill switches match libs/go/logging.
+    if _env_true("OTEL_SDK_DISABLED") or _env_true("OTEL_TRACES_DISABLED"):
+        enable_tracing = False
+    if enable_tracing and OTEL_TRACING_AVAILABLE:
+        _setup_tracing(_build_resource_attrs(context), otlp_endpoint)
+    elif enable_tracing:
+        logging.warning(
+            "OpenTelemetry tracing requested but dependencies not available. "
+            "Install with: pip install opentelemetry-sdk opentelemetry-exporter-otlp"
+        )
+
     # Always setup console logging (can be disabled with json_format=None future enhancement)
     _setup_console(context, json_format)
     
@@ -183,6 +212,7 @@ def configure_logging(
             "app_type": context.app_type,
             "version": context.version,
             "otlp_enabled": enable_otlp,
+            "tracing_enabled": enable_tracing,
             "auto_detected": not (service_name or service_version or deployment_environment),
         }
     )
@@ -190,17 +220,8 @@ def configure_logging(
     return context
 
 
-def _setup_otlp(context: LogContext, otlp_endpoint: Optional[str]) -> None:
-    """Setup OpenTelemetry Protocol (OTLP) logging export with full context.
-    
-    Maps all LogContext fields to proper OTEL semantic conventions:
-    - Resource attributes for stable service/infrastructure metadata
-    - Log record attributes for request/operation context
-    
-    Args:
-        context: Global log context
-        otlp_endpoint: OTLP collector endpoint
-    """
+def _build_resource_attrs(context: LogContext) -> Dict[str, Any]:
+    """Map LogContext to OTEL resource attributes shared by logs and traces."""
     # Create resource attributes from context (stable service metadata)
     # Following OTEL semantic conventions: https://opentelemetry.io/docs/specs/semconv/
     resource_attrs = {
@@ -249,7 +270,28 @@ def _setup_otlp(context: LogContext, otlp_endpoint: Optional[str]) -> None:
     # Build attributes (custom)
     if context.bazel_target:
         resource_attrs["build.target"] = context.bazel_target
+
+    # OTEL rejects None-valued attributes (e.g. no APP_DOMAIN set).
+    return {k: v for k, v in resource_attrs.items() if v is not None}
+
+
+def _env_true(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("true", "1", "yes")
+
+
+def _setup_otlp(context: LogContext, otlp_endpoint: Optional[str]) -> None:
+    """Setup OpenTelemetry Protocol (OTLP) logging export with full context.
     
+    Maps all LogContext fields to proper OTEL semantic conventions:
+    - Resource attributes for stable service/infrastructure metadata
+    - Log record attributes for request/operation context
+    
+    Args:
+        context: Global log context
+        otlp_endpoint: OTLP collector endpoint
+    """
+    resource_attrs = _build_resource_attrs(context)
+
     # Create logger provider with resource
     resource = Resource.create(resource_attrs)
     logger_provider = LoggerProvider(resource=resource)
@@ -275,6 +317,30 @@ def _setup_otlp(context: LogContext, otlp_endpoint: Optional[str]) -> None:
     
     logging.debug(f"OTLP logging enabled: {endpoint}")
     logging.debug(f"OTLP resource attributes: {resource_attrs}")
+
+
+def _setup_tracing(resource_attrs: Dict[str, Any], otlp_endpoint: Optional[str]) -> None:
+    """Install a global TracerProvider exporting spans to the OTLP collector.
+
+    The SDK flushes the batch processor at interpreter exit (shutdown_on_exit),
+    the same way it does for the LoggerProvider.
+    """
+    endpoint = (
+        otlp_endpoint
+        or os.getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        or "http://localhost:4317"
+    )
+    tracer_provider = TracerProvider(resource=Resource.create(resource_attrs))
+    tracer_provider.add_span_processor(
+        BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
+    )
+    trace.set_tracer_provider(tracer_provider)
+    propagate.set_global_textmap(
+        CompositePropagator([TraceContextTextMapPropagator(), W3CBaggagePropagator()])
+    )
+
+    logging.debug(f"OTLP tracing enabled: {endpoint}")
 
 
 def _setup_console(context: LogContext, json_format: bool) -> None:

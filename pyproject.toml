@@ -45,6 +45,7 @@ dependencies = [
     "opentelemetry-sdk",
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-instrumentation-sqlalchemy",
+    "opentelemetry-instrumentation-grpc",
     "opentelemetry-exporter-otlp",
     
     # Generative AI

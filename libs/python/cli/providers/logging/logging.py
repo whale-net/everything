@@ -39,6 +39,9 @@ LogLevel = Annotated[
     typer.Option(help="Logging level"),
 ]
 EnableOTLP = Annotated[bool, typer.Option("--log-otlp", help="Enable OTLP logging")]
+EnableTracing = Annotated[
+    bool, typer.Option("--log-tracing", help="Enable OTLP trace export")
+]
 EnableConsoleExporter = Annotated[
     bool, typer.Option("--log-console", help="Enable console OTLP exporter")
 ]
@@ -152,7 +155,7 @@ def logging_params(func: Callable) -> Callable:
     
     Automatically calls configure_logging() using environment variables:
     - APP_NAME, APP_DOMAIN, APP_TYPE, APP_VERSION (build-time metadata)
-    - LOG_LEVEL, LOG_OTLP, LOG_JSON_FORMAT, LOG_CONSOLE (runtime config)
+    - LOG_LEVEL, LOG_OTLP, LOG_TRACING, LOG_JSON_FORMAT, LOG_CONSOLE (runtime config)
     
     CLI flags can override environment variables if needed.
     
@@ -172,6 +175,7 @@ def logging_params(func: Callable) -> Callable:
     
     # Read environment variables for runtime config
     env_log_otlp = str_to_bool(os.getenv('LOG_OTLP', ''))
+    env_log_tracing = str_to_bool(os.getenv('LOG_TRACING', ''))
     env_log_level = os.getenv('LOG_LEVEL', 'INFO').upper()  # Default INFO for production
     env_json_format = str_to_bool(os.getenv('LOG_JSON_FORMAT', ''))
     env_console = str_to_bool(os.getenv('LOG_CONSOLE', 'true'))
@@ -186,6 +190,10 @@ def logging_params(func: Callable) -> Callable:
             'log_otlp', inspect.Parameter.KEYWORD_ONLY,
             default=env_log_otlp, annotation=EnableOTLP
         )),
+        ('log_tracing', inspect.Parameter(
+            'log_tracing', inspect.Parameter.KEYWORD_ONLY,
+            default=env_log_tracing, annotation=EnableTracing
+        )),
         ('log_level', inspect.Parameter(
             'log_level', inspect.Parameter.KEYWORD_ONLY,
             default=env_log_level, annotation=LogLevel
@@ -199,6 +207,7 @@ def logging_params(func: Callable) -> Callable:
         
         # Get runtime config from env vars (with CLI override)
         enable_otlp = kwargs.pop('log_otlp', env_log_otlp)
+        enable_tracing = kwargs.pop('log_tracing', env_log_tracing)
         
         log_level = os.getenv('LOG_LEVEL', '').upper()
         if not log_level or log_level not in valid_levels:
@@ -216,12 +225,14 @@ def logging_params(func: Callable) -> Callable:
             deployment_environment=app_env,
             log_level=log_level,
             enable_otlp=enable_otlp,
+            enable_tracing=enable_tracing,
             enable_console=enable_console,
             json_format=json_format,
         )
         
         return {
             'enable_otlp': enable_otlp,
+            'enable_tracing': enable_tracing,
             'log_level': log_level,
             'json_format': json_format,
             'enable_console': enable_console,

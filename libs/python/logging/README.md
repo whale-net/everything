@@ -227,12 +227,33 @@ export HELM_RELEASE_NAME=my-release
 # OpenTelemetry
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
 export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://collector:4317
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://collector:4317  # enable_tracing only
+export OTEL_SDK_DISABLED=true     # skips tracing setup (logs unaffected)
+export OTEL_TRACES_DISABLED=true  # skips tracing setup only
 
 # Platform
 export PLATFORM=linux/arm64
 export ARCHITECTURE=arm64
 export BAZEL_TARGET=//demo/my-app:my-app
 ```
+
+## Tracing
+
+`configure_logging(enable_tracing=True)` installs a global `TracerProvider`
+(same resource attributes as logs) exporting spans over OTLP gRPC with a
+`BatchSpanProcessor`, and sets the global propagator to W3C `traceparent` +
+`baggage`. It is off by default, matching `EnableTracing` in
+`libs/go/logging`; every long-running service should turn it on alongside
+`enable_otlp`. CLI apps get it from `@logging_params` via `--log-tracing` /
+`LOG_TRACING=true`.
+
+- Endpoint: `otlp_endpoint` argument, else `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+  else `OTEL_EXPORTER_OTLP_ENDPOINT`, else `http://localhost:4317` (insecure).
+- `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_DISABLED=true` skips the setup.
+- Flush: the SDK shuts the provider down at interpreter exit (as it does for
+  the log provider), draining queued spans.
+- Without it, `tracer.start_as_current_span(...)` spans are non-recording and
+  Temporal's `TracingInterceptor` / gRPC interceptors propagate nothing.
 
 ## Output Formats
 

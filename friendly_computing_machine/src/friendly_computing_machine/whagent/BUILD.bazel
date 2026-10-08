@@ -10,5 +10,6 @@ py_library(
         "//whagent_net/protos:whagentpb_py",
         "@pypi//:grpcio",
         "@pypi//:httpx",
+        "@pypi//:opentelemetry-instrumentation-grpc",
     ],
 )

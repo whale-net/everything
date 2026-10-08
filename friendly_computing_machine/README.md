@@ -86,7 +86,7 @@ Manual end-to-end check against a dev Keycloak: open
 `@mention` the bot in a channel linked to a whagent-net agent to start a threaded AI session. See [docs/whagent_integration.md](docs/whagent_integration.md).
 
 ## Logging, Tracing, and Metrics
-Logging uses the standard library with optional OTLP export. Tracing relies on Opentelemetry auto-instrumentation; the Python SDK is still experimental, so breaking changes may occur. Auto-instrumentation for logging proved unreliable, so logging remains manual. Metrics are currently out of scope. An OTEL collector should ingest signals according to the Helm values. Python keeps logging to stdout, though you can disable it if needed.
+Logging uses the standard library with optional OTLP export. Tracing is enabled with `--log-tracing` (bot, taskpool, worker, and web pass it): `libs/python/logging` installs the OTLP tracer provider and W3C propagator, Slack handlers open spans, Temporal's `TracingInterceptor` carries context into workflows and activities, and the whagent-net gRPC client injects `traceparent` so whagent-net spans join the same trace. Auto-instrumentation for logging proved unreliable, so logging remains manual. Metrics are currently out of scope. An OTEL collector should ingest signals according to the Helm values. Python keeps logging to stdout, though you can disable it if needed.
 
 ## Additional Notes
 To bootstrap Opentelemetry auto-instrumentation outside Tilt:

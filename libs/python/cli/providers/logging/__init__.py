@@ -3,6 +3,7 @@
 from libs.python.cli.providers.logging.logging import (
     EnableConsoleExporter,
     EnableOTLP,
+    EnableTracing,
     LogLevel,
     LoggingContext,
     create_logging_context,
@@ -12,6 +13,7 @@ from libs.python.cli.providers.logging.logging import (
 __all__ = [
     "EnableConsoleExporter",
     "EnableOTLP",
+    "EnableTracing",
     "LogLevel",
     "LoggingContext",
     "create_logging_context",
