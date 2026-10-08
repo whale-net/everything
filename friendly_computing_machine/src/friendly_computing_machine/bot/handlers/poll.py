@@ -126,15 +126,18 @@ def handle_poll_command(ack: Ack, respond: Respond, command, client: SlackWebCli
 @app.action(POLL_ADD_OPTION_ACTION)
 def handle_poll_add_option(ack: Ack, body, client: SlackWebClientFCM):
     ack()
-    view = body["view"]
-    metadata = PollModalMetadata.loads(view["private_metadata"])
-    metadata = replace(
-        metadata, option_fields=min(metadata.option_fields + 1, MAX_OPTIONS)
-    )
-    # unchanged block_ids keep what the user already typed
-    client.views_update(
-        view_id=view["id"], hash=view["hash"], view=build_poll_modal(metadata)
-    )
+    with tracer.start_as_current_span("handle_poll_add_option") as span:
+        span.set_attribute("slack.user.id", body["user"]["id"])
+        view = body["view"]
+        metadata = PollModalMetadata.loads(view["private_metadata"])
+        span.set_attribute("slack.channel.id", metadata.channel_id)
+        metadata = replace(
+            metadata, option_fields=min(metadata.option_fields + 1, MAX_OPTIONS)
+        )
+        # unchanged block_ids keep what the user already typed
+        client.views_update(
+            view_id=view["id"], hash=view["hash"], view=build_poll_modal(metadata)
+        )
 
 
 @app.view(POLL_MODAL_CALLBACK)
@@ -198,21 +201,24 @@ def handle_poll_vote(ack: Ack, body, respond: Respond, client: SlackWebClientFCM
 @app.action(POLL_CLOSE_ACTION)
 def handle_poll_close(ack: Ack, body, respond: Respond, client: SlackWebClientFCM):
     ack()
-    user_id = body["user"]["id"]
-    poll_id = int(body["actions"][0]["value"])
+    with tracer.start_as_current_span("handle_poll_close") as span:
+        user_id = body["user"]["id"]
+        poll_id = int(body["actions"][0]["value"])
+        span.set_attribute("slack.user.id", user_id)
+        span.set_attribute("db.poll.id", poll_id)
 
-    with _poll_locks[poll_id]:
-        snapshot = get_poll_snapshot(poll_id)
-        if snapshot is None:
-            logger.warning("close requested for unknown poll %s", poll_id)
-            return
-        if snapshot.poll.creator_slack_user_slack_id != user_id:
-            respond(
-                text="Only the person who created this poll can close it.",
-                response_type="ephemeral",
-                replace_original=False,
-            )
-            return
-        snapshot = close_poll(poll_id)
-        _refresh_message(client, snapshot)
-    logger.info("poll %s closed by %s", poll_id, user_id)
+        with _poll_locks[poll_id]:
+            snapshot = get_poll_snapshot(poll_id)
+            if snapshot is None:
+                logger.warning("close requested for unknown poll %s", poll_id)
+                return
+            if snapshot.poll.creator_slack_user_slack_id != user_id:
+                respond(
+                    text="Only the person who created this poll can close it.",
+                    response_type="ephemeral",
+                    replace_original=False,
+                )
+                return
+            snapshot = close_poll(poll_id)
+            _refresh_message(client, snapshot)
+        logger.info("poll %s closed by %s", poll_id, user_id)

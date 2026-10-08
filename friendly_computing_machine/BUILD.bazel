@@ -34,6 +34,7 @@ release_app(
     args = [
         "bot",
         "--log-otlp",
+        "--log-tracing",
         "run-slack-socket-app",
         "--skip-migration-check",
     ],
@@ -52,6 +53,7 @@ release_app(
     args = [
         "bot",
         "--log-otlp",
+        "--log-tracing",
         "run-taskpool",
         "--skip-migration-check",
     ],
@@ -70,6 +72,7 @@ release_app(
     args = [
         "workflow",
         "--log-otlp",
+        "--log-tracing",
         "run",
         "--skip-migration-check",
     ],
@@ -88,6 +91,7 @@ release_app(
     args = [
         "web",
         "--log-otlp",
+        "--log-tracing",
         "run",
         "--skip-migration-check",
     ],

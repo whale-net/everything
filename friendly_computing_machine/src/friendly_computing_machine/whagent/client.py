@@ -33,6 +33,8 @@ from typing import Optional
 
 import grpc
 import httpx
+from opentelemetry.instrumentation.grpc import client_interceptor
+from opentelemetry.instrumentation.grpc.grpcext import intercept_channel
 
 from whagent_net.protos import session_pb2, session_pb2_grpc
 
@@ -72,7 +74,11 @@ class WhagentClient:
 
         self._pb2 = session_pb2
 
-        self._channel = grpc.insecure_channel(api_url)
+        # Injects traceparent so whagent-net spans join FCM's trace. The OTel
+        # interceptor needs its own grpcext.intercept_channel, not grpc's.
+        self._channel = intercept_channel(
+            grpc.insecure_channel(api_url), client_interceptor()
+        )
         self._stub = session_pb2_grpc.SessionServiceStub(self._channel)
 
         self._token: Optional[str] = None

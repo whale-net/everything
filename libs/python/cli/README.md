@@ -86,10 +86,12 @@ Injects 2 Slack parameters:
 Stores in `ctx.obj['slack']` as dict with keys: `bot_token`, `app_token`
 
 #### `@logging_params` (from `libs.python.cli.providers.logging`)
-Injects 1 logging parameter:
-- `--log-otlp` (default: False)
+Injects logging parameters:
+- `--log-otlp` (envvar: LOG_OTLP, default: False)
+- `--log-tracing` (envvar: LOG_TRACING, default: False) - OTLP span export + W3C propagation
+- `--log-level` (envvar: LOG_LEVEL, default: INFO)
 
-Stores in `ctx.obj['logging']` as dict with key: `enable_otlp`
+Stores in `ctx.obj['logging']` as dict with keys: `enable_otlp`, `enable_tracing`, `log_level`, `json_format`, `enable_console`
 
 ## Using Provider Functions
 
@@ -330,11 +332,12 @@ Injects 1 parameter into `ctx.obj['logging']`:
 @logging_params
 def callback(ctx: typer.Context, ...):
     log_config = ctx.obj['logging']
-    # {'enable_otlp': bool}
+    # {'enable_otlp': bool, 'enable_tracing': bool, ...}
 ```
 
 **CLI Options**:
 - `--log-otlp` (default: `False`, help: "Enable OTLP logging")
+- `--log-tracing` (default: `False`, help: "Enable OTLP trace export"). Long-running services pass both.
 
 ## Provider Functions
 

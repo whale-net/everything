@@ -141,6 +141,9 @@ log line depends on these being set; they are all optional.
 |---|---|---|
 | `LOG_LEVEL` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`. An unrecognized value falls back to `INFO`. |
 | `LOG_OTLP` | `false` | `true`/`1`/`yes` enables OTLP log export. The release apps pass `--log-otlp` on the command line, which overrides this. |
+| `LOG_TRACING` | `false` | `true`/`1`/`yes` installs the OTLP tracer provider and W3C propagator. The bot, taskpool, worker, and web release apps pass `--log-tracing`, which overrides this. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://localhost:4317` | OTLP traces endpoint, used when tracing is enabled. `OTEL_EXPORTER_OTLP_ENDPOINT` (set by Helm) is the fallback. |
+| `OTEL_SDK_DISABLED` / `OTEL_TRACES_DISABLED` | unset | `true` skips tracing setup even when `--log-tracing` is passed. |
 | `LOG_CONSOLE` | `true` | `true`/`1`/`yes` enables the console OTLP exporter. |
 | `LOG_JSON_FORMAT` | `false` | `true`/`1`/`yes` emits JSON lines instead of plain text. |
 | `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | `http://0.0.0.0:4317` | OTLP logs endpoint, used when log export is enabled. `OTEL_EXPORTER_OTLP_ENDPOINT` is the fallback. |

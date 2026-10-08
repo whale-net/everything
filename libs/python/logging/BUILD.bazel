@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library")
+load("//tools/bazel:pytest.bzl", "py_test")
 
 py_library(
     name = "logging",
@@ -16,5 +17,18 @@ py_library(
         "@pypi//:opentelemetry-api",
         "@pypi//:opentelemetry-exporter-otlp",
         "@pypi//:opentelemetry-sdk",
+    ],
+)
+
+py_test(
+    name = "config_test",
+    size = "small",
+    srcs = ["config_test.py"],
+    # Parent __init__.py files keep pytest from naming this module
+    # logging.config_test, which collides with the stdlib logging package.
+    deps = [
+        ":logging",
+        "//libs",
+        "//libs/python",
     ],
 )
