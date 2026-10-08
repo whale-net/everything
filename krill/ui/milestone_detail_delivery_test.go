@@ -180,21 +180,21 @@ func TestDeliveryCardRowsCarryItemKindShipmentAndId(t *testing.T) {
 
 	// Item is the display number and the name, which for a Feature is Cn and
 	// for a Requirement is its FR/NFR kind -- never a bare name.
-	assert.Equal(t, []string{"C4 -- Milestones table", "Feature", "shipped", detailShippedFeature.String()},
+	assert.Equal(t, []string{"C4 -- Milestones table", "Feature", "shipped", detailShippedFeature.String()[:8]},
 		deliveryRowTexts(t, rows[0]))
 	// A Requirement's Item carries "FR", and its Kind column says
 	// "Requirement": the two are different facts and the FR asks for both.
-	assert.Equal(t, []string{"FR -- Milestone detail header", "Requirement", "shipped", detailShippedFR.String()},
+	assert.Equal(t, []string{"FR -- Milestone detail header", "Requirement", "shipped", detailShippedFR.String()[:8]},
 		deliveryRowTexts(t, rows[1]))
 
 	unshipped := deliveryTableFor(t, region, "unshipped")
 	rows = deliveryBodyRows(t, unshipped)
 	require.Len(t, rows, 2)
-	assert.Equal(t, []string{"C7 -- Delivery card", "Feature", "unshipped", detailUnshippedFeat.String()},
+	assert.Equal(t, []string{"C7 -- Delivery card", "Feature", "unshipped", detailUnshippedFeat.String()[:8]},
 		deliveryRowTexts(t, rows[0]))
 	// An NFR says NFR in its Item and Requirement in its Kind, which is
 	// exactly the pair a single-label flattening would have collapsed.
-	assert.Equal(t, []string{"NFR -- Delivery card is readable", "Requirement", "unshipped", detailUnshippedNFR.String()},
+	assert.Equal(t, []string{"NFR -- Delivery card is readable", "Requirement", "unshipped", detailUnshippedNFR.String()[:8]},
 		deliveryRowTexts(t, rows[1]))
 }
 
@@ -207,13 +207,13 @@ func TestDeliveryCardTablesAreSeparate(t *testing.T) {
 	shipped := deliveryTableFor(t, region, "shipped")
 	unshipped := deliveryTableFor(t, region, "unshipped")
 
-	assert.NotContains(t, deliveryRowsText(t, shipped), detailUnshippedFeat.String(),
+	assert.NotContains(t, deliveryRowsText(t, shipped), detailUnshippedFeat.String()[:8],
 		"the unshipped feature is not in the shipped table")
-	assert.NotContains(t, deliveryRowsText(t, unshipped), detailShippedFeature.String(),
+	assert.NotContains(t, deliveryRowsText(t, unshipped), detailShippedFeature.String()[:8],
 		"the shipped feature is not in the unshipped table")
 
-	assert.Contains(t, deliveryRowsText(t, shipped), detailShippedFeature.String())
-	assert.Contains(t, deliveryRowsText(t, unshipped), detailUnshippedFeat.String())
+	assert.Contains(t, deliveryRowsText(t, shipped), detailShippedFeature.String()[:8])
+	assert.Contains(t, deliveryRowsText(t, unshipped), detailUnshippedFeat.String()[:8])
 }
 
 // TestDeliveryCardAppliesToAMilepebbleToo: a milepebble is its own

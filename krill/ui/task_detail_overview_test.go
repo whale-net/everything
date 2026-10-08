@@ -287,9 +287,9 @@ func TestTaskDetailOverviewDescriptionCardFollowsTheBody(t *testing.T) {
 		assert.Contains(t, panel, `data-krill="task-description"`)
 		assert.Contains(t, panel, ">Description</h2>")
 		assert.Contains(t, panel, "the task body")
-		assert.Contains(t, panel, "    an indented line",
-			"the body's own whitespace survives")
-		assert.Contains(t, panel, "whitespace-pre-wrap")
+		assert.Contains(t, panel, "<code>an indented line",
+			"the body renders as markdown, so an indented line is a code block")
+		assert.Contains(t, panel, "krill-md")
 	})
 
 	t.Run("without-body", func(t *testing.T) {

@@ -34,7 +34,7 @@ import (
 // about the callout and not about whatever else the page carries.
 func detailActionsOf(t *testing.T, html string) string {
 	t.Helper()
-	return regionBetween(t, html, `data-krill="task-actions"`, `data-krill="task-detail-frame"`)
+	return regionBetween(t, html, `data-krill="task-actions"`, `data-krill="refresh"`)
 }
 
 // offeredVerbs is the verbs a region's controls post, in document order.
@@ -504,8 +504,8 @@ func TestTaskDetailRequeueIsThePrimaryControlOnAnEscalatedTask(t *testing.T) {
 		"exactly one verb is the state's primary action")
 	assert.Contains(t, triggers, `hx-post="`+opsTaskActionBase+task.ID.String()+`/`+actionRequeue+`"`)
 	// The Requeue form, and only it, carries the filled button.
-	assert.Contains(t, triggers, "btn-primary btn-xs")
-	assert.Contains(t, triggers, "btn-error btn-xs")
+	assert.Contains(t, triggers, "btn-primary btn-sm")
+	assert.Contains(t, triggers, "btn-ghost btn-sm text-error")
 
 	for _, tc := range []struct {
 		name string

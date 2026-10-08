@@ -315,7 +315,7 @@ templ milestoneDetailRail(rail MilestoneRail) {
 					<button type="button" class="badge badge-ghost font-mono disabled:opacity-50"
 						aria-label="Copy milestone id" data-krill="copy-task-id" data-task-id={ rail.ID }
 						disabled title="Copying the id needs JavaScript">
-						{ rail.ID }
+						{ idChipText(rail.ID) }
 					</button>
 					<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
 				</dd>

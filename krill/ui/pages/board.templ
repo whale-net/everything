@@ -267,16 +267,18 @@ templ boardCard(t TaskRow) {
 		class="card bg-base-100 border border-base-300">
 		<div class="card-body p-3 gap-1">
 			<a href={ templ.URL(t.DetailPath) } class="link font-medium" data-krill="task-title">{ t.Title }</a>
-			if t.Milepebble != "" {
-				<span data-krill="task-milepebble" class="badge badge-neutral badge-sm">{ t.Milepebble }</span>
-			}
+			<div class="flex flex-wrap gap-1">
+				if !t.Quiet {
+					@TaskBadges(t.Badges)
+				}
+				if t.Milepebble != "" {
+					<span data-krill="task-milepebble" class="badge badge-outline badge-sm">{ t.Milepebble }</span>
+				}
+			</div>
 			if !t.Quiet {
 				if t.Attempts != "" {
-					<div data-krill="task-attempts" class="text-xs text-base-content/70">{ t.Attempts }</div>
+					<div class="text-sm text-base-content/70"><span data-krill="task-attempts">{ t.Attempts }</span> attempts</div>
 				}
-				<div class="flex flex-wrap gap-1">
-					@TaskBadges(t.Badges)
-				</div>
 				if t.LeaseExpiresAt != "" {
 					<time data-krill="task-lease" datetime={ t.LeaseExpiresAt } title={ t.LeaseExpiresAt }
 						class="text-xs text-base-content/70">
@@ -335,7 +337,7 @@ templ boardFreshness(at string) {
 templ ProductBoard(d ProductBoardPage) {
 	<section id={ ProductTasksAnchor } data-krill="product-tasks" data-krill-view="Board">
 		<div class="flex flex-wrap items-center gap-3">
-			<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
+			<h1 class="text-2xl font-semibold" data-krill="page-title">{ d.View }</h1>
 			<p class="text-sm text-base-content/70">
 				Scoped to
 				<span data-krill="scope-label">{ d.ScopeLabel }</span>

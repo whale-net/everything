@@ -51,7 +51,7 @@ document.documentElement.setAttribute('data-theme',t);})();
 <style>%s</style>
 <script>%s</script>
 <script>%s</script>
-<script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS, relativeAgeScript, leaseCountdownScript, copyTaskIdScript)
+<script>%s</script>`, htmxui.ThemeSwitcherStorageKey, htmxui.ThemesCSS, markdownCSS+shellCSS, relativeAgeScript, leaseCountdownScript, copyTaskIdScript)
 }
 
 // leaseCountdownScript rewrites every board card's lease <time> into the
@@ -125,9 +125,19 @@ const markdownCSS = `
 .krill-md :where(h1, h2, h3, h4, h5, h6) { font-weight: 700; margin: 0.5em 0 0.25em; }
 `
 
+// shellCSS holds the workspace shell's own overrides. htmxui's themes.css
+// colors every navbar ghost button neutral-content for a neutral navbar, but
+// krill's header is base-100, so its Theme and account buttons need
+// base-content to be readable.
+const shellCSS = `
+[data-krill="workspace-shell"] .navbar .btn-ghost { color: var(--color-base-content); }
+`
+
 // relativeAgeScript upgrades every [data-krill-updated-at] element's text to
-// "Updated N ago", read off the absolute RFC3339 instant the server put in
-// the attribute (NFR 7b497d92).
+// "N ago", read off the absolute RFC3339 instant the server put in the
+// attribute (NFR 7b497d92). Only a freshness stamp (a data-krill hook ending
+// in "updated-at") reads "Updated N ago"; an event time such as an escalation
+// or a session's opening reads as the bare age.
 //
 // It lives in the document head, never in a fragment: the regions htmx swaps
 // carry the instant and nothing else, so a relative string rendered by the
@@ -163,7 +173,9 @@ function upgrade(root){
 var nodes=(root||document).querySelectorAll('[data-krill-updated-at]');
 for(var i=0;i<nodes.length;i++){
 var t=Date.parse(nodes[i].getAttribute('data-krill-updated-at'));
-if(!isNaN(t)){nodes[i].textContent='Updated '+ago(t)+' ago';}
+if(isNaN(t)){continue;}
+var hook=nodes[i].getAttribute('data-krill')||'';
+nodes[i].textContent=(/updated-at$/.test(hook)?'Updated ':'')+ago(t)+' ago';
 }
 }
 document.addEventListener('DOMContentLoaded',function(){upgrade(document);});

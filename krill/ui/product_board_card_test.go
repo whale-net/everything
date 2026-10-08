@@ -216,7 +216,7 @@ func TestBoardCardNamesTheMilepebbleWhenTheMilestoneIsCut(t *testing.T) {
 	cutCard := cardOf(t, lane, cut.TaskID.String())
 	assert.Contains(t, cutCard, `data-krill="task-milepebble"`,
 		"a milepebble task's card names the milepebble it came from")
-	assert.Contains(t, cutCard, `class="badge badge-neutral badge-sm">A cut<`,
+	assert.Contains(t, cutCard, `class="badge badge-outline badge-sm">A cut<`,
 		"and names it in a badge, not as loose text")
 
 	// A milestone's own task has no milepebble to name, and an uncut

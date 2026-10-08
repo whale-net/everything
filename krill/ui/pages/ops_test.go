@@ -104,7 +104,7 @@ func TestTaskActionsDoublesTheDestructiveControl(t *testing.T) {
 	assert.Contains(t, got, `hx-swap="outerHTML"`)
 	assert.Contains(t, got, `type="hidden" name="return_to" value="/ops/claimed"`)
 	assert.Contains(t, got, `type="hidden" name="expected_claim_id" value="bbbbbbbb-1111-2222-3333-444444444444"`)
-	assert.Contains(t, got, `type="button" popovertarget="krill-reason-popover-t1-cancel" class="btn btn-error btn-xs">Cancel</button>`,
+	assert.Contains(t, got, `type="button" popovertarget="krill-reason-popover-t1-cancel" class="btn btn-ghost btn-sm text-error">Cancel</button>`,
 		"the row's trigger opens the control's reason popover and posts nothing itself")
 	assert.NotContains(t, got, `type="submit" popovertarget`,
 		"the trigger is not a submit button: a submit button with a form owner submits it and returns before any popover invoker behaviour runs")

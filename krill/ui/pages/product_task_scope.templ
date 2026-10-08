@@ -161,7 +161,7 @@ templ ProductTaskViewToggleForm(t ProductTaskViewToggle) {
 	<div class="join mt-3" role="group" aria-label="View tasks as" data-krill="view-toggle">
 		for _, v := range t.Views {
 			if v.Active {
-				<a href={ templ.URL(v.Href) } class="join-item btn btn-sm btn-active" aria-current="page"
+				<a href={ templ.URL(v.Href) } class="join-item btn btn-sm btn-active btn-neutral" aria-current="page"
 					data-krill="view-toggle-link" data-krill-view={ v.Label }>
 					{ v.Label }
 				</a>
@@ -203,15 +203,15 @@ templ ProductTaskScopeForm(c ProductTaskScopeControl) {
 		hx-push-url="true">
 		<fieldset class="fieldset">
 			<legend class="fieldset-legend">Scope</legend>
-			for _, mode := range c.Modes {
-				<label class="label cursor-pointer justify-start gap-2 p-0">
-					<input type="radio" name={ ProductTaskScopeQueryParam } value={ mode.Mode } class="radio radio-primary"
+			<div class="join" role="group" aria-label="Scope">
+				for _, mode := range c.Modes {
+					<input type="radio" name={ ProductTaskScopeQueryParam } value={ mode.Mode } class="join-item btn btn-sm"
+						aria-label={ mode.Label }
 						checked?={ mode.Active }
 						data-krill="scope-mode" data-krill-mode={ mode.Mode }
 						title={ scopeModeHint(mode) } />
-					<span class="label-text">{ mode.Label }</span>
-				</label>
-			}
+				}
+			</div>
 		</fieldset>
 		if c.ShowMilestone {
 			<label class="fieldset">

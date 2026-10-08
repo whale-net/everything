@@ -537,8 +537,8 @@ templ DesignSessionDetail(page DesignSessionDetailPage) {
 			@designSessionStageBadge(page.Stage)
 		</div>
 		@DesignSessionRound(page)
-		<p id="session-nav">
-			<a href={ templ.URL(page.ProductSessionsPath) }>Back to this product's sessions</a>
+		<p id="session-nav" class="text-sm">
+			<a href={ templ.URL(page.ProductSessionsPath) } class="link">Back to this product's sessions</a>
 		</p>
 	</section>
 }
@@ -562,25 +562,34 @@ templ DesignSessionRound(page DesignSessionDetailPage) {
 	<section id={ DesignSessionRoundAnchor } class="space-y-4">
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
 			<div class="min-w-0 space-y-4">
-				<section id="session-opening" class="krill-md">
-					@templ.Raw(renderMarkdown(page.OpeningSubmission))
+				<section id="session-opening" class="card bg-base-100 border border-base-300">
+					<div class="card-body gap-2">
+						<h2 class="card-title">Opening request</h2>
+						<div class="krill-md">
+							@templ.Raw(renderMarkdown(page.OpeningSubmission))
+						</div>
+					</div>
 				</section>
 				@designSessionEventsRegion(page)
+				if !page.SignedOff {
+					<div class="card bg-base-100 border border-base-300">
+						<div class="card-body gap-3">
+							<h2 class="card-title">Follow up</h2>
+							<p class="text-sm text-base-content/70">Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
+							@FollowUpForm(page)
+						</div>
+					</div>
+				} else {
+					<p class="alert alert-success" data-krill="design-session-signed-off">
+						This session is signed off. Its latest signoff is approved, so it takes no further rounds -- open a new session if the design needs to move again.
+					</p>
+				}
 			</div>
 			<aside class="space-y-4">
 				@designSessionQuestionsRegion(page)
 				@designSessionPropertiesCard(page)
 			</aside>
 		</div>
-		if !page.SignedOff {
-			<h3>Submit follow-up</h3>
-			<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
-			@FollowUpForm(page)
-		} else {
-			<p data-krill="design-session-signed-off">
-				This session is signed off. Its latest signoff is approved, so it takes no further rounds -- open a new session if the design needs to move again.
-			</p>
-		}
 	</section>
 }
 
@@ -632,8 +641,9 @@ func designSessionCrumbs(page DesignSessionDetailPage) []DesignSessionCrumb {
 // as "No revision events yet." tells an operator their session is empty when
 // in fact krill could not read it.
 templ designSessionEventsRegion(page DesignSessionDetailPage) {
-	<section id={ designSessionEventsAnchor }>
-		<h3>Revision events</h3>
+	<section id={ designSessionEventsAnchor } class="card bg-base-100 border border-base-300">
+		<div class="card-body gap-3">
+		<h2 class="card-title">Revision events</h2>
 		if page.LogError != "" {
 			@htmxui.Alert(htmxui.AlertError, page.LogError, templ.Attributes{
 				"data-krill": "revision-events-error",
@@ -641,8 +651,9 @@ templ designSessionEventsRegion(page DesignSessionDetailPage) {
 		} else if len(page.Events) > 0 {
 			@revisionEventTimeline(page.Events)
 		} else {
-			<p data-krill="revision-events-empty">No revision events yet.</p>
+			<p class="text-sm text-base-content/70" data-krill="revision-events-empty">No revision events yet.</p>
 		}
+		</div>
 	</section>
 }
 
@@ -665,8 +676,9 @@ templ revisionEventTimeline(events []RevisionEventRow) {
 // as the timeline: a failed read is an alert in the rail, never an empty
 // card body that reads as "nothing is waiting on you".
 templ designSessionQuestionsRegion(page DesignSessionDetailPage) {
-	<section id={ designSessionQuestionsAnchor }>
-		<h3>Open questions</h3>
+	<section id={ designSessionQuestionsAnchor } class="card bg-base-100 border border-base-300">
+		<div class="card-body gap-3 p-4 text-sm">
+		<h2 class="font-semibold">Open questions</h2>
 		if page.QuestionsError != "" {
 			@htmxui.Alert(htmxui.AlertError, page.QuestionsError, templ.Attributes{
 				"data-krill": "open-questions-error",
@@ -674,6 +686,7 @@ templ designSessionQuestionsRegion(page DesignSessionDetailPage) {
 		} else {
 			@designSessionQuestionList(page)
 		}
+		</div>
 	</section>
 }
 
@@ -780,8 +793,9 @@ templ designSessionEventTypeBadge(eventType string) {
 // an identity into it would put a name on a session nobody typed it for
 // (LB4).
 templ designSessionPropertiesCard(page DesignSessionDetailPage) {
-	<section id={ designSessionPropertiesAnchor }>
-		<h3>Properties</h3>
+	<section id={ designSessionPropertiesAnchor } class="card bg-base-100 border border-base-300">
+		<div class="card-body gap-3 p-4 text-sm">
+		<h2 class="font-semibold">Properties</h2>
 		<dl class="grid grid-cols-1 gap-x-6 gap-y-2">
 			if page.OpenedBy != "" {
 				<div>
@@ -802,7 +816,7 @@ templ designSessionPropertiesCard(page DesignSessionDetailPage) {
 						aria-label="Copy design session id" data-krill="copy-task-id"
 						data-task-id={ page.ID }
 						disabled title="Copying the id needs JavaScript">
-						{ sessionChipText(page.ID) }
+						{ idChipText(page.ID) }
 					</button>
 					<span class="ml-2 text-xs" data-krill="copy-task-id-status" role="status" aria-live="polite"></span>
 				</dd>
@@ -817,19 +831,20 @@ templ designSessionPropertiesCard(page DesignSessionDetailPage) {
 				// not the krill_session behind it could be read.
 				<div>
 					<dt class="text-base-content/70">Krill session</dt>
-					<dd class="font-mono text-sm break-all" data-krill="design-session-opened-by-krill-session">{ page.OpenedByKrillSessionID }</dd>
+					<dd class="font-mono text-xs break-all" data-krill="design-session-opened-by-krill-session">{ page.OpenedByKrillSessionID }</dd>
 				</div>
 			}
 		</dl>
+		</div>
 	</section>
 }
 
-// sessionChipText is what the chip shows: the first eight characters of a
+// idChipText is what an id chip shows: the first eight characters of a
 // UUID, or the whole value when it is shorter (which only a malformed id
 // ever is). Truncated because a full 36-character id is unreadable at chip
 // size; the whole value stays in data-task-id, in the title the script sets,
 // and in what the clipboard receives.
-func sessionChipText(id string) string {
+func idChipText(id string) string {
 	if len(id) <= 8 {
 		return id
 	}
@@ -1034,11 +1049,9 @@ templ FollowUpForm(page DesignSessionDetailPage) {
 				}
 			</fieldset>
 		}
-		<p>
-			<label class="label" for="follow-up">Your follow-up</label>
-			<textarea id="follow-up" name="follow_up" rows="4" placeholder="It should use the postgres flag table." class="textarea textarea-bordered w-full max-w-2xl">{ page.FollowUp }</textarea>
-		</p>
-		<p><button type="submit" class="btn btn-primary">Submit follow-up</button></p>
+		<label class="sr-only" for="follow-up">Your follow-up</label>
+		<textarea id="follow-up" name="follow_up" rows="4" placeholder="It should use the postgres flag table." class="textarea w-full">{ page.FollowUp }</textarea>
+		<div class="mt-3 flex justify-end"><button type="submit" class="btn btn-primary">Submit follow-up</button></div>
 	</form>
 }
 
