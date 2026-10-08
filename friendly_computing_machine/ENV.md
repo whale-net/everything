@@ -181,3 +181,4 @@ Read by the Temporal worker when the snapshot job runs (`temporal/shitposter_bra
 | `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET` | no (default `2000`) | Maximum approximate tokens in a context snapshot's rendered text. Must be positive. |
 | `FCM_SHITPOSTER_LORE_DECAY_HALF_LIFE_HOURS` | no (default `168`) | Half-life of the recency term in the lore ranking score. Must be positive. |
 | `FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP` | no (default `10`) | Size N of the snapshot's ranked lore section. Only lore ranked below N is eligible for the random pick. Must be >= 1. |
+| `FCM_SHITPOSTER_STALE_LORE_DAYS` | no (default `30`) | Days a hit lore entry may go without appearing in a context snapshot (or since creation, if never shown) before the snapshot job folds it into the persona's consolidated lore entry. An entry at exactly this age folds. Operator-retired lore never folds. Must be a positive integer; otherwise the default is used with a warning. Read per snapshot run. |
