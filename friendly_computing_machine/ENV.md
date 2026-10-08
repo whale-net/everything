@@ -50,6 +50,11 @@ See [docs/whagent_integration.md](docs/whagent_integration.md) for the feature t
 | `WHAGENT_CLIENT_ID` | yes | fcm's whagent-net service-account Keycloak client id. |
 | `WHAGENT_CLIENT_SECRET` | yes | fcm's whagent-net service-account Keycloak client secret. |
 
+Under `tilt up`, `WHAGENT_API_URL` defaults to the in-cluster whagent-net api
+(`whagent-net-api.whagent-net-local-dev.svc.cluster.local:50051`) and
+`WHAGENT_UI_PUBLIC_URL` to `http://localhost:8081`; the Keycloak URL and the
+client id/secret have no default and must be set in `.env`.
+
 These are required on both `bot run-slack-socket-app` and `bot run-taskpool`
 (the shared `fcm bot` callback reads them before either sub-command runs) and on
 `workflow run`. They are **not** required by `web` or `migration`.
