@@ -222,10 +222,30 @@ Each of these failures is present in at least one app today:
     misconfiguration.
 - **Loading.** Any request that can take over ~300ms shows `hx-indicator` on
   the control that fired it.
-- **Live data.** Use SSE via `libs/go/htmxsse`: `hx-sse:connect` on a
-  container and `data-sse-topic="<topic>"` on each region it swaps (see that
-  package's README; it needs the `hx-sse` extension script in the head).
-  Use `hx-trigger="load, every 30s"` polling only for cheap summaries.
+- **Live data and polling policy.** Use SSE via `libs/go/htmxsse`:
+  `hx-sse:connect` on a container and `data-sse-topic="<topic>"` on each
+  region it swaps (see that package's README; it needs the `hx-sse` extension
+  script in the head). Pair it with `liveindicator`. Polling is a fallback
+  only, and every poll must follow these rules (aggressive polls have loaded
+  the DB in production twice; see `docs/audits/LIVE_PAGE_POLLING.md`):
+  - **SSE first.** If the state changes on an event (RabbitMQ, a write in
+    this app), push it. Do not poll for it.
+  - **Slow fallback.** No faster than `every 30s` for a backup poll beside
+    SSE, or for a cheap summary. A sub-30s poll needs a stated reason in a
+    comment and must stop on its own (next rule).
+  - **Bounded.** A poll that waits for a transition (`starting`, a pending
+    restart) renders its `hx-trigger` only while that state holds, and stops
+    after a cap (a few minutes) with a manual "Refresh" button. A stuck state
+    must not poll forever.
+  - **Visible only.** Gate polls on `document.visibilityState` and never
+    attach them to hidden or collapsed regions (`x-show` hides an element but
+    does not stop its poll). Load collapsed content on expand instead.
+  - **One poll per page, not per row.** Never put a polling trigger in a
+    repeated row or card. Poll one container, or push per-row topics over one
+    SSE connection.
+  - **Cheap per tick.** The handler a poll hits does a small, fixed number of
+    queries. No N+1 fan-out, no fleet-wide lists to render one object.
+  - When nothing changes on its own, use a manual Refresh button, not a timer.
 - **URLs reflect state.** Tabs, filters, sorting and pagination go through
   GET forms or `hx-push-url`, so back, refresh and shared links work.
 - **Targets.**
@@ -326,6 +346,8 @@ Run this before calling a page done:
 - [ ] Mutations swap in place. Toast feedback on success. Inline errors on
       failure.
 - [ ] The confirmation rung matches the ladder.
+- [ ] Live regions use SSE. Any polling follows the polling policy: ≥30s or
+      bounded, visibility-gated, one per page, cheap handler.
 - [ ] Empty, loading and error states are designed, not defaulted.
 - [ ] Checked in light, night and oled, at 390px and 1440px, keyboard only.
 - [ ] No banned tells. One element removed after the first critique.
