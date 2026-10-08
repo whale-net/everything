@@ -2,15 +2,15 @@
 
 The brain job runner is the shared shape for Shitposter persona jobs (harvest,
 reflect, write, snapshot). Each job kind plugs a compute step and an apply step
-into it. The harvest (`harvest.py`), reflect (`reflect.py`), and snapshot
-(`snapshot.py`) jobs are registered; write is not yet. Nothing schedules jobs by
-default yet; the runner, the per-kind schedule helper, and the operator trigger
-are the parts that exist.
+into it. The harvest (`harvest.py`), reflect (`reflect.py`), and snapshot (`snapshot.py`)
+job bodies are registered; write is not yet. Nothing schedules jobs by default yet;
+the runner, the per-kind schedule helper, and the operator trigger are the parts
+that exist.
 
 Code: `src/friendly_computing_machine/temporal/shitposter_brain/`
 (`base.py` constants and job-body registry, `activity.py` lock/compute/apply/fail,
 `workflow.py` `ShitposterBrainJobWorkflow`, `control.py` trigger and schedule
-helpers), `harvest.py`, `reflect.py`, and `snapshot.py` the job bodies. All are
+helpers), `harvest.py`, `reflect.py`, and `snapshot.py` the job bodies. All three are
 registered in `temporal/worker.py`.
 
 ## Guarantees
