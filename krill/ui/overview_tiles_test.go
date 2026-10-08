@@ -679,7 +679,7 @@ func TestStatTilesAreLinksToTheirOwnFigures(t *testing.T) {
 	if got := strings.Count(body, `data-krill="overview-stat"`); got != 4 {
 		t.Errorf("rendered %d stat tiles, want 4: %s", got, body)
 	}
-	if !strings.Contains(body, `class="stats stats-vertical sm:stats-horizontal"`) {
+	if !strings.Contains(body, `class="stats stats-vertical sm:stats-horizontal`) {
 		t.Errorf("the four tiles are not in a daisyUI stats block: %s", body)
 	}
 }

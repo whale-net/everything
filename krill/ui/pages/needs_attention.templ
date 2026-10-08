@@ -157,8 +157,8 @@ type NeedsAttentionFilterOption struct {
 // tab click.
 templ NeedsAttention(d NeedsAttentionData) {
 	<div id={ NeedsAttentionAnchor } data-krill="needs-attention" data-krill-tab={ d.Tab }>
-		<div class="flex flex-wrap items-center justify-between gap-4">
-			@needsAttentionTabStrip(d.Tabs)
+		<div class="mb-3 flex flex-wrap items-center justify-between gap-4">
+			<h1 class="text-2xl font-semibold" data-krill="page-title">Needs attention</h1>
 			<div class="flex items-center gap-2">
 				@needsAttentionFreshness(d)
 				if d.RefreshHref != "" {
@@ -172,6 +172,7 @@ templ NeedsAttention(d NeedsAttentionData) {
 				}
 			</div>
 		</div>
+		@needsAttentionTabStrip(d.Tabs)
 		@needsAttentionFilterBar(d)
 		if d.Filter.Notice != "" {
 			<p class="mt-2 text-sm text-base-content/70" data-krill="needs-attention-notes-notice">{ d.Filter.Notice }</p>
@@ -378,7 +379,7 @@ templ claimedTable(rows []ClaimedRow) {
 	if len(rows) == 0 {
 		@htmxui.EmptyState("No claimed tasks.", "Nothing holds a claim in this scope right now.", "", "", nil)
 	} else {
-		<div class="overflow-x-auto">
+		<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
 			<table class="table table-sm" data-krill="claimed-table">
 				<thead>
 					<tr>
@@ -528,7 +529,7 @@ templ escalatedQueueTable(rows []NeedsAttentionEscalatedRow) {
 	if len(rows) == 0 {
 		@htmxui.EmptyState("No escalated tasks.", "No task in this scope carries an active escalation.", "", "", nil)
 	} else {
-		<div class="overflow-x-auto">
+		<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
 			<table class="table table-sm" data-krill="escalated-table">
 				<thead>
 					<tr>
@@ -693,7 +694,7 @@ templ needsAttentionCancelledTable(rows []CancelledRow) {
 	if len(rows) == 0 {
 		@htmxui.EmptyState("No cancelled tasks.", "Nothing has been cancelled in this product.", "", "", nil)
 	} else {
-		<div class="overflow-x-auto">
+		<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
 			<table class="table table-sm">
 				<thead>
 					<tr>
@@ -753,7 +754,7 @@ templ needsAttentionNotesTable(rows []NoteRow) {
 	if len(rows) == 0 {
 		@htmxui.EmptyState("No open notes.", "No note in this product is still awaiting a decision.", "", "", nil)
 	} else {
-		<div class="overflow-x-auto">
+		<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
 			<table class="table table-sm">
 				<thead>
 					<tr>

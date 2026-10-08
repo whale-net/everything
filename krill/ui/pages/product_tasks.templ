@@ -234,7 +234,7 @@ templ ProductTasks(d ProductTaskRegion) {
 	<section id={ ProductTasksAnchor } data-krill="product-tasks" data-krill-view={ d.View }>
 		<div class="flex flex-wrap items-start justify-between gap-4">
 			<div>
-				<h2 class="text-xl font-semibold" data-krill="page-title">{ d.View }</h2>
+				<h1 class="text-2xl font-semibold" data-krill="page-title">{ d.View }</h1>
 				<p class="mt-1 text-sm text-base-content/70">
 					Scoped to
 					<span data-krill="scope-label">{ d.ScopeLabel }</span>
@@ -344,7 +344,7 @@ templ ProductTaskPagingFooter(p ProductTaskPaging) {
 // grid, so a narrow viewport scrolls the table and not the page -- the same
 // rule the Board follows for its five columns.
 templ ProductTaskTable(rows []ProductTaskRow) {
-	<div class="mt-3 overflow-x-auto">
+	<div class="mt-3 overflow-x-auto rounded-box border border-base-300 bg-base-100">
 		<table class="table table-zebra" data-krill="task-table">
 			<thead class="sticky top-0 bg-base-100">
 				<tr>

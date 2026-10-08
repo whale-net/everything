@@ -303,7 +303,7 @@ templ pageHeader(anchor, selfPath, title, vision string) {
 		<div>
 			<h2 class="text-xl font-semibold" data-krill="page-title">{ title }</h2>
 			if vision != "" {
-				<p class="mt-1 text-sm text-base-content/70 max-w-3xl">{ vision }</p>
+				<p class="mt-1 text-sm text-base-content/70 max-w-3xl line-clamp-2" title={ vision }>{ vision }</p>
 			}
 		</div>
 		@specRefresh(anchor, selfPath)
@@ -378,11 +378,11 @@ templ capabilityFeatureSet(fs CapabilityFeatureSet) {
 			<span class="text-lg font-semibold" data-krill="feature-set-name">{ fs.Name }</span>
 			<span class="badge badge-ghost badge-sm" data-krill="feature-set-count">{ strconv.Itoa(fs.FeatureCount) } features</span>
 			@capabilityFeatureSetExpander(fs)
+			if fs.Description != "" {
+				<div class="basis-full text-sm font-normal text-base-content/70 krill-md" data-krill="feature-set-description">@templ.Raw(renderMarkdown(fs.Description))</div>
+			}
 		</div>
 		<div class="collapse-content">
-			if fs.Description != "" {
-				<div class="text-sm text-base-content/70 krill-md" data-krill="feature-set-description">@templ.Raw(renderMarkdown(fs.Description))</div>
-			}
 			@capabilityFeatureTable(fs)
 		</div>
 	</div>
@@ -534,7 +534,7 @@ templ milestoneCountBadge(count int) {
 // 6aa70e3a).
 templ Decisions(page DecisionsPage) {
 	<section id={ DecisionsAnchor } data-krill="decisions">
-		@pageHeader(DecisionsAnchor, page.Path, page.Product.Name+" — load-bearing decisions", page.Product.Vision)
+		@pageHeader(DecisionsAnchor, page.Path, "Load-bearing decisions", "")
 		if len(page.Decisions) == 0 {
 			@htmxui.EmptyState("No load-bearing decisions yet.", "The decisions later capabilities of this product depend on.", "", "", templ.Attributes{})
 		} else {
@@ -557,7 +557,7 @@ templ Decisions(page DecisionsPage) {
 // (FR b4c1c77f).
 templ Personas(page PersonasPage) {
 	<section id={ PersonasAnchor } data-krill="personas">
-		@pageHeader(PersonasAnchor, page.Path, page.Product.Name+" — personas", page.Product.Vision)
+		@pageHeader(PersonasAnchor, page.Path, "Personas", "")
 		if len(page.Personas) == 0 {
 			@htmxui.EmptyState("No personas yet.", "Who this product serves.", "", "", templ.Attributes{})
 		} else {
@@ -585,7 +585,7 @@ templ Personas(page PersonasPage) {
 // fe0ebe94).
 templ NonGoals(page NonGoalsPage) {
 	<section id={ NonGoalsAnchor } data-krill="non-goals">
-		@pageHeader(NonGoalsAnchor, page.Path, page.Product.Name+" — non-goals", page.Product.Vision)
+		@pageHeader(NonGoalsAnchor, page.Path, "Non-goals", "")
 		if len(page.Groups) == 0 {
 			@htmxui.EmptyState("No non-goals yet.", "What this product deliberately will not do.", "", "", templ.Attributes{})
 		} else {

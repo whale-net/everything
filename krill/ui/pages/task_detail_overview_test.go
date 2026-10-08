@@ -95,7 +95,7 @@ func TestTaskOverviewCalloutRendersTheOneStateThatFired(t *testing.T) {
 	assert.NotContains(t, fragment, `data-krill-callout="lease-expired"`)
 }
 
-// The Description card is the task's own body, whitespace preserved, and
+// The Description card is the task's own body, rendered as markdown, and
 // it is omitted entirely for a task with no body -- an empty card claims a
 // description exists and is blank, which is a different and untrue
 // statement.
@@ -106,9 +106,8 @@ func TestTaskOverviewDescriptionCardFollowsTheTaskBody(t *testing.T) {
 	assert.Contains(t, withBody, `data-krill="task-description"`)
 	assert.Contains(t, withBody, ">Description</h2>")
 	assert.Contains(t, withBody, "first line")
-	assert.Contains(t, withBody, "  second line")
-	assert.Contains(t, withBody, "whitespace-pre-wrap",
-		"the body is whitespace-preserved, so its own line breaks survive")
+	assert.Contains(t, withBody, "<p>second line</p>",
+		"the body renders as markdown, so its paragraph breaks survive")
 
 	withoutBody := renderOverview(t, TaskDetailPage{Title: "undescribed"})
 	assert.NotContains(t, withoutBody, `data-krill="task-description"`,

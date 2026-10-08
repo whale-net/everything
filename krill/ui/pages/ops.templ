@@ -704,7 +704,7 @@ templ TaskActions(controls []TaskActionControl) {
 				if c.ObservedID != "" {
 					<input type="hidden" name={ c.ObservedField } value={ c.ObservedID } />
 				}
-				<button type="button" popovertarget={ c.PopoverID } class="btn btn-error btn-xs">{ c.Label }</button>
+				<button type="button" popovertarget={ c.PopoverID } class="btn btn-ghost btn-sm text-error">{ c.Label }</button>
 			</form>
 		}
 	}
@@ -726,9 +726,9 @@ func taskControlTarget(target string) string {
 // console has always used.
 func taskControlButtonClass(primary bool) string {
 	if primary {
-		return "btn btn-primary btn-xs"
+		return "btn btn-primary btn-sm"
 	}
-	return "btn btn-ghost btn-xs"
+	return "btn btn-ghost btn-sm"
 }
 
 // TaskActionPopovers renders one reason popover per control (FR 0cf360c5):
@@ -744,15 +744,18 @@ func taskControlButtonClass(primary bool) string {
 // popover's submit button is the control's real one -- htmx intercepts the
 // form's submit when it is loaded, and a browser without htmx submits the same
 // form natively -- so a blank reason is forwarded exactly as an absent one is.
+//
+// The popover element carries no display class: daisyUI's card sets
+// display:flex, which would beat the browser's closed-popover display:none.
 templ TaskActionPopovers(controls []TaskActionControl) {
 	for _, c := range controls {
 		<div
 			id={ c.PopoverID }
 			popover
 			data-krill="reason-popover"
-			class="card bg-base-100 border border-base-300 shadow-lg w-72"
+			class="m-auto w-72 overflow-visible bg-transparent p-0"
 		>
-			<div class="card-body p-4 gap-2">
+			<div class="card bg-base-100 border border-base-300 shadow-lg"><div class="card-body p-4 gap-2">
 				<label class="form-control w-full" for={ c.ReasonID }>
 					<span class="label-text text-sm">{ c.ReasonHint }</span>
 					<input
@@ -767,9 +770,9 @@ templ TaskActionPopovers(controls []TaskActionControl) {
 				</label>
 				<div class="card-actions justify-end">
 					<button type="button" class="btn btn-ghost btn-sm" popovertarget={ c.PopoverID } popovertargetaction="hide">Close</button>
-					<button type="submit" form={ c.FormID } class="btn btn-primary btn-sm">{ c.SubmitLabel }</button>
+					<button type="submit" form={ c.FormID } class={ "btn btn-sm", templ.KV("btn-error", c.Kind == "confirm"), templ.KV("btn-primary", c.Kind != "confirm") }>{ c.SubmitLabel }</button>
 				</div>
-			</div>
+			</div></div>
 		</div>
 	}
 }
