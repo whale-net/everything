@@ -19,6 +19,46 @@ def load_admin_slack_user_ids() -> frozenset[str]:
     return parse_admin_slack_user_ids(os.environ.get("FCM_ADMIN_SLACK_USER_IDS", ""))
 
 
+DEFAULT_CONTEXT_TOKEN_BUDGET = 2000
+DEFAULT_LORE_DECAY_HALF_LIFE_HOURS = 168.0
+
+
+def load_context_token_budget() -> int:
+    """Read FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET; the snapshot never exceeds it."""
+    raw = os.environ.get("FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET", "").strip()
+    if not raw:
+        return DEFAULT_CONTEXT_TOKEN_BUDGET
+    value = int(raw)
+    if value <= 0:
+        raise ValueError("FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET must be positive")
+    return value
+
+
+def load_lore_decay_half_life_hours() -> float:
+    """Read FCM_SHITPOSTER_LORE_DECAY_HALF_LIFE_HOURS; lore recency halves per period."""
+    raw = os.environ.get("FCM_SHITPOSTER_LORE_DECAY_HALF_LIFE_HOURS", "").strip()
+    if not raw:
+        return DEFAULT_LORE_DECAY_HALF_LIFE_HOURS
+    value = float(raw)
+    if value <= 0:
+        raise ValueError("FCM_SHITPOSTER_LORE_DECAY_HALF_LIFE_HOURS must be positive")
+    return value
+
+
+DEFAULT_SNAPSHOT_RANKED_LORE_CAP = 10
+
+
+def load_snapshot_ranked_lore_cap() -> int:
+    """Read FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP; lore beyond the top N is random-pick eligible."""
+    raw = os.environ.get("FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP", "").strip()
+    if not raw:
+        return DEFAULT_SNAPSHOT_RANKED_LORE_CAP
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP must be >= 1, got {raw!r}")
+    return value
+
+
 def parse_negative_emoji(raw: str) -> frozenset[str]:
     """Normalize to Slack reaction names: lowercase, surrounding colons stripped."""
     names = (p.strip().strip(":").strip().lower() for p in raw.split(","))
