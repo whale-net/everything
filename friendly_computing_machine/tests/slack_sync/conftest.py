@@ -23,6 +23,8 @@ from friendly_computing_machine.src.friendly_computing_machine.models.music_poll
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
     ShitposterChannelOptIn,
     ShitposterKillSwitch,
+    ShitposterSuggestion,
+    ShitposterSuggestionBacker,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack_reaction import (
     SlackReaction,
@@ -72,6 +74,8 @@ TABLES = [
     ShitposterChannelOptIn.__table__,
     ShitposterKillSwitch.__table__,
     SlackReaction.__table__,
+    ShitposterSuggestion.__table__,
+    ShitposterSuggestionBacker.__table__,
 ]
 
 

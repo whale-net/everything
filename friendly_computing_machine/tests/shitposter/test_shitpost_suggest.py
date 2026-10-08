@@ -54,12 +54,17 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterKillSwitch,
     ShitposterPersona,
     ShitposterSuggestion,
+    ShitposterSuggestionBacker,
+    ShitposterSuggestionReplyOutbox,
     ShitposterSuggestionStatusEnum,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (  # noqa: E402
     SlackChannel,
     SlackCommand,
     SlackUser,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack_reaction import (  # noqa: E402
+    SlackReaction,
 )
 
 ADMINS = frozenset({"U_ADMIN"})
@@ -88,6 +93,9 @@ def session(monkeypatch):
             ShitposterKillSwitch.__table__,
             ShitposterPersona.__table__,
             ShitposterSuggestion.__table__,
+            ShitposterSuggestionBacker.__table__,
+            ShitposterSuggestionReplyOutbox.__table__,
+            SlackReaction.__table__,
         ],
     )
     monkeypatch.setitem(db_util.__GLOBALS, "engine", engine)
