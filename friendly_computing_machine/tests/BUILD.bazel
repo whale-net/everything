@@ -288,6 +288,16 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Suggestion backing: distinct-backer promotion and kill-switch-held outcome replies.
+py_test(
+    name = "test_suggestion_backing",
+    size = "medium",
+    srcs = [
+        "shitposter/test_suggestion_backing.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # ShitpostWorkflow on the Temporal test server (SQLite, fake whagent/Slack).
 py_test(
     name = "test_shitpost_workflow",
