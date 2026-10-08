@@ -91,12 +91,13 @@ func TestPopoversCarryNoDisplayClass(t *testing.T) {
 // TestNoDivideColorUtilities guards against divide-<daisy color> classes.
 // daisyUI's CDN stylesheet ships border-<color> utilities but not divide-*,
 // and the Tailwind browser build does not know daisyUI's palette, so such a
-// divider silently renders in the text colour.
+// divider silently renders in the text colour. An arbitrary value,
+// divide-[var(--color-base-300)], is generated and resolves correctly.
 func TestNoDivideColorUtilities(t *testing.T) {
 	divide := regexp.MustCompile(`\bdivide-(base|primary|secondary|accent|neutral|info|success|warning|error)\S*`)
 	for name, src := range templFiles(t) {
 		for _, m := range divide.FindAllString(src, -1) {
-			t.Errorf("%s uses %q, which the CDN stylesheet does not define; use border-b border-<color> on the items", name, m)
+			t.Errorf("%s uses %q, which the CDN stylesheet does not define; use divide-[var(--color-<color>)] instead", name, m)
 		}
 	}
 }

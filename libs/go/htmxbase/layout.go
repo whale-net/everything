@@ -21,8 +21,8 @@ const BaseLayoutTemplate = `<!DOCTYPE html>
     <script src="https://unpkg.com/htmx.org@4.0.0/dist/htmx.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-alpine-compat.min.js"></script>
 
-    <!-- Alpine.js -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- Alpine.js, pinned like every other script: a floating range ships new releases with no commit. -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.17.4/dist/cdn.min.js"></script>
 
     {{if .CustomCSS}}
     <style>
