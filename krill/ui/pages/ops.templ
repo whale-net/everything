@@ -4,51 +4,20 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// This file holds the ops console's page bodies: three of its four read
-// views (escalated / cancelled / notes) and the four task interventions'
-// affordances (the row controls, the rejection page, the cancel-confirm
-// card).
-//
-// The claimed view's rows are not here. The Claimed tab of the Needs
-// attention page is that view's one rendering (FR a149d28f), so its row
-// view-model and its table live beside that page in
-// krill/ui/pages/needs_attention.templ; this file keeps the shared results
-// furniture and the page chrome the claimed view composes with.
-//
-// Each read view is one route in two modes. The results *fragment* is
-// what a polled/swapped response carries -- no chrome, always HTTP 200 --
-// and the *page* component is that same fragment under the view's
-// heading, description and Refresh button, composed into the shell by
-// krill/ui/templ_render.go's renderShell. A view therefore derives its
-// data exactly once per request and both modes render the same view-model,
-// so a fragment can never drift from the page it was swapped out of.
-//
-// The pure builders and mappers that populate these view-models stay in
-// package main (krill/ui/ops.go, krill/ui/interventions.go): the paths,
-// the identity resolution, the store paging rule, and the open-redirect
-// guard are krill's rules, not presentation.
+// The ops console's page bodies: the escalated, cancelled and notes views and
+// the intervention affordances. Each view renders one view-model as both a
+// 200 results fragment and a full page, so the two cannot drift.
 
-// OpsResultsAnchor is the stable id every read view's results block carries.
-// It is the swap target for the row interventions' hx-post and for the
-// manual Refresh button, and the poll's own "this" target resolves to it.
-// One constant rather than a per-view generated id, so it is also
-// byte-stable across a polled fragment's renders.
-//
-// Exported because a handler outside this package has to recognize the
-// region in HX-Target: a row's Cancel swaps the results block while the
-// confirm card's own form swaps the card, and that is the only thing that
-// tells the two refusal origins apart (interventions.go).
+// OpsResultsAnchor is the results block's stable id: the target of row actions,
+// Refresh and the poll. Exported so interventions.go can tell a row's Cancel
+// from the confirm card's by HX-Target.
 const OpsResultsAnchor = "ops-results"
 
-// CancelConfirmAnchor is the stable id of the cancel-confirm card, and the
-// hx-target of that card's own doubled form. Exported for the same reason
-// OpsResultsAnchor is: the card is the other region a refused cancel can be
-// answered into, named by HX-Target rather than by the path.
+// CancelConfirmAnchor is the cancel-confirm card's id and its form's hx-target,
+// the other region a refused cancel can answer into.
 const CancelConfirmAnchor = "cancel-confirm"
 
-// ---------------------------------------------------------------------------
 // view models
-// ---------------------------------------------------------------------------
 
 // EscalatedRow is one row of the escalated-task view (newEscalatedRow).
 type EscalatedRow struct {
@@ -64,19 +33,13 @@ type EscalatedRow struct {
 	Summary    string
 	Verdict    string
 	Actions    templ.Component
-	// Popovers is this row's reason popovers, rendered AFTER the table so no
-	// row contains a text input (FR 0cf360c5); each popover submits the
-	// form Actions rendered in the row.
+	// Popovers render after the table so no row contains a text input; each
+	// submits the row's Actions form.
 	Popovers templ.Component
 }
 
-// CancelledRow is one row of the cancelled-task view (newCancelledRow).
-//
-// TaskHref is the product-scoped detail link, built by the loader from
-// the read's own ConsoleFilter (empty on the scope-wide ops view, which
-// names no product). Lane and Reason are the lane the task was cancelled
-// out of and the optional intervention rationale; both come straight off
-// store.CancelledTaskRow.
+// CancelledRow is one row of the cancelled-task view. TaskHref is empty on
+// the scope-wide ops view, which names no product.
 type CancelledRow struct {
 	TaskID     string
 	Title      string
@@ -89,12 +52,8 @@ type CancelledRow struct {
 	Reason     string
 }
 
-// NoteRow is one row of the open-notes view (newNoteRow). Target names
-// the note's target entity by id as well as title; TaskHref is its
-// product-scoped detail link when the target IS a task, and empty when
-// the target is a spec-axis entity (which has no task page to link to).
-// Status is the note's lifecycle status, from the store's own
-// enumeration.
+// NoteRow is one row of the open-notes view. TaskHref is empty when the
+// target is a spec entity rather than a task.
 type NoteRow struct {
 	NoteID    string
 	Kind      string
@@ -105,13 +64,8 @@ type NoteRow struct {
 	Body      string
 }
 
-// OpsResultsData is the shared furniture of a read view's results block:
-// its table, its "next page" link, an optional inline refusal, and the
-// poll wiring the view's own route should (or should not) carry.
-//
-// Poll is a templ.Attributes rather than a bool so the *condition* for
-// polling stays with the view that owns it (claimedPollAttrs) and this
-// shared wrapper just forwards whatever that view decided.
+// OpsResultsData is a results block's shared furniture. Poll is attributes, not
+// a bool, so the polling condition stays with the owning view.
 type OpsResultsData struct {
 	// Table is the view's rows, or its EmptyState when there are none.
 	Table templ.Component
@@ -119,35 +73,25 @@ type OpsResultsData struct {
 	NextHref string
 	// Error is a refusal to present inline above the table, empty when none.
 	Error string
-	// ReadFailed marks an Error that came from failing to re-read the view
-	// at all, rather than from a refused intervention. The error is then
-	// the whole content: rendering the table alongside it would show an
-	// EmptyState ("No claimed tasks.") that the operator cannot distinguish
-	// from a successful read that genuinely came back empty -- a confident,
-	// wrong answer immediately after their write landed.
+	// ReadFailed marks an Error from failing to re-read the view; the error then
+	// replaces the table so an empty state is never mistaken for a real result.
 	ReadFailed bool
 	// Poll is the view's self-terminating poll wiring, nil for no timer.
 	Poll templ.Attributes
 }
 
-// OpsPageData is the page chrome around a results block: the view's
-// heading and one-line description, a manual Refresh button, and the
-// results themselves.
+// OpsPageData is the page chrome around a results block: heading, description,
+// Refresh button and results.
 type OpsPageData struct {
 	Heading     string
 	Description string
-	// RefreshHref is the view's own path -- the manual refresh's hx-get,
-	// and the same route the poll uses. Empty omits the button.
+	// RefreshHref is the view's own path, as used by the poll; empty omits the button.
 	RefreshHref string
 	Results     templ.Component
 }
 
-// ClaimedData is the claimed-task view's view-model, for both its page
-// and its results fragment.
-//
-// Href is the view's own path; Polling is decided server-side by
-// claimedPollingDue over the freshly-read store rows, never by anything
-// the browser supplied.
+// ClaimedData is the claimed view's view-model. Polling is decided server-side
+// from fresh store rows, never from browser input.
 type ClaimedData struct {
 	Rows     []ClaimedRow
 	NextHref string
@@ -184,19 +128,9 @@ type NotesData struct {
 	ReadFailed bool
 }
 
-// TaskActionControl is one control on a console row: an inline form for a
-// non-destructive verb (Kind "form") or, for a destructive verb (Kind
-// "confirm"), a control whose two halves are two different routes -- the
-// htmx half posts the verb after hx-confirm, the no-JS half opens the
-// confirmation page that verb is reached through. Populated by
-// renderTaskActions in package main, which owns the verb vocabulary; this
-// file only renders.
-//
-// The control's reason field never renders in the row. It lives in the
-// control's own popover (TaskActionPopovers), which is rendered OUTSIDE the
-// table so no row contains a text input (FR 0cf360c5); the popover's input
-// and submit button are associated with the row's form through the HTML
-// form= attribute, keyed by FormID.
+// TaskActionControl is one row control: an inline form (Kind "form") or a
+// destructive control (Kind "confirm") whose htmx half posts after hx-confirm
+// and whose no-JS half opens a confirmation page. The reason input is in a popover.
 type TaskActionControl struct {
 	Kind       string
 	Label      string
@@ -204,69 +138,44 @@ type TaskActionControl struct {
 	ReasonHint string
 	ReturnTo   string
 
-	// FormID is the id of this control's own <form> in the row: what the
-	// popover's reason input and submit button name in their form=
-	// attributes, so the popover can sit outside the table while still
-	// submitting the row's form. Populated by package main, derived from the
-	// task id and the verb so the row's triggers and its popovers agree.
+	// FormID is the row form's id, named by the popover's form= attributes so the
+	// popover outside the table still submits it.
 	FormID string
 
-	// PopoverID is the id of this control's reason popover: the
-	// popovertarget of the row's trigger button, and the popover's own id.
+	// PopoverID is the reason popover's id and its trigger's popovertarget.
 	PopoverID string
 
 	// ReasonID is the popover's reason input's id, for the label's for=.
 	ReasonID string
 
-	// SubmitLabel is the popover's submit button text -- the verb's own
-	// label for a form control, an explicit confirmation for a destructive
-	// one.
+	// SubmitLabel is the popover's submit text.
 	SubmitLabel string
 
-	// PostAction is the htmx half's route: the verb's own POST, which the
-	// browser issues only after accepting Confirm. It is set for a
-	// destructive control, whose no-JS half is a GET to Action (the
-	// confirmation page) because nothing may post to the destructive route
-	// without an explicit confirmation. A non-destructive control leaves it
-	// empty and posts Action on both halves.
+	// PostAction is a destructive control's htmx POST route; its no-JS half GETs
+	// Action, the confirmation page. Empty for non-destructive controls.
 	PostAction string
 
-	// Confirm is the hx-confirm copy the destructive control shows before it
-	// posts anything. It names the task, so the operator confirms the row
-	// they meant rather than the row that happens to be at that position.
+	// Confirm is the hx-confirm copy; it names the task so the operator confirms
+	// the intended row.
 	Confirm string
 
-	// ObservedClaimID is the claim the ROW observed, when the row holds one.
-	// The control carries it as a hidden expected_claim_id field, on both
-	// halves, so the write's guard is checked against the claim the operator
-	// actually saw rather than against whatever is current when they act.
-	// Empty for a control with no claim to guard against.
+	// ObservedClaimID is the claim the row observed, sent as expected_claim_id so
+	// the write is guarded against what the operator saw.
 	ObservedClaimID string
 
-	// ObservedID is the id of the state this control's row observed, and
-	// the guard the write is checked against -- an escalated row's
-	// escalation id, a claimed row's claim id. A form control carries it
-	// as a hidden ObservedField input, so a state that changed since the
-	// page loaded is refused rather than acted on. Empty is unguarded,
-	// which is only right where the row observed nothing to guard.
+	// ObservedID is the state id the row observed (escalation or claim), sent as
+	// ObservedField so a changed state is refused. Empty is unguarded.
 	ObservedID string
 
-	// ObservedField is the form field ObservedID is submitted under. It is
-	// the api request field's own name ("expected_escalation_id"), so the
-	// console forwards it to krill api unchanged rather than renaming it on
-	// the way through.
+	// ObservedField is the api's own field name, forwarded unchanged.
 	ObservedField string
 
-	// Target is the DOM id the control's htmx half swaps. Empty means the
-	// console results block every Needs attention row swaps; the task detail
-	// sets it to its own section, so an action taken there re-derives the
-	// header, the rail and the callout together rather than a queue's rows.
+	// Target is the DOM id the htmx half swaps; empty means the results block.
+	// The task detail sets its own section.
 	Target string
 
-	// Primary marks the one verb a caller renders as its state's primary
-	// action, so it is a filled button rather than the ghost button every
-	// row's verbs are. Only the task detail sets it, for Requeue on an
-	// escalated task (FR af61631d).
+	// Primary renders the verb as a filled button instead of ghost; set only
+	// by the task detail.
 	Primary bool
 }
 
@@ -275,15 +184,11 @@ type InterventionErrorData struct {
 	Heading  string
 	Detail   string
 	ReturnTo string
-	// BackLabel is the link's own text. Empty falls back to the console's
-	// label, so a caller that has nothing more specific to say still renders
-	// the link rather than a bare anchor.
+	// BackLabel is the link text; empty falls back to the console's label.
 	BackLabel string
 }
 
-// interventionBackLabel is the link text back out of the rejection page: the
-// caller's own label when it has one ("Back to the tab" for a refusal posted
-// from a Needs attention row), and the console's otherwise.
+// interventionBackLabel is the caller's label, or the console's.
 func interventionBackLabel(label string) string {
 	if label == "" {
 		return "Back to the console"
@@ -291,47 +196,31 @@ func interventionBackLabel(label string) string {
 	return label
 }
 
-// CancelConfirmData is the cancel-confirm card's data. Error carries a
-// refusal to present inline when the card is re-rendered after one.
-//
-// The observed-state guard fields are the same ones TaskActionControl
-// carries, for the same reason: the card's form is the no-JavaScript half of
-// a row's Cancel, so it posts the id the row observed and a claim or
-// escalation that changed since the row was read is refused. At most one of
-// ObservedClaimID and ObservedID is set -- a claimed row observed a claim, an
-// escalated row an escalation, a ready task neither.
+// CancelConfirmData is the cancel-confirm card's data. It carries the row's
+// observed-state guard, since the card is a row Cancel's no-JS half; at most
+// one of ObservedClaimID and ObservedID is set.
 type CancelConfirmData struct {
 	TaskID   string
 	Action   string
 	ReturnTo string
 	Error    string
 
-	// ObservedClaimID is the claim the acting row observed, submitted as the
-	// api's own expected_claim_id field.
+	// ObservedClaimID is submitted as the api's expected_claim_id.
 	ObservedClaimID string
 
-	// ObservedID is the escalation the acting row observed, submitted under
-	// ObservedField (the api request field's own name).
+	// ObservedID is the observed escalation, submitted under ObservedField.
 	ObservedID    string
 	ObservedField string
 
-	// Reason is the optional rationale the acting row's Cancel popover carried
-	// onto this page as a query parameter (FR 0cf360c5). The card pre-fills its
-	// own reason field with it, so a reason typed in the row's popover is not
-	// silently dropped when the no-JavaScript half lands here; the operator can
-	// still edit or clear it, and this field is required on this page exactly
-	// as it was before the popover.
+	// Reason pre-fills the card from the row popover, so a typed reason survives
+	// the no-JS path. The field stays editable and required.
 	Reason string
 }
 
-// ---------------------------------------------------------------------------
 // shared furniture
-// ---------------------------------------------------------------------------
 
-// opsResults renders one read view's results block: the id every swap
-// targets, the view's poll wiring when it has any, an inline refusal when
-// the block is being re-derived after a refused intervention, the rows
-// themselves, and the next-page link.
+// opsResults renders a results block: anchor id, poll wiring, inline refusal,
+// rows and the next-page link.
 templ opsResults(d OpsResultsData) {
 	<div id={ OpsResultsAnchor } { d.Poll... }>
 		if d.Error != "" {
@@ -348,12 +237,8 @@ templ opsResults(d OpsResultsData) {
 	</div>
 }
 
-// opsPageChrome renders a read view's page: its heading with the manual
-// Refresh button, its one-line description, and the results block.
-//
-// The Refresh button sits outside the results block on purpose. It is the
-// only affordance the three settled views have, and swapping the block it
-// lives in would take the button with it.
+// opsPageChrome renders a view's page. Refresh sits outside the results block
+// so swapping the block never removes it.
 templ opsPageChrome(d OpsPageData) {
 	<div class="flex flex-wrap items-center justify-between gap-4">
 		<h2>{ d.Heading }</h2>
@@ -373,29 +258,9 @@ templ opsPageChrome(d OpsPageData) {
 	</div>
 }
 
-// claimedPollAttrs is the claimed view's self-terminating poll, modelled
-// on manmanv2's deploymentRowPollAttrs: the poll attributes are emitted
-// only while the state they watch is transient, and because this route's
-// own HX-Request response IS the same fragment, a settled view comes back
-// without them and the loop stops by itself. No client-side timer
-// bookkeeping, no separate refresh endpoint -- hx-get is the view's OWN
-// request URI (ClaimedData.Href, the path plus query the operator is on)
-// and the handler's HX-Request branch answers it.
-//
-// That it is d.Href and not a route constant is what lets the poll ride
-// the Needs attention page's Claimed tab (FR a149d28f): the polled
-// fragment carries the tab's own address -- ?tab=claimed, and whatever
-// paging the operator is on -- rather than a fixed /ops/claimed, so a poll
-// cannot move the operator to another tab or back to page one. On the tab
-// the poll names the results block as its target, so it receives that
-// block alone; the strip, its counts and the freshness stamp (whose
-// instant moves every read) stay out of the polled bytes.
-//
-// This is the one place krill's console has a genuine transient state: a
-// lease near expiry. The operator watches the row leave when the lease
-// lapses. The other three views get a manual Refresh instead -- a task is
-// escalated or it is not, so a timer would be pure cost, and it would
-// swap a table out from under an operator typing a reason into a row.
+// claimedPollAttrs emits poll attributes only while a lease is near expiry, so a
+// settled response omits them and the poll stops itself. hx-get is d.Href, the
+// operator's own URI, so polling never changes their tab or page.
 func claimedPollAttrs(d ClaimedData) templ.Attributes {
 	if !d.Polling {
 		return templ.Attributes{}
@@ -408,9 +273,7 @@ func claimedPollAttrs(d ClaimedData) templ.Attributes {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // claimed view
-// ---------------------------------------------------------------------------
 
 templ ClaimedResults(d ClaimedData) {
 	@opsResults(OpsResultsData{
@@ -431,9 +294,7 @@ templ ClaimedPage(d ClaimedData) {
 	})
 }
 
-// ---------------------------------------------------------------------------
 // escalated view
-// ---------------------------------------------------------------------------
 
 templ EscalatedResults(d EscalatedData) {
 	@opsResults(OpsResultsData{
@@ -517,9 +378,7 @@ templ escalatedTable(rows []EscalatedRow) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // cancelled view
-// ---------------------------------------------------------------------------
 
 templ CancelledResults(d CancelledData) {
 	@opsResults(OpsResultsData{
@@ -574,9 +433,7 @@ templ cancelledTable(rows []CancelledRow) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // open-notes view
-// ---------------------------------------------------------------------------
 
 templ NotesResults(d NotesData) {
 	@opsResults(OpsResultsData{
@@ -629,42 +486,11 @@ templ notesTable(rows []NoteRow) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // task interventions
-// ---------------------------------------------------------------------------
 
-// TaskActions renders the intervention controls for one console row. A
-// non-destructive verb is an inline doubled form; a destructive verb is a
-// doubled control whose two halves are two routes -- htmx confirms
-// (hx-confirm) and posts the verb in place, while a no-JS browser submits
-// the same form as a GET to the verb's confirmation page. Nothing posts to
-// the destructive route without an explicit confirmation either way; the
-// difference is only which confirmation the browser gets.
-//
-// Every control's shape is: a <form> carrying the hidden fields and an
-// observed-state guard, and a type="button" trigger that opens the control's
-// reason POPOVER (popovertarget, the native HTML popover API -- no browser JS
-// needed) and posts nothing until that popover is submitted. The trigger is
-// type="button" and not a submit button on purpose: a submit button that owns
-// a form submits it and returns before any popover invoker behaviour runs
-// (HTML's button activation behavior), so a type="submit" trigger would post
-// the verb at once and never open the popover. The reason field itself is NOT
-// here: it lives in the popover (TaskActionPopovers), which renders outside
-// the table so no row contains a text input (FR 0cf360c5).
-//
-// The popover's own submit button names this form through the form= attribute
-// and IS a real submit button, so the no-htmx path is a native submission of
-// this same form, reason and guards included -- the doubling the rest of this
-// file documents is preserved, just carried by the popover's submit rather
-// than by the trigger.
-//
-// Both halves are doubled in the same sense as the non-destructive form
-// (htmxui ARCHITECTURE §9: the <form> element and its hx-* attributes stay
-// app-owned): the no-JS half is method="get" + action= the confirmation
-// page, the htmx half is hx-post the verb + hx-target + hx-swap. The
-// observed-state ids ride hidden inputs, so both halves carry the id the row
-// observed -- to the confirmation page as query parameters, to the verb as
-// body fields.
+// TaskActions renders a row's intervention controls. Each trigger is
+// type="button" opening a native popover (a submit button would post before the
+// popover opens); the popover's submit posts this form via form=, with or without JS.
 templ TaskActions(controls []TaskActionControl) {
 	for _, c := range controls {
 		if c.Kind == "form" {
@@ -710,9 +536,8 @@ templ TaskActions(controls []TaskActionControl) {
 	}
 }
 
-// TaskActionsMenu is the detail header's form of TaskActions: up to two
-// controls render inline; with more, the first stays a button and the rest
-// move into a "More" dropdown, as the wireframe's header shows.
+// TaskActionsMenu is the detail header's form of TaskActions: two controls
+// inline; beyond that, the rest move into a "More" dropdown.
 templ TaskActionsMenu(controls []TaskActionControl) {
 	if len(controls) <= 2 {
 		@TaskActions(controls)
@@ -727,9 +552,7 @@ templ TaskActionsMenu(controls []TaskActionControl) {
 	}
 }
 
-// taskControlTarget is the DOM id one control's htmx half swaps: the region
-// the caller named, or the console results block a Needs attention row
-// swaps when its control names none.
+// taskControlTarget is the caller's target, or the results block.
 func taskControlTarget(target string) string {
 	if target == "" {
 		return "#" + OpsResultsAnchor
@@ -737,10 +560,7 @@ func taskControlTarget(target string) string {
 	return "#" + target
 }
 
-// taskControlButtonClass is a non-destructive control's button class. A
-// caller may mark one verb as its state's primary action; every other verb --
-// and every verb on a row, which marks none -- is the ghost button the
-// console has always used.
+// taskControlButtonClass is filled for a primary verb, ghost otherwise.
 func taskControlButtonClass(primary bool) string {
 	if primary {
 		return "btn btn-primary btn-sm"
@@ -748,22 +568,9 @@ func taskControlButtonClass(primary bool) string {
 	return "btn btn-ghost btn-sm"
 }
 
-// TaskActionPopovers renders one reason popover per control (FR 0cf360c5):
-// a small, optional reason field and the control's own submit button, in the
-// browser's top layer until its trigger opens it. It is rendered OUTSIDE the
-// table -- never inside a <tr> -- because the FR forbids a text input in a
-// row; the reason input and the submit button name the row's form (FormID)
-// through the HTML form= attribute, so the popover submits the row's own
-// form, guards and all, with no JS and no second form.
-//
-// Submitting an empty reason is allowed: the field is optional (no required
-// attribute, so htmx's own reportValidity gate lets it through too), and the
-// popover's submit button is the control's real one -- htmx intercepts the
-// form's submit when it is loaded, and a browser without htmx submits the same
-// form natively -- so a blank reason is forwarded exactly as an absent one is.
-//
-// The popover element carries no display class: daisyUI's card sets
-// display:flex, which would beat the browser's closed-popover display:none.
+// TaskActionPopovers renders a reason popover per control outside the table;
+// its inputs name the row's form via form=. The popover has no display class,
+// since daisyUI's card display:flex would override the closed popover's none.
 templ TaskActionPopovers(controls []TaskActionControl) {
 	for _, c := range controls {
 		<div
@@ -794,35 +601,17 @@ templ TaskActionPopovers(controls []TaskActionControl) {
 	}
 }
 
-// OpsInlineError is the whole fragment an htmx caller gets when a console
-// query fails before a view could even be built -- a scope lookup or a
-// store read that errored out. It is view-agnostic on purpose: the failure
-// happened before the handler knew which view it was assembling, and
-// rendering a plausible-looking empty table would be worse than saying so.
-// The message is generic by design; the detail is logged, not shown.
-//
-// It carries the results id, and that is not decoration. It is swapped
-// into the results block, and htmx's outerHTML inserts the response in
-// place of the target and then REMOVES the target -- so a fragment without
-// the id would delete the swap target itself. The next Refresh would then
-// find no target, and htmx returns before issuing the request, so the
-// console freezes with no network evidence that anything was attempted.
-// Carrying the id keeps the block refreshable after an error.
+// OpsInlineError is the htmx fragment for a query that failed before a view was
+// built. It carries the results id because outerHTML removes the target, and
+// without it the next Refresh would silently find nothing to swap.
 templ OpsInlineError(message string) {
 	<div id={ OpsResultsAnchor } data-krill="ops-inline-error">
 		@htmxui.Alert(htmxui.AlertError, message, nil)
 	</div>
 }
 
-// OpsQueryError is the in-shell page a console query failure renders for a
-// no-JS browser: the same operator-facing message OpsInlineError carries,
-// plus a way back to a working page. It is the reason the failure is not a
-// bare text/plain body -- an operator who lands on a view that cannot load
-// has to be able to navigate away from it, and a bare http.Error takes the
-// nav with it.
-//
-// backHref is the view's own URI with the rejected continuation token
-// dropped, so following it is itself the recovery.
+// OpsQueryError is the no-JS in-shell page for a query failure. backHref is the
+// view's URI without the rejected token, so following it recovers.
 templ OpsQueryError(message, backHref string) {
 	<section data-krill="ops-query-error">
 		<h2 class="text-xl font-semibold" data-krill="page-title">Could not load this view</h2>
@@ -833,10 +622,8 @@ templ OpsQueryError(message, backHref string) {
 	</section>
 }
 
-// InterventionError is the in-shell page a refused intervention renders
-// for a no-JS browser. The htmx path never reaches it: a refusal rides
-// inside the re-derived results block as an inline Alert instead, because
-// an htmx swap target's HTTP status is not surfaced to the operator.
+// InterventionError is the no-JS in-shell page for a refused intervention; htmx
+// gets an inline Alert instead, since its swap hides the HTTP status.
 templ InterventionError(d InterventionErrorData) {
 	<h2>{ d.Heading }</h2>
 	@htmxui.Alert(htmxui.AlertError, d.Detail, nil)
@@ -845,24 +632,9 @@ templ InterventionError(d InterventionErrorData) {
 	</p>
 }
 
-// CancelConfirmCard is the confirmation step for the destructive cancel
-// verb: a GET page, and the hx-target of its own doubled form.
-//
-// The card carries CancelConfirmAnchor so the form can swap it in place, and
-// a refusal re-renders this same card at 200 with the reason inline --
-// the operator's typed rationale stays on screen instead of vanishing
-// behind a status code.
-//
-// It also carries the observed-state guard the acting row handed it, as
-// hidden inputs on its form: this card IS the no-JavaScript half of a row's
-// Cancel, so the id the row observed has to survive the round trip through
-// this page for the eventual POST to be guarded against the state the
-// operator saw.
-//
-// Its reason field is pre-filled from the reason the row's popover carried in
-// (d.Reason), so the no-JavaScript half of a Cancel does not drop the
-// rationale the operator already typed; the field stays required and editable
-// exactly as it was.
+// CancelConfirmCard is the cancel confirmation page and its form's hx-target. A
+// refusal re-renders it at 200 with the reason inline. It carries the row's
+// observed-state guard and pre-fills the reason from the row popover.
 templ CancelConfirmCard(d CancelConfirmData) {
 	<div id={ CancelConfirmAnchor } class="card bg-base-100 border-2 border-error/40 shadow-md">
 		<div class="card-body">
@@ -901,16 +673,10 @@ templ CancelConfirmCard(d CancelConfirmData) {
 	</div>
 }
 
-// ---------------------------------------------------------------------------
 // domain vocabulary -> badge colour
-// ---------------------------------------------------------------------------
 
-// laneVariant maps krill's task lane onto a badge colour, in the spirit
-// of htmxui ARCHITECTURE §13's domain-owned status mapper: the vocabulary
-// is krill's, expressed in terms of htmxui.Badge rather than folded into
-// it. Work still in flight is warning-coloured, a finished lane is
-// success, and an unrecognised lane falls through to neutral rather than
-// failing to compile when a sixth lane is added.
+// laneVariant maps a lane to a badge colour: in flight is warning, finished is
+// success, and an unknown lane is neutral.
 func laneVariant(lane string) htmxui.BadgeVariant {
 	switch lane {
 	case "Implementation", "Scaffold", "Testing", "Validation":
@@ -930,7 +696,7 @@ func verdictVariant(verdict string) htmxui.BadgeVariant {
 	case "fail":
 		return htmxui.BadgeError
 	default:
-		// "-" (no verdict recorded yet) and any future value.
+		// "-" (no verdict yet) and any future value.
 		return htmxui.BadgeNeutral
 	}
 }
