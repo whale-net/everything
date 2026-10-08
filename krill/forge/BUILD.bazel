@@ -10,6 +10,7 @@ go_library(
     srcs = ["github.go"],
     importpath = "github.com/whale-net/everything/krill/forge",
     visibility = ["//visibility:public"],
+    deps = ["@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp"],
 )
 
 # Unit tests for GitHubClient.CreateIssue (faked via httptest.Server -- no

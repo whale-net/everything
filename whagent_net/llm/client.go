@@ -18,11 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	openai "github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
 	"github.com/openai/openai-go/v2/packages/param"
 	"github.com/openai/openai-go/v2/shared"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Role is a chat message's role, mirroring the OpenAI wire protocol that
@@ -181,6 +183,8 @@ type Client struct {
 // transport via option.WithHTTPClient without a live OpenRouter call.
 func NewClient(apiKey, baseURL string, opts ...option.RequestOption) *Client {
 	all := append([]option.RequestOption{
+		// Traced default; a caller's own WithHTTPClient in opts still wins.
+		option.WithHTTPClient(&http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}),
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
 	}, opts...)

@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Client creates krill's one forge artifact kind (a thin GitHub issue,
@@ -40,7 +42,8 @@ type GitHubClient struct {
 	// nothing else.
 	Token string
 
-	// HTTPClient issues every request. Defaults to http.DefaultClient.
+	// HTTPClient issues every request. Defaults to a client whose otelhttp
+	// transport propagates trace context.
 	HTTPClient *http.Client
 
 	// BaseURL defaults to "https://api.github.com"; overridable in tests
@@ -51,11 +54,13 @@ type GitHubClient struct {
 
 var _ Client = (*GitHubClient)(nil)
 
+var defaultHTTPClient = &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
+
 func (c *GitHubClient) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return defaultHTTPClient
 }
 
 func (c *GitHubClient) baseURL() string {

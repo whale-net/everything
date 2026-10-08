@@ -11,12 +11,22 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/oauth2"
 )
 
 // defaultHTTPTimeout bounds discovery and (in later tasks) token/revocation
 // calls when the caller does not supply its own HTTPClient.
 const defaultHTTPTimeout = 15 * time.Second
+
+// newDefaultHTTPClient is used when the caller supplies no HTTPClient; the
+// otelhttp transport propagates trace context to Keycloak.
+func newDefaultHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   defaultHTTPTimeout,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}
+}
 
 // offlineAccessScope is always present in the resolved scope set (FR1):
 // without it Keycloak does not issue a refresh token usable for
@@ -244,7 +254,7 @@ func NewDelegatedGrantSource(ctx context.Context, cfg DelegatedGrantConfig) (*De
 
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultHTTPTimeout}
+		httpClient = newDefaultHTTPClient()
 	}
 
 	endpoints := cfg.Endpoints

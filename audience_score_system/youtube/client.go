@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 	youtubev3 "google.golang.org/api/youtube/v3"
@@ -164,7 +165,9 @@ func New(ts oauth2.TokenSource, opts ...Option) Client {
 
 	httpClient := cfg.httpClient
 	if httpClient == nil {
-		httpClient = oauth2.NewClient(context.Background(), ts)
+		// oauth2 uses this client's transport as its base, so API calls carry trace context.
+		base := &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
+		httpClient = oauth2.NewClient(context.WithValue(context.Background(), oauth2.HTTPClient, base), ts)
 	}
 	svcOpts := append([]option.ClientOption{option.WithHTTPClient(httpClient)}, cfg.serviceOpts...)
 
