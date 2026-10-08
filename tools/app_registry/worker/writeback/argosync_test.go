@@ -1,6 +1,7 @@
 package writeback
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -364,7 +365,7 @@ func NewFakePublisher() *FakePublisher {
 	return &FakePublisher{events: []PublishedEvent{}}
 }
 
-func (f *FakePublisher) Publish(promotionID, eventKind, eventStatus string) {
+func (f *FakePublisher) Publish(_ context.Context, promotionID, eventKind, eventStatus string) {
 	f.events = append(f.events, PublishedEvent{
 		PromotionID: promotionID,
 		EventKind:   eventKind,
@@ -372,7 +373,7 @@ func (f *FakePublisher) Publish(promotionID, eventKind, eventStatus string) {
 	})
 }
 
-func (f *FakePublisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+func (f *FakePublisher) PublishReleaseRun(_ context.Context, releaseRunID, eventKind, eventStatus string) {
 	f.releaseRunEvents = append(f.releaseRunEvents, ReleaseRunPublishedEvent{
 		ReleaseRunID: releaseRunID,
 		EventKind:    eventKind,

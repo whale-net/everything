@@ -114,12 +114,16 @@ Publishes a message to the specified exchange. The `body` can be:
 The message includes:
 - `ContentType: "application/json"`
 - `DeliveryMode: amqp.Persistent` (all messages are persistent)
-- Trace context headers (OpenTelemetry propagation)
+- Trace context headers (OpenTelemetry propagation; see [Tracing](#tracing))
 - Timestamp
 
 #### `func (p *Publisher) PublishWithExpiry(ctx context.Context, exchange, routingKey string, body interface{}, expiry time.Duration) error`
 
 Like `Publish`, but adds a per-message TTL. Messages older than `expiry` are dropped by the broker.
+
+#### `func (p *Publisher) PublishWithReply(ctx context.Context, exchange, routingKey string, body []byte, replyTo, correlationID string) error`
+
+Like `Publish`, but sets `ReplyTo` and `CorrelationId` for RPC-style commands. The consumer's handler result is sent back to `replyTo` automatically.
 
 #### `func (p *Publisher) Close() error`
 
@@ -219,6 +223,21 @@ This is appropriate for low-volume workloads. For high-rate topics with multiple
 ### Dead-Letter Queue (DLQ)
 
 Durable queues without TTL or max-length limits automatically create a dead-letter queue (DLQ) with the name `<queueName>-dlq`. Messages that fail processing (or that reach a limit) are routed to the DLQ. Non-durable queues do not create DLQs.
+
+## Tracing
+
+Every publish and every handled message is traced through the global OpenTelemetry provider and propagator (installed by `logging.Configure` with `EnableTracing: true`); nothing is recorded until one is installed.
+
+| Path | Span | Kind |
+|------|------|------|
+| `Publish`, `PublishWithExpiry`, `PublishWithReply` | `<routingKey> publish` | Producer |
+| Consumer RPC reply (`sendReply`) | `<replyTo> publish` | Producer |
+| Consumer handler dispatch | `<routingKey> process` | Consumer |
+
+- The producer span's W3C trace context is injected into the AMQP message headers (`traceparent`/`tracestate`).
+- The consumer extracts those headers and starts its `process` span as a child of the producer span, then passes that span's context to the `MessageHandler`. Spans the handler starts nest under it; a handler error is recorded on the span with `Error` status.
+- Attributes follow the OTel messaging conventions: `messaging.system=rabbitmq`, `messaging.operation.type`, `messaging.destination.name` (exchange), `messaging.rabbitmq.destination.routing_key`, and `messaging.message.conversation_id` when a correlation ID is set.
+- A handler that hands work to a goroutine should pass `context.WithoutCancel(ctx)` rather than `context.Background()`, so the async work stays in the trace without being cancelled when the handler returns.
 
 ## Exchange Declaration Behavior
 

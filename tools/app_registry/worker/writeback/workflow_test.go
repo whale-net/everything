@@ -363,7 +363,7 @@ type RecorderReleaseRunPublishedEvent struct {
 	EventStatus  string
 }
 
-func (f *FakeRecorderPublisher) Publish(promotionID, eventKind, eventStatus string) {
+func (f *FakeRecorderPublisher) Publish(_ context.Context, promotionID, eventKind, eventStatus string) {
 	f.events = append(f.events, RecorderPublishedEvent{
 		PromotionID: promotionID,
 		EventKind:   eventKind,
@@ -371,7 +371,7 @@ func (f *FakeRecorderPublisher) Publish(promotionID, eventKind, eventStatus stri
 	})
 }
 
-func (f *FakeRecorderPublisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+func (f *FakeRecorderPublisher) PublishReleaseRun(_ context.Context, releaseRunID, eventKind, eventStatus string) {
 	f.releaseRunEvents = append(f.releaseRunEvents, RecorderReleaseRunPublishedEvent{
 		ReleaseRunID: releaseRunID,
 		EventKind:    eventKind,

@@ -11,6 +11,7 @@
 package events
 
 import (
+	"context"
 	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -19,8 +20,8 @@ import (
 // PublisherInterface is the contract for publishing events. Both the real
 // Publisher and test fakes implement this interface.
 type PublisherInterface interface {
-	Publish(promotionID, eventKind, eventStatus string)
-	PublishReleaseRun(releaseRunID, eventKind, eventStatus string)
+	Publish(ctx context.Context, promotionID, eventKind, eventStatus string)
+	PublishReleaseRun(ctx context.Context, releaseRunID, eventKind, eventStatus string)
 }
 
 // ExchangeName is the RabbitMQ topic exchange name for app-registry's htmxsse

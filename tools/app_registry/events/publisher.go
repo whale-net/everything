@@ -11,6 +11,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/whale-net/everything/libs/go/rmq"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // EventPayload is the small structured JSON payload for app-registry events.
@@ -47,6 +48,9 @@ type publishRequest struct {
 	entityIDKey string
 	entityID    string
 	eventKind   string
+	// spanContext is the caller's span, so the background publish joins
+	// the caller's trace without inheriting its cancellation.
+	spanContext trace.SpanContext
 	// done is closed when the publish completes (or is dropped).
 	// This allows callers to await the result if needed (though
 	// the non-blocking model means most don't).
@@ -153,7 +157,7 @@ func NewPublisher(ctx context.Context, conn *rmq.Connection, logger *slog.Logger
 // Publish enqueues an event for publication. It returns immediately after
 // enqueuing to the bounded buffer, performing no broker I/O. If the buffer
 // is full, the event is dropped and logged.
-func (p *Publisher) Publish(promotionID, eventKind, eventStatus string) {
+func (p *Publisher) Publish(ctx context.Context, promotionID, eventKind, eventStatus string) {
 	payload := EventPayload{
 		PromotionID: promotionID,
 		EventKind:   eventKind,
@@ -166,6 +170,7 @@ func (p *Publisher) Publish(promotionID, eventKind, eventStatus string) {
 		entityIDKey: "promotion_id",
 		entityID:    promotionID,
 		eventKind:   eventKind,
+		spanContext: trace.SpanContextFromContext(ctx),
 		done:        make(chan error, 1), // Buffered so backgroundPublisher never blocks sending the result
 	})
 }
@@ -173,7 +178,7 @@ func (p *Publisher) Publish(promotionID, eventKind, eventStatus string) {
 // PublishReleaseRun enqueues a release-run event for publication. It shares
 // Publish's non-blocking bounded hand-off, background goroutine, buffer, and
 // counters; only the routing key and payload shape differ.
-func (p *Publisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+func (p *Publisher) PublishReleaseRun(ctx context.Context, releaseRunID, eventKind, eventStatus string) {
 	payload := ReleaseRunEventPayload{
 		ReleaseRunID: releaseRunID,
 		EventKind:    eventKind,
@@ -186,6 +191,7 @@ func (p *Publisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus strin
 		entityIDKey: "release_run_id",
 		entityID:    releaseRunID,
 		eventKind:   eventKind,
+		spanContext: trace.SpanContextFromContext(ctx),
 		done:        make(chan error, 1), // Buffered so backgroundPublisher never blocks sending the result
 	})
 }
@@ -301,7 +307,7 @@ func (p *Publisher) publishEvent(req *publishRequest) {
 
 	// Use a bounded context (5 seconds) for the broker publish.
 	// This is the same timeout as rmq.Publisher.Publish itself.
-	ctx, cancel := context.WithTimeout(p.doneCtx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(trace.ContextWithSpanContext(p.doneCtx, req.spanContext), 5*time.Second)
 	defer cancel()
 
 	p.mu.Lock()

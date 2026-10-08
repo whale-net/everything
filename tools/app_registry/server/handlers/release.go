@@ -212,7 +212,7 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 	// succeeds, so this fires unconditionally on that success -- not
 	// gated on s.temporal's outcome.
 	if s.pub != nil {
-		s.pub.PublishReleaseRun(created.ReleaseRunID, "release_target_queued", "pending")
+		s.pub.PublishReleaseRun(ctx, created.ReleaseRunID, "release_target_queued", "pending")
 	}
 
 	if s.temporal != nil {

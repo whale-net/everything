@@ -17,12 +17,12 @@ Publish events originate from three points in the system:
 The **first publish point** (promotion accept) is backed by an asynchronous component that decouples the write from the broker publish. The `Publisher` in `tools/app_registry/events/publisher.go` implements **four load-bearing properties**:
 
 ### Non-blocking hand-off (Property 1)
-`Publish(promotionID, eventKind, eventStatus string)` enqueues the event to a bounded in-process buffer and returns immediately to the caller. The actual broker publish happens on a background goroutine. The caller's context is **never blocked** on broker I/O.
+`Publish(ctx, promotionID, eventKind, eventStatus string)` enqueues the event to a bounded in-process buffer and returns immediately to the caller. The actual broker publish happens on a background goroutine. The caller's context is **never blocked** on broker I/O.
 
 **Timeout budget:** Broker publishes use a 5-second bounded context (line 245), independent of the caller's context. This 5-second bound is **the same as the `rmq.Publisher.Publish` timeout itself** — the component does not add its own timeout atop that; it just enforces the library's existing bound.
 
 ### Process-lifetime context (Property 2)
-The background publish goroutine uses a process-lifetime context (`doneCtx`, initialized on line 108 from `context.Background()`), not the caller's context. Cancelling the caller's context does not cancel an in-flight broker publish that has already been accepted into the buffer. **This separation is load-bearing for FR28:** the SSE handler's per-request context (FR28e, line 37 in `handlers_sse.go`) can be cancelled to terminate a stream without dropping an event that was already enqueued.
+The background publish goroutine uses a process-lifetime context (`doneCtx`, initialized on line 108 from `context.Background()`), not the caller's context. Cancelling the caller's context does not cancel an in-flight broker publish that has already been accepted into the buffer. **This separation is load-bearing for FR28:** the SSE handler's per-request context (FR28e, line 37 in `handlers_sse.go`) can be cancelled to terminate a stream without dropping an event that was already enqueued. Only the caller's span context is carried across: the queued request records `trace.SpanContextFromContext(ctx)` and the background publish runs on `trace.ContextWithSpanContext(doneCtx, sc)`, so the broker publish joins the caller's trace while still being cancelled only by shutdown.
 
 ### Non-fatal construction (Property 3)
 Construction does not fail the host process. Connect, channel open, and `ExchangeDeclare` happen in the background with exponential backoff (line 172, `attach` function); the process starts and serves immediately. Publishes enqueued while unattached are dropped and logged. The component attaches with no operator intervention once the broker becomes reachable.

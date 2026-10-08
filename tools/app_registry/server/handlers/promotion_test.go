@@ -692,7 +692,7 @@ func NewFakePublisher() *FakePublisher {
 	}
 }
 
-func (f *FakePublisher) Publish(promotionID, eventKind, eventStatus string) {
+func (f *FakePublisher) Publish(_ context.Context, promotionID, eventKind, eventStatus string) {
 	if f.shouldBlock {
 		<-f.blockChan
 	}
@@ -705,7 +705,7 @@ func (f *FakePublisher) Publish(promotionID, eventKind, eventStatus string) {
 	})
 }
 
-func (f *FakePublisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+func (f *FakePublisher) PublishReleaseRun(_ context.Context, releaseRunID, eventKind, eventStatus string) {
 	if f.shouldBlock {
 		<-f.blockChan
 	}

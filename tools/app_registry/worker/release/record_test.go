@@ -32,9 +32,10 @@ func newFakeReleaseRunPublisher() *fakeReleaseRunPublisher {
 	return &fakeReleaseRunPublisher{}
 }
 
-func (f *fakeReleaseRunPublisher) Publish(promotionID, eventKind, eventStatus string) {}
+func (f *fakeReleaseRunPublisher) Publish(_ context.Context, promotionID, eventKind, eventStatus string) {
+}
 
-func (f *fakeReleaseRunPublisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+func (f *fakeReleaseRunPublisher) PublishReleaseRun(_ context.Context, releaseRunID, eventKind, eventStatus string) {
 	f.events = append(f.events, releaseRunPublishedEvent{
 		ReleaseRunID: releaseRunID,
 		EventKind:    eventKind,

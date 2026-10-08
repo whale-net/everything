@@ -11,6 +11,7 @@ go_library(
     deps = [
         "//libs/go/rmq",
         "@com_github_rabbitmq_amqp091_go//:amqp091-go",
+        "@io_opentelemetry_go_otel_trace//:trace",
     ],
 )
 

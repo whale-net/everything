@@ -73,7 +73,7 @@ func TestNonBlockingHandoff(t *testing.T) {
 
 	// Publish should return immediately even if the background goroutine is slow
 	start := time.Now()
-	pub.Publish("promo-1", "test_event", "started")
+	pub.Publish(context.Background(), "promo-1", "test_event", "started")
 	elapsed := time.Since(start)
 
 	// Should complete almost instantly (< 100ms)
@@ -97,9 +97,9 @@ func TestFullBufferDropsEvents(t *testing.T) {
 	pub := NewPublisher(context.Background(), fakeConn, logger, 1, publisherFn)
 
 	// Fill the buffer
-	pub.Publish("promo-1", "event_1", "started")
+	pub.Publish(context.Background(), "promo-1", "event_1", "started")
 	// This should be dropped because buffer is full
-	pub.Publish("promo-2", "event_2", "started")
+	pub.Publish(context.Background(), "promo-2", "event_2", "started")
 
 	// Verify the counters
 	if pub.drainedCounter.Load() != 1 {
@@ -149,7 +149,7 @@ func TestBoundedEnqueue(t *testing.T) {
 	// This is the essence of non-blocking: enqueue to buffer is bounded and
 	// independent of broker state.
 	start := time.Now()
-	pub.Publish("promo-1", "test_event", "started")
+	pub.Publish(context.Background(), "promo-1", "test_event", "started")
 	elapsed := time.Since(start)
 
 	if elapsed > 100*time.Millisecond {
@@ -173,8 +173,8 @@ func TestProcessLifetimeContext(t *testing.T) {
 	pub := NewPublisher(context.Background(), fakeConn, logger, 10, publisherFn)
 
 	// Publish some events
-	pub.Publish("promo-1", "test_event", "started")
-	pub.Publish("promo-2", "test_event", "started")
+	pub.Publish(context.Background(), "promo-1", "test_event", "started")
+	pub.Publish(context.Background(), "promo-2", "test_event", "started")
 
 	// The publisher should still function independently of any caller context
 	if pub.drainedCounter.Load() != 2 {
@@ -202,7 +202,7 @@ func TestCallerContextCancellationDoesNotCancelPublish(t *testing.T) {
 
 	// Publish with the context (even though we don't use it in Publish API,
 	// this simulates a caller with their own context)
-	pub.Publish("promo-1", "test_event", "started")
+	pub.Publish(context.Background(), "promo-1", "test_event", "started")
 
 	// Cancel the caller's context
 	cancel()
@@ -267,7 +267,7 @@ func TestBoundedShutdown(t *testing.T) {
 
 	// Queue some events
 	for i := 0; i < 5; i++ {
-		pub.Publish("promo-1", "event", "started")
+		pub.Publish(context.Background(), "promo-1", "event", "started")
 	}
 
 	// Shutdown should complete within the bounded deadline
@@ -299,7 +299,7 @@ func TestMultiplePublishesAreEnqueued(t *testing.T) {
 	// Publish many events rapidly
 	start := time.Now()
 	for i := 0; i < 50; i++ {
-		pub.Publish("promo-1", "event", "started")
+		pub.Publish(context.Background(), "promo-1", "event", "started")
 	}
 	elapsed := time.Since(start)
 
@@ -332,7 +332,7 @@ func TestPublishReleaseRunUnattachedDropsWithoutBlocking(t *testing.T) {
 	pub := NewPublisher(context.Background(), fakeConn, logger, 10, publisherFn)
 
 	start := time.Now()
-	pub.PublishReleaseRun("run-1", "release_run_started", "pending")
+	pub.PublishReleaseRun(context.Background(), "run-1", "release_run_started", "pending")
 	elapsed := time.Since(start)
 
 	if elapsed > 100*time.Millisecond {
@@ -357,7 +357,7 @@ func TestPublishReleaseRunRoutingKeyAndPayload(t *testing.T) {
 	logger := newTestLogger()
 	pub := newBufferOnlyPublisher(logger, 1)
 
-	pub.PublishReleaseRun("run-1", "release_run_started", "pending")
+	pub.PublishReleaseRun(context.Background(), "run-1", "release_run_started", "pending")
 
 	req := <-pub.buffer
 
@@ -389,8 +389,8 @@ func TestInterleavedPublishAndPublishReleaseRunGetOwnRoutingKeys(t *testing.T) {
 	logger := newTestLogger()
 	pub := newBufferOnlyPublisher(logger, 2)
 
-	pub.Publish("promo-1", "promotion_started", "pending")
-	pub.PublishReleaseRun("run-1", "release_run_started", "pending")
+	pub.Publish(context.Background(), "promo-1", "promotion_started", "pending")
+	pub.PublishReleaseRun(context.Background(), "run-1", "release_run_started", "pending")
 
 	promoReq := <-pub.buffer
 	releaseRunReq := <-pub.buffer
@@ -409,10 +409,10 @@ func TestPublishReleaseRunFullBufferDrops(t *testing.T) {
 	logger := newTestLogger()
 	pub := newBufferOnlyPublisher(logger, 1)
 
-	pub.PublishReleaseRun("run-1", "release_run_started", "pending")
+	pub.PublishReleaseRun(context.Background(), "run-1", "release_run_started", "pending")
 
 	start := time.Now()
-	pub.PublishReleaseRun("run-2", "release_run_started", "pending")
+	pub.PublishReleaseRun(context.Background(), "run-2", "release_run_started", "pending")
 	elapsed := time.Since(start)
 
 	if elapsed > 100*time.Millisecond {
