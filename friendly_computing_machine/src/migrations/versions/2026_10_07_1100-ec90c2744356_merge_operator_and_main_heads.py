@@ -12,7 +12,6 @@ from typing import Sequence, Union
 revision: str = "ec90c2744356"
 down_revision: Union[str, Sequence[str], None] = (
     "e4a7c0d2b913",
-    "9e4b7d2a6c18",
     "5c1d8e3f7a2b",
 )
 branch_labels: Union[str, Sequence[str], None] = None
