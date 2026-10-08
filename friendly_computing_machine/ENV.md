@@ -177,3 +177,4 @@ Read by the Temporal worker when the snapshot job runs (`temporal/shitposter_bra
 |---|---|---|
 | `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET` | no (default `2000`) | Maximum approximate tokens in a context snapshot's rendered text. Must be positive. |
 | `FCM_SHITPOSTER_LORE_DECAY_HALF_LIFE_HOURS` | no (default `168`) | Half-life of the recency term in the lore ranking score. Must be positive. |
+| `FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP` | no (default `10`) | Size N of the snapshot's ranked lore section. Only lore ranked below N is eligible for the random pick. Must be >= 1. |

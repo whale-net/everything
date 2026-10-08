@@ -54,8 +54,9 @@ worker startup yet; `brain-trigger <persona_id> harvest` runs it on demand.
 
 ## Snapshot job
 
-`snapshot.py` renders a persona's memory (attributes, then ranked lore with one
-optional random pick) into a context snapshot within `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET`.
+`snapshot.py` renders a persona's memory (attributes, then the top N ranked lore,
+then one optional random pick from lore ranked below N) into a context snapshot
+within `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET`. N is `FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP`.
 Suggestion text is never read; only derived attributes are. Tunables are in
 [ENV.md](../ENV.md).
 

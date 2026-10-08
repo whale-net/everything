@@ -1,8 +1,8 @@
 """Snapshot brain job: ranked persona memory rendered within a token budget.
 
 Attributes go in first, in id order. Lore follows, ranked by a score of
-recency decay plus lifetime popularity. One lower-ranked lore entry is then
-picked at random if it fits. Every item is checked against the budget against
+recency decay plus lifetime popularity, bounded to the top N (the ranked
+section). One lore entry ranked below N is then picked at random if it fits. Every item is checked against the budget against
 the full rendered text, so a pick is dropped rather than overflowing.
 
 Suggestion text is never read here; only attributes derived from it are.
@@ -32,8 +32,10 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterSnapshotItem,
 )
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
+    DEFAULT_SNAPSHOT_RANKED_LORE_CAP,
     load_context_token_budget,
     load_lore_decay_half_life_hours,
+    load_snapshot_ranked_lore_cap,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.base import (
     ApplyOutcome,
@@ -104,8 +106,9 @@ def select_items(
     lore: list[Candidate],
     budget: int,
     rng: random.Random,
+    ranked_lore_cap: int = DEFAULT_SNAPSHOT_RANKED_LORE_CAP,
 ) -> Snapshot:
-    """Fill attributes, then ranked lore, then one random lower-ranked lore pick."""
+    """Fill attributes, then the top-N ranked lore, then one random pick from the rest."""
     lines: list[str] = []
     chosen: list[SelectedItem] = []
     included: set[tuple[str, int]] = set()
@@ -139,12 +142,13 @@ def select_items(
         )
 
     ranked_lore = sorted(lore, key=lambda c: (-c.score, c.item_id))
-    for candidate in ranked_lore:
+    ranked_section = ranked_lore[:ranked_lore_cap]
+    for candidate in ranked_section:
         take(candidate, False)
 
     pool = [
         c
-        for c in ranked_lore
+        for c in ranked_lore[ranked_lore_cap:]
         if (c.item_kind, c.item_id) not in included and fits(render_line(c.text))
     ]
     if pool:
@@ -174,6 +178,7 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
     now = datetime.datetime.now(datetime.timezone.utc)
     budget = load_context_token_budget()
     half_life = load_lore_decay_half_life_hours()
+    ranked_cap = load_snapshot_ranked_lore_cap()
 
     attributes = [
         Candidate(ITEM_ATTRIBUTE, row.id, row.text)
@@ -189,7 +194,7 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         for row in active_lore(persona_id, session=session)
     ]
 
-    snapshot = select_items(attributes, lore, budget, RNG_FACTORY())
+    snapshot = select_items(attributes, lore, budget, RNG_FACTORY(), ranked_cap)
 
     latest = session.exec(
         select(func.max(ShitposterContextSnapshot.version)).where(

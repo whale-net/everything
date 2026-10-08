@@ -123,13 +123,26 @@ def test_random_pick_is_lower_ranked_and_marked_when_it_fits():
         _cand("lore", 2, "top one", score=0.9),
         _cand("lore", 3, "second", score=0.5),
         _cand("lore", 4, "third", score=0.2),
+        _cand("lore", 5, "fourth", score=0.1),
     ]
-    result = snapshot.select_items([attr], lore, 10_000, random.Random(0))
+    result = snapshot.select_items([attr], lore, 10_000, random.Random(0), ranked_lore_cap=2)
+    ranked = [i.item_id for i in result.items if not i.is_random_pick and i.item_kind == "lore"]
+    assert ranked == [2, 3]
     picks = [i for i in result.items if i.is_random_pick]
     assert len(picks) == 1
     assert picks[0].item_kind == "lore"
-    # a pick is only drawn from lore not already in the ranked fill
-    assert picks[0].item_id not in {2, 3, 4}
+    # a pick is drawn only from lore ranked below the cap
+    assert picks[0].item_id in {4, 5}
+
+
+def test_no_random_pick_when_lore_fits_within_ranked_cap():
+    lore = [
+        _cand("lore", 2, "top one", score=0.9),
+        _cand("lore", 3, "second", score=0.5),
+    ]
+    result = snapshot.select_items([], lore, 10_000, random.Random(0), ranked_lore_cap=2)
+    assert not any(i.is_random_pick for i in result.items)
+    assert [i.item_id for i in result.items] == [2, 3]
 
 
 # --- DB-backed job body ---------------------------------------------------

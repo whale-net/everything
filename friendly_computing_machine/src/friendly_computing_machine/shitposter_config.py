@@ -45,6 +45,20 @@ def load_lore_decay_half_life_hours() -> float:
     return value
 
 
+DEFAULT_SNAPSHOT_RANKED_LORE_CAP = 10
+
+
+def load_snapshot_ranked_lore_cap() -> int:
+    """Read FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP; lore beyond the top N is random-pick eligible."""
+    raw = os.environ.get("FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP", "").strip()
+    if not raw:
+        return DEFAULT_SNAPSHOT_RANKED_LORE_CAP
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP must be >= 1, got {raw!r}")
+    return value
+
+
 def parse_negative_emoji(raw: str) -> frozenset[str]:
     """Normalize to Slack reaction names: lowercase, surrounding colons stripped."""
     names = (p.strip().strip(":").strip().lower() for p in raw.split(","))
