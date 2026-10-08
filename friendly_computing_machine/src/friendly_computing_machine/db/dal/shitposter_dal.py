@@ -551,6 +551,23 @@ def enqueue_suggestion_outcome(
     Returns False (and changes nothing) unless the suggestion is currently promoted.
     coarse_reason is required for declined and must be None for applied.
     """
+    now = now or datetime.datetime.now(datetime.UTC)
+    with SessionManager(session) as session:
+        if not stage_suggestion_outcome(session, suggestion_id, kind, coarse_reason, now):
+            session.rollback()
+            return False
+        session.commit()
+        return True
+
+
+def stage_suggestion_outcome(
+    session: Session,
+    suggestion_id: int,
+    kind: str,
+    coarse_reason: Optional[str],
+    now: datetime.datetime,
+) -> bool:
+    """Non-committing core of enqueue_suggestion_outcome; the caller commits or rolls back."""
     if kind == ShitposterSuggestionOutcomeKindEnum.APPLIED.value:
         if coarse_reason is not None:
             raise ValueError("applied outcomes take no coarse_reason")
@@ -562,24 +579,19 @@ def enqueue_suggestion_outcome(
         new_status = ShitposterSuggestionStatusEnum.DECLINED.value
     else:
         raise ValueError(f"outcome kind must be applied or declined, got {kind!r}")
-    now = now or datetime.datetime.now(datetime.UTC)
-    with SessionManager(session) as session:
-        result = session.exec(
-            update(ShitposterSuggestion)
-            .where(
-                ShitposterSuggestion.id == suggestion_id,
-                ShitposterSuggestion.status
-                == ShitposterSuggestionStatusEnum.PROMOTED.value,
-            )
-            .values(status=new_status, status_changed_at=now)
-            .execution_options(synchronize_session=False)
+    result = session.exec(
+        update(ShitposterSuggestion)
+        .where(
+            ShitposterSuggestion.id == suggestion_id,
+            ShitposterSuggestion.status == ShitposterSuggestionStatusEnum.PROMOTED.value,
         )
-        if result.rowcount != 1:
-            session.rollback()
-            return False
-        _enqueue_reply(session, suggestion_id, kind, coarse_reason, now)
-        session.commit()
-        return True
+        .values(status=new_status, status_changed_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        return False
+    _enqueue_reply(session, suggestion_id, kind, coarse_reason, now)
+    return True
 
 
 def _suggestion_for_message(
