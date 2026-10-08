@@ -406,3 +406,14 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# Operator surface: newest-first history, per-kind causes, admin-only retire,
+# and snapshot-for-post lookup (SQLite-backed). Fakes the bolt App singleton, so its own target.
+py_test(
+    name = "test_shitposter_operator",
+    size = "small",
+    srcs = [
+        "shitposter/test_shitposter_operator.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
