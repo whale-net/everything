@@ -145,3 +145,27 @@ def reflector_input_cap() -> int:
 def attribute_cap() -> int:
     """Maximum active persona attributes after a reflect run (FCM_SHITPOSTER_ATTRIBUTE_CAP)."""
     return _positive_int_env("FCM_SHITPOSTER_ATTRIBUTE_CAP", DEFAULT_ATTRIBUTE_CAP)
+
+
+DEFAULT_WRITE_CADENCE_HOURS = 3
+DEFAULT_DRAFT_BATCH_SIZE = 5
+DEFAULT_DRAFT_EXPIRY_HOURS = 24
+
+
+def write_cadence_hours() -> int:
+    """Hours between writer brain job runs (FCM_SHITPOSTER_WRITE_CADENCE_HOURS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_WRITE_CADENCE_HOURS", DEFAULT_WRITE_CADENCE_HOURS
+    )
+
+
+def draft_batch_size() -> int:
+    """Drafts requested per writer run (FCM_SHITPOSTER_DRAFT_BATCH_SIZE)."""
+    return _positive_int_env("FCM_SHITPOSTER_DRAFT_BATCH_SIZE", DEFAULT_DRAFT_BATCH_SIZE)
+
+
+def draft_expiry_hours() -> int:
+    """Age after which a queued draft is no longer eligible for a scheduled post (FCM_SHITPOSTER_DRAFT_EXPIRY_HOURS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_DRAFT_EXPIRY_HOURS", DEFAULT_DRAFT_EXPIRY_HOURS
+    )

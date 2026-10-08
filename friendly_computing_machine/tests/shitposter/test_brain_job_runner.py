@@ -274,6 +274,31 @@ def test_compute_raising_marks_run_failed(engine, persona_id, monkeypatch):
     assert "compute exploded" in runs[0].error
 
 
+def test_apply_reporting_failure_keeps_details_and_fails_workflow(engine, persona_id, monkeypatch):
+    def apply(session, run_id, payload):
+        return ApplyOutcome(
+            status=ShitposterBrainJobStatus.FAILED.value,
+            details={"dropped": 5},
+            error="no valid draft",
+        )
+
+    _register(monkeypatch, apply=apply)
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                with pytest.raises(WorkflowFailureError):
+                    await control.trigger_brain_job_async(
+                        env.client, TASK_QUEUE, persona_id, KIND, app_env=APP_ENV
+                    )
+
+    _run(go())
+    runs = _runs(engine, persona_id)
+    assert [r.status for r in runs] == [ShitposterBrainJobStatus.FAILED.value]
+    assert runs[0].details == {"dropped": 5}
+    assert runs[0].error == "no valid draft"
+
+
 def test_timeout_marks_run_failed(engine, persona_id, gate, monkeypatch):
     _register(monkeypatch, compute=_blocking_compute(gate))
     monkeypatch.setitem(base.BRAIN_JOB_TIMEOUTS, ShitposterBrainJobKind.SNAPSHOT, datetime.timedelta(seconds=2))

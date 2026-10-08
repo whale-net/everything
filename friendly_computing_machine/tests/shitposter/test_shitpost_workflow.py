@@ -40,6 +40,9 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
     ShitposterScheduledSkip,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_draft import (
+    ShitposterDraft,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_context import (
     ShitposterContextSnapshot,
 )
@@ -75,6 +78,7 @@ TABLES = [
     ShitposterPost.__table__,
     ShitposterContextSnapshot.__table__,
     ShitposterScheduledSkip.__table__,
+    ShitposterDraft.__table__,
 ]
 SNAPSHOT_TEXT = "Snapshot: the gremlin loves cheese."
 
@@ -194,6 +198,7 @@ def _run(whagent, monkeypatch, params):
                     act.send_ephemeral_notice_activity,
                     act.resolve_snapshot_activity,
                     act.record_scheduled_skip_activity,
+                    act.post_queued_draft_activity,
                 ],
                 workflow_runner=SandboxedWorkflowRunner(
                     restrictions=SandboxRestrictions.default.with_passthrough_all_modules()

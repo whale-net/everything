@@ -70,6 +70,8 @@ class ShitposterBrainJobWorkflow:
             result = body.result()
         except ActivityError as e:
             return await self._fail(begin.run_id, kind, str(e.cause or e))
+        if result.status == ShitposterBrainJobStatus.FAILED.value:
+            return await self._fail(begin.run_id, kind, result.error or "job failed")
         # the apply committed and released the lock, so the snapshot can take it
         reflected = kind == ShitposterBrainJobKind.REFLECT
         if reflected and result.status == ShitposterBrainJobStatus.SUCCEEDED.value:

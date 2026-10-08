@@ -308,6 +308,17 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Writer brain job (draft validation, empty-batch failure) and the draft-first
+# scheduled post path: ranking, expiry, retired items, guardrails, used-once.
+py_test(
+    name = "test_writer_drafts",
+    size = "medium",
+    srcs = [
+        "shitposter/test_writer_drafts.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # ShitposterChannelScheduleWorkflow on the Temporal test server: gap range,
 # restart replay, double start, silence/resume, opt-out and fast re-enable.
 py_test(
