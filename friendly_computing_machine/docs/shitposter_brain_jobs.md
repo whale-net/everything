@@ -61,7 +61,8 @@ newest first, capped at `FCM_SHITPOSTER_REFLECTOR_INPUT_CAP`; the excess carries
 the next run. With no input the run records `no_op` and the agent is not called.
 Otherwise the reflector agent (`FCM_SHITPOSTER_REFLECTOR_AGENT_ID`) returns
 `{"ops": [...]}` with `add`, `reinforce`, `retire`, and `merge` ops, each citing
-refs such as `post:<id>` or `suggestion:<id>`.
+refs such as `post:<id>` or `suggestion:<id>`. The agent's system prompt (`shitposter-reflector` in
+`whagent_net/config/agents.yaml`) restates this op schema; change both together.
 
 Each op is rejected, changing nothing, with one of these reasons:
 

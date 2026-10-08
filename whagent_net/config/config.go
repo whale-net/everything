@@ -25,7 +25,7 @@ import (
 var agentsYAML []byte
 
 // ToolsNone is the `tools` value an agent sets to declare it intentionally
-// has no tool_set (a base-prompt-only agent, e.g. the Shitposter reflector).
+// has no tool_set (a base-prompt-only agent, e.g. the Shitposter writer and reflector).
 // An agent with an empty tool_set and no declaration is still rejected.
 const ToolsNone = "none"
 
