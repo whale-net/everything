@@ -86,6 +86,8 @@ SNAPSHOT_TEXT = "Snapshot: the gremlin loves cheese."
 class FakeWhagent:
     """Only the methods the pipeline uses; pinned context is opt-in via `pinned`."""
 
+    ui_public_url = ""
+
     def __init__(self, replies, on_generate=None, hang=False, pinned=False):
         self.replies = list(replies)
         self.on_generate = on_generate
@@ -132,10 +134,12 @@ class FakeWhagent:
 
 class FakeSlack:
     def __init__(self):
+        self.blocks = []
         self.posts = []
         self.ephemerals = []
 
-    def post(self, channel, text, thread_ts=None):
+    def post(self, channel, text, thread_ts=None, blocks=None, unfurl=None):
+        self.blocks.append(blocks)
         self.posts.append((channel, text, thread_ts))
         return f"100.{len(self.posts):06d}"
 
@@ -233,6 +237,28 @@ def test_scheduled_posts_as_service_subject_without_on_behalf_of(engine, slack, 
     assert post.trigger == "scheduled"
     assert post.persona_revision_id is not None
     assert slack.posts == [(CHAN, "a fine shitpost", None)]
+
+
+def test_post_links_to_whagent_session_when_ui_url_set(engine, slack, monkeypatch):
+    w = FakeWhagent(["a linked shitpost"])
+    w.ui_public_url = "https://whagent.example/"
+    res = _run(w, monkeypatch, ShitpostParams(CHAN, "scheduled"))
+    assert res.outcome == ShitpostOutcome.POSTED
+    # fallback text stays the bare post
+    assert slack.posts == [(CHAN, "a linked shitpost", None)]
+    [blocks] = slack.blocks
+    assert blocks[0]["text"]["text"] == "a linked shitpost"
+    assert blocks[1] == {
+        "type": "context",
+        "elements": [
+            {"type": "mrkdwn", "text": "<https://whagent.example/sessions/sess-1|view prompt>"}
+        ],
+    }
+
+
+def test_post_has_no_blocks_without_ui_url(engine, slack, monkeypatch):
+    _run(FakeWhagent(["plain post"]), monkeypatch, ShitpostParams(CHAN, "scheduled"))
+    assert slack.blocks == [None]
 
 
 def test_persona_text_is_in_first_turn(engine, slack, monkeypatch):
