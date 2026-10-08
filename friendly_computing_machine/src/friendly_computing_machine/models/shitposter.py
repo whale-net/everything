@@ -488,3 +488,35 @@ class ShitposterBrainJobRun(Base, table=True):
             JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=True
         )
     )
+
+
+class ShitposterReflectorRun(Base, table=True):
+    """Outcome of one reflect brain job: what was read, applied, and rejected."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "input_count >= 0 AND carried_over_count >= 0 "
+            "AND applied_count >= 0 AND rejection_count >= 0",
+            name="ck_shitposterreflectorrun_counts_nonnegative",
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    brain_job_run_id: int = Field(
+        nullable=False, foreign_key="shitposterbrainjobrun.id", unique=True
+    )
+    persona_id: int = Field(
+        nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    input_count: int
+    carried_over_count: int
+    applied_count: int
+    rejection_count: int
+    # [{"op": str, "reason": str}] for each rejected proposed change
+    rejections: list = Field(
+        default_factory=list,
+        sa_column=Column(
+            JSON().with_variant(postgresql.JSONB(), "postgresql"),
+            nullable=False,
+            server_default=text("'[]'"),
+        ),
+    )
