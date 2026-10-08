@@ -77,9 +77,15 @@ Keycloak identity. It runs against the same Keycloak realm as whagent-net's
 | `FCM_SHITPOSTER_AGENT_ID` | for Shitposter | whagent-net agent id the Shitposter workflow starts sessions on. The agent definition holds only a generic base prompt; the persona text comes from FCM's persona record and is sent as the session's first turn. Read by the Temporal worker when generating. |
 | `FCM_SHITPOSTER_DENYLIST` | no | Comma-separated extra terms the Shitposter content filter rejects (whole-word, case-insensitive), on top of the built-in list. Read by the Temporal worker per check. |
 | `FCM_SHITPOSTER_GAP_MIN_SECONDS` / `FCM_SHITPOSTER_GAP_MAX_SECONDS` | no | Test/local override of the scheduled-shitpost gap bounds (default 4h-12h). Both must be set to take effect. Read when a channel schedule workflow is started. |
+| `FCM_SHITPOSTER_NEGATIVE_EMOJI` | no | Comma-separated Slack reaction names (colons and case ignored, e.g. `thumbsdown,-1`) that count as negative engagement on a bot post. Empty means none count. Read by the engagement harvester when it finalizes a post. |
+| `FCM_SHITPOSTER_LORE_TOP_SHARE` | no | Fraction (0, 1] of a persona's finalized posts from the lore window that count as popular enough to become lore. Default `0.10` (top 10%). Read by the harvest run's lore-promotion step. |
+| `FCM_SHITPOSTER_LORE_WINDOW_DAYS` | no | Days of finalized bot posts ranked for lore promotion. Default `30`. Lore already promoted is not removed when a post leaves the window. Read by the harvest run's lore-promotion step. |
 
 Scheduled shitposts run as the FCM service subject with no `on_behalf_of`; whagent-net's on-behalf-of allowlist only gates requests that carry `on_behalf_of`, so no whagent-net change is needed and FCM's human-work delegation is unchanged.
 | `FCM_ADMIN_SLACK_USER_IDS` | no | Comma-separated Slack user ids allowed to run `/shitpost admin ...` (opt-in/out, silence/resume). Whitespace is trimmed; empty or unset means no admins, so every admin action is refused. Read at startup on the `bot` app. |
+| `FCM_SHITPOSTER_SUGGESTION_DAILY_LIMIT` | no | Persona suggestions one member may submit per trailing 24 hours (default `3`). Must be a positive integer; otherwise the default is used with a warning. Read per submission. |
+| `FCM_SHITPOSTER_SUGGESTION_EXPIRY_DAYS` | no | Days a pending `/shitpost suggest` message waits for backing before it expires (default `7`). Must be a positive integer; otherwise the default is used with a warning. Read per submission. |
+| `FCM_SHITPOSTER_SUGGESTION_BACKER_THRESHOLD` | no | Distinct human Slack users backing a pending suggestion (the submitter counts once; bots and removed reactions do not) needed to promote it to the next persona update (default `3`). Must be a positive integer; otherwise the default is used with a warning. Read per reaction. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 
 Required Keycloak client config (provisioned through normal release/human steps, not by this repo):

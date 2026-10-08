@@ -1,6 +1,7 @@
 """Activities for the Shitposter generation pipeline (see workflow.py)."""
 
 import asyncio
+import datetime
 import logging
 import time
 from dataclasses import dataclass
@@ -296,3 +297,52 @@ async def send_ephemeral_notice_activity(params: NoticeParams) -> None:
         text=params.text,
         **({"thread_ts": params.thread_ts} if params.thread_ts else {}),
     )
+
+
+@activity.defn
+async def expire_pending_suggestions_activity() -> int:
+    """Expire pending persona suggestions past their expires_at; returns the count."""
+    return dal.expire_pending_suggestions(datetime.datetime.now(datetime.UTC))
+
+
+_DECLINED_REASON_LABEL = {
+    "off_topic": "off topic",
+    "unsafe": "not something Shitposter will post",
+    "duplicate": "already covered by the persona",
+    "other": "other",
+}
+
+
+def render_suggestion_reply(kind: str, coarse_reason: Optional[str]) -> str:
+    """Thread reply for a suggestion outcome; fixed text only, never backers or declined text."""
+    if kind == "applied":
+        return "This suggestion has been added to my persona."
+    if kind == "declined":
+        label = _DECLINED_REASON_LABEL.get(coarse_reason or "", "other")
+        return f"This suggestion wasn't added to my persona. Reason: {label}."
+    return "This suggestion expired before enough people backed it."
+
+
+@activity.defn
+async def drain_suggestion_replies_activity() -> int:
+    """Post queued suggestion replies while the kill switch is off; returns how many were posted."""
+    if not dal.is_shitposter_enabled():
+        return 0
+    posted = 0
+    for outbox_id, kind, coarse_reason, channel_slack_id, message_ts in (
+        dal.list_unposted_suggestion_replies()
+    ):
+        if not dal.is_shitposter_enabled():
+            break
+        try:
+            slack_post_thread_message(
+                channel_slack_id,
+                render_suggestion_reply(kind, coarse_reason),
+                thread_ts=message_ts,
+            )
+        except Exception:
+            logger.exception("suggestion reply post failed: outbox=%s", outbox_id)
+            continue
+        dal.mark_suggestion_reply_posted(outbox_id)
+        posted += 1
+    return posted

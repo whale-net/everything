@@ -199,6 +199,184 @@ class ShitposterPost(ShitposterPostBase, table=True):
     )
 
 
+class ShitposterPostEngagement(Base, table=True):
+    """Write-once engagement record for a bot post, written after its 24h window."""
+
+    post_id: int = Field(
+        primary_key=True, foreign_key="shitposterpost.id", nullable=False
+    )
+    persona_id: int = Field(
+        nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    finalized_at: datetime.datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    distinct_reactors: int
+    # emoji name -> count of distinct human reactions
+    reactions_by_emoji: dict = Field(
+        sa_column=Column(JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=False),
+    )
+    distinct_repliers: int
+    # reactions whose emoji is on FCM_SHITPOSTER_NEGATIVE_EMOJI, counted separately
+    negative_reactions: int
+    consumed_by_reflector_run_id: int | None = Field(
+        default=None, nullable=True, foreign_key="shitposterbrainjobrun.id"
+    )
+    consumed_by_lore_run_id: int | None = Field(
+        default=None, nullable=True, foreign_key="shitposterbrainjobrun.id"
+    )
+
+
+class ShitposterSuggestionStatusEnum(str, Enum):
+    PENDING = "pending"
+    PROMOTED = "promoted"
+    APPLIED = "applied"
+    DECLINED = "declined"
+    EXPIRED = "expired"
+
+
+class ShitposterSuggestion(Base, table=True):
+    """A community persona suggestion posted as a pending message in a channel."""
+
+    __table_args__ = (
+        UniqueConstraint(
+            "slack_channel_id",
+            "slack_message_ts",
+            name="uq_shitpostersuggestion_channel_ts",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'promoted', 'applied', 'declined', 'expired')",
+            name="ck_shitpostersuggestion_status",
+        ),
+        Index(
+            "ix_shitpostersuggestion_status_expires_at",
+            "status",
+            "expires_at",
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    persona_id: int = Field(
+        nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    slack_channel_id: int = Field(
+        nullable=False, foreign_key="slackchannel.id", index=True
+    )
+    # Slack ts of the posted pending-suggestion message; reactions join on (channel, ts)
+    slack_message_ts: str
+    submitter_slack_user_id: str
+    text: str
+    # ShitposterSuggestionStatusEnum value
+    status: str = Field(default=ShitposterSuggestionStatusEnum.PENDING.value)
+    submitted_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    expires_at: datetime.datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    status_changed_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    promoted_at: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    # run id of the reflector run that consumed this promoted suggestion; NULL until consumed
+    consumed_by_reflector_run_id: str | None = Field(default=None, nullable=True)
+
+
+class ShitposterSuggestionBacker(Base, table=True):
+    """A human Slack user backing a pending suggestion; removal stamps removed_at.
+
+    The submitter is not a row here; it counts once toward the threshold implicitly.
+    """
+
+    __table_args__ = (
+        Index(
+            "uq_shitpostersuggestionbacker_active",
+            "suggestion_id",
+            "slack_user_id",
+            unique=True,
+            postgresql_where=text("removed_at IS NULL"),
+            sqlite_where=text("removed_at IS NULL"),
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    suggestion_id: int = Field(
+        nullable=False, foreign_key="shitpostersuggestion.id", index=True
+    )
+    slack_user_id: str
+    backed_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    removed_at: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+
+class ShitposterSuggestionOutcomeKindEnum(str, Enum):
+    APPLIED = "applied"
+    DECLINED = "declined"
+    EXPIRED = "expired"
+
+
+class ShitposterSuggestionCoarseReasonEnum(str, Enum):
+    OFF_TOPIC = "off_topic"
+    UNSAFE = "unsafe"
+    DUPLICATE = "duplicate"
+    OTHER = "other"
+
+
+class ShitposterSuggestionReplyOutbox(Base, table=True):
+    """Pending thread replies on a suggestion post; drained only while the kill switch is off."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('applied', 'declined', 'expired')",
+            name="ck_shitpostersuggestionreplyoutbox_kind",
+        ),
+        CheckConstraint(
+            "coarse_reason IS NULL OR coarse_reason IN "
+            "('off_topic', 'unsafe', 'duplicate', 'other')",
+            name="ck_shitpostersuggestionreplyoutbox_coarse_reason",
+        ),
+        Index(
+            "ix_shitpostersuggestionreplyoutbox_unposted",
+            "created_at",
+            postgresql_where=text("posted_at IS NULL"),
+            sqlite_where=text("posted_at IS NULL"),
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    suggestion_id: int = Field(
+        nullable=False, foreign_key="shitpostersuggestion.id", index=True
+    )
+    # ShitposterSuggestionOutcomeKindEnum value
+    kind: str
+    # coarse, fixed vocabulary; never carries the declined text or a backer name
+    coarse_reason: str | None = Field(default=None, nullable=True)
+    created_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    posted_at: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+
 class ShitposterBrainJobKind(str, Enum):
     HARVEST = "harvest"
     REFLECT = "reflect"

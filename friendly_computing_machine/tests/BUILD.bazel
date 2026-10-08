@@ -277,6 +277,27 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# /shitpost suggest: gate order, 24h rate limit, guardrails, storage, expiry sweep,
+# and the periodic expiry schedule (runs on the Temporal test server).
+py_test(
+    name = "test_shitpost_suggest",
+    size = "medium",
+    srcs = [
+        "shitposter/test_shitpost_suggest.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Suggestion backing: distinct-backer promotion and kill-switch-held outcome replies.
+py_test(
+    name = "test_suggestion_backing",
+    size = "medium",
+    srcs = [
+        "shitposter/test_suggestion_backing.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # ShitpostWorkflow on the Temporal test server (SQLite, fake whagent/Slack).
 py_test(
     name = "test_shitpost_workflow",
@@ -305,6 +326,26 @@ py_test(
     size = "small",
     srcs = [
         "shitposter/test_brain_job_runner.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Harvest brain job: 24h engagement finalization (reactions, replies, negatives, write-once).
+py_test(
+    name = "test_shitposter_harvest",
+    size = "small",
+    srcs = [
+        "shitposter/test_harvest_engagement.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Lore promotion: top-share boundary, exclusions, window persistence, idempotent reruns.
+py_test(
+    name = "test_shitposter_lore_promotion",
+    size = "small",
+    srcs = [
+        "shitposter/test_lore_promotion.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )

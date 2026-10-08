@@ -2,13 +2,15 @@
 
 The brain job runner is the shared shape for Shitposter persona jobs (harvest,
 reflect, write, snapshot). Each job kind plugs a compute step and an apply step
-into it. Nothing schedules these jobs by default yet; the runner, the per-kind
-schedule helper, and the operator trigger are the parts that exist.
+into it. The harvest (`harvest.py`) and snapshot (`snapshot.py`) job bodies are
+registered; reflect and write are not yet. Nothing schedules jobs by default yet;
+the runner, the per-kind schedule helper, and the operator trigger are the parts
+that exist.
 
 Code: `src/friendly_computing_machine/temporal/shitposter_brain/`
 (`base.py` constants and job-body registry, `activity.py` lock/compute/apply/fail,
 `workflow.py` `ShitposterBrainJobWorkflow`, `control.py` trigger and schedule
-helpers). Registered in `temporal/worker.py`.
+helpers), `harvest.py` and `snapshot.py` the job bodies. Registered in `temporal/worker.py`.
 
 ## Guarantees
 
@@ -30,6 +32,32 @@ helpers). Registered in `temporal/worker.py`.
 Run statuses: `running`, `succeeded`, `failed`, `skipped`, `no_op`. Trigger values:
 `schedule`, `operator`. The table is `shitposterbrainjobrun` (append-only; see
 `models/shitposter.py`).
+
+## Harvest job
+
+`harvest.py` finalizes each bot post's engagement once the post is 24h old. For
+each persona-owned post in a currently opted-in channel with no engagement row:
+
+- Reactors are distinct human users with an active reaction at finalization (added
+  by then, not removed before it). Bot users and reactions flagged `is_bot` are
+  excluded. Per-emoji counts are distinct users.
+- `negative_reactions` sums the per-emoji counts for emoji on
+  `FCM_SHITPOSTER_NEGATIVE_EMOJI`.
+- `distinct_repliers` counts distinct non-bot users replying in the post's thread.
+
+Rows go into `shitposterpostengagement` in the apply transaction. `post_id` is the
+primary key, so a finalized record is never rewritten. A rerun with nothing new
+records `no_op`.
+
+`register_harvest_schedule(...)` creates the hourly schedule. Nothing calls it at
+worker startup yet; `brain-trigger <persona_id> harvest` runs it on demand.
+
+## Snapshot job
+
+`snapshot.py` renders a persona's memory (attributes, then ranked lore with one
+optional random pick) into a context snapshot within `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET`.
+Suggestion text is never read; only derived attributes are. Tunables are in
+[ENV.md](../ENV.md).
 
 ## Timeouts
 
