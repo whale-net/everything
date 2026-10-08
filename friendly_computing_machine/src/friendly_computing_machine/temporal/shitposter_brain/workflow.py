@@ -65,9 +65,12 @@ class ShitposterBrainJobWorkflow:
             return await self._fail(begin.run_id, kind, f"timed out after {timeout}")
         timer.cancel()
         try:
-            return body.result()
+            result = body.result()
         except ActivityError as e:
             return await self._fail(begin.run_id, kind, str(e.cause or e))
+        if result.status == ShitposterBrainJobStatus.FAILED.value:
+            return await self._fail(begin.run_id, kind, result.error or "job failed")
+        return result
 
     async def _body(
         self, params: BrainJobInput, run_id: int, timeout: timedelta

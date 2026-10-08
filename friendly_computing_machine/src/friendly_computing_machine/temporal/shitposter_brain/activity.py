@@ -155,6 +155,7 @@ def _apply(params: ApplyParams) -> BrainJobResult:
         run.status = outcome.status
         run.finished_at = _now()
         run.details = outcome.details
+        run.error = outcome.error
         session.commit()
         logger.info(
             "brain job %s: kind=%s run=%s",
@@ -163,7 +164,10 @@ def _apply(params: ApplyParams) -> BrainJobResult:
             params.run_id,
         )
         return BrainJobResult(
-            run_id=params.run_id, status=outcome.status, details=outcome.details
+            run_id=params.run_id,
+            status=outcome.status,
+            details=outcome.details,
+            error=outcome.error,
         )
 
 

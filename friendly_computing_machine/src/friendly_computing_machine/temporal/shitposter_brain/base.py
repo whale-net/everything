@@ -45,6 +45,7 @@ class BrainJobResult:
     status: str
     skip_reason: str | None = None
     details: dict[str, Any] | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -69,9 +70,10 @@ class FailParams:
 
 @dataclass
 class ApplyOutcome:
-    # succeeded or no_op
+    # succeeded, no_op, or failed (a body ending its own run as failed keeps its details)
     status: str
     details: dict[str, Any] | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)

@@ -63,6 +63,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     expire_pending_suggestions_activity,
     generate_shitpost_activity,
     post_and_record_shitpost_activity,
+    post_queued_draft_activity,
     record_scheduled_skip_activity,
     resolve_persona_activity,
     resolve_snapshot_activity,
@@ -89,6 +90,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     harvest as _harvest,  # noqa: F401  registers the harvest job body
     snapshot as _snapshot_job,  # noqa: F401 registers the snapshot job body
     reflect as _reflect,  # noqa: F401  registers the reflect job body
+    write as _write,  # noqa: F401  registers the write job body
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.workflow import (
     ShitposterBrainJobWorkflow,
@@ -163,6 +165,7 @@ ACTIVITIES = [
     generate_shitpost_activity,
     check_guardrails_activity,
     post_and_record_shitpost_activity,
+    post_queued_draft_activity,
     record_scheduled_skip_activity,
     resolve_snapshot_activity,
     send_ephemeral_notice_activity,

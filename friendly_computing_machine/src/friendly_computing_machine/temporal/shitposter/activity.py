@@ -18,13 +18,21 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.util import (
 )
 from friendly_computing_machine.src.friendly_computing_machine.db import dal
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+    shitposter_draft_dal,
     shitposter_snapshot_dal,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
+    ShitposterBrainJobRun,
     ShitposterPrincipalKindEnum,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_draft import (
+    ShitposterDraft,
+)
+from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
+    draft_expiry_hours,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
@@ -263,18 +271,24 @@ def _member_names() -> list[str]:
     return [r for r in rows if r]
 
 
+def _guardrail_reason(text: str) -> Optional[str]:
+    """Reason code the text must not post under, or None when every check passes."""
+    if not text.strip():
+        return "empty"
+    if guardrails.find_mention(text):
+        return "mention"
+    if guardrails.find_member_name(text, _member_names()):
+        return "member_name"
+    if not guardrails.passes_content_filter(text):
+        return "content_filter"
+    return None
+
+
 @activity.defn
 async def check_guardrails_activity(text: str) -> GuardrailResult:
     """Mentions, current-member names and the content filter."""
-    if not text.strip():
-        return GuardrailResult(False, "empty")
-    if guardrails.find_mention(text):
-        return GuardrailResult(False, "mention")
-    if guardrails.find_member_name(text, _member_names()):
-        return GuardrailResult(False, "member_name")
-    if not guardrails.passes_content_filter(text):
-        return GuardrailResult(False, "content_filter")
-    return GuardrailResult(True)
+    reason = _guardrail_reason(text)
+    return GuardrailResult(reason is None, reason)
 
 
 def _record(params: PostParams, ts: str) -> None:
@@ -358,6 +372,121 @@ async def post_and_record_shitpost_activity(params: PostParams) -> ShitpostResul
         slack_message_ts=ts,
         whagent_session_id=params.whagent_session_id,
     )
+
+
+@dataclass
+class DraftPostParams:
+    params: ShitpostParams
+    persona: PersonaResult
+
+
+def _pick_draft(
+    session, persona_id: int, now: datetime.datetime, expiry: datetime.timedelta
+) -> Optional[ShitposterDraft]:
+    """Best-ranked unused, unexpired draft that passes retirement and guardrail checks.
+
+    Failing drafts are discarded with a reason as they are reached.
+    """
+    for draft in shitposter_draft_dal.unused_drafts(persona_id, session=session):
+        if not shitposter_draft_dal.is_unexpired(draft, now, expiry):
+            continue
+        if shitposter_draft_dal.snapshot_has_retired_item(session, draft.snapshot_id):
+            reason = "retired_item"
+        else:
+            reason = _guardrail_reason(draft.text)
+            if reason is not None:
+                reason = f"guardrail:{reason}"
+        if reason is None:
+            return draft
+        logger.info("draft %s discarded: %s", draft.id, reason)
+        shitposter_draft_dal.discard_draft(session, draft, reason, now)
+        session.commit()
+    return None
+
+
+def _post_queued_draft(p: DraftPostParams) -> Optional[ShitpostResult]:
+    """Post the best queued draft, or return None so the caller generates on the spot."""
+    channel_slack_id = p.params.channel_slack_id
+    gate = dal.shitposter_gate(channel_slack_id)
+    if not gate.allowed:
+        return ShitpostResult(ShitpostOutcome.SKIPPED_GATE, reason=gate.reason)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expiry = datetime.timedelta(hours=draft_expiry_hours())
+    with SessionManager() as session:
+        draft = _pick_draft(session, p.persona.persona_id, now, expiry)
+        if draft is None:
+            return None
+        run = session.get(ShitposterBrainJobRun, draft.brain_job_run_id)
+        whagent_session_id = (run.details or {}).get("whagent_session_id") if run else None
+        if not whagent_session_id:
+            shitposter_draft_dal.discard_draft(session, draft, "missing_writer_session", now)
+            session.commit()
+            return None
+        draft_id, text, snapshot_id = draft.id, draft.text, draft.snapshot_id
+
+    ts = slack_post_thread_message(channel_slack_id, text)
+    try:
+        _record_draft_post(
+            p, draft_id, ts, whagent_session_id, snapshot_id, now
+        )
+    except Exception:
+        # the post is live; a missing record must not leave the draft reusable
+        logger.exception("draft post recorded failed: draft=%s ts=%s", draft_id, ts)
+        with SessionManager() as session:
+            draft = session.get(ShitposterDraft, draft_id)
+            shitposter_draft_dal.discard_draft(session, draft, "post_record_failed", now)
+            session.commit()
+    logger.info("draft posted: channel=%s draft=%s ts=%s", channel_slack_id, draft_id, ts)
+    return ShitpostResult(
+        ShitpostOutcome.POSTED,
+        slack_message_ts=ts,
+        whagent_session_id=whagent_session_id,
+    )
+
+
+def _record_draft_post(
+    p: DraftPostParams,
+    draft_id: int,
+    ts: str,
+    whagent_session_id: str,
+    snapshot_id: int,
+    now: datetime.datetime,
+) -> None:
+    """Insert the post record and mark the draft used in one transaction."""
+    iss, sub = get_whagent_client().service_subject()
+    with SessionManager() as session:
+        channel_id = session.exec(
+            select(SlackChannel.id).where(SlackChannel.slack_id == p.params.channel_slack_id)
+        ).one()
+        draft = session.exec(
+            select(ShitposterDraft).where(ShitposterDraft.id == draft_id).with_for_update()
+        ).one()
+        if draft.used_at is not None:
+            raise RuntimeError(f"draft {draft_id} was already used")
+        post = dal.shitposter_dal.record_post(
+            slack_channel_id=channel_id,
+            slack_message_ts=ts,
+            persona_id=p.persona.persona_id,
+            persona_revision_id=p.persona.persona_revision_id,
+            trigger=p.params.trigger,
+            principal_iss=iss,
+            principal_sub=sub,
+            principal_kind=ShitposterPrincipalKindEnum.SERVICE,
+            whagent_session_id=whagent_session_id,
+            context_snapshot_id=snapshot_id,
+            session=session,
+            commit=False,
+        )
+        draft.used_at = now
+        draft.used_post_id = post.id
+        session.add(draft)
+        session.commit()
+
+
+@activity.defn
+async def post_queued_draft_activity(params: DraftPostParams) -> Optional[ShitpostResult]:
+    """Scheduled-post path: post a queued draft, or None when none is usable."""
+    return await asyncio.to_thread(_post_queued_draft, params)
 
 
 @activity.defn

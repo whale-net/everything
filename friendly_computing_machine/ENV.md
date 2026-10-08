@@ -172,6 +172,18 @@ needs a code change and a release. See [docs/shitposter_brain_jobs.md](docs/shit
 | `BRAIN_JOB_TIMEOUTS` | harvest 15 min, reflect 30 min, write 30 min, snapshot 5 min | code constant | Workflow timeout per job kind. Hitting it marks the run `failed`. |
 | `STALE_LOCK_SLACK` | 5 min | code constant | Added to the job timeout. A `running` row older than that has no live workflow behind it, so the next run takes the lock over. |
 
+### Shitposter writer and draft queue
+
+Read by the Temporal worker when the write brain job runs (`temporal/shitposter_brain/write.py`)
+and by the scheduled post path (`temporal/shitposter/activity.py`).
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `FCM_SHITPOSTER_WRITER_AGENT_ID` | for the write job | whagent-net agent id the write brain job starts its session on. Defined in `whagent_net/config/agents.yaml` as `shitposter-writer` with `tools: none`. Read per write run. |
+| `FCM_SHITPOSTER_WRITE_CADENCE_HOURS` | no (default `3`) | Hours between writer runs; used when the write schedule is registered. Must be a positive integer. |
+| `FCM_SHITPOSTER_DRAFT_BATCH_SIZE` | no (default `5`) | Most drafts stored per writer run. Extra or malformed reply items are dropped and counted in the run's `details`. Must be a positive integer. |
+| `FCM_SHITPOSTER_DRAFT_EXPIRY_HOURS` | no (default `24`) | A draft older than this is not eligible for a scheduled post. Must be a positive integer. |
+
 ### Shitposter context snapshot
 
 Read by the Temporal worker when the snapshot job runs (`temporal/shitposter_brain/snapshot.py`).

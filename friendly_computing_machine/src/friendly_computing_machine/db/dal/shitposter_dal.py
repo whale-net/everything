@@ -344,8 +344,13 @@ def record_post(
     parent_post_id: int | None = None,
     context_snapshot_id: int | None = None,
     session: Optional[Session] = None,
+    commit: bool = True,
 ) -> ShitposterPost:
-    """Persist a bot post; (channel, ts) is unique and a duplicate raises."""
+    """Persist a bot post; (channel, ts) is unique and a duplicate raises.
+
+    commit=False flushes into the caller's session so the caller can commit it
+    together with other writes.
+    """
     with SessionManager(session) as session:
         post = ShitposterPost(
             slack_channel_id=slack_channel_id,
@@ -363,6 +368,9 @@ def record_post(
             context_snapshot_id=context_snapshot_id,
         )
         session.add(post)
+        if not commit:
+            session.flush()
+            return post
         session.commit()
         session.refresh(post)
         return post

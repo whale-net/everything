@@ -12,6 +12,7 @@ from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.activity import (
+        DraftPostParams,
         GenerateParams,
         NoticeParams,
         PostParams,
@@ -19,6 +20,7 @@ with workflow.unsafe.imports_passed_through():
         check_guardrails_activity,
         generate_shitpost_activity,
         post_and_record_shitpost_activity,
+        post_queued_draft_activity,
         record_scheduled_skip_activity,
         resolve_persona_activity,
         resolve_snapshot_activity,
@@ -65,6 +67,10 @@ class ShitpostWorkflow:
             None,
             start_to_close_timeout=ACTIVITY_TIMEOUT,
         )
+        if params.trigger == "scheduled" and not params.whagent_session_id:
+            queued = await self._queued_draft(params, persona)
+            if queued is not None:
+                return queued
         # a riff on an existing session keeps the snapshot its session started from
         if params.whagent_session_id:
             snapshot_id, context_text = params.context_snapshot_id, None
@@ -106,6 +112,19 @@ class ShitpostWorkflow:
             if interactive and result.outcome != ShitpostOutcome.SKIPPED_GATE:
                 await self._notice(params)
         return result
+
+    async def _queued_draft(self, params: ShitpostParams, persona):
+        """Post the best queued draft; None means generate on the spot."""
+        try:
+            return await workflow.execute_activity(
+                post_queued_draft_activity,
+                DraftPostParams(params=params, persona=persona),
+                start_to_close_timeout=ACTIVITY_TIMEOUT,
+                retry_policy=_ONCE,
+            )
+        except ActivityError:
+            workflow.logger.error("queued draft post failed; generating on the spot")
+            return None
 
     async def _attempt(
         self,

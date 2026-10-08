@@ -3,13 +3,13 @@
 The brain job runner is the shared shape for Shitposter persona jobs (harvest,
 reflect, write, snapshot). Each job kind plugs a compute step and an apply step
 into it. The harvest (`harvest.py`), snapshot (`snapshot.py`), and reflect (`reflect.py`) job bodies are
-registered; write is not yet. Nothing schedules jobs by default yet; the runner, the per-kind schedule
+registered, and so is write. Nothing schedules jobs by default yet; the runner, the per-kind schedule
 helper, and the operator trigger are the parts that exist.
 
 Code: `src/friendly_computing_machine/temporal/shitposter_brain/`
 (`base.py` constants and job-body registry, `activity.py` lock/compute/apply/fail,
 `workflow.py` `ShitposterBrainJobWorkflow`, `control.py` trigger and schedule
-helpers), `harvest.py`, `snapshot.py`, and `reflect.py` the job bodies. Registered in `temporal/worker.py`.
+helpers), `harvest.py`, `snapshot.py`, `reflect.py`, and `write.py` the job bodies. Registered in `temporal/worker.py`.
 
 ## Guarantees
 
@@ -58,6 +58,37 @@ then one optional random pick from lore ranked below N) into a context snapshot
 within `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET`. N is `FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP`.
 Suggestion text is never read; only derived attributes are. Tunables are in
 [ENV.md](../ENV.md).
+
+## Write job
+
+`write.py` drafts a batch of posts from the latest context snapshot into the
+`shitposterdraft` queue. Compute reads that snapshot and sends it to the writer
+agent (`FCM_SHITPOSTER_WRITER_AGENT_ID`) as the first turn, or as pinned context
+when the client supports it. The reply must be a JSON array of `{text, rank}`.
+Each item is checked: `text` is non-empty and at most 280 characters, `rank` is a
+positive integer that is not a boolean, and no rank repeats. Items that fail are
+dropped and counted. Valid drafts beyond `FCM_SHITPOSTER_DRAFT_BATCH_SIZE` are
+dropped and counted too.
+
+The apply step stores the drafts with the snapshot id and run id, and records
+`drafted`, `dropped`, `snapshot_id`, and `whagent_session_id` in the run's
+`details`. A run with no valid draft, or an unparseable reply, ends `failed` with
+the reason in `error`, and nothing is queued. Guardrails are not checked here;
+they run at posting time.
+
+`register_write_schedule(...)` creates the schedule, every
+`FCM_SHITPOSTER_WRITE_CADENCE_HOURS` hours. Like the other kinds, nothing calls it
+at worker startup yet; `brain-trigger <persona_id> write` runs it on demand.
+
+Scheduled posts consume the queue in `temporal/shitposter/activity.py`
+(`post_queued_draft_activity`), called by `ShitpostWorkflow` before generation.
+It takes the best-ranked draft that is unused, unexpired (`FCM_SHITPOSTER_DRAFT_EXPIRY_HOURS`),
+and has no retired item in its snapshot. It discards any draft whose snapshot
+holds an attribute or lore entry the operator has since retired
+(`retired_item`) or that fails the guardrails (`guardrail:<reason>`), and tries
+the next. The post and the draft's `used_at`/`used_post_id` are written in one
+transaction, and the post carries the draft's snapshot id. With no usable draft,
+the scheduled post is generated on the spot as before.
 
 ## Reflect job
 
