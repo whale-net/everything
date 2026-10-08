@@ -27,6 +27,7 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal.identity_d
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.dal.shitposter_dal import (
     get_latest_riff_session_id,
+    get_session_context_snapshot_id,
     get_post_by_channel_ts,
     set_thread_owner_if_unset,
 )
@@ -134,8 +135,11 @@ def riff_thread_reply(event, client=None) -> bool:
         if session_id is None and root.trigger == "summon":
             session_id = root.whagent_session_id
         context = None
+        context_snapshot_id = None
         if session_id is None:
             context = _thread_context(client, channel_id, thread_ts)
+        else:
+            context_snapshot_id = get_session_context_snapshot_id(session_id)
 
         _start_riff(
             ShitpostParams(
@@ -150,6 +154,7 @@ def riff_thread_reply(event, client=None) -> bool:
                 thread_owner_slack_user_id=owner,
                 parent_post_id=root.id,
                 thread_context=context,
+                context_snapshot_id=context_snapshot_id,
             )
         )
         span.set_attribute("shitposter.riff.started", True)
