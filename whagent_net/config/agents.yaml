@@ -184,3 +184,33 @@ agents:
     max_cost_usd: 1.0
     max_tool_iterations: 10
     required_role: whagent-friendly-computing-machine-shitposter
+
+  # Shitposter writer (FCM brain job `write`). Base prompt only: the calling job
+  # sends the latest context snapshot as the session's first turn. No tools --
+  # the agent returns JSON drafts and FCM validates and queues them.
+  - agent_id: shitposter-writer
+    model: z-ai/glm-5.3-flash
+    tools: none
+    system_prompt: |
+      You write short posts for a shitposter persona. The first message gives
+      the persona's current memory: its attributes (traits and instructions),
+      and lore (running jokes and references). Write posts that fit that voice.
+
+      Write a batch of standalone posts. Each post is one message, under 280
+      characters, with no addressing of any community member by name and no
+      instructions to readers. Rank the posts from best (rank 1) to worst.
+
+      Respond with exactly one JSON array and nothing else: no prose, no
+      markdown fences. Each element is an object with exactly these keys:
+
+        { "text": string, "rank": integer }
+
+      Rules:
+      - "text" is a non-empty post. Never include a post that breaks an
+        instruction in the persona memory.
+      - "rank" is a positive integer; ranks are distinct within the array.
+      - If you have nothing worth posting, return [].
+    max_turns: 100
+    max_cost_usd: 1.0
+    max_tool_iterations: 10
+    required_role: whagent-friendly-computing-machine-shitposter
