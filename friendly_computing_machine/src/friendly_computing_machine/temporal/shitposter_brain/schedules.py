@@ -14,6 +14,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.reflect import (
     register_reflect_schedule,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.snapshot import (
+    register_snapshot_schedule,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.write import (
     register_write_schedule,
 )
@@ -22,11 +25,12 @@ logger = logging.getLogger(__name__)
 
 Register = Callable[..., Awaitable[None]]
 
-# Snapshot has no schedule: a successful reflect run enqueues it.
+# A successful reflect run also enqueues a snapshot; the scheduled one covers quiet periods.
 BRAIN_SCHEDULE_REGISTRARS: tuple[Register, ...] = (
     register_harvest_schedule,
     register_reflect_schedule,
     register_write_schedule,
+    register_snapshot_schedule,
 )
 
 

@@ -148,6 +148,7 @@ def attribute_cap() -> int:
 
 
 DEFAULT_WRITE_CADENCE_HOURS = 3
+DEFAULT_SNAPSHOT_CADENCE_HOURS = 24
 DEFAULT_DRAFT_BATCH_SIZE = 5
 DEFAULT_DRAFT_EXPIRY_HOURS = 24
 
@@ -156,6 +157,13 @@ def write_cadence_hours() -> int:
     """Hours between writer brain job runs (FCM_SHITPOSTER_WRITE_CADENCE_HOURS)."""
     return _positive_int_env(
         "FCM_SHITPOSTER_WRITE_CADENCE_HOURS", DEFAULT_WRITE_CADENCE_HOURS
+    )
+
+
+def snapshot_cadence_hours() -> int:
+    """Hours between scheduled snapshot brain job runs (FCM_SHITPOSTER_SNAPSHOT_CADENCE_HOURS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_SNAPSHOT_CADENCE_HOURS", DEFAULT_SNAPSHOT_CADENCE_HOURS
     )
 
 

@@ -18,7 +18,11 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, create_engine, select
-from temporalio.client import ScheduleActionStartWorkflow, ScheduleAlreadyRunningError
+from temporalio.client import (
+    ScheduleActionStartWorkflow,
+    ScheduleAlreadyRunningError,
+    ScheduleOverlapPolicy,
+)
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -66,7 +70,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 
 APP_ENV = "test"
 TASK_QUEUE = "fcm-brain-schedules-test"
-KINDS = ("harvest", "reflect", "write")
+KINDS = ("harvest", "reflect", "write", "snapshot")
 TABLES = [
     ShitposterPersona.__table__,
     ShitposterPersonaRevision.__table__,
@@ -221,6 +225,7 @@ def test_fresh_namespace_creates_harvest_reflect_and_write_per_persona(
     personas, monkeypatch
 ):
     monkeypatch.setenv("FCM_SHITPOSTER_WRITE_CADENCE_HOURS", "3")
+    monkeypatch.setenv("FCM_SHITPOSTER_SNAPSHOT_CADENCE_HOURS", "12")
     client = _FakeScheduleClient()
 
     _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
@@ -235,7 +240,11 @@ def test_fresh_namespace_creates_harvest_reflect_and_write_per_persona(
             "harvest": HARVEST_SCHEDULE_EVERY,
             "reflect": REFLECT_SCHEDULE_EVERY,
             "write": datetime.timedelta(hours=3),
+            "snapshot": datetime.timedelta(hours=12),
         }
+        for kind in KINDS:
+            sched = client.schedules[control.schedule_id(pid, kind, APP_ENV)]
+            assert sched.policy.overlap == ScheduleOverlapPolicy.SKIP
 
 
 def test_second_start_creates_no_duplicate_schedules(personas, monkeypatch, caplog):

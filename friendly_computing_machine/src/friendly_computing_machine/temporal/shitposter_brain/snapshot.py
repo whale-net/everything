@@ -31,17 +31,23 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterContextSnapshot,
     ShitposterSnapshotItem,
 )
+from temporalio.client import Client
+
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
     DEFAULT_SNAPSHOT_RANKED_LORE_CAP,
     load_context_token_budget,
     load_lore_decay_half_life_hours,
     load_snapshot_ranked_lore_cap,
+    snapshot_cadence_hours,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.base import (
     ApplyOutcome,
     BrainJobInput,
     JobBody,
     register_job_body,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.control import (
+    register_brain_schedule,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.fold import (
     fold_stale_lore,
@@ -243,6 +249,23 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
             "token_count": snapshot.token_count,
             "item_count": len(snapshot.items),
         },
+    )
+
+
+async def register_snapshot_schedule(
+    client: Client,
+    task_queue: str,
+    persona_id: int,
+    app_env: str | None = None,
+) -> None:
+    """Create the periodic snapshot schedule for one persona (every FCM_SHITPOSTER_SNAPSHOT_CADENCE_HOURS); no-op if it exists."""
+    await register_brain_schedule(
+        client,
+        task_queue,
+        persona_id,
+        ShitposterBrainJobKind.SNAPSHOT.value,
+        every=datetime.timedelta(hours=snapshot_cadence_hours()),
+        app_env=app_env,
     )
 
 
