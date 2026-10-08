@@ -7,6 +7,7 @@ reflector agent call replaced by a canned reply.
 
 import datetime
 import json
+import types
 
 import pytest
 from sqlalchemy import event
@@ -472,3 +473,39 @@ def test_failed_apply_leaves_attributes_and_inputs_unchanged(engine, monkeypatch
             for r in s.exec(select(ShitposterPostEngagement)).all()
         )
         assert s.exec(select(ShitposterSuggestion)).one().status == ShitposterSuggestionStatusEnum.PROMOTED.value
+
+
+def _capture_reflector_start(monkeypatch):
+    started = []
+
+    class FakeClient:
+        def start_session(self, agent_id, first_turn=None, **_):
+            started.append(agent_id)
+            return types.SimpleNamespace(session_id="session-1")
+
+    monkeypatch.setattr(reflect, "get_whagent_client", lambda: FakeClient())
+    monkeypatch.setattr(
+        reflect, "_wait_for_reply", lambda client, sid, seq, deadline: '{"ops": []}'
+    )
+    return started
+
+
+def test_reflector_resolves_definition_name_when_env_unset(monkeypatch):
+    monkeypatch.delenv("FCM_SHITPOSTER_REFLECTOR_AGENT_ID", raising=False)
+    started = _capture_reflector_start(monkeypatch)
+    assert reflect._call_reflector([], []) == '{"ops": []}'
+    assert started == ["shitposter-reflector"]
+
+
+def test_reflector_env_override_takes_precedence(monkeypatch):
+    monkeypatch.setenv("FCM_SHITPOSTER_REFLECTOR_AGENT_ID", "custom-reflector")
+    started = _capture_reflector_start(monkeypatch)
+    reflect._call_reflector([], [])
+    assert started == ["custom-reflector"]
+
+
+def test_blank_env_falls_back_to_definition_name(monkeypatch):
+    monkeypatch.setenv("FCM_SHITPOSTER_REFLECTOR_AGENT_ID", "  ")
+    started = _capture_reflector_start(monkeypatch)
+    reflect._call_reflector([], [])
+    assert started == ["shitposter-reflector"]

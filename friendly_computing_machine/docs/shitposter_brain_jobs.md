@@ -56,7 +56,8 @@ records `no_op`.
 attributes. Compute gathers unconsumed engagement rows and promoted suggestions,
 newest first, capped at `FCM_SHITPOSTER_REFLECTOR_INPUT_CAP`; the excess carries to
 the next run. With no input the run records `no_op` and the agent is not called.
-Otherwise the reflector agent (`FCM_SHITPOSTER_REFLECTOR_AGENT_ID`) returns
+Otherwise the reflector agent (definition `shitposter-reflector`, overridable with
+`FCM_SHITPOSTER_REFLECTOR_AGENT_ID`) returns
 `{"ops": [...]}` with `add`, `reinforce`, `retire`, and `merge` ops, each citing
 refs such as `post:<id>` or `suggestion:<id>`. The agent's system prompt (`shitposter-reflector` in
 `whagent_net/config/agents.yaml`) restates this op schema; change both together.
@@ -111,8 +112,8 @@ the reason in `error`, and nothing is queued. Guardrails are not checked here;
 they run at posting time.
 
 `register_write_schedule(...)` creates the schedule, every
-`FCM_SHITPOSTER_WRITE_CADENCE_HOURS` hours. Like the other kinds, nothing calls it
-at worker startup yet; `brain-trigger <persona_id> write` runs it on demand.
+`FCM_SHITPOSTER_WRITE_CADENCE_HOURS` hours. Worker startup registers it for every persona;
+`brain-trigger <persona_id> write` runs it on demand.
 
 Scheduled posts consume the queue in `temporal/shitposter/activity.py`
 (`post_queued_draft_activity`), called by `ShitpostWorkflow` before generation.
@@ -130,7 +131,8 @@ the scheduled post is generated on the spot as before.
 attributes. Compute gathers unconsumed engagement rows and promoted suggestions,
 newest first, capped at `FCM_SHITPOSTER_REFLECTOR_INPUT_CAP`; the excess carries to
 the next run. With no input the run records `no_op` and the agent is not called.
-Otherwise the reflector agent (`FCM_SHITPOSTER_REFLECTOR_AGENT_ID`) returns
+Otherwise the reflector agent (definition `shitposter-reflector`, overridable with
+`FCM_SHITPOSTER_REFLECTOR_AGENT_ID`) returns
 `{"ops": [...]}` with `add`, `reinforce`, `retire`, and `merge` ops, each citing
 refs such as `post:<id>` or `suggestion:<id>`.
 
