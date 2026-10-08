@@ -145,6 +145,83 @@ func TestValidate_EmptyToolSet_FailsLoudly(t *testing.T) {
 	assert.Contains(t, err.Error(), "tool_set must have at least one entry")
 }
 
+// TestValidate_NoToolsDeclared_Succeeds proves an agent that explicitly
+// declares tools: none may omit tool_set entirely.
+func TestValidate_NoToolsDeclared_Succeeds(t *testing.T) {
+	agent := validAgent()
+	agent.ToolSet = nil
+	agent.Tools = ToolsNone
+
+	assert.NoError(t, Validate(nil, []AgentDefinitionConfig{agent}))
+}
+
+// TestValidate_NoToolsDeclaredWithToolSet_FailsLoudly proves tools: none
+// and a non-empty tool_set are mutually exclusive.
+func TestValidate_NoToolsDeclaredWithToolSet_FailsLoudly(t *testing.T) {
+	agent := validAgent()
+	agent.Tools = ToolsNone
+
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tools: none conflicts with a non-empty tool_set")
+}
+
+// TestValidate_UnknownToolsValue_FailsLoudly proves only "none" (or unset)
+// is accepted for tools, so a typo cannot silently disable tool_set checks.
+func TestValidate_UnknownToolsValue_FailsLoudly(t *testing.T) {
+	agent := validAgent()
+	agent.ToolSet = nil
+	agent.Tools = "nnone"
+
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `must be "none" or unset`)
+}
+
+// TestValidate_EmptyToolSetWithoutDeclaration_StillFails proves a missing
+// tool_set stays an error unless tools: none is declared (the message
+// names the escape hatch).
+func TestValidate_EmptyToolSetWithoutDeclaration_StillFails(t *testing.T) {
+	agent := validAgent()
+	agent.ToolSet = nil
+	agent.Tools = ""
+
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool_set must have at least one entry")
+	assert.Contains(t, err.Error(), "tools: none")
+}
+
+// TestLoad_ReflectorAgentIsNoTools proves the checked-in shitposter-reflector
+// definition is a base-prompt-only agent: tools: none, no tool_set, and a
+// system prompt carrying the strict JSON op schema.
+func TestLoad_ReflectorAgentIsNoTools(t *testing.T) {
+	_, agents, err := Load()
+	require.NoError(t, err)
+
+	var reflector *AgentDefinitionConfig
+	for i := range agents {
+		if agents[i].AgentID == "shitposter-reflector" {
+			reflector = &agents[i]
+		}
+	}
+	require.NotNil(t, reflector, "agents.yaml must define shitposter-reflector")
+	assert.Equal(t, ToolsNone, reflector.Tools)
+	assert.Empty(t, reflector.ToolSet)
+	assert.NotEmpty(t, reflector.SystemPrompt)
+	for _, want := range []string{`"ops"`, `"add"`, `"reinforce"`, `"retire"`, `"merge"`, `"trait"`, `"instruction"`, `"cause_refs"`} {
+		assert.Contains(t, reflector.SystemPrompt, want)
+	}
+}
+
+// TestAgentDefinitionConfig_Tools_Decodes proves `tools: none` decodes 1:1
+// onto AgentDefinitionConfig.Tools via the same yaml path Load uses.
+func TestAgentDefinitionConfig_Tools_Decodes(t *testing.T) {
+	var agent AgentDefinitionConfig
+	require.NoError(t, yaml.Unmarshal([]byte("agent_id: x\nmodel: m\ntools: none\n"), &agent))
+	assert.Equal(t, ToolsNone, agent.Tools)
+}
+
 func TestValidate_ToolSetMissingServerURL_FailsLoudly(t *testing.T) {
 	agent := validAgent()
 	agent.ToolSet = []ToolServerRefConfig{{ServerURL: "", AllowedTools: nil}}
@@ -224,7 +301,11 @@ func TestLoad_EmbeddedAgentsYAML_ParsesAndValidates(t *testing.T) {
 			assert.NotEmpty(t, *a.Scope, "agent %q's scope, if set, must not be empty", a.AgentID)
 		}
 		assert.True(t, a.Model != "" || a.ModelDefinition != "", "agent %q must name a model or model_definition", a.AgentID)
-		assert.NotEmpty(t, a.ToolSet)
+		if a.Tools == ToolsNone {
+			assert.Empty(t, a.ToolSet, "agent %q declares tools: none, so it must not carry a tool_set", a.AgentID)
+		} else {
+			assert.NotEmpty(t, a.ToolSet, "agent %q needs a tool_set or tools: none", a.AgentID)
+		}
 		for _, ref := range a.ToolSet {
 			assert.True(t, strings.HasPrefix(ref.ServerURL, "http"), "tool_set server_url %q should be an http(s) URL", ref.ServerURL)
 		}

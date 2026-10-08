@@ -412,6 +412,51 @@ def _merge_attributes(
     return successor
 
 
+def _add_lore(
+    session: Session,
+    *,
+    persona_id: int,
+    text: str,
+    kind: str,
+    cause_kind: str,
+    source_post_id: Optional[int],
+    cause_post_id: Optional[int],
+    cause_ref: Optional[str],
+    reflector_run_id: Optional[str],
+    popularity_score: int,
+    now: datetime.datetime,
+) -> ShitposterLoreEntry:
+    if kind not in _LORE_KINDS:
+        raise ValueError(f"unknown lore kind {kind!r}")
+    _require_cause(cause_kind, cause_post_id, cause_ref)
+    row = ShitposterLoreEntry(
+        persona_id=persona_id,
+        text=text,
+        kind=kind,
+        source_post_id=source_post_id,
+        popularity_score=popularity_score,
+        retired_by_operator=False,
+        valid_from=now,
+    )
+    session.add(row)
+    session.flush()
+    _log(
+        session,
+        persona_id=persona_id,
+        entity_kind=ShitposterMemoryEntityKindEnum.LORE.value,
+        entity_id=row.id,
+        operation=ShitposterMemoryOperationEnum.ADD,
+        before_text=None,
+        after_text=text,
+        cause_kind=cause_kind,
+        cause_post_id=cause_post_id,
+        cause_ref=cause_ref,
+        reflector_run_id=reflector_run_id,
+        now=now,
+    )
+    return row
+
+
 def add_lore(
     persona_id: int,
     text: str,
@@ -425,34 +470,19 @@ def add_lore(
     session: Optional[Session] = None,
 ) -> ShitposterLoreEntry:
     """Open a new current lore entry and log an add. Requires a cause."""
-    if kind not in _LORE_KINDS:
-        raise ValueError(f"unknown lore kind {kind!r}")
-    _require_cause(cause_kind, cause_post_id, cause_ref)
     now = _now(now)
     with SessionManager(session) as s:
-        row = ShitposterLoreEntry(
+        row = _add_lore(
+            s,
             persona_id=persona_id,
             text=text,
             kind=kind,
-            source_post_id=source_post_id,
-            popularity_score=0,
-            retired_by_operator=False,
-            valid_from=now,
-        )
-        s.add(row)
-        s.flush()
-        _log(
-            s,
-            persona_id=persona_id,
-            entity_kind=ShitposterMemoryEntityKindEnum.LORE.value,
-            entity_id=row.id,
-            operation=ShitposterMemoryOperationEnum.ADD,
-            before_text=None,
-            after_text=text,
             cause_kind=cause_kind,
+            source_post_id=source_post_id,
             cause_post_id=cause_post_id,
             cause_ref=cause_ref,
             reflector_run_id=reflector_run_id,
+            popularity_score=0,
             now=now,
         )
         s.commit()
