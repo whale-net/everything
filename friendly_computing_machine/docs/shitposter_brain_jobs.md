@@ -2,14 +2,15 @@
 
 The brain job runner is the shared shape for Shitposter persona jobs (harvest,
 reflect, write, snapshot). Each job kind plugs a compute step and an apply step
-into it. Only the harvest job is registered so far (`harvest.py`). Nothing schedules jobs
-by default yet; the runner, the per-kind schedule helper, and the operator trigger
-are the parts that exist.
+into it. The harvest (`harvest.py`) and snapshot (`snapshot.py`) job bodies are
+registered; reflect and write are not yet. Nothing schedules jobs by default yet;
+the runner, the per-kind schedule helper, and the operator trigger are the parts
+that exist.
 
 Code: `src/friendly_computing_machine/temporal/shitposter_brain/`
 (`base.py` constants and job-body registry, `activity.py` lock/compute/apply/fail,
 `workflow.py` `ShitposterBrainJobWorkflow`, `control.py` trigger and schedule
-helpers), `harvest.py` the harvest job body. Registered in `temporal/worker.py`.
+helpers), `harvest.py` and `snapshot.py` the job bodies. Registered in `temporal/worker.py`.
 
 ## Guarantees
 
@@ -50,6 +51,14 @@ records `no_op`.
 
 `register_harvest_schedule(...)` creates the hourly schedule. Nothing calls it at
 worker startup yet; `brain-trigger <persona_id> harvest` runs it on demand.
+
+## Snapshot job
+
+`snapshot.py` renders a persona's memory (attributes, then the top N ranked lore,
+then one optional random pick from lore ranked below N) into a context snapshot
+within `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET`. N is `FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP`.
+Suggestion text is never read; only derived attributes are. Tunables are in
+[ENV.md](../ENV.md).
 
 ## Timeouts
 
