@@ -1,4 +1,4 @@
-"""FCM admin set, engagement, and tunables for Shitposter."""
+"""FCM admin set, tunables, and engagement config for Shitposter control commands."""
 
 import logging
 import os
@@ -129,3 +129,19 @@ def suggestion_backer_threshold() -> int:
     return _positive_int_env(
         "FCM_SHITPOSTER_SUGGESTION_BACKER_THRESHOLD", DEFAULT_SUGGESTION_BACKER_THRESHOLD
     )
+
+
+DEFAULT_REFLECTOR_INPUT_CAP = 200
+DEFAULT_ATTRIBUTE_CAP = 20
+
+
+def reflector_input_cap() -> int:
+    """Engagement and promoted-suggestion inputs one reflect run reads, newest first (FCM_SHITPOSTER_REFLECTOR_INPUT_CAP)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_REFLECTOR_INPUT_CAP", DEFAULT_REFLECTOR_INPUT_CAP
+    )
+
+
+def attribute_cap() -> int:
+    """Maximum active persona attributes after a reflect run (FCM_SHITPOSTER_ATTRIBUTE_CAP)."""
+    return _positive_int_env("FCM_SHITPOSTER_ATTRIBUTE_CAP", DEFAULT_ATTRIBUTE_CAP)

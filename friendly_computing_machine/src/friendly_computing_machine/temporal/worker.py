@@ -87,6 +87,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
     harvest as _harvest,  # noqa: F401  registers the harvest job body
+    reflect as _reflect,  # noqa: F401  registers the reflect job body
     snapshot as _snapshot_job,  # noqa: F401 registers the snapshot job body
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.workflow import (
