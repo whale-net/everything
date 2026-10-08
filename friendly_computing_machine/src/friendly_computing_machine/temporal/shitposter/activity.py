@@ -63,6 +63,9 @@ SCHEDULED_INSTRUCTION = "Write one original shitpost for the channel. Reply with
 SUMMON_INSTRUCTION = "Write one original shitpost on demand. Reply with only the post text."
 RIFF_INSTRUCTION = "Reply in the thread with a short riff. Reply with only the text."
 RETRY_SUFFIX = " Your previous attempt was rejected; take a different angle and do not name or mention any person."
+PROMPT_LINK_LABEL = "view prompt"
+# Slack's section block text limit
+_SECTION_TEXT_LIMIT = 3000
 
 
 @dataclass
@@ -343,6 +346,41 @@ async def record_scheduled_skip_activity(params: SkipParams) -> None:
         logger.exception("scheduled skip record failed: channel=%s", params.channel_slack_id)
 
 
+def _post_blocks(text: str, whagent_session_id: Optional[str]) -> Optional[list[dict]]:
+    """Post text plus a small "view prompt" link to its whagent session.
+
+    Slack has no spoiler or collapsed-section markup, so the link sits in a
+    context block under the post. None (plain text post) when no link can be built.
+    """
+    base_url = get_whagent_client().ui_public_url
+    if not base_url or not whagent_session_id or len(text) > _SECTION_TEXT_LIMIT:
+        return None
+    link = f"{base_url.rstrip('/')}/sessions/{whagent_session_id}"
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"<{link}|{PROMPT_LINK_LABEL}>"}],
+        },
+    ]
+
+
+def _post_shitpost(
+    channel_slack_id: str,
+    text: str,
+    whagent_session_id: Optional[str],
+    thread_ts: Optional[str] = None,
+) -> str:
+    """Post to Slack; text stays the bare post so notifications and search omit the link."""
+    return slack_post_thread_message(
+        channel_slack_id,
+        text,
+        thread_ts=thread_ts,
+        blocks=_post_blocks(text, whagent_session_id),
+        unfurl=False,
+    )
+
+
 @activity.defn
 async def post_and_record_shitpost_activity(params: PostParams) -> ShitpostResult:
     """Re-check the gate, post to Slack, record the post. Never retried.
@@ -353,8 +391,11 @@ async def post_and_record_shitpost_activity(params: PostParams) -> ShitpostResul
     gate = dal.shitposter_gate(params.params.channel_slack_id)
     if not gate.allowed:
         return ShitpostResult(ShitpostOutcome.SKIPPED_GATE, reason=gate.reason)
-    ts = slack_post_thread_message(
-        params.params.channel_slack_id, params.text, thread_ts=params.params.thread_ts
+    ts = _post_shitpost(
+        params.params.channel_slack_id,
+        params.text,
+        params.whagent_session_id,
+        thread_ts=params.params.thread_ts,
     )
     try:
         _record(params, ts)
@@ -424,7 +465,7 @@ def _post_queued_draft(p: DraftPostParams) -> Optional[ShitpostResult]:
             return None
         draft_id, text, snapshot_id = draft.id, draft.text, draft.snapshot_id
 
-    ts = slack_post_thread_message(channel_slack_id, text)
+    ts = _post_shitpost(channel_slack_id, text, whagent_session_id)
     try:
         _record_draft_post(
             p, draft_id, ts, whagent_session_id, snapshot_id, now

@@ -79,6 +79,8 @@ TABLES = [
 
 
 class FakeWhagent:
+    ui_public_url = ""
+
     def __init__(self):
         self.starts = []
         self.turns = []
@@ -112,9 +114,11 @@ class FakeWhagent:
 
 class FakeSlack:
     def __init__(self):
+        self.blocks = []
         self.posts = []
 
-    def post(self, channel, text, thread_ts=None):
+    def post(self, channel, text, thread_ts=None, blocks=None, unfurl=None):
+        self.blocks.append(blocks)
         self.posts.append((channel, text, thread_ts))
         return f"100.{len(self.posts):06d}"
 

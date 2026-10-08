@@ -45,7 +45,7 @@ See [docs/whagent_integration.md](docs/whagent_integration.md) for the feature t
 | Variable | Required | Purpose |
 |---|---|---|
 | `WHAGENT_API_URL` | yes | whagent-net `api`'s gRPC address (`host:port`), e.g. `localhost:50054`. |
-| `WHAGENT_UI_PUBLIC_URL` | yes | whagent-net `ui`'s externally-reachable base URL — used to build the `{url}/sessions/{id}` link posted in the first thread reply. |
+| `WHAGENT_UI_PUBLIC_URL` | yes | whagent-net `ui`'s externally-reachable base URL — used to build the `{url}/sessions/{id}` link posted in the first thread reply, and the small "view prompt" link under each Shitposter post (omitted when unset). |
 | `WHAGENT_KEYCLOAK_TOKEN_URL` | yes | Keycloak token endpoint fcm's service account uses to obtain a `client_credentials` grant. |
 | `WHAGENT_CLIENT_ID` | yes | fcm's whagent-net service-account Keycloak client id. |
 | `WHAGENT_CLIENT_SECRET` | yes | fcm's whagent-net service-account Keycloak client secret. |

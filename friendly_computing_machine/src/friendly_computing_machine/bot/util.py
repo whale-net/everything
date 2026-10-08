@@ -133,6 +133,7 @@ def slack_post_thread_message(
     text: str,
     thread_ts: Optional[str] = None,
     blocks: Optional[list[Block | dict]] = None,
+    unfurl: Optional[bool] = None,
 ) -> str:
     """Post a message to Slack using Slack's own ts string directly.
 
@@ -145,6 +146,8 @@ def slack_post_thread_message(
     SlackMessage row (the whagent-net thread relay's placeholder/status
     messages aren't channel content to sync, just UI state it owns).
 
+    unfurl=False suppresses link and media previews.
+
     Returns the posted message's ts.
     """
     web_client = get_slack_web_client()
@@ -153,6 +156,9 @@ def slack_post_thread_message(
         kwargs["blocks"] = blocks
     if thread_ts is not None:
         kwargs["thread_ts"] = thread_ts
+    if unfurl is not None:
+        kwargs["unfurl_links"] = unfurl
+        kwargs["unfurl_media"] = unfurl
     response = web_client.chat_postMessage(**kwargs)
     return response["ts"]
 

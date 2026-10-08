@@ -102,6 +102,8 @@ NOW = datetime.datetime.now(datetime.timezone.utc)
 
 
 class FakeWhagent:
+    ui_public_url = ""
+
     def __init__(self, replies=()):
         self.replies = list(replies)
         self.starts = []
@@ -133,9 +135,11 @@ class FakeWhagent:
 
 class FakeSlack:
     def __init__(self):
+        self.blocks = []
         self.posts = []
 
-    def post(self, channel, text, thread_ts=None):
+    def post(self, channel, text, thread_ts=None, blocks=None, unfurl=None):
+        self.blocks.append(blocks)
         self.posts.append(text)
         return f"200.{len(self.posts):06d}"
 
@@ -478,6 +482,18 @@ def test_best_ranked_draft_posts_with_its_snapshot_and_is_marked_used(engine, sl
     assert drafts["best"].used_at is not None
     assert drafts["best"].used_post_id == posts[0].id
     assert drafts["worse"].used_at is None
+
+
+def test_queued_draft_links_to_its_writer_session(engine, slack, monkeypatch):
+    _seed(engine, drafts=[{"text": "best", "rank": 1}])
+    whagent = FakeWhagent()
+    whagent.ui_public_url = "https://whagent.example"
+    _run_scheduled(whagent, monkeypatch)
+
+    [blocks] = slack.blocks
+    assert blocks[1]["elements"][0]["text"] == (
+        f"<https://whagent.example/sessions/{WRITER_SESSION}|view prompt>"
+    )
 
 
 def test_draft_is_used_at_most_once_across_runs(engine, slack, monkeypatch):
