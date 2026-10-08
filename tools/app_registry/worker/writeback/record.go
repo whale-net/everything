@@ -62,7 +62,7 @@ func (r *Recorder) RecordWritebackResult(ctx context.Context, promotionID, locat
 	// FR7a/FR7c: publish after write commits, but only if publisher is configured.
 	// Publish errors are discarded and logged by the publisher; see #1130 for details.
 	if r.Publisher != nil {
-		r.Publisher.Publish(promotionID, "writeback_completed", "success")
+		r.Publisher.Publish(ctx, promotionID, "writeback_completed", "success")
 	}
 	return nil
 }

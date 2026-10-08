@@ -314,7 +314,7 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 		// Publish after the write lands (NFR3): never before, never on a
 		// failed UpdateTargetState (the early return above skips this).
 		if a.Publisher != nil {
-			a.Publisher.PublishReleaseRun(releaseRunID, releaseTargetEventKind(repository.ReleaseRunTargetStateFailed), releaseTargetEventStatus(repository.ReleaseRunTargetStateFailed))
+			a.Publisher.PublishReleaseRun(ctx, releaseRunID, releaseTargetEventKind(repository.ReleaseRunTargetStateFailed), releaseTargetEventStatus(repository.ReleaseRunTargetStateFailed))
 		}
 		return nil
 	}
@@ -352,7 +352,7 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 		// its own event, in order. Never published on a failed
 		// UpdateTargetState (the error return above short-circuits first).
 		if a.Publisher != nil {
-			a.Publisher.PublishReleaseRun(releaseRunID, releaseTargetEventKind(step), releaseTargetEventStatus(step))
+			a.Publisher.PublishReleaseRun(ctx, releaseRunID, releaseTargetEventKind(step), releaseTargetEventStatus(step))
 		}
 	}
 	if newState == repository.ReleaseRunTargetStateSucceeded {

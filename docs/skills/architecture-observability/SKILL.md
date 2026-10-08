@@ -49,6 +49,7 @@ defer logging.Shutdown(ctx) //nolint:errcheck
 | HTTP client | `otelhttp.NewTransport`, or `logging.WrapDefaultHTTPTransport()` for `http.DefaultClient` |
 | MCP server | `otelhttp` on the HTTP handler **and** `libs/go/mcpobs` per tool call (below) |
 | MCP client | `mcpobs.WrapClientTransport` |
+| RabbitMQ publish / consume | `libs/go/rmq` `Publisher`/`Consumer` (producer and consumer spans, headers propagated for you); never call `amqp.Channel.Publish*` directly. Handlers that spawn goroutines pass `context.WithoutCancel(ctx)`, not `context.Background()` |
 
 ## MCP servers need per-tool-call spans
 

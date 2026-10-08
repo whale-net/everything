@@ -113,8 +113,10 @@ func (c *Consumer) handleStartSession(ctx context.Context, msg rmq.Message) erro
 	// take several minutes, and QoS=1 means no other messages (stop, kill, etc.)
 	// would be processable while this handler blocks. The API gets an immediate
 	// "acknowledged" reply; session progress is reported via status updates.
+	// Keep the trace for async work, but not the handler's cancellation.
+	asyncCtx := context.WithoutCancel(ctx)
 	go func() {
-		if err := c.handler.HandleStartSession(context.Background(), &cmd); err != nil {
+		if err := c.handler.HandleStartSession(asyncCtx, &cmd); err != nil {
 			slog.Error("session start failed", "session_id", cmd.SessionID, "error", err)
 		} else {
 			slog.Info("command completed", "command", "start_session", "session_id", cmd.SessionID)
@@ -137,8 +139,9 @@ func (c *Consumer) handleStopSession(ctx context.Context, msg rmq.Message) error
 	// processable while this handler blocks. The API gets an immediate
 	// "acknowledged" reply; session progress is reported via the "stopping"/
 	// "stopped" status updates HandleStopSession already publishes independently.
+	asyncCtx := context.WithoutCancel(ctx)
 	go func() {
-		if err := c.handler.HandleStopSession(context.Background(), &cmd); err != nil {
+		if err := c.handler.HandleStopSession(asyncCtx, &cmd); err != nil {
 			slog.Error("session stop failed", "session_id", cmd.SessionID, "error", err)
 		} else {
 			slog.Info("command completed", "command", "stop_session", "session_id", cmd.SessionID)
@@ -193,8 +196,9 @@ func (c *Consumer) handleRemoveAddon(ctx context.Context, msg rmq.Message) error
 		return fmt.Errorf("failed to unmarshal remove addon command: %w", err)
 	}
 	slog.Info("received command", "command", "remove_addon", "installation_id", cmd.InstallationID, "sgc_id", cmd.SGCID, "addon_id", cmd.AddonID, "routing_key", msg.RoutingKey)
+	asyncCtx := context.WithoutCancel(ctx)
 	go func() {
-		if err := c.handler.HandleRemoveAddon(context.Background(), &cmd); err != nil {
+		if err := c.handler.HandleRemoveAddon(asyncCtx, &cmd); err != nil {
 			slog.Error("remove addon failed", "installation_id", cmd.InstallationID, "error", err)
 		} else {
 			slog.Info("command completed", "command", "remove_addon", "installation_id", cmd.InstallationID)
@@ -216,8 +220,9 @@ func (c *Consumer) handleVerifyCacheEntry(ctx context.Context, msg rmq.Message) 
 	}
 	slog.Info("received command", "command", "verify_cache_entry", "cache_entry_id", cmd.CacheEntryID, "workshop_id", cmd.WorkshopID, "routing_key", msg.RoutingKey)
 
+	asyncCtx := context.WithoutCancel(ctx)
 	go func() {
-		if err := c.handler.HandleVerifyCacheEntry(context.Background(), &cmd); err != nil {
+		if err := c.handler.HandleVerifyCacheEntry(asyncCtx, &cmd); err != nil {
 			slog.Error("verify cache entry failed", "cache_entry_id", cmd.CacheEntryID, "error", err)
 		} else {
 			slog.Info("command completed", "command", "verify_cache_entry", "cache_entry_id", cmd.CacheEntryID)
@@ -240,8 +245,9 @@ func (c *Consumer) handleBackup(ctx context.Context, msg rmq.Message) error {
 		return nil
 	}
 
+	asyncCtx := context.WithoutCancel(ctx)
 	go func() {
-		if err := c.handler.HandleBackup(context.Background(), &cmd); err != nil {
+		if err := c.handler.HandleBackup(asyncCtx, &cmd); err != nil {
 			slog.Error("backup failed", "backup_id", cmd.BackupID, "error", err)
 		}
 	}()

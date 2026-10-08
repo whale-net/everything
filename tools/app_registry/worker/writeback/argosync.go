@@ -399,7 +399,7 @@ func (a *ArgoSyncActivities) recordSyncEvent(ctx context.Context, promotionID, s
 	// Publish errors are discarded and logged by the publisher; see #1130 for details.
 	if a.Publisher != nil {
 		eventKind := source // Use the source as the event kind (e.g., "refresh_triggered", "poll_observed")
-		a.Publisher.Publish(promotionID, eventKind, "pending")
+		a.Publisher.Publish(ctx, promotionID, eventKind, "pending")
 	}
 	return e, nil
 }

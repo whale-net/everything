@@ -201,7 +201,7 @@ func (s *PromotionServer) Promote(ctx context.Context, req *pb.PromoteRequest) (
 	// Publish errors are discarded; see #1130 for details.
 	if !replayed && !promoteResp.AlreadyPromoted && s.pub != nil {
 		// Cross-reference #800 for request-scoped logging considerations.
-		s.pub.Publish(promoteResp.Promotion.PromotionId, "promotion_started", "pending")
+		s.pub.Publish(ctx, promoteResp.Promotion.PromotionId, "promotion_started", "pending")
 	}
 
 	return promoteResp, nil
@@ -393,7 +393,7 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 	// Publish errors are discarded; see #1130 for details.
 	if !replayed && s.pub != nil {
 		// Cross-reference #800 for request-scoped logging considerations.
-		s.pub.Publish(rollbackResp.Promotion.PromotionId, "rollback_started", "pending")
+		s.pub.Publish(ctx, rollbackResp.Promotion.PromotionId, "rollback_started", "pending")
 	}
 	return rollbackResp, nil
 }

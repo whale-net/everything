@@ -9,8 +9,6 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 )
 
 // Publisher publishes messages to RabbitMQ exchanges
@@ -99,51 +97,82 @@ func isNotFound(err error) bool {
 		strings.Contains(err.Error(), "Exception (404)")
 }
 
+// marshalBody converts a []byte, string, or JSON-marshalable value to bytes.
+func marshalBody(body interface{}) ([]byte, error) {
+	switch v := body.(type) {
+	case []byte:
+		return v, nil
+	case string:
+		return []byte(v), nil
+	default:
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal message: %w", err)
+		}
+		return b, nil
+	}
+}
+
 // Publish publishes a message to an exchange with a routing key
 // It automatically reconnects to RabbitMQ if the channel is closed
 func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, body interface{}) error {
-	var bodyBytes []byte
-	var err error
-
-	switch v := body.(type) {
-	case []byte:
-		bodyBytes = v
-	case string:
-		bodyBytes = []byte(v)
-	default:
-		bodyBytes, err = json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("failed to marshal message: %w", err)
-		}
+	bodyBytes, err := marshalBody(body)
+	if err != nil {
+		return err
 	}
+	return p.publish(ctx, exchange, routingKey, amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         bodyBytes,
+		DeliveryMode: amqp.Persistent,
+	})
+}
+
+// PublishWithExpiry publishes a message with a per-message TTL (expiration).
+// expiry is the duration after which the broker will drop the message if undelivered.
+// It automatically reconnects to RabbitMQ if the channel is closed.
+func (p *Publisher) PublishWithExpiry(ctx context.Context, exchange, routingKey string, body interface{}, expiry time.Duration) error {
+	bodyBytes, err := marshalBody(body)
+	if err != nil {
+		return err
+	}
+	return p.publish(ctx, exchange, routingKey, amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         bodyBytes,
+		DeliveryMode: amqp.Persistent,
+		Expiration:   fmt.Sprintf("%d", expiry.Milliseconds()),
+	})
+}
+
+// PublishWithReply publishes a message with RPC support (reply_to and correlation_id)
+// It automatically reconnects to RabbitMQ if the channel is closed
+func (p *Publisher) PublishWithReply(ctx context.Context, exchange, routingKey string, body []byte, replyTo, correlationID string) error {
+	return p.publish(ctx, exchange, routingKey, amqp.Publishing{
+		ContentType:   "application/json",
+		Body:          body,
+		DeliveryMode:  amqp.Persistent,
+		ReplyTo:       replyTo,
+		CorrelationId: correlationID,
+	})
+}
+
+// publish sends msg inside a producer span with trace context injected into
+// its headers, recreating the channel and retrying once if it was closed.
+func (p *Publisher) publish(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) (err error) {
+	ctx, span, headers := startPublishSpan(ctx, exchange, routingKey, msg.CorrelationId)
+	defer func() { endSpan(span, err) }()
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// Inject trace context into AMQP headers so consumers can extract it.
-	carrier := propagation.MapCarrier{}
-	otel.GetTextMapPropagator().Inject(ctx, carrier)
-	headers := amqp.Table{}
-	for k, v := range carrier {
-		headers[k] = v
-	}
-
-	publishing := amqp.Publishing{
-		ContentType:  "application/json",
-		Body:         bodyBytes,
-		DeliveryMode: amqp.Persistent,
-		Timestamp:    time.Now(),
-		Headers:      headers,
-	}
+	msg.Headers = headers
+	msg.Timestamp = time.Now()
 
 	// First attempt
 	p.mu.Lock()
 	ch := p.channel
 	p.mu.Unlock()
 
-	err = ch.PublishWithContext(ctx, exchange, routingKey, false, false, publishing)
-
-	// If publish succeeded, return
+	err = ch.PublishWithContext(ctx, exchange, routingKey, false, false, msg)
 	if err == nil {
 		return nil
 	}
@@ -170,173 +199,7 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 			p.mu.Unlock()
 		}
 
-		// Retry the publish once
-		retryErr := ch.PublishWithContext(ctx, exchange, routingKey, false, false, publishing)
-		if retryErr != nil {
-			return fmt.Errorf("publish failed after channel recreation: %w", retryErr)
-		}
-		return nil
-	}
-
-	// For other errors, return as-is (don't retry)
-	return err
-}
-
-// PublishWithExpiry publishes a message with a per-message TTL (expiration).
-// expiry is the duration after which the broker will drop the message if undelivered.
-// It automatically reconnects to RabbitMQ if the channel is closed.
-func (p *Publisher) PublishWithExpiry(ctx context.Context, exchange, routingKey string, body interface{}, expiry time.Duration) error {
-	var bodyBytes []byte
-	var err error
-
-	switch v := body.(type) {
-	case []byte:
-		bodyBytes = v
-	case string:
-		bodyBytes = []byte(v)
-	default:
-		bodyBytes, err = json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("failed to marshal message: %w", err)
-		}
-	}
-
-	expirationMS := fmt.Sprintf("%d", expiry.Milliseconds())
-
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	p.mu.Lock()
-	ch := p.channel
-	p.mu.Unlock()
-
-	err = ch.PublishWithContext(
-		ctx,
-		exchange,
-		routingKey,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType:  "application/json",
-			Body:         bodyBytes,
-			DeliveryMode: amqp.Persistent,
-			Timestamp:    time.Now(),
-			Expiration:   expirationMS,
-		},
-	)
-
-	if err == nil {
-		return nil
-	}
-
-	if isChannelClosed(err) {
-		p.mu.Lock()
-		if p.channel != ch {
-			ch = p.channel
-			p.mu.Unlock()
-		} else {
-			newCh, recreateErr := p.chanOpener(p.conn, exchange)
-			if recreateErr != nil {
-				p.mu.Unlock()
-				return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
-			}
-			p.channel = newCh
-			ch = newCh
-			p.mu.Unlock()
-		}
-
-		retryErr := ch.PublishWithContext(
-			ctx,
-			exchange,
-			routingKey,
-			false,
-			false,
-			amqp.Publishing{
-				ContentType:  "application/json",
-				Body:         bodyBytes,
-				DeliveryMode: amqp.Persistent,
-				Timestamp:    time.Now(),
-				Expiration:   expirationMS,
-			},
-		)
-
-		if retryErr != nil {
-			return fmt.Errorf("publish failed after channel recreation: %w", retryErr)
-		}
-		return nil
-	}
-
-	return err
-}
-
-// PublishWithReply publishes a message with RPC support (reply_to and correlation_id)
-// It automatically reconnects to RabbitMQ if the channel is closed
-func (p *Publisher) PublishWithReply(ctx context.Context, exchange, routingKey string, body []byte, replyTo, correlationID string) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	// First attempt
-	p.mu.Lock()
-	ch := p.channel
-	p.mu.Unlock()
-
-	err := ch.PublishWithContext(
-		ctx,
-		exchange,
-		routingKey,
-		false, // mandatory
-		false, // immediate
-		amqp.Publishing{
-			ContentType:   "application/json",
-			Body:          body,
-			DeliveryMode:  amqp.Persistent,
-			Timestamp:     time.Now(),
-			ReplyTo:       replyTo,
-			CorrelationId: correlationID,
-		},
-	)
-
-	// If publish succeeded, return
-	if err == nil {
-		return nil
-	}
-
-	// If the channel is closed, try to recreate and retry once.
-	// Same double-recreation guard as Publish.
-	if isChannelClosed(err) {
-		p.mu.Lock()
-		if p.channel != ch {
-			ch = p.channel
-			p.mu.Unlock()
-		} else {
-			newCh, recreateErr := p.chanOpener(p.conn, exchange)
-			if recreateErr != nil {
-				p.mu.Unlock()
-				return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
-			}
-			p.channel = newCh
-			ch = newCh
-			p.mu.Unlock()
-		}
-
-		// Retry the publish once
-		retryErr := ch.PublishWithContext(
-			ctx,
-			exchange,
-			routingKey,
-			false, // mandatory
-			false, // immediate
-			amqp.Publishing{
-				ContentType:   "application/json",
-				Body:          body,
-				DeliveryMode:  amqp.Persistent,
-				Timestamp:     time.Now(),
-				ReplyTo:       replyTo,
-				CorrelationId: correlationID,
-			},
-		)
-
-		if retryErr != nil {
+		if retryErr := ch.PublishWithContext(ctx, exchange, routingKey, false, false, msg); retryErr != nil {
 			return fmt.Errorf("publish failed after channel recreation: %w", retryErr)
 		}
 		return nil

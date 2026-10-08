@@ -9,8 +9,6 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 )
 
 const (
@@ -391,15 +389,8 @@ func (c *Consumer) handleMessage(ctx context.Context, delivery amqp.Delivery) {
 		return
 	}
 
-	// Extract trace context from AMQP headers so this message is linked to
-	// the publisher's span as a child.
-	carrier := propagation.MapCarrier{}
-	for k, v := range delivery.Headers {
-		if s, ok := v.(string); ok {
-			carrier[k] = s
-		}
-	}
-	ctx = otel.GetTextMapPropagator().Extract(ctx, carrier)
+	// Consumer span parented by the publisher's span via the AMQP headers.
+	ctx, span := startConsumeSpan(ctx, delivery)
 
 	// Create message struct
 	msg := Message{
@@ -416,6 +407,7 @@ func (c *Consumer) handleMessage(ctx context.Context, delivery amqp.Delivery) {
 	if msg.ReplyTo != "" && msg.CorrelationID != "" {
 		c.sendReply(ctx, msg.ReplyTo, msg.CorrelationID, err)
 	}
+	endSpan(span, err)
 
 	if err != nil {
 		log.Printf("Error handling message: %v", err)
@@ -487,22 +479,29 @@ func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string,
 	// Publish reply using the channel directly (no exchange, direct to queue)
 	log.Printf("Sending reply to %s (correlation_id=%s, success=%v)", replyTo, correlationID, err == nil)
 
+	ctx, span, headers := startPublishSpan(ctx, "", replyTo, correlationID)
+	var publishErr error
+	defer func() { endSpan(span, publishErr) }()
+
+	reply := amqp.Publishing{
+		ContentType:   "application/json",
+		Body:          responseBytes,
+		CorrelationId: correlationID,
+		Headers:       headers,
+	}
+
 	// First attempt
 	c.mu.Lock()
 	ch := c.channel
 	c.mu.Unlock()
 
-	publishErr := ch.PublishWithContext(
+	publishErr = ch.PublishWithContext(
 		ctx,
 		"",      // exchange (empty for direct queue publish)
 		replyTo, // routing key (queue name)
 		false,   // mandatory
 		false,   // immediate
-		amqp.Publishing{
-			ContentType:   "application/json",
-			Body:          responseBytes,
-			CorrelationId: correlationID,
-		},
+		reply,
 	)
 
 	// If publish succeeded, return
@@ -520,6 +519,7 @@ func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string,
 		if recreateErr != nil {
 			c.mu.Unlock()
 			log.Printf("Failed to recreate channel for reply: %v (original error: %v)", recreateErr, publishErr)
+			publishErr = recreateErr
 			return
 		}
 
@@ -534,13 +534,10 @@ func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string,
 			replyTo, // routing key (queue name)
 			false,   // mandatory
 			false,   // immediate
-			amqp.Publishing{
-				ContentType:   "application/json",
-				Body:          responseBytes,
-				CorrelationId: correlationID,
-			},
+			reply,
 		)
 
+		publishErr = retryErr
 		if retryErr != nil {
 			log.Printf("Failed to send reply after channel recreation: %v", retryErr)
 		} else {
