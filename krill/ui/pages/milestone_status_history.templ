@@ -4,115 +4,64 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// The Milestone status-history view (FR 9a6e7924): one container's whole
-// status-transition register, oldest first, each transition carrying its own
-// badge, actor, instant and note.
-//
-// It is its own route rather than a tab of the Milestone detail, because the
-// detail's own subject is what the milestone DELIVERS and the rail is its
-// summary: the register is a long tail, and a detail page that grew a
-// per-transition table beside its delivery breakdown would answer a question
-// nobody asked it. The rail's Status history link is what reaches here.
-//
-// Everything on it is somebody else's. The rows are the get_milestone_status_history
-// read, the status badge is the shared statusBadge, the relative-time wording is
-// the shell's own, and the back link is the detail URL the rail already spells.
-// This file adds a layout over them and defines no second copy of any of it.
+// The Milestone status-history view: one container's status transitions,
+// oldest first. A separate route from the detail page, which is about what
+// the milestone delivers; the rail's Status history link leads here.
 
-// MilestoneStatusHistoryAnchor is the DOM id this view's region carries, so
-// the tests that assert on it -- and the rail's link target -- name one element.
+// MilestoneStatusHistoryAnchor is the DOM id of this view's region and the
+// rail link's target.
 const MilestoneStatusHistoryAnchor = "krill-milestone-status-history"
 
-// StatusTransition is one row of the register: a status, who moved it there,
-// when, and why they said.
-//
-// The fields are the store's own, pre-rendered: Status is the store's wire
-// value the shared statusBadge resolves, At is the exact instant and Relative
-// its human age. Keeping both rather than rendering one from the other is what
-// lets the exact time survive on hover without the browser's clock, and lets
-// the no-JavaScript page show something an operator can read rather than a
-// bare instant.
+// StatusTransition is one register row. At (exact) and Relative (human age)
+// are both kept so the exact time shows on hover without client JS.
 type StatusTransition struct {
-	// ID is the transition's own id, carried so a row is addressable and a
-	// test can check that what rendered came from the transition it meant.
 	ID string
 
-	// Status renders through the shared statusBadge -> components.MilestoneStatusStyle,
-	// so a status is one colour on the register, the detail header, the
-	// rail and the Milestones table alike.
 	Status string
 
-	// Actor is the acting subject who recorded this transition. OnBehalfOf
-	// is set only where it differs, because the pair is equal for the
-	// ordinary case and a second identical line would say nothing.
+	// OnBehalfOf is set only when it differs from Actor.
 	Actor      string
 	OnBehalfOf string
 
-	// At is the exact instant, RFC3339; Relative is how long ago that was.
-	// At is what the element's datetime and title carry, so hovering
-	// answers "exactly when" from text the relative figure cannot.
+	// At is RFC3339; Relative is how long ago that was.
 	At       string
 	Relative string
 
-	// Note is the transition's own note, or "" when it recorded none. It
-	// renders as its own column rather than being appended to the actor,
-	// because a note is the reason for the transition and an operator
-	// scanning the register is looking for reasons.
+	// Note is "" when none was recorded.
 	Note string
 }
 
-// MilestoneStatusHistoryPage is the status-history view's view model.
 type MilestoneStatusHistoryPage struct {
-	// Product is the banner: the product this container belongs to.
 	Product ProductHeader
 
-	// Path is this page's own URL, so a refresh and a shared link are the
-	// same page.
+	// Path is this page's own URL.
 	Path string
 
-	// ID and Kind describe the container whose register this is. They ride
-	// on the region as data attributes rather than being rendered, because
-	// the operator arrived here from that container's own detail and the
-	// heading above names it.
+	// ID and Kind ride on the region as data attributes rather than rendering.
 	ID   string
 	Kind string
 
-	// Crumbs walks product -> Milestones -> the container's name -> this
-	// page, the last of which carries no href because the operator is
-	// already on it.
 	Crumbs []MilestoneCrumb
 
-	// Title is this page's own heading; ContainerName is the milestone or
-	// milepebble the register belongs to, which is what the rail's link was
-	// labelled with.
 	Title         string
 	ContainerName string
 
-	// DetailPath is the container's detail page -- where the operator came
-	// from, and what "back" means here.
+	// DetailPath is the container's detail page, the "back" target.
 	DetailPath string
 
-	// Transitions is the register as read: oldest first, each entry whole.
-	// It is held in the read's own order rather than re-sorted, so the page
-	// and get_milestone_status_history describe one list in one order.
+	// Transitions is kept in the read's order, not re-sorted, so the page and
+	// get_milestone_status_history list one order.
 	Transitions []StatusTransition
 
-	// Error is set when the register could not be read. It renders as its
-	// own alert in place of the list: an empty table under a failed read is
-	// indistinguishable from a container whose status was never touched.
+	// Error replaces the list with an alert: an empty table under a failed read
+	// would look like a container never touched.
 	Error string
 }
 
-// HasTransitions reports whether the register holds any row, so the empty
-// state and the table are decided in one place rather than at two.
 func (p MilestoneStatusHistoryPage) HasTransitions() bool { return len(p.Transitions) > 0 }
 
-// SummaryLine is the count sentence under the heading: what the operator
-// followed, and how much of it there is.
-//
-// It restates the rail's count on purpose. The two are read from one call, so
-// they cannot disagree -- and an operator who walked two pages to compare a
-// number and could not would rightly stop trusting both.
+// SummaryLine is the count sentence under the heading; it restates the
+// rail's count, read from the same call.
 func (p MilestoneStatusHistoryPage) SummaryLine() string {
 	if !p.HasTransitions() {
 		return "No status changes recorded."
@@ -123,12 +72,8 @@ func (p MilestoneStatusHistoryPage) SummaryLine() string {
 	return itoa(len(p.Transitions)) + " status changes, oldest first."
 }
 
-// statusTransitionActor renders one row's attribution.
-//
-// The acting subject is the actor; the on-behalf-of subject is shown beneath
-// it only when it is somebody else, because LB4's distinction exists to say
-// "this was done by an agent, for this person" and collapsing the pair would
-// make exactly that statement inexpressible.
+// statusTransitionActor shows the on-behalf-of subject only when it differs
+// from the actor, so agent-for-person actions stay visible.
 templ statusTransitionActor(t StatusTransition) {
 	<span class="text-sm" data-krill="status-transition-actor">{ t.Actor }</span>
 	if t.OnBehalfOf != "" {
@@ -138,24 +83,15 @@ templ statusTransitionActor(t StatusTransition) {
 	}
 }
 
-// statusTransitionAt renders one row's instant: the relative age as the
-// visible text, with the exact instant carried in the datetime and the title
-// so hovering answers "exactly when" -- the same shape the Overview's
-// escalation panel gives its timestamps, and the same
-// data-krill-updated-at hook the task detail's Escalated row uses for a
-// historical event rather than a freshness stamp.
-//
-// Relative is what the element renders server-side, so the page says
-// something readable with the head script absent; the exact instant is in
-// the title either way, so the precise answer survives both ways.
+// statusTransitionAt renders the relative age server-side, with the exact
+// instant in datetime and title so hover answers "exactly when".
 templ statusTransitionAt(t StatusTransition) {
 	<time class="text-sm text-base-content/70" data-krill="status-transition-at"
 		data-krill-updated-at={ t.At } datetime={ t.At } title={ t.At }>{ t.Relative }</time>
 }
 
-// statusTransitionNote renders one row's note, or the cell's own emptiness
-// when there is none. It is an em dash rather than a blank cell so the column
-// reads as "none recorded" instead of "the read dropped it".
+// statusTransitionNote renders an em dash for no note so the cell reads as
+// "none recorded", not dropped.
 templ statusTransitionNote(t StatusTransition) {
 	if t.Note != "" {
 		<span class="text-sm" data-krill="status-transition-note">{ t.Note }</span>
@@ -164,12 +100,6 @@ templ statusTransitionNote(t StatusTransition) {
 	}
 }
 
-// statusHistoryTable is the register itself: one row per transition, in the
-// read's own order.
-//
-// It is a table rather than a list because the comparison an operator makes
-// here is between rows -- which status replaced which, and how long each state
-// lasted -- and a stack of sentences would not let them scan it.
 templ statusHistoryTable(page MilestoneStatusHistoryPage) {
 	<div class="overflow-x-auto rounded-lg border border-base-300">
 		<table class="table table-zebra table-sm" data-krill="status-history-table">
@@ -195,9 +125,8 @@ templ statusHistoryTable(page MilestoneStatusHistoryPage) {
 	</div>
 }
 
-// MilestoneStatusHistory renders the status-history view: the header naming
-// the container whose register this is, a link back to its detail, and the
-// register itself.
+// MilestoneStatusHistory renders the header, a back link to the detail, and
+// the register.
 templ MilestoneStatusHistory(page MilestoneStatusHistoryPage) {
 	<section id={ MilestoneStatusHistoryAnchor } data-krill="milestone-status-history"
 		data-krill-container-id={ page.ID } data-krill-container-kind={ page.Kind } class="space-y-4">
@@ -219,9 +148,7 @@ templ MilestoneStatusHistory(page MilestoneStatusHistoryPage) {
 						@htmxui.Alert(htmxui.AlertError, page.Error, nil)
 					</div>
 				} else if !page.HasTransitions() {
-					// Absence of history is a real answer, not a failed read:
-					// a container whose status has never been set reads
-					// "not started" precisely because no transition exists.
+					// No history is a real answer: the status is "not started".
 					<div data-krill="status-history-empty">
 						@htmxui.EmptyState(
 							"No status changes yet.",

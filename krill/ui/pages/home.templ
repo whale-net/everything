@@ -1,17 +1,15 @@
 package pages
 
-// AreaLink is one "go here" row on an area's landing page: a link and
-// the one-line description of what it leads to.
+// AreaLink is one row on an area's landing page: a link and a one-line
+// description of where it leads.
 type AreaLink struct {
 	Path  string
 	Label string
 	Blurb string
 }
 
-// AreaIndex is the shared link-and-blurb list the ops root and the spec
-// landing both render. The two were near-identical html/template strings;
-// they are one component because the difference between them was a
-// heading, not a shape.
+// AreaIndex is the link-and-blurb list shared by the ops root and the spec
+// landing.
 templ AreaIndex(heading string, links []AreaLink) {
 	<section data-krill="area-index">
 		<h2 class="text-lg font-semibold">{ heading }</h2>

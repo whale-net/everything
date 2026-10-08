@@ -1,37 +1,22 @@
 package pages
 
-// The Milestone detail's Delivery card (FR 1d16afe2): one container's
-// delivered scope split into the items that have a shipment record and the
-// items that do not, as two tables of the same shape.
-//
-// Everything it renders is somebody else's: the content is the
-// get_delivery_breakdown read, the status disagreement warning is
-// deliveryStatusDisagreement, the no-shipment-record sentence is
-// deliveryUnshippedLabel, the Shipment badge is components.ShipmentStyle and
-// the Id chip is the head script's own data-krill="copy-task-id" hook. This
-// file adds a layout over them and defines no second copy of any of it.
+// The Milestone detail's Delivery card: one container's scope split into
+// items with and without a shipment record, as two tables of the same shape.
 
 import (
 	"github.com/whale-net/everything/krill/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// The two shipment states a row can be in, which are also the two tables
-// the card renders. They are strings rather than a type because they are
-// both the components.ShipmentStyle key and the badge's own label, so one
-// value drives the colour and the words and the two cannot disagree.
+// Shipment states, used as both the components.ShipmentStyle key and the
+// badge label so colour and words cannot disagree.
 const (
 	deliveryShippedState   = "shipped"
 	deliveryUnshippedState = "unshipped"
 )
 
-// deliveryTable is one of the card's two buckets: what it is called, the
-// shipment state every row in it carries, what it lists, and what it says
-// when it lists nothing.
-//
-// The state lives here rather than on the entity because it is a property
-// of the BUCKET, not of any row: the same item is unshipped in the unshipped
-// table and would be a lie if it claimed otherwise in the shipped one.
+// deliveryTable is one of the card's two buckets. The shipment state lives on
+// the bucket, not the row, because it is a property of the bucket.
 type deliveryTable struct {
 	Heading    string
 	State      string
@@ -39,24 +24,15 @@ type deliveryTable struct {
 	Rows       []DeliveryEntity
 }
 
-// shipmentBadge renders one row's shipment state. It goes through
-// components.ShipmentStyle, the same one-value-one-colour chain statusBadge
-// uses, so "shipped" is the same green here as it is in the status column
-// above this card.
+// shipmentBadge renders a row's shipment state via components.ShipmentStyle.
 templ shipmentBadge(state string) {
 	{{ s := components.ShipmentStyle(state) }}
 	@htmxui.Badge(state, s.Variant, s.Size, s.Soft, nil)
 }
 
-// deliveryEntityID is one row's Id cell: the surrogate id as a copy chip,
-// plus the polite live region the head script writes the confirmation into.
-//
-// The chip is the task detail's own control -- same data-krill hook, same
-// data-task-id attribute, same head script, shipped disabled so a control
-// that cannot work never looks live. It sits in a <dd> inside the cell
-// because that is the scope the shared script looks in (btn.closest('dd'));
-// a <td> with no <dd> ancestor would copy correctly and then confirm
-// nothing at all.
+// deliveryEntityID is the Id cell: a copy chip plus the live region for its
+// confirmation. It sits in a <dd> because the shared copy script looks up
+// btn.closest('dd'); without one it copies but never confirms.
 templ deliveryEntityID(e DeliveryEntity) {
 	<dl>
 		<dd class="ml-0">
@@ -70,22 +46,13 @@ templ deliveryEntityID(e DeliveryEntity) {
 	</dl>
 }
 
-// deliveryEntityTable is one bucket's table: a heading, the no-shipment-record
-// sentence where it applies, and the rows.
-//
-// The FR's four columns are Item, Kind, Shipment and Id. They are checked as
-// a table rather than as a list because the split is the point: an operator
-// reads "this feature shipped, that one has not" by comparing two columns of
-// the same shape, and a list of sentences would not let them.
-//
-// An empty bucket renders its sentence and no table: an empty table under a
-// heading reads as a read that returned nothing to compare.
+// deliveryEntityTable is one bucket's table. An empty bucket renders only its
+// sentence: an empty table reads as a failed read.
 templ deliveryEntityTable(t deliveryTable) {
 	<div class="space-y-1" data-krill={ "milestone-delivery-" + t.State + "-bucket" }>
 		<h3 class="text-sm font-semibold">{ t.Heading }</h3>
 		if t.State == deliveryUnshippedState {
-			// The one sentence that is true of every row below it, and the
-			// same one the roadmap's unshipped bucket carries.
+			// Sentence true of every row below; matches the roadmap's unshipped bucket.
 			<p class="text-sm text-base-content/70" data-krill="milestone-delivery-unshipped-label">
 				{ deliveryUnshippedLabel }
 			</p>
@@ -119,19 +86,9 @@ templ deliveryEntityTable(t deliveryTable) {
 	</div>
 }
 
-// MilestoneDelivery is the detail page's Delivery card: the disagreement
-// warning when the container's own status and its breakdown tell different
-// stories, then the shipped and unshipped tables.
-//
-// The warning is the existing deliveryStatusDisagreement alert, rendered
-// above the tables rather than beside the badge it contradicts, because the
-// operator has to read it before concluding the outstanding list is complete.
-// It appears only when the read set the flag, and nothing here decides that
-// on its own.
-//
-// A nil breakdown renders no card at all rather than an empty one: a box
-// with no content says something is missing where the answer is "there is
-// nothing to show here".
+// MilestoneDelivery is the Delivery card: the status-disagreement warning
+// (above the tables, so it is read first), then both tables. A nil breakdown
+// renders nothing.
 templ MilestoneDelivery(b *DeliveryBreakdown) {
 	if b != nil {
 		<div class="card bg-base-100 border border-base-300" data-krill="milestone-delivery-card">

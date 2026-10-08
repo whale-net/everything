@@ -1,24 +1,6 @@
-// The design-session write surface: the two Requirement-Contributor
-// actions the design-session read views (design_page.go) hang off -- open a
-// new session from a plain-language opening_submission, and submit
-// follow-up input to an open session as an `answer` revision round.
-//
-// Both actions go through withKrillSession (writes.go), the same path every
-// other write in this binary takes: the krill session is minted from the
-// signed-in operator's real (iss, sub) pair (identity.go), and the browser's
-// form carries only the action's own arguments -- no identity, scope, or
-// session id is ever read from the request. Each action calls the exact krill
-// api operation its MCP twin wraps (OpenDesignSessionHandler /
-// AppendRevisionEventHandler), so a browser and an MCP client produce the same
-// stored rows and the same rejections.
-//
-// Neither action writes a Feature/Requirement entity. The open path sends
-// only product_id + opening_submission -- the api body has no entity-reference
-// field at all (FR8), so there is nothing for the browser to point at a
-// Feature or Requirement with. The answer path always sends an empty
-// entity_deltas, so the UI proposes and amends no spec entity; turning a
-// submission into entities stays the mediated (propose_entities) path an
-// Agent drives, not a browser write.
+// Design-session writes: open a session and submit an `answer` round. Both go
+// through withKrillSession and call the same api operations as their MCP twins.
+// Neither writes a spec entity; entity_deltas is always empty.
 package main
 
 import (
@@ -39,38 +21,29 @@ import (
 
 // ── wire types ───────────────────────────────────────────────────────────────
 
-// The request/response types below mirror api/handlers' appendRevisionEvent*
-// shapes field for field, redeclared because this binary speaks to `api` over
-// HTTP rather than importing its handler package -- exactly as writes.go
-// redeclares openDesignSessionRequest. Keeping them in step is what makes a
-// browser's write byte-identical to the same write issued through the
-// open_design_session / append_revision_event MCP tools.
+// These types mirror api/handlers' appendRevisionEvent* shapes field for
+// field, so a browser write matches the same MCP tool write.
 
-// answerEntityDelta mirrors api/handlers' entityDeltaRequest. The answer path
-// never populates it -- it always sends an empty slice -- and exists only so
-// the request body matches AppendRevisionEventHandler's shape field for field.
+// answerEntityDelta mirrors entityDeltaRequest; always sent empty.
 type answerEntityDelta struct {
 	EntityID    string `json:"entity_id"`
 	Change      string `json:"change"`
 	SummaryLine string `json:"summary_line"`
 }
 
-// answerOpenedQuestion mirrors api/handlers' openQuestionOpenedRequest.
 type answerOpenedQuestion struct {
 	QuestionID string `json:"question_id"`
 	Blocking   bool   `json:"blocking"`
 	Text       string `json:"text"`
 }
 
-// answerQuestionsDelta mirrors api/handlers' openQuestionsDeltaRequest.
 type answerQuestionsDelta struct {
 	Opened   []answerOpenedQuestion `json:"opened"`
 	Resolved []string               `json:"resolved"`
 }
 
-// answerRevisionEventRequest mirrors api/handlers' appendRevisionEventRequest.
-// It deliberately has no field for acting/on_behalf_of/scope_id: those are
-// always taken from the gating krill session, never from this body.
+// answerRevisionEventRequest has no identity or scope fields: those always
+// come from the krill session.
 type answerRevisionEventRequest struct {
 	EventType          string               `json:"event_type"`
 	EntityDeltas       []answerEntityDelta  `json:"entity_deltas"`
@@ -79,10 +52,8 @@ type answerRevisionEventRequest struct {
 	SignoffStatus      *string              `json:"signoff_status"`
 }
 
-// createdResponse is api's IDResponse (an opened design session's new id) and
-// createdRevisionEvent is its RevisionEventCreatedResponse (an appended
-// round's id and store-allocated seq_no). Redeclared for the same reason as
-// the request types above.
+// createdResponse and createdRevisionEvent mirror api's IDResponse and
+// RevisionEventCreatedResponse.
 type createdResponse struct {
 	ID string `json:"id"`
 }
@@ -94,11 +65,8 @@ type createdRevisionEvent struct {
 
 // ── write plumbing ───────────────────────────────────────────────────────────
 
-// writeRejection is a non-2xx response from api: a rejected write (unknown
-// product, unopened question id, malformed id) is a normal outcome, not a
-// failure of this binary, so its status and api's own message are carried
-// here as received. The message reaches an operator through
-// operatorRejectionText, never raw.
+// writeRejection is a non-2xx api response: a normal outcome carrying api's
+// status and message, shown to operators only via operatorRejectionText.
 type writeRejection struct {
 	status  int
 	message string
@@ -106,11 +74,8 @@ type writeRejection struct {
 
 func (w *writeRejection) Error() string { return w.message }
 
-// writeAndDecode issues one krill write under the given session and, on a 2xx,
-// JSON-decodes api's response body into out. A non-2xx becomes a
-// *writeRejection carrying api's status and named error message; a transport
-// failure surfaces as the underlying error (which renderWriteFailure maps to a
-// 502, never attributing a write that never reached krill).
+// writeAndDecode issues one write and decodes a 2xx body into out. Non-2xx
+// becomes *writeRejection; a transport failure returns the underlying error.
 func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, method, path string, body, out any) error {
 	resp, err := app.writes.Write(ctx, sessionID, method, path, body)
 	if err != nil {
@@ -140,28 +105,9 @@ func (app *App) writeAndDecode(ctx context.Context, sessionID store.SessionID, m
 
 // ── refusal text ────────────────────────────────────────────────────────────
 
-// operatorRejectionText renders a *writeRejection for an operator: its
-// status, kept, and a reason the operator can act on.
-//
-// WHERE this translation lives is a deliberate choice, and the alternative
-// was weighed. api hands the store's own error string to every client --
-// appendRevisionEventHandler's writeJSONError(w, 400, err.Error()) -- and the
-// MCP append_revision_event tool is contractually required to surface that
-// same string verbatim, so api's error body is a contract other tools read.
-// Rewriting it in api's handler would fix every consumer at once, at the
-// price of changing that shared surface for all of them. Translating here
-// leaves api honest for programmatic clients and rewrites only the text a
-// human is shown, which is the half that was actually leaking.
-//
-// That leaves one consequence to own: the match is on the store sentinel's
-// own text, because over HTTP an error arrives as a string and there is no
-// errors.As to run. So a store validation failure gets a sentence of its own
-// here, and anything unrecognised degrades to a generic refusal rather than
-// falling through to the raw string -- a new sentinel added to
-// validateNewRevisionEvent must not start reaching operators by being
-// unrecognised. api's own named messages (an unusable id, a malformed body)
-// and this binary's own rejections are already written for a reader, so they
-// pass through.
+// operatorRejectionText renders a rejection for an operator. api's error body
+// is a verbatim contract for MCP clients, so store text is translated here
+// instead; unrecognised store text degrades to a generic refusal.
 func operatorRejectionText(rejection *writeRejection) string {
 	cause, isStoreValidation := strings.CutPrefix(rejection.message, store.ErrInvalidRevisionEvent.Error()+": ")
 	if !isStoreValidation {
@@ -169,10 +115,7 @@ func operatorRejectionText(rejection *writeRejection) string {
 	}
 
 	if id, ok := neverOpenedQuestionID(cause); ok {
-		// The id is quoted the operator's own form sent it as, because it
-		// is the only handle on the problem: a question that was never
-		// opened is not in the rail, so the operator cannot otherwise see
-		// which submission krill turned away.
+		// Quote the id: an unopened question is not in the rail to see.
 		return fmt.Sprintf("%d: Question %s was never opened in this session, so nothing was sent. "+
 			"It is not one of the open questions listed above -- reload the page to see the questions still open.",
 			rejection.status, id)
@@ -182,13 +125,9 @@ func operatorRejectionText(rejection *writeRejection) string {
 		"Reload the page to see this session's current state, then try again.", rejection.status)
 }
 
-// neverOpenedQuestionID pulls the question id out of the one revision-event
-// validation cause this surface can actually provoke: a resolve naming a
-// question no round in the session ever opened (open_questions.go's
-// validateResolvedQuestionsOpened). It mirrors the store's format string
-// rather than its wording -- a store reword degrades to the generic refusal
-// in operatorRejectionText, which is safe, where a store reformat would
-// silently stop matching.
+// neverOpenedQuestionID extracts the id from the store's "never opened"
+// validation error by its format string; a reword falls back to the generic
+// refusal.
 func neverOpenedQuestionID(cause string) (string, bool) {
 	const (
 		head = "open_questions_delta.resolved names "
@@ -209,22 +148,9 @@ func neverOpenedQuestionID(cause string) (string, bool) {
 	return id, true
 }
 
-// renderOpenFormFailure hands the new-session blade back after a refused
-// write, with the operator's opening text preserved so a refusal is never a
-// data-loss event (FR 4304fe60).
-//
-// Both modes answer 200, never the rejection's status: htmx does not swap on
-// an error status, so a 4xx or a 502 would leave the operator with a blade
-// that appears to do nothing at all -- the one case they most need to be
-// told about. The no-JS path gets the same blade inside the shell, never a
-// bare http.StatusText page.
-//
-// A *writeRejection is shown inline as api's status plus an
-// operator-readable reason (operatorRejectionText) -- never the store's own
-// error string. Anything else (no resolved operator, unresolvable scope,
-// unreachable api) never reached krill at all, so it gets the
-// operator-facing half only -- the specific cause is logged, never rendered
-// (transportFailureMessage).
+// renderOpenFormFailure re-renders the new-session blade with the operator's
+// text preserved. Always 200, since htmx does not swap on error statuses;
+// non-rejection causes are logged, never rendered.
 func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, productID uuid.UUID, opening string, err error) {
 	blade := app.newDesignSessionBlade(r, productID)
 	blade.OpeningSubmission = opening
@@ -239,10 +165,7 @@ func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, pr
 	page := app.designSessionListPage(r, productID, nil)
 	page.NewBlade = blade
 
-	// The list behind the page is a nicety; the blade is the subject. When
-	// the read fails the blade still comes back -- saying so inline, rather
-	// than rendering an empty table as though it were the whole answer --
-	// and the typed text survives either way.
+	// If the list read fails, still return the blade and say so inline.
 	if rejection != nil {
 		sessions, listErr := app.designSessionRows(r.Context(), productID, time.Now())
 		if listErr != nil {
@@ -260,42 +183,24 @@ func (app *App) renderOpenFormFailure(w http.ResponseWriter, r *http.Request, pr
 	app.renderShell(w, r, "Design sessions", r.URL.Path, pages.DesignSessionList(page))
 }
 
-// transportFailureMessage is the operator-facing half of a non-rejection
-// write failure. The specific cause is logged, not rendered: it can carry
-// an internal api URL or a driver message.
+// transportFailureMessage is the operator-facing text for a non-rejection
+// failure; the cause can carry internal URLs, so it is logged only.
 func transportFailureMessage(err error) string {
 	logger.Error("design write failed before reaching krill", "error", err)
 	return "the request did not complete. Check the logs, then try again."
 }
 
-// renderAnswerFormFailure re-renders the follow-up round after a rejected
-// write, preserving the follow-up text and which resolve boxes were
-// ticked. Same 200-both-modes rule as renderOpenFormFailure.
-//
-// What comes back is the WHOLE round region -- timeline, rail, form --
-// not the form alone. The ticked boxes live in the rail, so an answer that
-// swapped only the form would silently drop the operator's own ticks on
-// exactly the request where they must not be dropped (FR 1942d934). The
-// rail inside it is re-derived from a FRESH read, so a question krill has
-// since resolved is gone rather than offered again.
+// renderAnswerFormFailure re-renders the whole round region (timeline, rail,
+// form) so the operator's ticks and text survive; the rail is re-read so
+// resolved questions are not offered again.
 func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, productID, id uuid.UUID, err error, followUp string, resolved []string) {
 	checked := make(map[string]bool, len(resolved))
 	for _, qid := range resolved {
 		checked[qid] = true
 	}
 
-	// The reason, in the one sentence rule the two failure shapes share: a
-	// rejection that reached krill shows api's status plus an
-	// operator-readable reason (operatorRejectionText), and anything else
-	// never reached krill at all, so it gets the operator-facing half only
-	// -- the specific cause is logged, never rendered
-	// (transportFailureMessage).
-	//
-	// errors.As is tested FIRST, and that ordering is load-bearing:
-	// transportFailureMessage logs at ERROR, so computing it on the way to
-	// a default -- before the rejection test -- logs "krill could not be
-	// reached" for a call that was answered, correctly, by krill. An
-	// ordinary refusal is handled control flow and logs nothing.
+	// Check errors.As first: transportFailureMessage logs at ERROR, which would
+	// be wrong for an ordinary rejection.
 	var rejection *writeRejection
 	var message string
 	if errors.As(err, &rejection) {
@@ -304,18 +209,12 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 		message = "Could not reach krill: " + transportFailureMessage(err)
 	}
 
-	// The rail is re-read for EVERY refusal, not only the rejected-write
-	// one: the read rides a different client from the write, so it can
-	// still succeed when the write never reached krill, and a question
-	// krill has resolved in the meantime must not come back as a box to
-	// tick again.
+	// Re-read the rail for every refusal; the read may succeed even when the
+	// write never reached krill.
 	detail, detailErr := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
 	if detailErr != nil {
-		// The re-read failed too. The operator's work is still not lost:
-		// both regions say so in place rather than rendering as empty --
-		// an unread question list is not a session with nothing waiting on
-		// it (NFR ca90dc03) -- and the ticked ids ride as hidden inputs,
-		// because there is no rail left to render a box in.
+		// The re-read failed too: both regions say so, and ticked ids ride as hidden
+		// inputs since there is no rail to hold them.
 		logger.Error("failed to re-render the answer round after a refusal", "design_session_id", id, "error", detailErr)
 		detail = pages.DesignSessionDetailPage{
 			ID:             id.String(),
@@ -332,13 +231,8 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 		detail.CheckedResolve = checked
 	}
 
-	// Both modes answer 200, never the rejection's status: htmx does not
-	// swap on an error status, and a bare status page would cost the
-	// operator the paragraph they just typed.
-	//
-	// An unresolved operator identity is the one exception. A 401 is the
-	// signal a browser acts on -- it is what tells the operator to sign in
-	// again -- and no amount of prose in a 200 page replaces it.
+	// Always 200 so htmx swaps and typed text survives, except a missing
+	// operator on the no-JS path: its 401 prompts re-sign-in.
 	if errors.Is(err, errNoOperator) && !isHXRequest(r) {
 		writeWriteError(w, err)
 		return
@@ -350,17 +244,9 @@ func (app *App) renderAnswerFormFailure(w http.ResponseWriter, r *http.Request, 
 	app.renderShell(w, r, "Design session", r.URL.Path, pages.DesignSessionDetail(detail))
 }
 
-// renderAnswerSuccess answers a successful htmx follow-up in place: 200,
-// and the same round region re-derived from a fresh read, so the timeline
-// carries the appended event, the rail no longer offers the questions the
-// round closed, and the textarea is empty. The confirmation is an
-// out-of-band toast rather than a navigation -- a success here is not a
-// move to a different page, and htmx cannot do a partial navigation.
-//
-// If the fresh read fails the write still landed, so the region comes back
-// degraded with that said out loud, and the toast still confirms: telling
-// an operator their answer was lost when it was not would cost them the
-// round they just spent.
+// renderAnswerSuccess re-renders the round region from a fresh read plus an
+// out-of-band toast. If the read fails the write still landed, so the toast
+// still confirms.
 func (app *App) renderAnswerSuccess(w http.ResponseWriter, r *http.Request, productID, id uuid.UUID) {
 	detail, err := app.buildDesignSessionDetail(r.Context(), productID, id, time.Now())
 	if err != nil {
@@ -376,13 +262,8 @@ func (app *App) renderAnswerSuccess(w http.ResponseWriter, r *http.Request, prod
 	renderFragment(w, r, withToast(answerSuccessToast, pages.DesignSessionRound(detail)))
 }
 
-// hxRedirect answers a successful doubled-form write for an htmx caller:
-// 200 with an HX-Redirect, so the browser performs the same
-// POST/Redirect/Get navigation the no-JS branch performs with a 303. This
-// is the one HX-Redirect in this surface, and it earns its place -- the
-// success outcome navigates to a different page (the new session's detail
-// page), which an hx-swap fragment cannot express. The no-HX branch is
-// untouched, so its 303 + Location behaviour is unchanged.
+// hxRedirect is the htmx counterpart of a 303: 200 with HX-Redirect, for a
+// success that navigates to a different page.
 func hxRedirect(w http.ResponseWriter, to string) {
 	w.Header().Set("HX-Redirect", to)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -391,18 +272,9 @@ func hxRedirect(w http.ResponseWriter, to string) {
 
 // ── handlers ─────────────────────────────────────────────────────────────────
 
-// handleOpenDesignSessionForm is the browser form action behind the
-// new-session blade. productID is the path value; the form's only field is
-// opening_submission, so the write body stays product_id +
-// opening_submission -- no entity reference, no identity, no session id
-// read from the browser (LB4). On success it redirects
-// (POST/Redirect/Get) to the new session's detail page, so a refresh cannot
-// re-open the session. A refused write re-renders the blade with the
-// operator's text preserved (renderOpenFormFailure).
-//
-// The form is doubled, so one route serves both a no-JS browser and an htmx
-// one; the no-HX half of that pair is the 303 + Location below, left
-// exactly as it was.
+// handleOpenDesignSessionForm backs the new-session blade for both no-JS and
+// htmx. The body is only product_id + opening_submission; success redirects
+// to the new session (POST/Redirect/Get).
 func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Request) {
 	productID, err := parseUUIDPathValue(w, r, "productID", "product")
 	if err != nil {
@@ -423,9 +295,7 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 	}
 	opening := strings.TrimSpace(r.PostFormValue("opening_submission"))
 	if opening == "" {
-		// Client-side `required` catches the empty case, but a whitespace-only
-		// submission slips past it; re-render the form with the message rather
-		// than a bare 400 so the operator stays in context.
+		// `required` misses whitespace-only input; re-render in context.
 		app.renderOpenFormFailure(w, r, productID, "", &writeRejection{
 			status:  http.StatusBadRequest,
 			message: "Describe your idea in plain language before opening the session.",
@@ -447,12 +317,7 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return
 	}
-	// Both outcomes below are navigations -- a 303 for a no-JS browser, an
-	// HX-Redirect for an htmx one -- and neither carries a body to state
-	// the outcome in, so the confirmation rides the same one-shot cookie
-	// every other redirect-after-post uses. The landing page is the new
-	// session's own detail page, which is the page the operator needs to
-	// read next anyway.
+	// Both outcomes are navigations with no body, so confirm via the flash cookie.
 	flashSuccess(w, "Design session opened.")
 	if isHXRequest(r) {
 		hxRedirect(w, designSessionPath(productID, id))
@@ -461,16 +326,9 @@ func (app *App) handleOpenDesignSessionForm(w http.ResponseWriter, r *http.Reque
 	http.Redirect(w, r, designSessionPath(productID, id), http.StatusSeeOther)
 }
 
-// handleDesignSessionAnswerForm is the browser form action behind a session
-// detail page's "submit follow-up" form. It appends one `answer` revision
-// round via api's AppendRevisionEventHandler, then redirects back to the
-// session's detail page (POST/Redirect/Get). A rejected write re-renders the
-// detail page in-shell with the operator's text and ticks preserved
-// (renderAnswerFormFailure).
-//
-// Doubled form, one route: the no-HX half answers the 303 + Location below,
-// untouched; the HX half answers 200 and either HX-Redirects on success or
-// re-renders this form with the error inline.
+// handleDesignSessionAnswerForm appends one `answer` round. No-JS gets a 303
+// back to the session; htmx gets the round region in place. Rejections
+// preserve text and ticks.
 func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Request) {
 	productID, err := parseUUIDPathValue(w, r, "productID", "product")
 	if err != nil {
@@ -481,11 +339,8 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		// Nothing was submitted, so there is no operator work to preserve --
-		// but the answer is still the round region rather than a bare form,
-		// because that region is the form's hx-target and a fragment without
-		// its id would leave htmx deleting the element it was meant to
-		// replace (htmxui ARCHITECTURE, the swap-target rule).
+		// Return the round region, not a bare form: it is the hx-target, and a
+		// fragment without its id would delete the element.
 		logger.Error("could not parse the follow-up form body", "design_session_id", id, "error", err)
 		app.renderAnswerFormFailure(w, r, productID, id, &writeRejection{
 			status:  http.StatusBadRequest,
@@ -497,8 +352,7 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 	followUp := strings.TrimSpace(r.PostFormValue("follow_up"))
 	resolved := nonEmptyValues(r.PostForm["resolve"])
 	if followUp == "" && len(resolved) == 0 {
-		// An answer round with no follow-up text and nothing resolved records
-		// nothing meaningful; reject rather than append an empty `answer`.
+		// No text and nothing resolved: reject rather than append an empty round.
 		app.renderAnswerFormFailure(w, r, productID, id, &writeRejection{
 			status:  http.StatusBadRequest,
 			message: "Write a follow-up, or tick an open question your answer closes.",
@@ -506,22 +360,13 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// A tick naming a question that is no longer open is refused HERE, not
-	// by krill. The store validates a resolve against the questions EVER
-	// opened in the session -- re-resolving an already-resolved one is a
-	// deliberate no-op, not a 400 -- so a stale tick posted as-is is
-	// accepted, the round is recorded, and the operator is told their
-	// resolve saved while it was silently dropped (FR 1942d934).
-	//
-	// The WHOLE round is refused: a partially applied one, where the text
-	// lands and the resolve does not, is worse than none.
+	// Refuse stale ticks here: the store accepts re-resolving an already-resolved
+	// question as a no-op, which would silently drop the resolve. The whole round
+	// is refused rather than partially applied.
 	if len(resolved) > 0 {
 		stale, staleErr := app.staleResolveTicks(r.Context(), id, resolved)
 		if staleErr != nil {
-			// The open set could not be read, so staleness cannot be ruled
-			// out. Refusing rather than posting: a second failed read costs
-			// the operator one retry, while posting blind reopens exactly
-			// the silent drop this check exists to prevent.
+			// Staleness cannot be ruled out, so refuse rather than post blind.
 			app.renderAnswerFormFailure(w, r, productID, id, staleErr, followUp, resolved)
 			return
 		}
@@ -531,14 +376,8 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// The revision_event schema (migration 008) has no free-text prose column,
-	// and FR 1ff1c1e9 forbids the answer from proposing or amending a
-	// Feature/Requirement entity -- which rules out entity_deltas[].summary_line,
-	// the only other text carrier. So non-empty follow-up text is recorded as a
-	// non-blocking opened question in this same answer round; a resolve-only
-	// round sends no opened question. entity_deltas is always empty: the UI
-	// touches no spec entity, and the mediated propose_entities path stays the
-	// only thing that turns a submission into one.
+	// revision_event has no free-text column and answers may not touch spec
+	// entities, so follow-up text is recorded as a non-blocking opened question.
 	body := answerRevisionEventRequest{
 		EventType:    string(store.EventTypeAnswer),
 		EntityDeltas: []answerEntityDelta{}, // the UI never proposes/amends an entity
@@ -546,9 +385,7 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 			Opened:   []answerOpenedQuestion{},
 			Resolved: resolved,
 		},
-		// An `answer` round must leave both nil: FR3 requires verified_against
-		// only for draft/reconciliation and forbids it otherwise, and FR4 does
-		// the same for signoff_status on non-signoff rounds.
+		// `answer` rounds must leave verified_against and signoff_status nil.
 		VerifiedAgainst: nil,
 		SignoffStatus:   nil,
 	}
@@ -570,17 +407,8 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// The two outcomes answer differently, and both are right for their
-	// mode. A no-JS browser navigated, so it gets the POST/Redirect/Get it
-	// needs and the confirmation rides the flash cookie (a 303 has no body
-	// to carry a message in). An htmx browser does NOT navigate -- a round
-	// updates the page it is already on -- so it gets the round region
-	// re-derived from a fresh read, in place, plus an out-of-band toast.
-	//
-	// The htmx success used to HX-Redirect to this same page, which cannot
-	// express what actually happened: "the timeline gained an event, the
-	// rail lost a question, the textarea cleared" is a partial update, and
-	// a redirect is a full page load that throws the swap away.
+	// No-JS navigated, so it gets a 303 and a flash; htmx stays on the page and
+	// gets the round region in place plus a toast.
 	if isHXRequest(r) {
 		app.renderAnswerSuccess(w, r, productID, id)
 		return
@@ -589,15 +417,9 @@ func (app *App) handleDesignSessionAnswerForm(w http.ResponseWriter, r *http.Req
 	http.Redirect(w, r, designSessionPath(productID, id), http.StatusSeeOther)
 }
 
-// staleResolveTicks returns the ticked question ids the session does not
-// currently have OPEN, counting each id once.
-//
-// It reads the same accessor the rail is rendered from
-// (store.RevisionEventStore.ListOpenQuestions, the one list_open_questions
-// calls), so "open" means the same thing here as it does a few lines above on
-// the page the operator ticked the box on. The store's own validation is
-// deliberately NOT the oracle: it accepts an id resolved by any earlier round,
-// which is what makes the check necessary rather than redundant.
+// staleResolveTicks returns ticked ids not currently open, using the same
+// accessor the rail renders from. The store's validation accepts ids closed
+// by any earlier round, so it cannot be the oracle.
 func (app *App) staleResolveTicks(ctx context.Context, id uuid.UUID, ticked []string) ([]string, error) {
 	open, err := app.revisionEvents.ListOpenQuestions(ctx, id)
 	if err != nil {
@@ -619,19 +441,8 @@ func (app *App) staleResolveTicks(ctx context.Context, id uuid.UUID, ticked []st
 	return stale, nil
 }
 
-// staleTickRejection is the operator-facing reason a round is refused
-// because one or more of its ticks names a question another round has closed
-// since the page was rendered.
-//
-// It names what happened rather than echoing the id: an operator who ticked a
-// box does not recognise "q-flag-store", but does recognise "already closed
-// since this page loaded". One and several read differently because they
-// call for different operator action -- one is a stray tick, several mean the
-// page is far enough out of date that its rail should not be trusted.
-//
-// The status is this binary's own conflict classification. krill sent no
-// status: the round never reached it, which is the whole point -- the store
-// would have accepted it and dropped the resolve.
+// staleTickRejection refuses a round whose ticks name questions closed since
+// the page loaded. The conflict status is ours; the round never reached krill.
 func staleTickRejection(stale int) *writeRejection {
 	if stale == 1 {
 		return &writeRejection{
@@ -646,25 +457,19 @@ func staleTickRejection(stale int) *writeRejection {
 	}
 }
 
-// answerSuccessToast is the one message a submitted follow-up reports, on
-// both paths: as a flash across the 303 for a no-JS browser, and as an
-// out-of-band toast in the swapped region for an htmx one. One string, so
-// the two modes cannot come to describe the same outcome differently.
+// answerSuccessToast is shared by the flash and the toast so both modes say
+// the same thing.
 const answerSuccessToast = "Follow-up submitted."
 
-// newAnswerQuestionID mints the question id a follow-up answer opens. A UUID
-// keeps it unique within the session's ever-opened set (FR6 validates only
-// that the id is non-empty and, for a resolution, was opened somewhere in the
-// session), so concurrent answers can never collide on one id.
+// newAnswerQuestionID mints a UUID so concurrent answers never collide within
+// the session's ever-opened question set.
 func newAnswerQuestionID() string {
 	return "a-" + uuid.NewString()
 }
 
 // ── small form helpers ───────────────────────────────────────────────────────
 
-// parseUUIDPathValue parses a UUID path value, writing a 400 and returning an
-// error if it is malformed, so every form handler rejects a bad id the same
-// named way.
+// parseUUIDPathValue parses a UUID path value, writing a 400 if malformed.
 func parseUUIDPathValue(w http.ResponseWriter, r *http.Request, name, what string) (uuid.UUID, error) {
 	id, err := uuid.Parse(r.PathValue(name))
 	if err != nil {
@@ -674,18 +479,14 @@ func parseUUIDPathValue(w http.ResponseWriter, r *http.Request, name, what strin
 	return id, nil
 }
 
-// parseUUIDOrFail parses an id api returned, writing a 500 and returning an
-// error if it is unusable. A malformed id in a 2xx is a contract break between
-// this binary and `api`, not something to redirect with.
+// parseUUIDOrFail parses an id api returned, writing a 500 if unusable: a
+// malformed id in a 2xx is a contract break.
 func parseUUIDOrFail(w http.ResponseWriter, r *http.Request, value, what string) (uuid.UUID, error) {
 	id, err := uuid.Parse(value)
 	if err != nil {
 		logger.Error("api returned an unusable id on a 2xx", "what", what, "error", err)
 		if isHXRequest(r) {
-			// The write landed; only the link back is unusable. Saying
-			// that is far more useful than a silent 500 the operator
-			// would resolve by resubmitting -- which would create a second
-			// session.
+			// The write landed; say so, or a resubmit would create a second session.
 			renderFragment(w, r, pages.OpsInlineError(
 				"The session was created, but krill returned an id this UI could not link to. Find it under Design sessions."))
 			return uuid.Nil, err
@@ -696,8 +497,7 @@ func parseUUIDOrFail(w http.ResponseWriter, r *http.Request, value, what string)
 	return id, nil
 }
 
-// nonEmptyValues drops empty checkbox values (an unchecked box contributes
-// nothing, but keeps the slice free of blanks) while preserving order.
+// nonEmptyValues drops empty checkbox values, preserving order.
 func nonEmptyValues(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, v := range values {
