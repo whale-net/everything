@@ -179,7 +179,7 @@ and by the scheduled post path (`temporal/shitposter/activity.py`).
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `FCM_SHITPOSTER_WRITER_AGENT_ID` | for the write job | whagent-net agent id the write brain job starts its session on. Defined in `whagent_net/config/agents.yaml` as `shitposter-drafter` with `tools: none`. Read per write run. |
+| `FCM_SHITPOSTER_WRITER_AGENT_ID` | no | Optional override of the whagent-net agent definition the write brain job starts its session on. Unset or blank uses the definition named `shitposter-drafter` in `whagent_net/config/agents.yaml` (`tools: none`). Read per write run. |
 | `FCM_SHITPOSTER_WRITE_CADENCE_HOURS` | no (default `3`) | Hours between writer runs; used when the write schedule is registered. Must be a positive integer. |
 | `FCM_SHITPOSTER_DRAFT_BATCH_SIZE` | no (default `5`) | Most drafts stored per writer run. Extra or malformed reply items are dropped and counted in the run's `details`. Must be a positive integer. |
 | `FCM_SHITPOSTER_DRAFT_EXPIRY_HOURS` | no (default `24`) | A draft older than this is not eligible for a scheduled post. Must be a positive integer. |

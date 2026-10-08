@@ -416,6 +416,46 @@ def test_writer_schedule_cadence_defaults_and_env_override(monkeypatch):
     assert cfg.draft_expiry_hours() == 24
 
 
+def _capture_writer_start(monkeypatch):
+    started = []
+
+    class _Session:
+        session_id = "sess-1"
+
+    class _FakeClient:
+        def supports_pinned_context(self):
+            return False
+
+        def start_session(self, agent_id, *, first_turn, pinned_context=None):
+            started.append(agent_id)
+            return _Session()
+
+    monkeypatch.setattr(write, "get_whagent_client", lambda: _FakeClient())
+    monkeypatch.setattr(write, "_wait_for_reply", lambda client, sid, seq, deadline: "[]")
+    return started
+
+
+def test_writer_resolves_definition_name_when_env_unset(monkeypatch):
+    monkeypatch.delenv("FCM_SHITPOSTER_WRITER_AGENT_ID", raising=False)
+    started = _capture_writer_start(monkeypatch)
+    write._call_writer("snapshot", 3)
+    assert started == ["shitposter-drafter"]
+
+
+def test_blank_writer_env_falls_back_to_definition_name(monkeypatch):
+    monkeypatch.setenv("FCM_SHITPOSTER_WRITER_AGENT_ID", "   ")
+    started = _capture_writer_start(monkeypatch)
+    write._call_writer("snapshot", 3)
+    assert started == ["shitposter-drafter"]
+
+
+def test_writer_env_override_takes_precedence(monkeypatch):
+    monkeypatch.setenv("FCM_SHITPOSTER_WRITER_AGENT_ID", "custom-drafter")
+    started = _capture_writer_start(monkeypatch)
+    write._call_writer("snapshot", 3)
+    assert started == ["custom-drafter"]
+
+
 # ---- scheduled post: draft-first path ----
 
 

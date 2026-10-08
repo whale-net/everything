@@ -98,7 +98,7 @@ Suggestion text is never read; only derived attributes are. Tunables are in
 
 `write.py` drafts a batch of posts from the latest context snapshot into the
 `shitposterdraft` queue. Compute reads that snapshot and sends it to the writer
-agent (`FCM_SHITPOSTER_WRITER_AGENT_ID`) as the first turn, or as pinned context
+agent (definition `shitposter-drafter`, overridable with `FCM_SHITPOSTER_WRITER_AGENT_ID`) as the first turn, or as pinned context
 when the client supports it. The reply must be a JSON array of `{text, rank}`.
 Each item is checked: `text` is non-empty and at most 280 characters, `rank` is a
 positive integer that is not a boolean, and no rank repeats. Items that fail are

@@ -53,14 +53,13 @@ logger = logging.getLogger(__name__)
 
 AGENT_DEADLINE_SECONDS = 20 * 60
 MAX_POST_CHARS = 280
+WRITER_AGENT_DEFINITION = "shitposter-drafter"
 
 
 def load_writer_agent_id() -> str:
-    """Read FCM_SHITPOSTER_WRITER_AGENT_ID (the whagent agent holding the writer base prompt)."""
-    agent_id = os.environ.get("FCM_SHITPOSTER_WRITER_AGENT_ID", "")
-    if not agent_id:
-        raise RuntimeError("FCM_SHITPOSTER_WRITER_AGENT_ID is not set")
-    return agent_id
+    """The whagent agent definition the write job starts on; FCM_SHITPOSTER_WRITER_AGENT_ID overrides it when set."""
+    override = os.environ.get("FCM_SHITPOSTER_WRITER_AGENT_ID", "").strip()
+    return override or WRITER_AGENT_DEFINITION
 
 
 def _instruction(batch: int) -> str:
