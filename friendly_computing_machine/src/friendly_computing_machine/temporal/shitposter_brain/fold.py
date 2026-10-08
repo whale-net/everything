@@ -103,7 +103,22 @@ def fold_reflector_retirements(
             ShitposterPersonaAttribute.persona_id == persona_id,
         )
     ).all()
-    foldable = [row for row in rows if not row.retired_by_operator]
+    # Guard by attribute key: a closed predecessor id must not fold when its key was operator-retired.
+    keys = {row.attribute_key for row in rows}
+    operator_keys = set(
+        session.exec(
+            select(ShitposterPersonaAttribute.attribute_key).where(
+                ShitposterPersonaAttribute.persona_id == persona_id,
+                ShitposterPersonaAttribute.attribute_key.in_(keys),  # type: ignore[union-attr]
+                ShitposterPersonaAttribute.retired_by_operator.is_(True),  # type: ignore[attr-defined]
+            )
+        ).all()
+    )
+    foldable = [
+        row
+        for row in rows
+        if not row.retired_by_operator and row.attribute_key not in operator_keys
+    ]
     if not foldable:
         return
     existing = shitposter_memory_dal.current_consolidated_lore(persona_id, session=session)
