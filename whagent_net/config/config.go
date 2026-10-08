@@ -24,6 +24,11 @@ import (
 //go:embed agents.yaml
 var agentsYAML []byte
 
+// ToolsNone is the `tools` value an agent sets to declare it intentionally
+// has no tool_set (a base-prompt-only agent, e.g. the Shitposter reflector).
+// An agent with an empty tool_set and no declaration is still rejected.
+const ToolsNone = "none"
+
 // ToolServerRefConfig is agents.yaml's tool_set entry shape -- decodes
 // 1:1 into whagent_net/session.ToolServerRef.
 type ToolServerRefConfig struct {
@@ -91,6 +96,10 @@ type AgentDefinitionConfig struct {
 	ToolSet         []ToolServerRefConfig `yaml:"tool_set"`
 	MaxTurns        int                   `yaml:"max_turns"`
 	MaxCostUSD      float64               `yaml:"max_cost_usd"`
+	// Tools is the explicit no-tools declaration: "none" means the agent
+	// has no tool_set and Validate accepts that; empty means tool_set must
+	// be non-empty. Any other value, or "none" alongside a tool_set, fails.
+	Tools string `yaml:"tools,omitempty"`
 	// MaxToolIterations bounds the inner tool-call loop's model calls within
 	// a single turn (worker/caps.go's defaultMaxToolIterations applies when
 	// left at the zero value) -- same level as MaxTurns/MaxCostUSD above.
@@ -209,8 +218,17 @@ func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig)
 			}
 		}
 
-		if len(a.ToolSet) == 0 {
-			return fmt.Errorf("agent %q: tool_set must have at least one entry", a.AgentID)
+		switch a.Tools {
+		case "":
+			if len(a.ToolSet) == 0 {
+				return fmt.Errorf("agent %q: tool_set must have at least one entry (or declare tools: none)", a.AgentID)
+			}
+		case ToolsNone:
+			if len(a.ToolSet) > 0 {
+				return fmt.Errorf("agent %q: tools: none conflicts with a non-empty tool_set", a.AgentID)
+			}
+		default:
+			return fmt.Errorf("agent %q: tools %q must be %q or unset", a.AgentID, a.Tools, ToolsNone)
 		}
 		for j, ref := range a.ToolSet {
 			if ref.ServerURL == "" {

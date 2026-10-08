@@ -307,7 +307,10 @@ that agent_id) + 1` when changing an existing definition — never an
 `UPDATE` of an existing row (`id` gets its own surrogate default and
 needs no value here). `tool_set` is a JSON array of
 `{server_url, allowed_tools}` objects (`allowed_tools: null` means
-"whatever the server exposes"). To route through a `model_definitions`
+"whatever the server exposes"). An agent with no tools at all (a
+base-prompt-only agent, e.g. `shitposter-reflector` in `agents.yaml`)
+declares `tools: none` and carries an empty `tool_set`; without that
+declaration an empty `tool_set` is a config error. To route through a `model_definitions`
 entry instead of naming `model` directly, insert into `model_definition`
 first (upsert by `name`, not versioned) and reference its `id` via
 `model_definition_id` — exactly one of `model` / `model_definition_id` is
