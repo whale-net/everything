@@ -4,6 +4,7 @@ Both start ShitposterBrainJobWorkflow, so both go through the same per-persona
 lock as any other run.
 """
 
+import logging
 import uuid
 from datetime import timedelta
 
@@ -11,6 +12,7 @@ from temporalio.client import (
     Client,
     Schedule,
     ScheduleActionStartWorkflow,
+    ScheduleAlreadyRunningError,
     ScheduleIntervalSpec,
     SchedulePolicy,
     ScheduleOverlapPolicy,
@@ -32,6 +34,8 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 from friendly_computing_machine.src.friendly_computing_machine.temporal.util import (
     get_app_env,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def schedule_id(persona_id: int, job_kind: str, app_env: str | None = None) -> str:
@@ -69,7 +73,11 @@ async def register_brain_schedule(
     app_env: str | None = None,
     overlap: ScheduleOverlapPolicy = ScheduleOverlapPolicy.SKIP,
 ) -> None:
-    """Create the recurring schedule for one persona and job kind; no-op if it exists."""
+    """Create the recurring schedule for one persona and job kind; no-op if it exists.
+
+    The SDK raises ScheduleAlreadyRunningError on a duplicate id; the raw RPC
+    ALREADY_EXISTS status is handled too for clients that surface it directly.
+    """
     job_kind = ShitposterBrainJobKind(job_kind).value
     sid = schedule_id(persona_id, job_kind, app_env)
     schedule = Schedule(
@@ -88,6 +96,9 @@ async def register_brain_schedule(
     )
     try:
         await client.create_schedule(sid, schedule)
+    except ScheduleAlreadyRunningError:
+        logger.debug("brain schedule already registered: %s", sid)
     except RPCError as e:
         if e.status != RPCStatusCode.ALREADY_EXISTS:
             raise
+        logger.debug("brain schedule already registered: %s", sid)
