@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -636,5 +638,21 @@ func TestCopyTaskIdScript_AnnouncesTheFailureOnEveryPathThatCanFail(t *testing.T
 	if !strings.Contains(copyTaskIdScript, "catch(e){}") {
 		t.Errorf("the selection is unguarded, so a browser that refuses the Range throws instead "+
 			"of telling the operator to select the id by hand. script: %s", copyTaskIdScript)
+	}
+}
+
+func TestHxTargetIDReadsBothHeaderForms(t *testing.T) {
+	for header, want := range map[string]string{
+		"div#krill-spec-panel": "krill-spec-panel", // htmx 4
+		"krill-spec-panel":     "krill-spec-panel", // htmx 1/2
+		"":                     "",
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		if header != "" {
+			r.Header.Set("HX-Target", header)
+		}
+		if got := hxTargetID(r); got != want {
+			t.Errorf("hxTargetID(%q) = %q, want %q", header, got, want)
+		}
 	}
 }

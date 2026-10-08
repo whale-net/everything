@@ -434,10 +434,10 @@ func (p ListEscalatedTasksParams) Filters() FilterSet {
 // independently-fed counters -- never recomputed from task_attempt, which
 // this query does not touch at all.
 //
-// A requeued task (current_escalation_id cleared) or a cancelled task
-// (which is never escalated -- CancelTask and EscalateTask are distinct
-// terminal/active states) never appears here: requeue's own drill-in is
-// FR6, cancellation's is FR10's ListCancelledTasks above.
+// A requeued task (current_escalation_id cleared) or a cancelled task never
+// appears here. Cancel leaves current_escalation_id as it was, so the query
+// excludes cancelled_at explicitly: requeue's own drill-in is FR6,
+// cancellation's is FR10's ListCancelledTasks above.
 func (s taskStore) ListEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (Page[EscalatedTaskRow], error) {
 	pageSize := ResolvePageSize(params.Page.PageSize)
 
@@ -642,6 +642,7 @@ func escalatedTasksQuery(params ListEscalatedTasksParams) (string, []any) {
 		JOIN milestone_ref ON milestone_ref.id = task.milestone_id AND milestone_ref.valid_to IS NULL
 		JOIN task_escalation_event ev ON ev.id = task.current_escalation_id
 		WHERE task.scope_id = $1 AND task.current_escalation_id IS NOT NULL
+			AND task.cancelled_at IS NULL
 	`
 	args := []any{params.ScopeID}
 	filterSQL, filterArgs := params.ConsoleFilter.sqlPredicate("milestone_ref", len(args)+1)

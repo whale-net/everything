@@ -868,7 +868,7 @@ func idChipText(id string) string {
 // field by field against get_design_session's wire, so they stay rendered on
 // the page rather than being dropped in a redesign.
 templ revisionEvent(ev RevisionEventRow, connector bool) {
-	<li data-krill="revision-event" data-krill-seq-no={ itoa(ev.SeqNo) } data-krill-event-type={ ev.EventType }>
+	<li class="grid-cols-[0_auto_minmax(0,1fr)]" data-krill="revision-event" data-krill-seq-no={ itoa(ev.SeqNo) } data-krill-event-type={ ev.EventType }>
 		if connector {
 			<hr/>
 		}

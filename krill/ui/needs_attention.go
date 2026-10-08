@@ -297,7 +297,7 @@ func parseNeedsAttentionFilter(r *http.Request) (needsAttentionFilter, error) {
 // region (strip and results travel together), while the claimed tab's poll
 // and the Refresh button name the results block alone.
 func needsAttentionPanelSwap(r *http.Request) bool {
-	return r.Header.Get("HX-Target") == pages.NeedsAttentionAnchor
+	return hxTargetID(r) == pages.NeedsAttentionAnchor
 }
 
 // handleNeedsAttention serves GET /products/{pid}/needs-attention in both

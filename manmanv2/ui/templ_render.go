@@ -57,7 +57,6 @@ func buildHead() string {
 	return fmt.Sprintf(`%s
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js"></script>
 <style type="text/tailwindcss">
-@import "tailwindcss";
 %s
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">

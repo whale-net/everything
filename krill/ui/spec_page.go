@@ -195,7 +195,7 @@ func (app *App) renderSpecTabPage(w http.ResponseWriter, r *http.Request, title 
 // swap region, the panel's Refresh button names the panel's content
 // region.
 func specTabSwapRequested(r *http.Request) bool {
-	return r.Header.Get("HX-Target") == pages.SpecPanelAnchor
+	return hxTargetID(r) == pages.SpecPanelAnchor
 }
 
 // specTabOf resolves which of the four spec tabs a request is for, from

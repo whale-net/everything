@@ -310,7 +310,8 @@ func boardCardBadges(row store.ProductTaskRow, now time.Time) []pages.TaskBadge 
 	if row.AttemptCount >= store.DefaultAttemptCap {
 		badges = append(badges, pages.TaskBadge{Key: "capped", Label: "Capped"})
 	}
-	if row.State == store.TaskStateEscalated {
+	// A cancelled task keeps its escalation on record but is terminal.
+	if row.State == store.TaskStateEscalated && row.CancelledAt == nil {
 		badges = append(badges, pages.TaskBadge{Key: "escalated", Label: "Escalated"})
 	}
 	if row.CancelledAt != nil {

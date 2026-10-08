@@ -127,7 +127,8 @@ func taskStateBadges(t store.TaskSummary, now time.Time) []pages.TaskBadge {
 	if t.AttemptCount >= store.DefaultAttemptCap {
 		badges = append(badges, pages.TaskBadge{Key: "capped", Label: "Capped"})
 	}
-	if t.CurrentEscalationID != nil {
+	// A cancelled task keeps its escalation on record but is terminal.
+	if t.CurrentEscalationID != nil && t.CancelledAt == nil {
 		badges = append(badges, pages.TaskBadge{Key: "escalated", Label: "Escalated"})
 	}
 	if t.CancelledAt != nil {

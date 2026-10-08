@@ -18,6 +18,7 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -483,4 +484,37 @@ func TestDesignSessionDetail_Shell_LogAndQuestionsStillRender(t *testing.T) {
 	// be offered for this session.
 	assert.Contains(t, rec.Body.String(), `value="blocker"`,
 		"the resolve checkbox set survives the relayout")
+}
+
+// TestDesignSessionDetail_Shell_SidebarFollowsTheURLsProduct guards the
+// detail against resolving its product from the last-viewed cookie: a
+// session under product B, opened while the cookie names product A, must
+// select B in the switcher and record B as last viewed.
+func TestDesignSessionDetail_Shell_SidebarFollowsTheURLsProduct(t *testing.T) {
+	productA := store.Product{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001"), Name: "alpha"}
+	productB := store.Product{ID: uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000002"), Name: "bravo"}
+	sessionID := uuid.MustParse("cccccccc-0000-0000-0000-000000000003")
+
+	summary := designSummary(sessionID, productB.ID, "Bravo's session", store.StageOpened, time.Now(), 0)
+	ds := fakeDesignSessions{
+		byID:      map[uuid.UUID]store.DesignSession{sessionID: {ID: sessionID, ProductID: productB.ID}},
+		summaries: designSummaries(productB.ID, summary),
+	}
+	app := newDesignReadApp(ds, fakeRevisionEvents{})
+	app.spec = scopedProductsReader{specReadClient: emptyScopeSpecReader{}, products: []store.Product{productA, productB}}
+
+	req := httptest.NewRequest(http.MethodGet, designSessionPath(productB.ID, sessionID), nil)
+	req.AddCookie(&http.Cookie{Name: lastViewedProductCookie, Value: productA.ID.String()})
+	rec := httptest.NewRecorder()
+	designReadMux(app).ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	body := rec.Body.String()
+	assert.Contains(t, body, `value="`+productB.ID.String()+`" selected`,
+		"the switcher selects the product the URL names")
+	assert.NotContains(t, body, `value="`+productA.ID.String()+`" selected`)
+	assert.Contains(t, body, `href="/products/`+productB.ID.String()+`/overview"`,
+		"the sidebar links stay on the URL's product")
+	assert.Contains(t, rec.Header().Get("Set-Cookie"), productB.ID.String(),
+		"the URL's product becomes the last viewed")
 }

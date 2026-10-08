@@ -13,8 +13,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http/httptest"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -39,7 +39,7 @@ func TestUIWrite_Escalate_AttributedToSignedInOperator(t *testing.T) {
 	idp := newFakeIDP(t, testOperatorSub)
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
@@ -67,7 +67,7 @@ func TestUIWrite_OpenDesignSession_AttributedToSignedInOperator(t *testing.T) {
 	idp := newFakeIDP(t, testOperatorSub)
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /design-sessions", app.operatorRoute(app.handleOpenDesignSession))
@@ -106,7 +106,7 @@ func TestUIWrite_AuthModeNone_Rejected(t *testing.T) {
 	require.NoError(t, err)
 
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, "" /* no OIDC issuer configured */, api.server.URL)
+	app := newSignedInApp(t, authenticator, "" /* no OIDC issuer configured */, api.server.URL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
@@ -129,7 +129,7 @@ func TestUIWrite_NoSession_Rejected(t *testing.T) {
 	idp := newFakeIDP(t, testOperatorSub)
 	authenticator, _ := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
@@ -146,7 +146,7 @@ func TestUIWrite_UnknownSessionCookie_Rejected(t *testing.T) {
 	idp := newFakeIDP(t, testOperatorSub)
 	authenticator, _ := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
@@ -165,7 +165,7 @@ func TestUIWrite_RequestBodyCannotSpoofIdentity(t *testing.T) {
 	idp := newFakeIDP(t, testOperatorSub)
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
@@ -182,7 +182,7 @@ func TestUIWrite_RequestBodyCannotSpoofIdentity(t *testing.T) {
 // stop there rather than mint a session from nothing.
 func TestWithKrillSession_NoOperatorSubject_Errors(t *testing.T) {
 	api := newFakeAPI(t)
-	app := newTestApp(t, nil, "https://keycloak.example.com/realms/krill", api.server.URL)
+	app := newSignedInApp(t, nil, "https://keycloak.example.com/realms/krill", api.server.URL)
 
 	called := false
 	err := app.withKrillSession(context.Background(), func(context.Context, store.SessionID) error {
@@ -216,7 +216,7 @@ func TestUIWrite_ReaderForbiddenSurfaced(t *testing.T) {
 		}
 		return 0, ""
 	})
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
@@ -231,7 +231,7 @@ func TestUIWrite_ReaderForbiddenSurfaced(t *testing.T) {
 func TestRequireOperator_DevToken(t *testing.T) {
 	idp := newFakeIDP(t, testOperatorSub)
 	authenticator, _ := newSignedInOperator(t, idp)
-	app := newTestApp(t, authenticator, idp.server.URL, "http://api.invalid")
+	app := newSignedInApp(t, authenticator, idp.server.URL, "http://api.invalid")
 	app.devAuth = true
 	app.devAPIToken = "dev-secret"
 

@@ -78,7 +78,7 @@ func newTabInterventionFixture(t *testing.T) *tabInterventionFixture {
 	idp := newFakeIDP(t, uuid.NewString())
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
 
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 	tasks := &tabActionTasks{}
 	app.tasks = tasks
 

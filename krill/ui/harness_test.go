@@ -350,12 +350,12 @@ type fakeScopeStore struct{ scope store.Scope }
 func (f fakeScopeStore) GetByID(context.Context, uuid.UUID) (store.Scope, error) { return f.scope, nil }
 func (f fakeScopeStore) GetSole(context.Context) (store.Scope, error)            { return f.scope, nil }
 
-// newTestApp builds the App every harness test drives. spec lists one
+// newSignedInApp builds the App every harness test drives. spec lists one
 // product because the shell's un-prefixed pages resolve one to record it in
 // the last-viewed cookie; without it those pages nil-panic on the interface
 // call rather than rendering. scopes and tasks are the two stores the
 // chrome reads for its Needs-attention badge on every page it renders.
-func newTestApp(t *testing.T, authenticator *htmxauth.Authenticator, issuer, apiURL string) *App {
+func newSignedInApp(t *testing.T, authenticator *htmxauth.Authenticator, issuer, apiURL string) *App {
 	t.Helper()
 
 	writes, err := newWriteClient(writeClientConfig{BaseURL: apiURL})
@@ -487,7 +487,7 @@ func newHtmxInterventionApp(t *testing.T, api *fakeAPI, operatorSub string) (*Ap
 	t.Helper()
 	idp := newFakeIDP(t, operatorSub)
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 	app.tasks = &fakeFragmentTasks{
 		claimed:   []store.ClaimedTaskRow{{TaskID: uuid.New(), Title: "a still-claimed task"}},
 		escalated: []store.EscalatedTaskRow{{TaskID: uuid.New(), Title: "a still-escalated task"}},

@@ -154,6 +154,14 @@ func TestScopeControlMilepebbleModeRevealsOnlyThatMilestonesMilepebbles(t *testi
 			wantMilepebble: productTaskMilepebble.String(),
 		},
 		{
+			// Switching from Milestone mode submits the milestone the
+			// select held as container_id.
+			name:           "a milestone submitted as the container becomes the parent",
+			query:          "scope=milepebble&container_id=" + productTaskMilestone.String(),
+			wantMilestone:  productTaskMilestone.String(),
+			wantMilepebble: productTaskMilepebble.String(),
+		},
+		{
 			name:           "neither named falls back to the highest-position milestone with one",
 			query:          "scope=milepebble",
 			wantMilestone:  productTaskNewestMilestone.String(),
@@ -358,7 +366,7 @@ func TestScopeControlMilepebbleModeStillRefusesAnotherProductsMilepebble(t *test
 // refusal as any other id the product does not own under that kind.
 //
 // It is the reverse pairing -- a milepebble where a milestone belongs --
-// that TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble covers.
+// that TestScopeControlMilepebbleModeReadsAMilestoneContainerAsTheParent covers.
 func TestScopeControlMilepebbleModeRefusesAMilepebbleAsTheParentMilestone(t *testing.T) {
 	tasks := &recordingProductTasks{}
 	mux := productTaskMux(t, tasks, productTaskListing(), nil)
@@ -369,46 +377,56 @@ func TestScopeControlMilepebbleModeRefusesAMilepebbleAsTheParentMilestone(t *tes
 	assert.Empty(t, tasks.listed)
 }
 
-// TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble: the
-// container parameter in milepebble mode names a MILEPEBBLE. Handed a
-// milestone id -- one this product does own, and one with milepebbles cut
-// under it, so nothing else about it is wrong -- it is still a 404, and the
-// store is never asked.
-//
-// The two are the same kind of mistake in opposite directions: a milepebble
-// submitted as the parent (above), and a milestone submitted as the
-// container (here). Answering the second would scope the read to a
-// milestone while the URL said "one milepebble", which is the one reading
-// the operator would have no way to tell apart from the one they asked for.
-func TestScopeControlMilepebbleModeRefusesAMilestoneAsAMilepebble(t *testing.T) {
+// TestScopeControlMilepebbleModeReadsAMilestoneContainerAsTheParent: the
+// container parameter in milepebble mode names a MILEPEBBLE, but switching
+// the scope from Milestone submits the chosen milestone in that parameter.
+// It is read as the parent whose milepebbles are on offer, never as the
+// read's container: the store is only ever asked for a milepebble's tasks.
+func TestScopeControlMilepebbleModeReadsAMilestoneContainerAsTheParent(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		query string
+		name          string
+		query         string
+		wantMilestone string
+		wantRead      bool
 	}{
 		{
-			name:  "a milestone of this product that has milepebbles cut under it",
-			query: "scope=milepebble&container_id=" + productTaskMilestone.String(),
+			name:          "a milestone of this product that has milepebbles cut under it",
+			query:         "scope=milepebble&container_id=" + productTaskMilestone.String(),
+			wantMilestone: productTaskMilestone.String(),
+			wantRead:      true,
 		},
 		{
-			name:  "the same, alongside a parent that agrees with it",
-			query: "scope=milepebble&milestone=" + productTaskMilestone.String() + "&container_id=" + productTaskMilestone.String(),
+			name:          "the same, alongside a parent that agrees with it",
+			query:         "scope=milepebble&milestone=" + productTaskMilestone.String() + "&container_id=" + productTaskMilestone.String(),
+			wantMilestone: productTaskMilestone.String(),
+			wantRead:      true,
 		},
 		{
-			name:  "an uncut milestone, which has no milepebble to be one of",
-			query: "scope=milepebble&container_id=" + productTaskOldestMilestone.String(),
+			name:          "an uncut milestone, which has no milepebble to offer",
+			query:         "scope=milepebble&container_id=" + productTaskOldestMilestone.String(),
+			wantMilestone: productTaskOldestMilestone.String(),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tasks := &recordingProductTasks{rows: []store.ProductTaskRow{
-				{TaskID: uuid.New(), Title: "a task that must never render"},
-			}, total: 1}
+			tasks := &recordingProductTasks{total: 1}
 			mux := productTaskMux(t, tasks, productTaskListing(), nil)
 
 			rec := fetch(t, mux, productTaskTasksURL(tc.query))
 
-			assert.Equal(t, http.StatusNotFound, rec.Code)
-			assert.NotContains(t, rec.Body.String(), "a task that must never render")
-			assert.Empty(t, tasks.listed, "the store must never be asked for a milestone's tasks in milepebble mode")
+			assert.Equal(t, http.StatusOK, rec.Code, "the operator is never stranded on a mode switch")
+			body := rec.Body.String()
+			assert.Equal(t, "milepebble", checkedRadioValue(t, body))
+			assert.Equal(t, tc.wantMilestone, selectedOption(t, body, `data-krill="scope-milestone-select"`),
+				"the submitted milestone is the one whose milepebbles are on offer")
+			for _, params := range tasks.listed {
+				assert.NotEqual(t, tc.wantMilestone, params.Scope.ContainerID.String(),
+					"the store is never asked for a milestone's tasks in milepebble mode")
+			}
+			if tc.wantRead {
+				require.Len(t, tasks.listed, 1)
+				assert.Equal(t, productTaskMilepebble.String(), tasks.listed[0].Scope.ContainerID.String(),
+					"the read is the milestone's first milepebble")
+			}
 		})
 	}
 }

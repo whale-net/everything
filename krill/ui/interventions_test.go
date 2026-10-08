@@ -78,7 +78,7 @@ func TestInterventionRoundTripMatchesMCPContract(t *testing.T) {
 	for _, v := range verbs {
 		t.Run(v.verb, func(t *testing.T) {
 			api := newFakeAPI(t)
-			app := newTestApp(t, authenticator, issuer, api.server.URL)
+			app := newSignedInApp(t, authenticator, issuer, api.server.URL)
 			mux := newInterventionMux(app)
 
 			taskID := uuid.NewString()
@@ -119,7 +119,7 @@ func TestInterventionForwardsEmptyReasonAsNull(t *testing.T) {
 	idp := newFakeIDP(t, operatorSub)
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 	mux := newInterventionMux(app)
 
 	taskID := uuid.NewString()
@@ -147,7 +147,7 @@ func TestInterventionReturnToRejectsOpenRedirect(t *testing.T) {
 	idp := newFakeIDP(t, operatorSub)
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 	mux := newInterventionMux(app)
 
 	hostile := []string{
@@ -201,7 +201,7 @@ func TestInterventionRejectionRendersInShellErrorPage(t *testing.T) {
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
 	api.rejectWrite(http.StatusConflict, `{"error":"task is already cancelled"}`)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 	mux := newInterventionMux(app)
 
 	taskID := uuid.NewString()
@@ -345,7 +345,7 @@ func TestCancelConfirmPageRequiresReasonAndPostsToCancel(t *testing.T) {
 	idp := newFakeIDP(t, operatorSub)
 	authenticator, sessionCookie := newSignedInOperator(t, idp)
 	api := newFakeAPI(t)
-	app := newTestApp(t, authenticator, idp.server.URL, api.server.URL)
+	app := newSignedInApp(t, authenticator, idp.server.URL, api.server.URL)
 	mux := newInterventionMux(app)
 
 	taskID := uuid.NewString()
