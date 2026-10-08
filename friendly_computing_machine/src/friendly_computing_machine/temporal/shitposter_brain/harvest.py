@@ -32,6 +32,8 @@ from friendly_computing_machine.src.friendly_computing_machine.models.slack_reac
     SlackReaction,
 )
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
+    load_lore_top_share,
+    load_lore_window_days,
     load_negative_emoji,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.base import (
@@ -42,6 +44,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.control import (
     register_brain_schedule,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.lore_promotion import (
+    promote_new_lore,
 )
 from friendly_computing_machine.src.friendly_computing_machine.util import (
     ts_to_datetime,
@@ -171,7 +176,11 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         len(records),
         params.persona_id,
     )
-    return {"finalized_at": now.isoformat(), "records": records}
+    return {
+        "finalized_at": now.isoformat(),
+        "persona_id": params.persona_id,
+        "records": records,
+    }
 
 
 def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutcome:
@@ -204,9 +213,19 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         )
         written += 1
     session.flush()
+    lore = promote_new_lore(
+        session,
+        run_id,
+        payload["persona_id"],
+        finalized_at,
+        top_share=load_lore_top_share(),
+        window_days=load_lore_window_days(),
+    )
     details = {"finalized": written, "already_finalized": len(records) - written}
     status = (
-        ShitposterBrainJobStatus.SUCCEEDED if written else ShitposterBrainJobStatus.NO_OP
+        ShitposterBrainJobStatus.SUCCEEDED
+        if written or lore.status == ShitposterBrainJobStatus.SUCCEEDED.value
+        else ShitposterBrainJobStatus.NO_OP
     )
     return ApplyOutcome(status=status.value, details=details)
 
