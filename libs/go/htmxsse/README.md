@@ -122,6 +122,15 @@ into each other's regions. Give each region a `data-sse-region`
 On reconnect the extension sends `Last-Event-ID`; the server uses it to
 suppress duplicate swaps for unchanged state.
 
+### Fallback Polling
+
+SSE is the primary channel. A page may add a slow `hx-trigger` poll as a
+backup, and it must follow the polling policy in
+`.claude/skills/design-htmx-ui/SKILL.md` ("Live data and polling policy"):
+≥30s, visibility-gated, one per page, and a cheap handler. The heartbeat
+below is not free either. Every heartbeat calls `fragment` once per topic per
+connection, so keep fragment renders cheap and topic counts small.
+
 ### Detecting a Live Connection (Not-Live Indicators)
 
 Use `libs/go/htmxsse/liveindicator` for a client-visible "Live"/"Not Live"
