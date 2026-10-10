@@ -234,6 +234,37 @@ func TestLoad_WriterAgentIsNoTools(t *testing.T) {
 	assert.Equal(t, byID["shitposter-reflector"].RequiredRole, writer.RequiredRole)
 }
 
+// TestLoad_IdeaGeneratorAgentsAreSeparate proves the theme and novel
+// generators are distinct no-tools agents on the reflector's role, each
+// carrying its own entry schema in its own prompt.
+func TestLoad_IdeaGeneratorAgentsAreSeparate(t *testing.T) {
+	_, agents, err := Load()
+	require.NoError(t, err)
+
+	byID := map[string]*AgentDefinitionConfig{}
+	for i := range agents {
+		byID[agents[i].AgentID] = &agents[i]
+	}
+	reflector := byID["shitposter-reflector"]
+	require.NotNil(t, reflector)
+	theme := byID["shitposter-theme-generator"]
+	novel := byID["shitposter-novel-generator"]
+	require.NotNil(t, theme, "agents.yaml must define shitposter-theme-generator")
+	require.NotNil(t, novel, "agents.yaml must define shitposter-novel-generator")
+
+	for _, a := range []*AgentDefinitionConfig{theme, novel} {
+		assert.Equal(t, ToolsNone, a.Tools)
+		assert.Empty(t, a.ToolSet)
+		assert.Equal(t, reflector.RequiredRole, a.RequiredRole)
+		assert.Contains(t, a.SystemPrompt, `"entries"`)
+		assert.Contains(t, a.SystemPrompt, `"text"`)
+		assert.Contains(t, a.SystemPrompt, "Never name, nickname")
+	}
+	assert.Contains(t, theme.SystemPrompt, `"cites"`)
+	assert.NotContains(t, novel.SystemPrompt, `"cites"`)
+	assert.NotEqual(t, theme.SystemPrompt, novel.SystemPrompt)
+}
+
 // TestAgentDefinitionConfig_Tools_Decodes proves `tools: none` decodes 1:1
 // onto AgentDefinitionConfig.Tools via the same yaml path Load uses.
 func TestAgentDefinitionConfig_Tools_Decodes(t *testing.T) {
