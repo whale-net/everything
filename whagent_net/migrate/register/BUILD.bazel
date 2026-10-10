@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "register",
+    srcs = ["register.go"],
+    importpath = "github.com/whale-net/everything/whagent_net/migrate/register",
+    visibility = ["//whagent_net:__subpackages__"],
+    deps = [
+        "//whagent_net/config",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Run explicitly (requires Docker):
+#   bazel test //whagent_net/migrate/register:register_integration_test
+go_test(
+    name = "register_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["register_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":register",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//whagent_net/config",
+        "//whagent_net/migrate/schema",
+        "//whagent_net/session",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

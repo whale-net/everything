@@ -8,6 +8,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//libs/go/migrate",
+        "//whagent_net/migrate/register",
         "//whagent_net/migrate/schema",
     ],
 )

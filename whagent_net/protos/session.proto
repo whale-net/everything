@@ -98,6 +98,22 @@ service SessionService {
   // when no admin role is configured).
   rpc GetAgent(GetAgentRequest) returns (GetAgentResponse);
 
+  // ListModelDefinitions returns every model_definition row ordered by
+  // model then id. Any authenticated caller may call it; feeds the agent
+  // edit form's model-definition choice.
+  rpc ListModelDefinitions(ListModelDefinitionsRequest) returns (ListModelDefinitionsResponse);
+
+  // UpdateAgent atomically supersedes an agent's current definition with
+  // the full desired definition in the request (full replacement, not a
+  // field mask: every field is set, so omitted fields take their zero
+  // value). Requires the configured API admin role (PERMISSION_DENIED
+  // otherwise; fails closed when no admin role is configured).
+  // INVALID_ARGUMENT for a malformed definition, NOT_FOUND when agent_id has
+  // no current row (this RPC never creates agents), ABORTED when a
+  // concurrent update won the race. Running sessions keep their pinned
+  // definition; new sessions use the new row.
+  rpc UpdateAgent(UpdateAgentRequest) returns (UpdateAgentResponse);
+
   // StreamEvents is FR5/C17's server-streaming bridge over the
   // `whagent/events` exchange (NFR4, LB7, issue #2239): a programmatic
   // client follows a session's events live without ever holding RabbitMQ
@@ -388,6 +404,21 @@ message ListAgentsResponse {
   repeated AgentDefinition agents = 1;
 }
 
+// ModelDefinition is one model_definition row.
+message ModelDefinition {
+  string id = 1;
+  string name = 2;
+  string model = 3;
+  // JSON-encoded provider-routing preferences.
+  string provider = 4;
+}
+
+message ListModelDefinitionsRequest {}
+
+message ListModelDefinitionsResponse {
+  repeated ModelDefinition model_definitions = 1;
+}
+
 message GetAgentRequest {
   string agent_id = 1;
   bool include_history = 2;
@@ -397,6 +428,26 @@ message GetAgentResponse {
   AgentDefinition current = 1;
   // Populated only when include_history was requested; valid_from ascending.
   repeated AgentDefinition history = 2;
+}
+
+message UpdateAgentRequest {
+  string agent_id = 1;
+  // Exactly one of model / model_definition_id must be set.
+  string model = 2;
+  optional string model_definition_id = 3;
+  // JSON-encoded tool_set array (same encoding as AgentDefinition.tool_set).
+  string tool_set = 4;
+  int32 max_turns = 5;
+  double max_cost_usd = 6;
+  int32 max_tool_iterations = 7;
+  string tool_loading_mode = 8;
+  optional string required_role = 9;
+  string scope = 10;
+  string system_prompt = 11;
+}
+
+message UpdateAgentResponse {
+  AgentDefinition current = 1;
 }
 
 message StreamEventsRequest {
