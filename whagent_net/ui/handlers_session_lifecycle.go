@@ -58,18 +58,43 @@ func isUnexpectedAPIError(err error) bool {
 	}
 }
 
-// handleNewSession is FR1's start-session form (GET /sessions/new, issue
-// #2246): renders pages.SessionNew with no prior input or error.
-func (app *App) handleNewSession(w http.ResponseWriter, r *http.Request) {
-	logger := logging.Get("main")
+// listAgentOptions reads the current agents for the new-session dropdown.
+func (app *App) listAgentOptions(ctx context.Context) ([]pages.AgentOption, error) {
+	resp, err := app.session.Client().ListAgents(ctx, &whagentpb.ListAgentsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	opts := make([]pages.AgentOption, 0, len(resp.GetAgents()))
+	for _, a := range resp.GetAgents() {
+		v := agentToView(a)
+		opts = append(opts, pages.AgentOption{AgentID: v.AgentID, Model: v.Model})
+	}
+	return opts, nil
+}
 
+// newSessionData builds the form's page data with the agent dropdown filled.
+func (app *App) newSessionData(ctx context.Context) pages.SessionNewData {
 	data := pages.SessionNewData{
 		Layout: components.LayoutData{
 			Title:  "Start a session",
 			Active: "New session",
-			User:   htmxauth.GetUser(r.Context()),
+			User:   htmxauth.GetUser(ctx),
 		},
 	}
+	agents, err := app.listAgentOptions(ctx)
+	if err != nil {
+		logging.Get("main").Error("failed to list agents for new session form", "error", err)
+		data.AgentsError = "Could not load agents: the whagent-net api is unavailable."
+		return data
+	}
+	data.Agents = agents
+	return data
+}
+
+// handleNewSession is GET /sessions/new.
+func (app *App) handleNewSession(w http.ResponseWriter, r *http.Request) {
+	logger := logging.Get("main")
+	data := app.newSessionData(r.Context())
 
 	if err := RenderTempl(w, r, data.Layout.Title, pages.SessionNew(data)); err != nil {
 		logger.Error("failed to render session new page", "error", err)
@@ -77,14 +102,8 @@ func (app *App) handleNewSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleStartSession is FR1's start-session submit (POST /sessions, issue
-// #2246): calls StartSession through the `api` client as the signed-in
-// operator (on_behalf_of left unset on the request -- M1's default,
-// StartSessionRequest's doc comment: "acting subject == on-behalf-of
-// subject"), redirecting to /sessions/{id} on success. There is no agent
-// picker (pages/session_new.templ's doc comment): agent_id is read
-// verbatim from the form and resolved entirely by `api`'s own
-// AgentDefinitions lookup.
+// handleStartSession is POST /sessions. agent_id must be one of the
+// current ListAgents entries; anything else is rejected with a 400.
 func (app *App) handleStartSession(w http.ResponseWriter, r *http.Request) {
 	logger := logging.Get("main")
 	ctx := r.Context()
@@ -96,24 +115,32 @@ func (app *App) handleStartSession(w http.ResponseWriter, r *http.Request) {
 	agentID := strings.TrimSpace(r.FormValue("agent_id"))
 	modelOverride := strings.TrimSpace(r.FormValue("model_override"))
 
-	renderForm := func(errMsg string) {
-		data := pages.SessionNewData{
-			Layout: components.LayoutData{
-				Title:  "Start a session",
-				Active: "New session",
-				User:   htmxauth.GetUser(ctx),
-			},
-			AgentID:       agentID,
-			ModelOverride: modelOverride,
-			Error:         errMsg,
-		}
+	renderForm := func(code int, errMsg string) {
+		data := app.newSessionData(ctx)
+		data.AgentID = agentID
+		data.ModelOverride = modelOverride
+		data.Error = errMsg
+		w.WriteHeader(code)
 		if err := RenderTempl(w, r, data.Layout.Title, pages.SessionNew(data)); err != nil {
 			logger.Error("failed to render session new page", "error", err)
 		}
 	}
 
-	if agentID == "" {
-		renderForm("Agent ID is required.")
+	agents, err := app.listAgentOptions(ctx)
+	if err != nil {
+		logger.Error("failed to list agents to validate start session", "error", err)
+		renderForm(http.StatusBadGateway, "Could not validate the agent: the whagent-net api is unavailable.")
+		return
+	}
+	known := false
+	for _, a := range agents {
+		if a.AgentID == agentID {
+			known = true
+			break
+		}
+	}
+	if !known {
+		renderForm(http.StatusBadRequest, "Select an agent from the list.")
 		return
 	}
 
@@ -127,7 +154,7 @@ func (app *App) handleStartSession(w http.ResponseWriter, r *http.Request) {
 		if isUnexpectedAPIError(err) {
 			logger.Error("start session failed", "agent_id", agentID, "error", err)
 		}
-		renderForm(mapAPIError(err))
+		renderForm(http.StatusOK, mapAPIError(err))
 		return
 	}
 
