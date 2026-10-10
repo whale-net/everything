@@ -13,6 +13,7 @@ go_library(
         "transcript.go",
         "turn_commit.go",
         "usage.go",
+        "usage_report.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/session",
     visibility = ["//visibility:public"],
@@ -72,6 +73,7 @@ go_test(
         "transcript_publish_integration_test.go",
         "turn_commit_integration_test.go",
         "usage_integration_test.go",
+        "usage_report_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [

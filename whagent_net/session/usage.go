@@ -55,6 +55,9 @@ type UsageStore interface {
 	// and whether any row's cost was estimated -- one query, always
 	// derived fresh from turn_usage (NFR5).
 	Summary(ctx context.Context, sessionID uuid.UUID) (UsageSummary, error)
+	// UsageReport aggregates turn_usage by UTC period/agent/model
+	// (usage_report.go).
+	UsageReport(ctx context.Context, q UsageReportQuery) (UsageReport, error)
 }
 
 // usageStore is the Postgres-backed UsageStore implementation.

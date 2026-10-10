@@ -68,6 +68,11 @@ func (f *fakeUISessionServer) GetSessionUsage(ctx context.Context, req *whagentp
 	return &whagentpb.GetSessionUsageResponse{Usage: &whagentpb.SessionUsage{TurnCap: 100, CostCapUsd: 1}}, nil
 }
 
+// GetUsageReport returns an empty report.
+func (f *fakeUISessionServer) GetUsageReport(ctx context.Context, req *whagentpb.GetUsageReportRequest) (*whagentpb.GetUsageReportResponse, error) {
+	return &whagentpb.GetUsageReportResponse{Total: &whagentpb.UsageTotals{}}, nil
+}
+
 // newBufconnUISessionClient dials server over an in-memory bufconn
 // listener and wraps it in a *SessionClient, the same shape
 // grpc_client_test.go's newBufconnSessionClient uses -- generalized to

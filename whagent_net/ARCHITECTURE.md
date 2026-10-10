@@ -477,6 +477,15 @@ query, not a separately-mutated counter — so a client reading usage never
 sees a figure that could diverge from what cap evaluation itself used to
 decide `capped`.
 
+`GetUsageReport` (`UsageStore.UsageReport`, `session/usage_report.go`) is the
+cross-session cost read: one SQL statement aggregating `turn_usage` by UTC
+calendar period (day/ISO week/month/all-time), agent and model in any
+combination, with the ungrouped total from the same statement. Agent
+attribution comes from `turn_usage.agent_definition_id` joined to
+`agent_definition.agent_id` (no temporal join to `session_agent`), so a turn
+is attributed to the agent that ran it. Only buckets with usage appear. Any
+authenticated caller may call it.
+
 **Max tool iterations** bounds the *inner* tool-call loop [Session
 workflow](#session-workflow) step 4 runs within a single external turn: the
 number of model calls one `SendTurn` may trigger while the model keeps

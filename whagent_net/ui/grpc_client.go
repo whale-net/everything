@@ -54,3 +54,8 @@ func (c *SessionClient) Client() whagentpb.SessionServiceClient {
 func (c *SessionClient) GetDashboardSummary(ctx context.Context) (*whagentpb.GetDashboardSummaryResponse, error) {
 	return c.client.GetDashboardSummary(ctx, &whagentpb.GetDashboardSummaryRequest{})
 }
+
+// GetUsageReport calls SessionService.GetUsageReport.
+func (c *SessionClient) GetUsageReport(ctx context.Context, req *whagentpb.GetUsageReportRequest) (*whagentpb.GetUsageReportResponse, error) {
+	return c.client.GetUsageReport(ctx, req)
+}

@@ -95,6 +95,11 @@ func (f *fakeSessionServiceClient) GetSessionUsage(context.Context, *pb.GetSessi
 	panic("fakeSessionServiceClient: GetSessionUsage called -- no whagent-net mcp tool forwards to this RPC")
 }
 
+// GetUsageReport has no matching tool.
+func (f *fakeSessionServiceClient) GetUsageReport(context.Context, *pb.GetUsageReportRequest, ...grpc.CallOption) (*pb.GetUsageReportResponse, error) {
+	panic("fakeSessionServiceClient: GetUsageReport called -- no whagent-net mcp tool forwards to this RPC")
+}
+
 // StreamEvents (issue #2239) has no matching tool -- like ListSessions
 // above, any test that reaches this is exercising a code path this
 // package must never have.

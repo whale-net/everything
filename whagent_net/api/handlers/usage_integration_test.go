@@ -140,3 +140,42 @@ func TestGetSessionUsage_ReportsSummedUsageAgainstPinnedCaps(t *testing.T) {
 	assert.InDelta(t, 5.0, resp.Usage.CostCapUsd, 0.0000001)
 	assert.True(t, resp.Usage.CostEstimated, "cost_estimated must be true when any summed row was estimated")
 }
+
+// TestGetUsageReport_RowsReconcileWithTotal proves per-agent rows sum to the total.
+func TestGetUsageReport_RowsReconcileWithTotal(t *testing.T) {
+	client, store := newTestServer(t)
+	ctx := context.Background()
+	sess := createSession(t, ctx, store, devSubject, session.StatusRunning)
+
+	for i, name := range []string{"report-a", "report-b"} {
+		def := testAgentDefinition(name, 25, 5.0)
+		require.NoError(t, store.AgentDefinitions().Upsert(ctx, def))
+		require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.ID))
+		require.NoError(t, store.Usage().RecordTurn(ctx, session.TurnUsage{
+			SessionID: sess.SessionID, Turn: i + 1, Model: "test-model",
+			PromptTokens: 100, CompletionTokens: 50, CostUSD: 0.25, CostEstimated: i == 1,
+		}))
+	}
+
+	resp, err := client.GetUsageReport(ctx, &pb.GetUsageReportRequest{Period: pb.UsagePeriod_USAGE_PERIOD_DAY, ByAgent: true})
+	require.NoError(t, err)
+	require.Len(t, resp.Rows, 2)
+	var sum float64
+	for _, r := range resp.Rows {
+		sum += r.CostUsd
+		assert.NotEmpty(t, r.PeriodStart)
+		assert.NotEmpty(t, r.AgentId)
+		assert.Equal(t, "", r.Model)
+	}
+	assert.InDelta(t, resp.Total.CostUsd, sum, 1e-9)
+	assert.Equal(t, int64(2), resp.Total.Turns)
+	assert.True(t, resp.Total.CostIncludesEstimate)
+}
+
+// TestGetUsageReport_InvalidPeriod proves an out-of-range enum is INVALID_ARGUMENT.
+func TestGetUsageReport_InvalidPeriod(t *testing.T) {
+	client, _ := newTestServer(t)
+	_, err := client.GetUsageReport(context.Background(), &pb.GetUsageReportRequest{Period: pb.UsagePeriod(99)})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
