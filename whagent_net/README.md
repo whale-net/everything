@@ -354,7 +354,7 @@ Applied by hand per environment; nothing here is run by CI. Do dev first.
 Definitions are SCD2 rows. `SessionService.ListAgents` (current rows) and
 `GetAgent` (current row; `include_history` adds every row by `valid_from`)
 read them; history needs the API admin role (see "Keycloak role").
-Try it: `grpcurl -plaintext localhost:50051 whagent_net.session.v1.SessionService/ListAgents`
+Try it: `grpcurl -plaintext localhost:50051 whagent.v1.SessionService/ListAgents`
 (adjust the service name to `session.proto`'s package).
 
 ## Keycloak role
