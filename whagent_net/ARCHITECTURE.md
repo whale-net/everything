@@ -733,6 +733,8 @@ access it through `ui`. Logged at WARNING (this is a genuine deviation
 needing a human, not an ERROR — the system itself behaved correctly).
 
 **Self-service and admin grant lists (FR14–FR17, issues #2432/#2433).**
+`GET /cost` (`whagent_net/ui/handlers_cost.go`) is the UTC usage report (tokens, cost, turns by period, agent and model) built on `GetUsageReport`.
+
 `GET /grants` (`whagent_net/ui/handlers_grants.go`) lists the signed-in
 operator's own delegated grants with a live per-scope status read
 (`grpcauth.Store.Status`, never the bookkeeping index, which carries no

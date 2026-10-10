@@ -16,6 +16,7 @@ go_library(
         "delegatedgrant.go",
         "grpc_client.go",
         "handlers_consent.go",
+        "handlers_cost.go",
         "handlers_grants.go",
         "handlers_grants_admin.go",
         "handlers_link.go",

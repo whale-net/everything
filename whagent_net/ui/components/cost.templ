@@ -1,0 +1,45 @@
+package components
+
+// CostFilters carries GET /cost's controls as submitted.
+type CostFilters struct {
+	// Period is one of day|week|month|all|none.
+	Period  string
+	ByAgent bool
+	ByModel bool
+}
+
+// CostRowView is one GetUsageReport row, pre-formatted for display.
+type CostRowView struct {
+	PeriodLabel      string
+	Agent            string
+	Model            string
+	PromptTokens     int64
+	CompletionTokens int64
+	Turns            int64
+	CostUSD          float64
+	Estimated        bool
+}
+
+// CostPageData carries Cost/CostTable's parameterisation.
+type CostPageData struct {
+	Layout     LayoutData
+	Filters    CostFilters
+	Rows       []CostRowView
+	Total      CostRowView
+	FetchError string
+}
+
+// Cost renders the full usage report page.
+templ Cost(data CostPageData) {
+	@Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">Cost (UTC)</h1>
+		<div id="cost-table">
+			@CostTable(data)
+		</div>
+	}
+}
+
+// CostTable renders the table fragment swapped by the controls.
+templ CostTable(data CostPageData) {
+	<div></div>
+}
