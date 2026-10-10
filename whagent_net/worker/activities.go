@@ -374,6 +374,10 @@ type CommitTurnResult struct {
 	// CommitTurn to recognize a real finish signal.
 	Done bool
 
+	// DoneReason is events.StatusChangeReasonSingleTurn when Done ends a
+	// single-turn session; empty otherwise.
+	DoneReason string
+
 	// Capped and CapKind report a tripped turn or cost cap (FR6/FR7):
 	// SessionWorkflow's loop (workflow.go) writes session.StatusCapped
 	// with CapKind in the terminal reason when Capped is true. CapKind is
