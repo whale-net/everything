@@ -12,6 +12,7 @@ go_library(
         "transcript.go",
         "turn_commit.go",
         "usage.go",
+        "usage_report.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/session",
     visibility = ["//visibility:public"],

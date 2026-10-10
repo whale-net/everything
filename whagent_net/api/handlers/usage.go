@@ -87,3 +87,9 @@ func (s *SessionServer) GetSessionUsage(ctx context.Context, req *pb.GetSessionU
 		},
 	}, nil
 }
+
+// GetUsageReport aggregates usage by UTC period, agent and model; any
+// authenticated caller may call it.
+func (s *SessionServer) GetUsageReport(ctx context.Context, req *pb.GetUsageReportRequest) (*pb.GetUsageReportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetUsageReport not implemented")
+}

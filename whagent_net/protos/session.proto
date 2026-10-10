@@ -74,6 +74,13 @@ service SessionService {
   // rule as GetSession (any authenticated caller) -- see issue #2238.
   rpc GetSessionUsage(GetSessionUsageRequest) returns (GetSessionUsageResponse);
 
+  // GetUsageReport aggregates turn_usage by UTC calendar period, agent and
+  // model in any combination (every dimension optional). Agent attribution
+  // comes from turn_usage.agent_definition_id. Only buckets with usage are
+  // returned. Any authenticated caller may call it; an unknown enum is
+  // INVALID_ARGUMENT.
+  rpc GetUsageReport(GetUsageReportRequest) returns (GetUsageReportResponse);
+
   // ListAgentDefinitionScopes returns every distinct grant-scope
   // configured across all agent_definition rows
   // (whagent_net/session.AgentDefinition.Scope, issue #2424 FR1/FR4) --
@@ -339,6 +346,50 @@ message GetSessionUsageRequest {
 
 message GetSessionUsageResponse {
   SessionUsage usage = 1;
+}
+
+enum UsagePeriod {
+  USAGE_PERIOD_NONE = 0;
+  USAGE_PERIOD_DAY = 1;
+  USAGE_PERIOD_WEEK = 2;
+  USAGE_PERIOD_MONTH = 3;
+  USAGE_PERIOD_ALL_TIME = 4;
+}
+
+message GetUsageReportRequest {
+  UsagePeriod period = 1;
+  bool by_agent = 2;
+  bool by_model = 3;
+  // Optional half-open [from, to) bounds on turn_usage.created_at.
+  google.protobuf.Timestamp from = 4;
+  google.protobuf.Timestamp to = 5;
+}
+
+message UsageRow {
+  // YYYY-MM-DD (UTC bucket start); empty for ALL_TIME/NONE.
+  string period_start = 1;
+  // Set only when by_agent.
+  string agent_id = 2;
+  // Set only when by_model.
+  string model = 3;
+  int64 prompt_tokens = 4;
+  int64 completion_tokens = 5;
+  double cost_usd = 6;
+  int64 turns = 7;
+  bool cost_includes_estimate = 8;
+}
+
+message UsageTotals {
+  int64 prompt_tokens = 1;
+  int64 completion_tokens = 2;
+  double cost_usd = 3;
+  int64 turns = 4;
+  bool cost_includes_estimate = 5;
+}
+
+message GetUsageReportResponse {
+  repeated UsageRow rows = 1;
+  UsageTotals total = 2;
 }
 
 message ListAgentDefinitionScopesRequest {}

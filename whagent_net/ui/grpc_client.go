@@ -49,3 +49,8 @@ func (c *SessionClient) Close() error {
 func (c *SessionClient) Client() whagentpb.SessionServiceClient {
 	return c.client
 }
+
+// GetUsageReport calls SessionService.GetUsageReport.
+func (c *SessionClient) GetUsageReport(ctx context.Context, req *whagentpb.GetUsageReportRequest) (*whagentpb.GetUsageReportResponse, error) {
+	return c.client.GetUsageReport(ctx, req)
+}
