@@ -153,20 +153,25 @@ def _instruction(params: ShitpostParams, attempt: int) -> str:
 
 
 def _wait_for_reply(client, session_id: str, from_seq: int, deadline: float) -> str:
-    """Poll until the session leaves RUNNING, then return its newest reply."""
+    """Poll until a new assistant reply lands after from_seq.
+
+    A follow-up turn can still read AWAITING_INPUT right after send_turn,
+    before the session flips to RUNNING, so a settled state with no new
+    reply yet is polled again rather than treated as a failure.
+    """
     while True:
         session = client.get_session(session_id)
-        if session.state in (_STATE_AWAITING_INPUT, _STATE_DONE):
-            break
-        if session.state != _STATE_RUNNING:
+        if session.state not in (_STATE_AWAITING_INPUT, _STATE_DONE, _STATE_RUNNING):
             raise RuntimeError(f"whagent session ended in state {session.state}")
+        if session.state != _STATE_RUNNING:
+            reply = client.latest_assistant_message(session_id, from_seq=from_seq)
+            if reply is not None:
+                return reply[0]
         if time.monotonic() >= deadline:
-            raise TimeoutError("whagent generation deadline exceeded")
+            if session.state == _STATE_RUNNING:
+                raise TimeoutError("whagent generation deadline exceeded")
+            raise RuntimeError("whagent session produced no assistant message")
         time.sleep(_POLL_INTERVAL_SECONDS)
-    reply = client.latest_assistant_message(session_id, from_seq=from_seq)
-    if reply is None:
-        raise RuntimeError("whagent session produced no assistant message")
-    return reply[0]
 
 
 def _generate_blocking(params: GenerateParams) -> GenerateResult:
