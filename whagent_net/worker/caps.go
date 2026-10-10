@@ -115,20 +115,29 @@ type capCheck struct {
 // happen to be simultaneously exceeded still reports exactly CapKindTurns,
 // never both.
 func checkCaps(turn int, def session.AgentDefinition, costSoFar float64) (capCheck, error) {
-	maxTurns := def.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = defaultMaxTurns
+	if turn >= effectiveMaxTurns(def) {
+		return capCheck{Capped: true, CapKind: session.CapKindTurns}, nil
 	}
+	return checkCostCap(def, costSoFar), nil
+}
+
+// effectiveMaxTurns is def's turn cap, defaultMaxTurns when MaxTurns is zero.
+func effectiveMaxTurns(def session.AgentDefinition) int {
+	if def.MaxTurns == 0 {
+		return defaultMaxTurns
+	}
+	return def.MaxTurns
+}
+
+// checkCostCap is FR7's cost half of checkCaps on its own: the turn cap is
+// evaluated only after a turn's final response, never inside the tool loop.
+func checkCostCap(def session.AgentDefinition, costSoFar float64) capCheck {
 	maxCostUSD := def.MaxCostUSD
 	if maxCostUSD == 0 {
 		maxCostUSD = defaultMaxCostUSD
 	}
-
-	if turn >= maxTurns {
-		return capCheck{Capped: true, CapKind: session.CapKindTurns}, nil
-	}
 	if costSoFar >= maxCostUSD {
-		return capCheck{Capped: true, CapKind: session.CapKindCost}, nil
+		return capCheck{Capped: true, CapKind: session.CapKindCost}
 	}
-	return capCheck{}, nil
+	return capCheck{}
 }

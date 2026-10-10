@@ -295,7 +295,7 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 		if outcome.done {
 			nextStatus = session.StatusDone
 		}
-		if err := updateSessionStatus(ctx, in.SessionID, turn, nextStatus, nil); err != nil {
+		if err := updateSessionStatusWithReason(ctx, in.SessionID, turn, nextStatus, nil, outcome.doneReason); err != nil {
 			return err
 		}
 		if outcome.done {
@@ -318,6 +318,7 @@ type turnOutcome struct {
 	errorCategory session.ErrorCategory
 	errorDetail   string
 	capKind       session.CapKind
+	doneReason    string
 }
 
 // turnGoroutineResult carries processTurn's result across the
@@ -390,6 +391,7 @@ func runTurn(ctx workflow.Context, stopCh workflow.ReceiveChannel, sessionID uui
 		errorCategory: result.commit.ErrorCategory,
 		errorDetail:   result.commit.ErrorDetail,
 		capKind:       result.commit.CapKind,
+		doneReason:    result.commit.DoneReason,
 	}, nil
 }
 
@@ -469,6 +471,11 @@ func dispatchToolCall(ctx workflow.Context, sessionID uuid.UUID, turn int, callI
 // failed status.
 func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTurnSignal) (CommitTurnResult, error) {
 	v := workflow.GetVersion(ctx, "session-workflow-cap-enforcement", workflow.DefaultVersion, 1)
+	// turnCapAfterFinal moves the turn cap out of the tool loop and onto the
+	// post-final-response check, and adds the single-turn done outcome (a
+	// max_turns of 1 ends as done, not capped). Runs opened before it deploys
+	// keep the in-loop turn cap and capped-on-first-turn behavior.
+	turnCapAfterFinal := workflow.GetVersion(ctx, "session-workflow-turn-cap-after-final", workflow.DefaultVersion, 1)
 
 	var resolved ResolveAgentDefinitionResult
 	if err := workflow.ExecuteActivity(ctx, ActivityResolveAgentDefinition, sessionID).Get(ctx, &resolved); err != nil {
@@ -741,7 +748,12 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 			// in-workflow tally rather than SumCost). Reuses checkCaps
 			// unchanged -- turn is invariant across this turn's own
 			// iterations, so only the cost half can newly trip here.
-			if check, err := checkCaps(turn, resolved.Definition, baseCostUSD+prior.CostUSD); err != nil {
+			if turnCapAfterFinal >= 1 {
+				// Cost only: the turn cap waits for this turn's final response.
+				if check := checkCostCap(resolved.Definition, baseCostUSD+prior.CostUSD); check.Capped {
+					return cappedTurn(ctx, sessionID, turn, check.CapKind)
+				}
+			} else if check, err := checkCaps(turn, resolved.Definition, baseCostUSD+prior.CostUSD); err != nil {
 				return failTurn(ctx, sessionID, turn, err)
 			} else if check.Capped {
 				return cappedTurn(ctx, sessionID, turn, check.CapKind)
@@ -808,6 +820,21 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		// reaches actually gets caught, ending the session immediately
 		// rather than waiting for a further signal that will never come
 		// (Testing phase's "does not process a further signalled turn").
+		if turnCapAfterFinal >= 1 {
+			final, err := evaluateFinalCaps(ctx, sessionID, turn, resolved.Definition)
+			if err != nil {
+				return failTurn(ctx, sessionID, turn, err)
+			}
+			if final.singleTurnDone {
+				commitResult.Done = true
+				commitResult.DoneReason = events.StatusChangeReasonSingleTurn
+				return commitResult, nil
+			}
+			if final.capped {
+				return cappedTurn(ctx, sessionID, turn, final.capKind)
+			}
+			return commitResult, nil
+		}
 		check, err := evaluateCaps(ctx, sessionID, turn, resolved.Definition)
 		if err != nil {
 			return failTurn(ctx, sessionID, turn, err)
@@ -843,6 +870,34 @@ func evaluateCaps(ctx workflow.Context, sessionID uuid.UUID, turnForCapCheck int
 		return capCheck{}, err
 	}
 	return checkCaps(turnForCapCheck, def, sum.CostUSD)
+}
+
+// finalCapResult is evaluateFinalCaps' outcome for a turn whose final
+// response has been committed. At most one field group is set.
+type finalCapResult struct {
+	capped         bool
+	capKind        session.CapKind
+	singleTurnDone bool
+}
+
+// evaluateFinalCaps is the post-final-response cap check (FR6/FR7, C6): cost
+// is checked first so a cost cap reached on the same turn wins, then the turn
+// cap. An effective max_turns of 1 ends the session as done rather than capped.
+func evaluateFinalCaps(ctx workflow.Context, sessionID uuid.UUID, turn int, def session.AgentDefinition) (finalCapResult, error) {
+	var sum SumCostResult
+	if err := workflow.ExecuteActivity(ctx, ActivitySumCost, SumCostInput{SessionID: sessionID}).Get(ctx, &sum); err != nil {
+		return finalCapResult{}, err
+	}
+	if check := checkCostCap(def, sum.CostUSD); check.Capped {
+		return finalCapResult{capped: true, capKind: check.CapKind}, nil
+	}
+	if turn >= effectiveMaxTurns(def) {
+		if effectiveMaxTurns(def) == 1 {
+			return finalCapResult{singleTurnDone: true}, nil
+		}
+		return finalCapResult{capped: true, capKind: session.CapKindTurns}, nil
+	}
+	return finalCapResult{}, nil
 }
 
 // cappedTurn is processTurn's shared cap-trip terminal path (FR6/FR7):
@@ -930,13 +985,20 @@ func failTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, cause error) 
 // shares its Turn with whatever other event this same iteration commits
 // (FR2's collision guard).
 func updateSessionStatus(ctx workflow.Context, sessionID uuid.UUID, turn int, status session.Status, terminal *session.TerminalReason) error {
+	return updateSessionStatusWithReason(ctx, sessionID, turn, status, terminal, "")
+}
+
+// updateSessionStatusWithReason is updateSessionStatus plus the optional
+// status_change reason (events.StatusChangeEventPayload.Reason); reason is
+// empty for every status except a single-turn done.
+func updateSessionStatusWithReason(ctx workflow.Context, sessionID uuid.UUID, turn int, status session.Status, terminal *session.TerminalReason, reason string) error {
 	v := workflow.GetVersion(ctx, "session-workflow-status-transitions", workflow.DefaultVersion, 1)
 	if v == workflow.DefaultVersion {
 		// Pre-existing behavior for any run whose history predates this
 		// change: no status write.
 		return nil
 	}
-	if err := commitStatusChangeEvent(ctx, sessionID, turn, status); err != nil {
+	if err := commitStatusChangeEvent(ctx, sessionID, turn, status, reason); err != nil {
 		return err
 	}
 	return workflow.ExecuteActivity(ctx, ActivityUpdateSessionStatus, UpdateSessionStatusInput{
@@ -953,7 +1015,7 @@ func updateSessionStatus(ctx workflow.Context, sessionID uuid.UUID, turn int, st
 // those already commit an equivalent signal (cappedTurn/failTurn)
 // immediately before updateSessionStatus is even called, and FR1
 // explicitly does not duplicate it.
-func commitStatusChangeEvent(ctx workflow.Context, sessionID uuid.UUID, turn int, status session.Status) error {
+func commitStatusChangeEvent(ctx workflow.Context, sessionID uuid.UUID, turn int, status session.Status, reason string) error {
 	v := workflow.GetVersion(ctx, "session-workflow-status-change-event", workflow.DefaultVersion, 1)
 	if v == workflow.DefaultVersion {
 		return nil
@@ -963,7 +1025,7 @@ func commitStatusChangeEvent(ctx workflow.Context, sessionID uuid.UUID, turn int
 	default:
 		return nil
 	}
-	payload, err := json.Marshal(events.StatusChangeEventPayload{Status: string(status)})
+	payload, err := json.Marshal(events.StatusChangeEventPayload{Status: string(status), Reason: reason})
 	if err != nil {
 		return fmt.Errorf("marshal status_change event payload: %w", err)
 	}
