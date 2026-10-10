@@ -351,6 +351,12 @@ Applied by hand per environment; nothing here is run by CI. Do dev first.
    be resolved: ... Link manmanv2 identity`.
 7. Record env, version and `server_url` in the krill task summary.
 
+Definitions are SCD2 rows. `SessionService.ListAgents` (current rows) and
+`GetAgent` (current row; `include_history` adds every row by `valid_from`)
+read them; history needs the API admin role (see "Keycloak role").
+Try it: `grpcurl -plaintext localhost:50051 whagent.v1.SessionService/ListAgents`
+(adjust the service name to `session.proto`'s package).
+
 ## Keycloak role
 
 The role is checked on the **caller**, never on an `on_behalf_of` user;
@@ -397,6 +403,13 @@ token's roles on `grpcauth.Claims.Roles` for every RPC; `StartSession`'s
 call — a `start_session` for this agent as an operator without the role
 must fail with `PermissionDenied` and no session row created (M1
 Validation criterion 1).
+
+**API admin role.** Reading agent definition history needs a second realm
+role, whose name you choose (e.g. `whagent-api-admin`): create it under
+**Realm roles**, add it to an operator group's **Role mapping**, and set
+`WHAGENT_API_ADMIN_ROLE` on `api` to the same name. With the variable unset
+no one can read history. It is unrelated to the ui's
+`WHAGENT_GRANT_ADMIN_ROLE`.
 
 Realm configuration itself (creating the role, the group, and granting
 it) is **manual** in this repo today — there is no in-repo Keycloak

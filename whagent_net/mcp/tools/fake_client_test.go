@@ -101,3 +101,11 @@ func (f *fakeSessionServiceClient) GetSessionUsage(context.Context, *pb.GetSessi
 func (f *fakeSessionServiceClient) StreamEvents(context.Context, *pb.StreamEventsRequest, ...grpc.CallOption) (pb.SessionService_StreamEventsClient, error) {
 	panic("fakeSessionServiceClient: StreamEvents called -- no whagent-net mcp tool forwards to this RPC")
 }
+
+func (f *fakeSessionServiceClient) ListAgents(context.Context, *pb.ListAgentsRequest, ...grpc.CallOption) (*pb.ListAgentsResponse, error) {
+	panic("fakeSessionServiceClient: ListAgents called -- no whagent-net mcp tool forwards to this RPC")
+}
+
+func (f *fakeSessionServiceClient) GetAgent(context.Context, *pb.GetAgentRequest, ...grpc.CallOption) (*pb.GetAgentResponse, error) {
+	panic("fakeSessionServiceClient: GetAgent called -- no whagent-net mcp tool forwards to this RPC")
+}

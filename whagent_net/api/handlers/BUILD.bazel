@@ -4,6 +4,7 @@ go_library(
     name = "handlers",
     srcs = [
         "agent_definition.go",
+        "agents.go",
         "auth.go",
         "broadcast.go",
         "send.go",
@@ -80,6 +81,7 @@ go_test(
     timeout = "long",
     srcs = [
         "agent_definition_scopes_integration_test.go",
+        "agents_integration_test.go",
         "control_on_behalf_of_integration_test.go",
         "delegated_manmanv2_ops_integration_test.go",
         "fake_temporal_test.go",

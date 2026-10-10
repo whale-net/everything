@@ -263,3 +263,11 @@ func TestScopeForSession_UsesPinnedDefinitionNotCurrent(t *testing.T) {
 	require.NotNil(t, scope)
 	assert.Equal(t, "old-scope", *scope)
 }
+
+func (f *fakeAgentDefinitionStore) ListCurrent(context.Context) ([]*session.AgentDefinition, error) {
+	panic("fakeAgentDefinitionStore: ListCurrent not used by mcpscope")
+}
+
+func (f *fakeAgentDefinitionStore) History(context.Context, string) ([]*session.AgentDefinition, error) {
+	panic("fakeAgentDefinitionStore: History not used by mcpscope")
+}
