@@ -44,11 +44,9 @@ const (
 // inherits unless overridden (FR5/FR6/FR7, FR9's required_role).
 // ID is the surrogate primary key (migration 009): a single stable handle
 // for one row, so callers, logs, and any future FK never need to repeat
-// both AgentID and Version to name one. AgentID remains the stable,
+// both AgentID and a validity window to name one. AgentID remains the stable,
 // human-authored business key (agents.yaml, MCP tool inputs, UI filters --
-// LB5/NFR6); (AgentID, Version) stays UNIQUE at the database layer, it is
-// just no longer the primary key. Versions are never mutated in place,
-// only inserted.
+// LB5/NFR6). Rows are never mutated in place, only inserted.
 //
 // Exactly one of Model and ModelDefinitionID is set (migration 006's
 // agent_definition_model_xor_model_definition CHECK constraint;
@@ -244,11 +242,9 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 		toolLoadingMode = ToolLoadingModeBulk
 	}
 
-	// version is still NOT NULL until the contract migration; derive it so
-	// the legacy UNIQUE (agent_id, version) holds. Nothing reads it back.
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
-		VALUES ($1, $2, (SELECT COALESCE(MAX(version), 0) + 1 FROM agent_definition WHERE agent_id = $1), $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, valid_from
 	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode, def.SystemPrompt).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
 	if err != nil {
