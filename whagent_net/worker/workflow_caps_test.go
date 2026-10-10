@@ -512,18 +512,17 @@ func TestSessionWorkflow_StopRacingCapTrip_ResolvesToSingleTerminalReason(t *tes
 }
 
 // TestAgentDefinition_HasNoPerSessionCapOverrideField is a structural guard
-// (issue body: "there is no per-session cap override" -- deliberate, M1
-// scope) mirroring activities_test.go's reflection-based field assertions:
-// session.Session (the per-session row) must never grow its own
-// max_turns/max_cost_usd-shaped field, since checkCaps (caps.go) is wired
-// to read exclusively from the agent definition (evaluateCaps,
-// workflow.go), never from anything session-scoped.
+// mirroring activities_test.go's reflection-based field assertions:
+// session.Session (the per-session row) may carry only the pinned
+// MaxTurnsOverride (the max-turns override FR, resolved by
+// session.EffectiveMaxTurns) and never a bare MaxTurns/MaxCostUSD or a
+// cost override, which remain definition-level only.
 func TestAgentDefinition_HasNoPerSessionCapOverrideField(t *testing.T) {
 	typ := reflect.TypeOf(session.Session{})
 	for i := 0; i < typ.NumField(); i++ {
 		name := typ.Field(i).Name
-		assert.NotContains(t, []string{"MaxTurns", "MaxCostUSD", "MaxTurnsOverride", "MaxCostUSDOverride"}, name,
-			"session.Session must not carry a per-session cap override field (%s) -- caps are agent-definition-level only in M1", name)
+		assert.NotContains(t, []string{"MaxTurns", "MaxCostUSD", "MaxCostUSDOverride"}, name,
+			"session.Session must not carry a per-session cap field (%s) -- only the pinned MaxTurnsOverride is session-scoped", name)
 	}
 }
 

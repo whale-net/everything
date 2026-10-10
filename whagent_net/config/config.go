@@ -248,6 +248,11 @@ func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig)
 		default:
 			return fmt.Errorf("agent %q: tool_loading_mode %q must be \"bulk\" or \"search\"", a.AgentID, a.ToolLoadingMode)
 		}
+
+		// 0 means unset (the platform default applies); a negative cap is never valid.
+		if a.MaxTurns < 0 {
+			return fmt.Errorf("agent %q: max_turns must be >= 1 (or unset): got %d", a.AgentID, a.MaxTurns)
+		}
 	}
 	return nil
 }

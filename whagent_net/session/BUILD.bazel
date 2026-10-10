@@ -36,10 +36,14 @@ go_library(
 # exercises List itself against a real database.
 go_test(
     name = "session_test",
-    srcs = ["sessions_test.go"],
+    srcs = [
+        "maxturns_test.go",
+        "sessions_test.go",
+    ],
     embed = [":session"],
     deps = [
         "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
     ],
 )
 
