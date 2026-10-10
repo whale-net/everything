@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	pb "github.com/whale-net/everything/whagent_net/protos"
@@ -113,5 +114,18 @@ func (s *SessionServer) GetAgent(ctx context.Context, req *pb.GetAgentRequest) (
 // GetDashboardSummary returns today's (UTC) per-agent traffic and cost.
 // Any authenticated caller may call it.
 func (s *SessionServer) GetDashboardSummary(ctx context.Context, _ *pb.GetDashboardSummaryRequest) (*pb.GetDashboardSummaryResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "GetDashboardSummary not implemented")
+	today := time.Now().UTC().Format("2006-01-02")
+	sum, err := s.store.GetDashboardSummary(ctx, today)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "dashboard summary: %v", err)
+	}
+	resp := &pb.GetDashboardSummaryResponse{
+		UtcDate:              sum.UTCDate,
+		TotalCostUsdToday:    sum.TotalCostUSDToday,
+		CostIncludesEstimate: sum.CostIncludesEstimate,
+	}
+	for _, a := range sum.Agents {
+		resp.Agents = append(resp.Agents, &pb.AgentTraffic{AgentId: a.AgentID, SessionsToday: a.SessionsToday, TurnsToday: a.TurnsToday})
+	}
+	return resp, nil
 }

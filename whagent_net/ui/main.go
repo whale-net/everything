@@ -600,11 +600,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /mcp/consent", app.auth.RequireAuthFunc(app.handleMCPConsentConfirm))
 	mux.HandleFunc("GET /mcp/consent/callback", app.auth.RequireAuthFunc(app.handleMCPConsentCallback))
 
-	// Session list (FR3/C15, NFR3, issue #2247): the authenticated landing
-	// page, mounted at both "/" and "/sessions" -- replacing issue #2236's
-	// placeholder index -- so a bare sign-in and an explicit nav click both
-	// land here.
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionList)))
+	// Dashboard at "/" (the landing page) and the session list at /sessions.
+	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboard)))
 	mux.HandleFunc("GET /sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionList)))
 
 	// Session lifecycle controls (FR1, issue #2246): start form, turn

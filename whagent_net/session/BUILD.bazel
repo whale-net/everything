@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "agentdef.go",
         "archive.go",
+        "dashboard.go",
         "idempotency.go",
         "modeldef.go",
         "session.go",

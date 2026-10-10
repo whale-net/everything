@@ -49,3 +49,8 @@ func (c *SessionClient) Close() error {
 func (c *SessionClient) Client() whagentpb.SessionServiceClient {
 	return c.client
 }
+
+// GetDashboardSummary fetches today's (UTC) per-agent traffic and cost.
+func (c *SessionClient) GetDashboardSummary(ctx context.Context) (*whagentpb.GetDashboardSummaryResponse, error) {
+	return c.client.GetDashboardSummary(ctx, &whagentpb.GetDashboardSummaryRequest{})
+}
