@@ -98,6 +98,11 @@ service SessionService {
   // when no admin role is configured).
   rpc GetAgent(GetAgentRequest) returns (GetAgentResponse);
 
+  // ListModelDefinitions returns every model_definition row ordered by
+  // model then id. Any authenticated caller may call it; feeds the agent
+  // edit form's model-definition choice.
+  rpc ListModelDefinitions(ListModelDefinitionsRequest) returns (ListModelDefinitionsResponse);
+
   // StreamEvents is FR5/C17's server-streaming bridge over the
   // `whagent/events` exchange (NFR4, LB7, issue #2239): a programmatic
   // client follows a session's events live without ever holding RabbitMQ
@@ -386,6 +391,21 @@ message ListAgentsRequest {}
 
 message ListAgentsResponse {
   repeated AgentDefinition agents = 1;
+}
+
+// ModelDefinition is one model_definition row.
+message ModelDefinition {
+  string id = 1;
+  string name = 2;
+  string model = 3;
+  // JSON-encoded provider-routing preferences.
+  string provider = 4;
+}
+
+message ListModelDefinitionsRequest {}
+
+message ListModelDefinitionsResponse {
+  repeated ModelDefinition model_definitions = 1;
 }
 
 message GetAgentRequest {

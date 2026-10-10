@@ -913,6 +913,9 @@ are open to any authenticated caller. `GetAgent{include_history}` returns
 all rows for the agent by `valid_from` and requires the caller's token roles
 to include `WHAGENT_API_ADMIN_ROLE` (`handlers.isAgentAdmin`); an unset role
 fails closed. The response carries no version number.
+`SessionService.ListModelDefinitions` returns every `model_definition` row
+ordered by model then id, open to any authenticated caller; it feeds the
+agent edit form's model-definition choice.
 
 ## `mcp`'s start_session: two RPCs, one tool (issue #2120)
 

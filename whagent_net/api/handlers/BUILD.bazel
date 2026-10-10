@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "agent_definition.go",
         "agents.go",
+        "model_definition.go",
         "auth.go",
         "broadcast.go",
         "send.go",
