@@ -1,9 +1,10 @@
 # whagent-net Tiltfile
 # Local development environment for whagent-net (issue #2121, M1 close-out).
 #
-# migrate (job, applies schema migrations only -- agent_definition rows
-# are inserted by hand, see whagent_net/README.md "Agent definition
-# config") + api (SessionService gRPC + JWKS) + worker
+# migrate (job, applies schema migrations, then registers config/agents.yaml
+# agents that have no current row; never overwrites UpdateAgent or Agents-page
+# changes, see whagent_net/README.md "Agent definition config") + api
+# (SessionService gRPC + JWKS) + worker
 # (Temporal SessionWorkflow, plus a Temporal-scheduled hot-to-cold
 # transcript archive workflow when WHAGENT_S3_BUCKET is set -- FR7/C18,
 # worker/archive.go) + mcp (the Claude-Code-facing MCP surface), with
@@ -282,9 +283,9 @@ build_images_from_apps(APPS, watch_paths, platform)
 # Kubernetes Deployments
 # ===========================
 
-# migrate: applies 001_initial_schema and later migrations only --
-# agent_definition/model_definition rows are inserted by hand (see
-# whagent_net/README.md "Agent definition config"), not seeded here.
+# migrate: applies schema migrations, then registers config/agents.yaml
+# agent_definition/model_definition rows that have no current row (see
+# whagent_net/README.md "Agent definition config").
 if get_env_bool('ENABLE_WHAGENT_NET_MIGRATE', default='true'):
     k8s_yaml(blob("""
 apiVersion: batch/v1
