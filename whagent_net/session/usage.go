@@ -68,12 +68,17 @@ var _ UsageStore = usageStore{}
 // wording; callers that need retry-safety compose it themselves (e.g. via
 // IdempotencyLedger).
 func (s usageStore) RecordTurn(ctx context.Context, usage TurnUsage) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO turn_usage (session_id, turn, model, prompt_tokens, completion_tokens, cost_usd, cost_estimated, generation_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO turn_usage (session_id, turn, model, prompt_tokens, completion_tokens, cost_usd, cost_estimated, generation_id, agent_definition_id)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, sa.agent_definition_id
+		FROM session_agent sa
+		WHERE sa.session_id = $1 AND sa.valid_to IS NULL
 	`, usage.SessionID, usage.Turn, usage.Model, usage.PromptTokens, usage.CompletionTokens, usage.CostUSD, usage.CostEstimated, usage.GenerationID)
 	if err != nil {
 		return fmt.Errorf("record turn usage: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("record turn usage: session %s has no open agent assignment", usage.SessionID)
 	}
 	return nil
 }

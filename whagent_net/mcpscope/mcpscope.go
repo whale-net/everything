@@ -58,12 +58,12 @@ func New(store session.AgentDefinitionStore) *Resolver {
 	return &Resolver{store: store}
 }
 
-// ScopeForAgent resolves agentID's current (highest-Version)
+// ScopeForAgent resolves agentID's current (open)
 // AgentDefinition and returns its Scope (nil if the agent carries no
 // scope). Returns an error wrapping ErrNotFound when agentID has no
 // agent_definition row at all.
 func (r *Resolver) ScopeForAgent(ctx context.Context, agentID string) (*string, error) {
-	def, err := r.store.GetLatest(ctx, agentID)
+	def, err := r.store.GetCurrent(ctx, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("mcpscope: resolve scope for agent %q: %w", agentID, err)
 	}
@@ -75,9 +75,9 @@ func (r *Resolver) ScopeForAgent(ctx context.Context, agentID string) (*string, 
 
 // ScopeForSession resolves sessionID's already-recorded agent-definition
 // assignment (the session_agent row session.AssignToSession wrote) and
-// returns the Scope of the exact (AgentID, Version) it was assigned to --
-// never the current/latest version of that AgentID, which may since have
-// been upserted with a different Scope. Returns an error wrapping
+// returns the Scope of the exact definition row it was assigned to --
+// never the current row of that AgentID, which may since have
+// been replaced with a different Scope. Returns an error wrapping
 // ErrNotFound when sessionID is not a valid session id, has no
 // session_agent assignment, or (should it ever happen) is assigned to an
 // agent_definition row that no longer exists.
@@ -95,14 +95,14 @@ func (r *Resolver) ScopeForSession(ctx context.Context, sessionID string) (*stri
 		return nil, fmt.Errorf("%w: session id %q has no current agent assignment", ErrNotFound, sessionID)
 	}
 
-	def, err := r.store.GetVersion(ctx, assignment.AgentID, assignment.AgentVersion)
+	def, err := r.store.GetByID(ctx, assignment.AgentDefinitionID)
 	if err != nil {
-		return nil, fmt.Errorf("mcpscope: resolve scope for session %q's assigned agent %s@%d: %w",
-			sessionID, assignment.AgentID, assignment.AgentVersion, err)
+		return nil, fmt.Errorf("mcpscope: resolve scope for session %q's assigned agent %s (%s): %w",
+			sessionID, assignment.AgentID, assignment.AgentDefinitionID, err)
 	}
 	if def == nil {
-		return nil, fmt.Errorf("%w: session %q is assigned to agent %s@%d, which no longer exists",
-			ErrNotFound, sessionID, assignment.AgentID, assignment.AgentVersion)
+		return nil, fmt.Errorf("%w: session %q is assigned to agent %s (%s), which no longer exists",
+			ErrNotFound, sessionID, assignment.AgentID, assignment.AgentDefinitionID)
 	}
 
 	return def.Scope, nil

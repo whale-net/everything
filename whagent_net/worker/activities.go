@@ -162,12 +162,12 @@ func (a *Activities) ResolveAgentDefinition(ctx context.Context, sessionID uuid.
 		return ResolveAgentDefinitionResult{}, fmt.Errorf("resolve agent definition: session %s has no agent definition assignment", sessionID)
 	}
 
-	def, err := a.Store.AgentDefinitions().GetVersion(ctx, assignment.AgentID, assignment.AgentVersion)
+	def, err := a.Store.AgentDefinitions().GetByID(ctx, assignment.AgentDefinitionID)
 	if err != nil {
-		return ResolveAgentDefinitionResult{}, fmt.Errorf("resolve agent definition: get version: %w", err)
+		return ResolveAgentDefinitionResult{}, fmt.Errorf("resolve agent definition: get definition: %w", err)
 	}
 	if def == nil {
-		return ResolveAgentDefinitionResult{}, fmt.Errorf("resolve agent definition: %s v%d not found", assignment.AgentID, assignment.AgentVersion)
+		return ResolveAgentDefinitionResult{}, fmt.Errorf("resolve agent definition: %s definition %s not found", assignment.AgentID, assignment.AgentDefinitionID)
 	}
 
 	sess, err := a.Store.Sessions().GetByID(ctx, sessionID)
@@ -199,7 +199,7 @@ func (a *Activities) ResolveAgentDefinition(ctx context.Context, sessionID uuid.
 func resolveModel(ctx context.Context, store *session.Store, def session.AgentDefinition) (string, *llm.ProviderPreferences, error) {
 	if def.ModelDefinitionID == nil {
 		if def.Model == nil {
-			return "", nil, fmt.Errorf("agent definition %s v%d has neither model nor model_definition_id set", def.AgentID, def.Version)
+			return "", nil, fmt.Errorf("agent definition %s (%s) has neither model nor model_definition_id set", def.AgentID, def.ID)
 		}
 		return *def.Model, nil, nil
 	}
@@ -209,7 +209,7 @@ func resolveModel(ctx context.Context, store *session.Store, def session.AgentDe
 		return "", nil, fmt.Errorf("get model definition %s: %w", *def.ModelDefinitionID, err)
 	}
 	if modelDef == nil {
-		return "", nil, fmt.Errorf("model definition %s not found (referenced by agent definition %s v%d)", *def.ModelDefinitionID, def.AgentID, def.Version)
+		return "", nil, fmt.Errorf("model definition %s not found (referenced by agent definition %s (%s))", *def.ModelDefinitionID, def.AgentID, def.ID)
 	}
 	return modelDef.Model, toLLMProviderPreferences(modelDef.Provider), nil
 }

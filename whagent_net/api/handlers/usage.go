@@ -30,7 +30,7 @@ const (
 // GetSessionUsage is a read path (FR4/NFR5): resolves the session
 // (NOT_FOUND if unknown), reads the caps from the session's current SCD2
 // agent assignment (session.AgentDefinitionStore.CurrentAssignment ->
-// GetVersion), applying the defaults above when a definition field is
+// GetByID), applying the defaults above when a definition field is
 // zero-valued, and combines that with session.UsageStore.Summary --
 // every figure summed fresh from committed turn_usage rows, never a
 // separately-mutated counter. Authorization follows the same rule as
@@ -58,7 +58,7 @@ func (s *SessionServer) GetSessionUsage(ctx context.Context, req *pb.GetSessionU
 		return nil, status.Errorf(codes.Internal, "get current agent assignment: %v", err)
 	}
 	if assignment != nil {
-		def, err := s.store.AgentDefinitions().GetVersion(ctx, assignment.AgentID, assignment.AgentVersion)
+		def, err := s.store.AgentDefinitions().GetByID(ctx, assignment.AgentDefinitionID)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "get agent definition: %v", err)
 		}
