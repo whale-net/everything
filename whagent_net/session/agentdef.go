@@ -123,6 +123,11 @@ type AgentDefinitionStore interface {
 	// not replace an existing row in place). Fills in ID, CreatedAt and
 	// ValidFrom.
 	Upsert(ctx context.Context, def *AgentDefinition) error
+	// Register inserts def as agentID's current row only when agentID has
+	// none; created reports whether it did. It never updates a row, and
+	// concurrent registrations of one agent_id leave exactly one current
+	// row with no error. Fills in ID, CreatedAt and ValidFrom when created.
+	Register(ctx context.Context, def *AgentDefinition) (created bool, err error)
 	// AssignToSession writes the SCD2 close-and-open pair: closes the
 	// session's currently-open session_agent row (if any) and opens a new
 	// one pinned to agentDefinitionID.
@@ -315,6 +320,48 @@ func (s agentDefinitionStore) CurrentAssignment(ctx context.Context, sessionID u
 		return nil, fmt.Errorf("get current session_agent assignment: %w", err)
 	}
 	return &sa, nil
+}
+
+// Querier is the QueryRow surface shared by *pgxpool.Pool and *pgx.Conn, so
+// registration can run from either the store or the migrate job's
+// database/sql connection.
+type Querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// Register implements AgentDefinitionStore.
+func (s agentDefinitionStore) Register(ctx context.Context, def *AgentDefinition) (bool, error) {
+	return RegisterAgentDefinition(ctx, s.pool, def)
+}
+
+// RegisterAgentDefinition inserts def only if its agent_id has no current
+// row. A single statement guarded by idx_agent_definition_current, so racing
+// callers leave one current row and none errors.
+func RegisterAgentDefinition(ctx context.Context, q Querier, def *AgentDefinition) (bool, error) {
+	toolSet, err := json.Marshal(def.ToolSet)
+	if err != nil {
+		return false, fmt.Errorf("marshal tool_set: %w", err)
+	}
+	toolLoadingMode := def.ToolLoadingMode
+	if toolLoadingMode == "" {
+		toolLoadingMode = ToolLoadingModeBulk
+	}
+
+	err = q.QueryRow(ctx, `
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
+		SELECT $1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+		WHERE NOT EXISTS (SELECT 1 FROM agent_definition WHERE agent_id = $1::text AND valid_to IS NULL)
+		ON CONFLICT (agent_id) WHERE valid_to IS NULL DO NOTHING
+		RETURNING id, created_at, valid_from
+	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, string(toolLoadingMode), def.SystemPrompt).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("register agent definition: %w", err)
+	}
+	def.ToolLoadingMode = toolLoadingMode
+	return true, nil
 }
 
 func (s agentDefinitionStore) queryDefs(ctx context.Context, what, query string, args ...any) ([]*AgentDefinition, error) {

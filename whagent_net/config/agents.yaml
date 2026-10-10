@@ -1,18 +1,14 @@
-# whagent-net agent-definition reference config (issue #2121, LB5/NFR6).
+# whagent-net agent-definition declarations (LB5/NFR6).
 #
-# This documents the row shape for `agent_definition`/`model_definition`
-# (decoded via config.go's Load, and consumed by whagent_net/api/main.go
-# for RequiredRoles/DevRoles) -- but it is not automatically loaded into
-# either table. A human inserts these rows by hand; see
-# whagent_net/README.md "Agent definition config" for a worked SQL
-# example. `agent_definition` stays a real versioned table (AGENTS.md
-# "SCD2"; ARCHITECTURE.md "Domain-owned MCP servers and the tool
-# contract"): never edit a version already pinned to a session in place,
-# only ever insert a new one when a definition's fields change.
+# The migrate job (whagent_net/migrate) registers every entry here on each
+# deploy, but only for an agent_id with no current agent_definition row;
+# an existing agent is never updated from this file. To change a registered
+# agent use UpdateAgent or the Agents page. Model_definitions entries are
+# likewise created only when the name is absent. Unknown keys (including a
+# stale `version:`) are rejected by config.Load.
 #
 # Each `agents` entry's shape mirrors whagent_net/session.AgentDefinition
-# (agentdef.go) minus `version`/`created_at`, which whoever inserts the row
-# assigns:
+# (agentdef.go) minus the id/created_at/valid_from/valid_to the database assigns:
 #   - agent_id:       stable identifier sessions pin to (session_agent.agent_id)
 #   - scope:          the one grant-scope this definition belongs to (often,
 #                      but not required to be, an AGENTS.md Domains-table
