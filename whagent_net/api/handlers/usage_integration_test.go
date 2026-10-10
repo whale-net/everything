@@ -22,12 +22,10 @@ import (
 )
 
 // testAgentDefinition builds an AgentDefinition fixture with the given
-// caps -- version 1 always exists so tests can also seed a version 2 to
-// prove the pinned (not latest) version is read.
-func testAgentDefinition(agentID string, version, maxTurns int, maxCostUSD float64) *session.AgentDefinition {
+// caps.
+func testAgentDefinition(agentID string, maxTurns int, maxCostUSD float64) *session.AgentDefinition {
 	return &session.AgentDefinition{
 		AgentID:    agentID,
-		Version:    version,
 		Model:      strPtr2("test-model"),
 		ToolSet:    []session.ToolServerRef{{ServerURL: "https://mcp.example.com/research"}},
 		MaxTurns:   maxTurns,
@@ -73,8 +71,9 @@ func TestGetSessionUsage_ZeroValuedDefinitionFields_ApplyDefaults(t *testing.T) 
 	ctx := context.Background()
 	sess := createSession(t, ctx, store, devSubject, session.StatusRunning)
 
-	require.NoError(t, store.AgentDefinitions().Upsert(ctx, testAgentDefinition("zero-caps-agent", 1, 0, 0)))
-	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "zero-caps-agent", 1))
+	zeroCaps := testAgentDefinition("zero-caps-agent", 0, 0)
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, zeroCaps))
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, zeroCaps.ID))
 
 	resp, err := client.GetSessionUsage(ctx, &pb.GetSessionUsageRequest{SessionId: sess.SessionID.String()})
 	require.NoError(t, err)
@@ -83,29 +82,32 @@ func TestGetSessionUsage_ZeroValuedDefinitionFields_ApplyDefaults(t *testing.T) 
 	assert.InDelta(t, 1.0, resp.Usage.CostCapUsd, 0.0000001, "a zero-valued MaxCostUSD on the pinned definition must still fall back to the default")
 }
 
-// TestGetSessionUsage_ReadsCapsFromPinnedVersionNotLatest proves
+// TestGetSessionUsage_ReadsCapsFromPinnedDefinitionNotCurrent proves
 // GetSessionUsage reads caps from the session's pinned SCD2 assignment
-// (session_agent.agent_version), not whatever the latest agent_definition
-// version happens to be -- seeding a version 2 with different caps after
-// the session was assigned to version 1 must not change what this session
+// (session_agent.agent_definition_id), not whatever the current
+// agent_definition row happens to be -- superseding the definition after
+// the session was assigned must not change what this session
 // reports.
-func TestGetSessionUsage_ReadsCapsFromPinnedVersionNotLatest(t *testing.T) {
-	client, store := newTestServer(t)
+func TestGetSessionUsage_ReadsCapsFromPinnedDefinitionNotCurrent(t *testing.T) {
+	client, store, db := newTestServerWithDB(t)
 	ctx := context.Background()
 	sess := createSession(t, ctx, store, devSubject, session.StatusRunning)
 
-	require.NoError(t, store.AgentDefinitions().Upsert(ctx, testAgentDefinition("versioned-agent", 1, 10, 0.50)))
-	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "versioned-agent", 1))
+	pinned := testAgentDefinition("versioned-agent", 10, 0.50)
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, pinned))
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, pinned.ID))
 
-	// A newer version is seeded after the session was pinned to v1, with
-	// very different caps -- must not be what this session reports.
-	require.NoError(t, store.AgentDefinitions().Upsert(ctx, testAgentDefinition("versioned-agent", 2, 999, 99.0)))
+	// The agent is edited after the session was pinned, with very
+	// different caps -- must not be what this session reports.
+	_, err := db.Pool.Exec(ctx, `UPDATE agent_definition SET valid_to = NOW() WHERE id = $1`, pinned.ID)
+	require.NoError(t, err)
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, testAgentDefinition("versioned-agent", 999, 99.0)))
 
 	resp, err := client.GetSessionUsage(ctx, &pb.GetSessionUsageRequest{SessionId: sess.SessionID.String()})
 	require.NoError(t, err)
 
-	assert.Equal(t, int32(10), resp.Usage.TurnCap, "turn_cap must come from the session's pinned version (1), not the newer version (2) seeded afterward")
-	assert.InDelta(t, 0.50, resp.Usage.CostCapUsd, 0.0000001, "cost_cap_usd must come from the session's pinned version (1), not the newer version (2) seeded afterward")
+	assert.Equal(t, int32(10), resp.Usage.TurnCap, "turn_cap must come from the session's pinned definition, not the one that superseded it")
+	assert.InDelta(t, 0.50, resp.Usage.CostCapUsd, 0.0000001, "cost_cap_usd must come from the session's pinned definition, not the one that superseded it")
 }
 
 // TestGetSessionUsage_ReportsSummedUsageAgainstPinnedCaps proves the
@@ -116,8 +118,9 @@ func TestGetSessionUsage_ReportsSummedUsageAgainstPinnedCaps(t *testing.T) {
 	ctx := context.Background()
 	sess := createSession(t, ctx, store, devSubject, session.StatusRunning)
 
-	require.NoError(t, store.AgentDefinitions().Upsert(ctx, testAgentDefinition("usage-agent", 1, 25, 5.0)))
-	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "usage-agent", 1))
+	usageDef := testAgentDefinition("usage-agent", 25, 5.0)
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, usageDef))
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, usageDef.ID))
 
 	require.NoError(t, store.Usage().RecordTurn(ctx, session.TurnUsage{
 		SessionID: sess.SessionID, Turn: 1, Model: "test-model",

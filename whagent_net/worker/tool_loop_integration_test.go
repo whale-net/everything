@@ -78,6 +78,10 @@ func TestActivities_CommitTurn_FoldsPriorLoopIterationsIntoOneUsageRow(t *testin
 	ctx := context.Background()
 	store, db := newTestStore(t)
 	sess := newTestSessionRow(t, ctx, store)
+	model := "test-model"
+	def := &session.AgentDefinition{AgentID: "loop-agent", Model: &model}
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, def))
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.ID))
 
 	a := &Activities{Store: store}
 	_, err := a.CommitTurn(ctx, CommitTurnInput{

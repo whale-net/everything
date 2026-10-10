@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,6 +21,7 @@ func TestUsageStore_SumCost_SumsAcrossTurnsIncludingEstimated(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStore(t)
 	sess := createTestSession(t, ctx, s)
+	assignNewAgent(t, ctx, s, sess, "usage-agent")
 
 	require.NoError(t, s.Usage().RecordTurn(ctx, session.TurnUsage{
 		SessionID: sess.SessionID, Turn: 1, Model: "test-model",
@@ -79,6 +81,7 @@ func TestUsageStore_Summary_MixedRows_TrueCountExactCostAnyEstimated(t *testing.
 	ctx := context.Background()
 	s, _ := newStore(t)
 	sess := createTestSession(t, ctx, s)
+	assignNewAgent(t, ctx, s, sess, "usage-agent")
 
 	require.NoError(t, s.Usage().RecordTurn(ctx, session.TurnUsage{
 		SessionID: sess.SessionID, Turn: 1, Model: "test-model",
@@ -117,4 +120,40 @@ func TestUsageStore_CostUSD_RejectsNullInsert(t *testing.T) {
 	var count int
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM turn_usage WHERE session_id = $1`, sess.SessionID).Scan(&count))
 	assert.Equal(t, 0, count, "the rejected insert must not leave a row behind")
+}
+
+// TestUsageStore_RecordTurn_RecordsOpenAssignmentDefinitionID proves
+// RecordTurn stamps the open assignment's definition id, and that after an
+// agent switch later turns carry the new id.
+func TestUsageStore_RecordTurn_RecordsOpenAssignmentDefinitionID(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	sess := createTestSession(t, ctx, s)
+	defA := assignNewAgent(t, ctx, s, sess, "agent-a")
+
+	require.NoError(t, s.Usage().RecordTurn(ctx, session.TurnUsage{SessionID: sess.SessionID, Turn: 1, Model: "m"}))
+
+	defB := upsertAgent(t, ctx, s, "agent-b")
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, defB.ID))
+	require.NoError(t, s.Usage().RecordTurn(ctx, session.TurnUsage{SessionID: sess.SessionID, Turn: 2, Model: "m"}))
+
+	for turn, want := range map[int]uuid.UUID{1: defA.ID, 2: defB.ID} {
+		var got uuid.UUID
+		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT agent_definition_id FROM turn_usage WHERE session_id = $1 AND turn = $2`, sess.SessionID, turn).Scan(&got))
+		assert.Equal(t, want, got, "turn %d", turn)
+	}
+}
+
+// TestUsageStore_RecordTurn_NoOpenAssignment_Errors proves RecordTurn never
+// writes a usage row without a definition id.
+func TestUsageStore_RecordTurn_NoOpenAssignment_Errors(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	sess := createTestSession(t, ctx, s)
+
+	require.Error(t, s.Usage().RecordTurn(ctx, session.TurnUsage{SessionID: sess.SessionID, Turn: 1, Model: "m"}))
+
+	var n int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM turn_usage WHERE session_id = $1`, sess.SessionID).Scan(&n))
+	assert.Zero(t, n)
 }

@@ -73,6 +73,14 @@ var otherIssSameSub = session.Subject{Iss: "https://other-issuer.example.com", S
 // *session.Store for test fixtures to write through directly.
 func newTestServer(t *testing.T) (pb.SessionServiceClient, *session.Store) {
 	t.Helper()
+	client, store, _ := newTestServerWithDB(t)
+	return client, store
+}
+
+// newTestServerWithDB is newTestServer plus the underlying Postgres, for
+// tests that supersede agent definitions.
+func newTestServerWithDB(t *testing.T) (pb.SessionServiceClient, *session.Store, *dbtest.Postgres) {
+	t.Helper()
 	ctx := context.Background()
 
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -123,7 +131,7 @@ func newTestServer(t *testing.T) (pb.SessionServiceClient, *session.Store) {
 		grpcServer.Stop()
 	})
 
-	return pb.NewSessionServiceClient(conn), store
+	return pb.NewSessionServiceClient(conn), store, db
 }
 
 // createSession inserts a Session row owned by subject in status, ready for

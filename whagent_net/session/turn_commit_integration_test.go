@@ -8,6 +8,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -47,6 +48,7 @@ func TestStore_CommitTurn_RetriedCall_CommitsExactlyOnce(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
 	sess := createTestSession(t, ctx, s)
+	def := assignNewAgent(t, ctx, s, sess, "commit-agent")
 	params := testCommitTurnParams(sess)
 
 	first, err := s.CommitTurn(ctx, params)
@@ -69,6 +71,12 @@ func TestStore_CommitTurn_RetriedCall_CommitsExactlyOnce(t *testing.T) {
 		SELECT count(*) FROM turn_usage WHERE session_id = $1 AND turn = $2
 	`, sess.SessionID, params.Turn).Scan(&usageCount))
 	assert.Equal(t, 1, usageCount, "a retried commit must not duplicate the usage row")
+
+	var usageDefID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT agent_definition_id FROM turn_usage WHERE session_id = $1 AND turn = $2
+	`, sess.SessionID, params.Turn).Scan(&usageDefID))
+	assert.Equal(t, def.ID, usageDefID, "CommitTurn must record the open assignment's agent_definition_id")
 }
 
 // TestStore_CommitTurn_DifferentTurns_EachCommitsOwnEvent proves
@@ -82,6 +90,7 @@ func TestStore_CommitTurn_DifferentTurns_EachCommitsOwnEvent(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
 	sess := createTestSession(t, ctx, s)
+	assignNewAgent(t, ctx, s, sess, "commit-agent")
 
 	turn1 := testCommitTurnParams(sess)
 	turn2 := testCommitTurnParams(sess)
@@ -98,4 +107,55 @@ func TestStore_CommitTurn_DifferentTurns_EachCommitsOwnEvent(t *testing.T) {
 	var eventCount int
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM transcript_event WHERE session_id = $1`, sess.SessionID).Scan(&eventCount))
 	assert.Equal(t, 2, eventCount)
+}
+
+// TestStore_CommitTurn_AgentSwitchMidSession_LaterTurnsCarryNewDefinitionID
+// proves each turn's usage row carries the assignment open at commit time.
+func TestStore_CommitTurn_AgentSwitchMidSession_LaterTurnsCarryNewDefinitionID(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	sess := createTestSession(t, ctx, s)
+	defA := assignNewAgent(t, ctx, s, sess, "agent-a")
+
+	turn1 := testCommitTurnParams(sess)
+	_, err := s.CommitTurn(ctx, turn1)
+	require.NoError(t, err)
+
+	defB := upsertAgent(t, ctx, s, "agent-b")
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, defB.ID))
+
+	turn2 := testCommitTurnParams(sess)
+	turn2.Turn = 2
+	_, err = s.CommitTurn(ctx, turn2)
+	require.NoError(t, err)
+
+	got := map[int]uuid.UUID{}
+	rows, err := db.Pool.Query(ctx, `SELECT turn, agent_definition_id FROM turn_usage WHERE session_id = $1`, sess.SessionID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var turn int
+		var id uuid.UUID
+		require.NoError(t, rows.Scan(&turn, &id))
+		got[turn] = id
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[int]uuid.UUID{1: defA.ID, 2: defB.ID}, got)
+}
+
+// TestStore_CommitTurn_NoOpenAssignment_ErrorsAndWritesNothing proves a
+// missing assignment is an error and leaves no usage row or event behind.
+func TestStore_CommitTurn_NoOpenAssignment_ErrorsAndWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	sess := createTestSession(t, ctx, s)
+
+	_, err := s.CommitTurn(ctx, testCommitTurnParams(sess))
+	require.Error(t, err)
+
+	var usageCount, eventCount int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM turn_usage WHERE session_id = $1`, sess.SessionID).Scan(&usageCount))
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM transcript_event WHERE session_id = $1`, sess.SessionID).Scan(&eventCount))
+	assert.Zero(t, usageCount)
+	assert.Zero(t, eventCount, "the transcript event must roll back with the failed usage insert")
 }

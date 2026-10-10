@@ -390,7 +390,6 @@ func e2eSearchAgentDefinition(t *testing.T, ctx context.Context, store *session.
 	t.Helper()
 	def := session.AgentDefinition{
 		AgentID:           agentID,
-		Version:           1,
 		Model:             modelPtr("test-model"),
 		ToolSet:           []session.ToolServerRef{{ServerURL: serverURL, AllowedTools: []string{"list_widgets", "delete_gadget", "inspect_sensor"}}},
 		MaxTurns:          100,
@@ -399,7 +398,7 @@ func e2eSearchAgentDefinition(t *testing.T, ctx context.Context, store *session.
 		ToolLoadingMode:   session.ToolLoadingModeSearch,
 	}
 	require.NoError(t, store.AgentDefinitions().Upsert(ctx, &def))
-	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.AgentID, def.Version))
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.ID))
 }
 
 // TestSessionWorkflow_SearchMode_FullLifecycle_EndToEnd is this milestone's
@@ -580,7 +579,6 @@ func TestSessionWorkflow_BulkMode_ControlCase_EndToEnd(t *testing.T) {
 
 	def := session.AgentDefinition{
 		AgentID:           "e2e-bulk-control-agent",
-		Version:           1,
 		Model:             modelPtr("test-model"),
 		ToolSet:           []session.ToolServerRef{{ServerURL: serverURL, AllowedTools: []string{"list_widgets", "delete_gadget", "inspect_sensor"}}},
 		MaxTurns:          100,
@@ -589,7 +587,7 @@ func TestSessionWorkflow_BulkMode_ControlCase_EndToEnd(t *testing.T) {
 		// ToolLoadingMode left at its zero value -- bulk, FR2's default.
 	}
 	require.NoError(t, store.AgentDefinitions().Upsert(ctx, &def))
-	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.AgentID, def.Version))
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.ID))
 
 	ts := testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()
@@ -657,7 +655,6 @@ func e2eReservedNameFailsLoudly(t *testing.T, mode session.ToolLoadingMode) {
 
 	def := session.AgentDefinition{
 		AgentID:           "e2e-reserved-name-agent-" + string(mode),
-		Version:           1,
 		Model:             modelPtr("test-model"),
 		ToolSet:           []session.ToolServerRef{{ServerURL: serverURL}},
 		MaxTurns:          100,
@@ -666,7 +663,7 @@ func e2eReservedNameFailsLoudly(t *testing.T, mode session.ToolLoadingMode) {
 		ToolLoadingMode:   mode,
 	}
 	require.NoError(t, store.AgentDefinitions().Upsert(ctx, &def))
-	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.AgentID, def.Version))
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.ID))
 
 	ts := testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()

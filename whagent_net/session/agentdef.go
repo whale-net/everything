@@ -70,7 +70,6 @@ type AgentDefinition struct {
 	ID                uuid.UUID
 	AgentID           string
 	Scope             *string
-	Version           int
 	Model             *string
 	ModelDefinitionID *uuid.UUID
 	ToolSet           []ToolServerRef
@@ -94,6 +93,9 @@ type AgentDefinition struct {
 	// to the request as a RoleSystem message when set.
 	SystemPrompt *string
 	CreatedAt    time.Time
+	// ValidFrom/ValidTo are the SCD2 window; ValidTo nil marks the current row.
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 // SessionAgent is a `session_agent` row (LB5/NFR6): the SCD2 history of
@@ -102,29 +104,30 @@ type AgentDefinition struct {
 // row per session has ValidTo nil (enforced by the partial unique index
 // migration 001 creates).
 type SessionAgent struct {
-	SessionID    uuid.UUID
-	AgentID      string
-	AgentVersion int
-	ValidFrom    time.Time
-	ValidTo      *time.Time
+	SessionID         uuid.UUID
+	AgentID           string
+	AgentDefinitionID uuid.UUID
+	ValidFrom         time.Time
+	ValidTo           *time.Time
 }
 
 // AgentDefinitionStore is the `agent_definition` and `session_agent`
 // tables' repository interface.
 type AgentDefinitionStore interface {
-	// GetLatest returns the highest-Version AgentDefinition row for
-	// agentID.
-	GetLatest(ctx context.Context, agentID string) (*AgentDefinition, error)
-	// GetVersion returns the exact (agentID, version) AgentDefinition row.
-	GetVersion(ctx context.Context, agentID string, version int) (*AgentDefinition, error)
-	// Upsert inserts or replaces the (AgentID, Version) row -- M1 seeds
-	// agent_definition from config via this method (see #2109's issue
-	// body).
+	// GetCurrent returns agentID's open (valid_to IS NULL) AgentDefinition
+	// row, or nil, nil when agentID has none.
+	GetCurrent(ctx context.Context, agentID string) (*AgentDefinition, error)
+	// GetByID returns the AgentDefinition row with surrogate id, open or
+	// superseded, or nil, nil when absent.
+	GetByID(ctx context.Context, id uuid.UUID) (*AgentDefinition, error)
+	// Upsert inserts def as agentID's current row (fixture writer; it does
+	// not replace an existing row in place). Fills in ID, CreatedAt and
+	// ValidFrom.
 	Upsert(ctx context.Context, def *AgentDefinition) error
 	// AssignToSession writes the SCD2 close-and-open pair: closes the
 	// session's currently-open session_agent row (if any) and opens a new
-	// one for (agentID, version).
-	AssignToSession(ctx context.Context, sessionID uuid.UUID, agentID string, version int) error
+	// one pinned to agentDefinitionID.
+	AssignToSession(ctx context.Context, sessionID uuid.UUID, agentDefinitionID uuid.UUID) error
 	// CurrentAssignment returns the session's open (ValidTo nil)
 	// session_agent row.
 	CurrentAssignment(ctx context.Context, sessionID uuid.UUID) (*SessionAgent, error)
@@ -145,14 +148,14 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, created_at`
+const agentDefinitionColumns = `id, agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, created_at, valid_from, valid_to`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
-		&def.ID, &def.AgentID, &def.Scope, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
-		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.ToolLoadingMode, &def.SystemPrompt, &def.CreatedAt,
+		&def.ID, &def.AgentID, &def.Scope, &def.Model, &def.ModelDefinitionID, &toolSet,
+		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.ToolLoadingMode, &def.SystemPrompt, &def.CreatedAt, &def.ValidFrom, &def.ValidTo,
 	); err != nil {
 		return nil, err
 	}
@@ -162,20 +165,18 @@ func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	return &def, nil
 }
 
-// GetLatest returns nil (not an error) when agentID has no rows.
-func (s agentDefinitionStore) GetLatest(ctx context.Context, agentID string) (*AgentDefinition, error) {
+// GetCurrent returns nil (not an error) when agentID has no open row.
+func (s agentDefinitionStore) GetCurrent(ctx context.Context, agentID string) (*AgentDefinition, error) {
 	def, err := scanAgentDefinition(s.pool.QueryRow(ctx, `
 		SELECT `+agentDefinitionColumns+`
 		FROM agent_definition
-		WHERE agent_id = $1
-		ORDER BY version DESC
-		LIMIT 1
+		WHERE agent_id = $1 AND valid_to IS NULL
 	`, agentID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("get latest agent definition: %w", err)
+		return nil, fmt.Errorf("get current agent definition: %w", err)
 	}
 	return def, nil
 }
@@ -205,27 +206,25 @@ func (s agentDefinitionStore) ListScopes(ctx context.Context) ([]string, error) 
 	return scopes, nil
 }
 
-// GetVersion returns nil (not an error) when (agentID, version) does not
-// exist.
-func (s agentDefinitionStore) GetVersion(ctx context.Context, agentID string, version int) (*AgentDefinition, error) {
+// GetByID returns nil (not an error) when id does not exist.
+func (s agentDefinitionStore) GetByID(ctx context.Context, id uuid.UUID) (*AgentDefinition, error) {
 	def, err := scanAgentDefinition(s.pool.QueryRow(ctx, `
 		SELECT `+agentDefinitionColumns+`
 		FROM agent_definition
-		WHERE agent_id = $1 AND version = $2
-	`, agentID, version))
+		WHERE id = $1
+	`, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("get agent definition version: %w", err)
+		return nil, fmt.Errorf("get agent definition by id: %w", err)
 	}
 	return def, nil
 }
 
-// Upsert inserts (AgentID, Version) or, on conflict, replaces every column
-// except id and created_at (a replace of an already-seeded definition
-// keeps its original surrogate id and creation time rather than minting a
-// new one). Fills in ID and CreatedAt on def either way.
+// Upsert inserts def as agentID's new current row. It never rewrites an
+// existing row in place; an already-open row for AgentID is a unique-index
+// violation. Fills in ID, CreatedAt and ValidFrom.
 //
 // A zero-valued def.ToolLoadingMode is normalized to ToolLoadingModeBulk
 // before writing: the column is NOT NULL, and this explicit-column
@@ -241,24 +240,15 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 		toolLoadingMode = ToolLoadingModeBulk
 	}
 
+	// version is still NOT NULL until the contract migration; derive it so
+	// the legacy UNIQUE (agent_id, version) holds. Nothing reads it back.
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		ON CONFLICT (agent_id, version) DO UPDATE SET
-			scope = EXCLUDED.scope,
-			model = EXCLUDED.model,
-			model_definition_id = EXCLUDED.model_definition_id,
-			tool_set = EXCLUDED.tool_set,
-			max_turns = EXCLUDED.max_turns,
-			max_cost_usd = EXCLUDED.max_cost_usd,
-			max_tool_iterations = EXCLUDED.max_tool_iterations,
-			required_role = EXCLUDED.required_role,
-			tool_loading_mode = EXCLUDED.tool_loading_mode,
-			system_prompt = EXCLUDED.system_prompt
-		RETURNING id, created_at
-	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode, def.SystemPrompt).Scan(&def.ID, &def.CreatedAt)
+		VALUES ($1, $2, (SELECT COALESCE(MAX(version), 0) + 1 FROM agent_definition WHERE agent_id = $1), $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, created_at, valid_from
+	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode, def.SystemPrompt).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
 	if err != nil {
-		return fmt.Errorf("upsert agent definition: %w", err)
+		return fmt.Errorf("insert agent definition: %w", err)
 	}
 	def.ToolLoadingMode = toolLoadingMode
 	return nil
@@ -266,10 +256,10 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 
 // AssignToSession writes the SCD2 close-and-open pair in one transaction
 // (AGENTS.md "SCD2"): closes sessionID's currently-open session_agent row
-// (if any), then opens a new one for (agentID, version). The partial
+// (if any), then opens a new one pinned to agentDefinitionID. The partial
 // unique index on (session_id) WHERE valid_to IS NULL (migration 001)
 // rejects two open rows for the same session even if this ever races.
-func (s agentDefinitionStore) AssignToSession(ctx context.Context, sessionID uuid.UUID, agentID string, version int) error {
+func (s agentDefinitionStore) AssignToSession(ctx context.Context, sessionID uuid.UUID, agentDefinitionID uuid.UUID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -284,9 +274,9 @@ func (s agentDefinitionStore) AssignToSession(ctx context.Context, sessionID uui
 	}
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO session_agent (session_id, agent_id, agent_version)
-		VALUES ($1, $2, $3)
-	`, sessionID, agentID, version); err != nil {
+		INSERT INTO session_agent (session_id, agent_id, agent_definition_id)
+		SELECT $1, agent_id, id FROM agent_definition WHERE id = $2
+	`, sessionID, agentDefinitionID); err != nil {
 		return fmt.Errorf("open new session_agent assignment: %w", err)
 	}
 
@@ -301,10 +291,10 @@ func (s agentDefinitionStore) AssignToSession(ctx context.Context, sessionID uui
 func (s agentDefinitionStore) CurrentAssignment(ctx context.Context, sessionID uuid.UUID) (*SessionAgent, error) {
 	var sa SessionAgent
 	err := s.pool.QueryRow(ctx, `
-		SELECT session_id, agent_id, agent_version, valid_from, valid_to
+		SELECT session_id, agent_id, agent_definition_id, valid_from, valid_to
 		FROM session_agent
 		WHERE session_id = $1 AND valid_to IS NULL
-	`, sessionID).Scan(&sa.SessionID, &sa.AgentID, &sa.AgentVersion, &sa.ValidFrom, &sa.ValidTo)
+	`, sessionID).Scan(&sa.SessionID, &sa.AgentID, &sa.AgentDefinitionID, &sa.ValidFrom, &sa.ValidTo)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil

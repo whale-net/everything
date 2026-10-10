@@ -25,7 +25,7 @@ import (
 //  1. authenticate the caller (already done by the interceptor chain by the
 //     time this handler runs; callerIdentity reconstructs the identity and the
 //     caller's own client_id, which gates a delegated on_behalf_of start)
-//  2. resolve the named agent's latest definition version
+//  2. resolve the named agent's current definition
 //  3. FR9 -- the definition's required_role, if any, gates the call
 //  4. FR5 -- a requested model_override is checked against the provider
 //     catalogue
@@ -95,8 +95,8 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 		onBehalfOf = asserted
 	}
 
-	// Step 2: resolve the named agent's current (latest) definition.
-	def, err := s.store.AgentDefinitions().GetLatest(ctx, agentID)
+	// Step 2: resolve the named agent's current definition.
+	def, err := s.store.AgentDefinitions().GetCurrent(ctx, agentID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get agent definition: %v", err)
 	}
@@ -211,11 +211,11 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 			"on_behalf_of_sub", onBehalfOf.Sub)
 	}
 
-	// Step 6 (LB5/NFR6): pin the resolved definition version. AssignToSession
+	// Step 6 (LB5/NFR6): pin the resolved definition row by id. AssignToSession
 	// always opens a fresh row on a brand-new session (there is nothing to
 	// close yet), so exactly one `session_agent` row with valid_to IS NULL
 	// exists afterwards.
-	if err := s.store.AgentDefinitions().AssignToSession(ctx, sessionID, agentID, def.Version); err != nil {
+	if err := s.store.AgentDefinitions().AssignToSession(ctx, sessionID, def.ID); err != nil {
 		return nil, status.Errorf(codes.Internal, "assign agent definition: %v", err)
 	}
 

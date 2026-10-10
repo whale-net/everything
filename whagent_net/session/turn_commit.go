@@ -65,14 +65,20 @@ func (s *Store) CommitTurn(ctx context.Context, params CommitTurnParams) (events
 		return events.Event{}, err
 	}
 
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO turn_usage (session_id, turn, model, prompt_tokens, completion_tokens, cost_usd, cost_estimated, generation_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO turn_usage (session_id, turn, model, prompt_tokens, completion_tokens, cost_usd, cost_estimated, generation_id, agent_definition_id)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, sa.agent_definition_id
+		FROM session_agent sa
+		WHERE sa.session_id = $1 AND sa.valid_to IS NULL
 	`,
 		params.SessionID, params.Turn, params.Usage.Model, params.Usage.PromptTokens, params.Usage.CompletionTokens,
 		params.Usage.CostUSD, params.Usage.CostEstimated, params.Usage.GenerationID,
-	); err != nil {
+	)
+	if err != nil {
 		return events.Event{}, fmt.Errorf("record turn usage: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return events.Event{}, fmt.Errorf("record turn usage: session %s has no open agent assignment", params.SessionID)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

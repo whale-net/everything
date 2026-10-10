@@ -38,6 +38,21 @@ import (
 // session_test and this file lives in package mcpscope_test.
 func newStore(t *testing.T) *session.Store {
 	t.Helper()
+	store, _ := newStoreWithDB(t)
+	return store
+}
+
+// supersede closes agentID's open definition row and inserts def as its
+// replacement.
+func supersede(t *testing.T, ctx context.Context, store *session.Store, db *dbtest.Postgres, def *session.AgentDefinition) {
+	t.Helper()
+	_, err := db.Pool.Exec(ctx, `UPDATE agent_definition SET valid_to = NOW() WHERE agent_id = $1 AND valid_to IS NULL`, def.AgentID)
+	require.NoError(t, err)
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, def))
+}
+
+func newStoreWithDB(t *testing.T) (*session.Store, *dbtest.Postgres) {
+	t.Helper()
 	ctx := context.Background()
 
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -49,16 +64,15 @@ func newStore(t *testing.T) *session.Store {
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Up(), "apply every migration from the real embedded schema")
 
-	return session.New(db.Pool, nil)
+	return session.New(db.Pool, nil), db
 }
 
 func strPtr(s string) *string { return &s }
 
-func newTestAgentDefinition(agentID string, scope *string, version int) *session.AgentDefinition {
+func newTestAgentDefinition(agentID string, scope *string) *session.AgentDefinition {
 	return &session.AgentDefinition{
 		AgentID:  agentID,
 		Scope:    scope,
-		Version:  version,
 		Model:    strPtr("test-model"),
 		ToolSet:  []session.ToolServerRef{{ServerURL: "https://mcp.example.com/research"}},
 		MaxTurns: 100,
@@ -91,7 +105,7 @@ func TestScopeForAgent_ReturnsSeededDefinitionsScope(t *testing.T) {
 	store := newStore(t)
 	resolver := mcpscope.New(store.AgentDefinitions())
 
-	require.NoError(t, store.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("research-agent", strPtr("audience_score_system"), 1)))
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("research-agent", strPtr("audience_score_system"))))
 
 	scope, err := resolver.ScopeForAgent(ctx, "research-agent")
 	require.NoError(t, err)
@@ -107,7 +121,7 @@ func TestScopeForAgent_NilScope_ResolvesToNilWithoutError(t *testing.T) {
 	store := newStore(t)
 	resolver := mcpscope.New(store.AgentDefinitions())
 
-	require.NoError(t, store.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("scopeless-agent", nil, 1)))
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("scopeless-agent", nil)))
 
 	scope, err := resolver.ScopeForAgent(ctx, "scopeless-agent")
 	require.NoError(t, err)
@@ -133,24 +147,25 @@ func TestScopeForAgent_UnknownAgent_ReturnsErrNotFound(t *testing.T) {
 // exact (AgentID, Version) recorded in the session's session_agent
 // assignment -- even when a *newer* version of the same agent definition
 // has since been upserted with a different Scope.
-func TestScopeForSession_ReturnsAssignedVersionsScope_NotNewerVersions(t *testing.T) {
+func TestScopeForSession_ReturnsPinnedDefinitionsScope_NotCurrent(t *testing.T) {
 	ctx := context.Background()
-	store := newStore(t)
+	store, db := newStoreWithDB(t)
 	resolver := mcpscope.New(store.AgentDefinitions())
 	sess := createTestSession(t, ctx, store)
 
-	require.NoError(t, store.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("research-agent", strPtr("audience_score_system"), 1)))
-	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "research-agent", 1))
+	pinned := newTestAgentDefinition("research-agent", strPtr("audience_score_system"))
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, pinned))
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, sess.SessionID, pinned.ID))
 
-	// A newer version of the same agent, with a different scope, is
+	// A newer definition of the same agent, with a different scope, is
 	// upserted after the assignment above -- ScopeForSession must still
-	// resolve version 1's scope, never this one.
-	require.NoError(t, store.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("research-agent", strPtr("manmanv2"), 2)))
+	// resolve the pinned scope, never this one.
+	supersede(t, ctx, store, db, newTestAgentDefinition("research-agent", strPtr("manmanv2")))
 
 	scope, err := resolver.ScopeForSession(ctx, sess.SessionID.String())
 	require.NoError(t, err)
 	require.NotNil(t, scope)
-	assert.Equal(t, "audience_score_system", *scope, "ScopeForSession must resolve the session's recorded assignment, not the agent's current/latest version")
+	assert.Equal(t, "audience_score_system", *scope, "ScopeForSession must resolve the session's recorded assignment, not the agent's current definition")
 
 	// Sanity: ScopeForAgent (which does resolve "current") disagrees,
 	// proving the two really do take different paths.

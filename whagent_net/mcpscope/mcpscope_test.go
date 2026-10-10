@@ -27,28 +27,28 @@ import (
 // method's behavior is supplied by a caller-set func field, nil meaning
 // "must not be called".
 type fakeAgentDefinitionStore struct {
-	getLatestFunc         func(ctx context.Context, agentID string) (*session.AgentDefinition, error)
-	getVersionFunc        func(ctx context.Context, agentID string, version int) (*session.AgentDefinition, error)
+	getCurrentFunc        func(ctx context.Context, agentID string) (*session.AgentDefinition, error)
+	getByIDFunc           func(ctx context.Context, id uuid.UUID) (*session.AgentDefinition, error)
 	upsertFunc            func(ctx context.Context, def *session.AgentDefinition) error
-	assignToSessionFunc   func(ctx context.Context, sessionID uuid.UUID, agentID string, version int) error
+	assignToSessionFunc   func(ctx context.Context, sessionID uuid.UUID, agentDefinitionID uuid.UUID) error
 	currentAssignmentFunc func(ctx context.Context, sessionID uuid.UUID) (*session.SessionAgent, error)
 	listScopesFunc        func(ctx context.Context) ([]string, error)
 }
 
 var _ session.AgentDefinitionStore = (*fakeAgentDefinitionStore)(nil)
 
-func (f *fakeAgentDefinitionStore) GetLatest(ctx context.Context, agentID string) (*session.AgentDefinition, error) {
-	if f.getLatestFunc == nil {
-		panic("fakeAgentDefinitionStore: GetLatest called but no getLatestFunc set")
+func (f *fakeAgentDefinitionStore) GetCurrent(ctx context.Context, agentID string) (*session.AgentDefinition, error) {
+	if f.getCurrentFunc == nil {
+		panic("fakeAgentDefinitionStore: GetCurrent called but no getCurrentFunc set")
 	}
-	return f.getLatestFunc(ctx, agentID)
+	return f.getCurrentFunc(ctx, agentID)
 }
 
-func (f *fakeAgentDefinitionStore) GetVersion(ctx context.Context, agentID string, version int) (*session.AgentDefinition, error) {
-	if f.getVersionFunc == nil {
-		panic("fakeAgentDefinitionStore: GetVersion called but no getVersionFunc set")
+func (f *fakeAgentDefinitionStore) GetByID(ctx context.Context, id uuid.UUID) (*session.AgentDefinition, error) {
+	if f.getByIDFunc == nil {
+		panic("fakeAgentDefinitionStore: GetByID called but no getByIDFunc set")
 	}
-	return f.getVersionFunc(ctx, agentID, version)
+	return f.getByIDFunc(ctx, id)
 }
 
 func (f *fakeAgentDefinitionStore) Upsert(ctx context.Context, def *session.AgentDefinition) error {
@@ -58,11 +58,11 @@ func (f *fakeAgentDefinitionStore) Upsert(ctx context.Context, def *session.Agen
 	return f.upsertFunc(ctx, def)
 }
 
-func (f *fakeAgentDefinitionStore) AssignToSession(ctx context.Context, sessionID uuid.UUID, agentID string, version int) error {
+func (f *fakeAgentDefinitionStore) AssignToSession(ctx context.Context, sessionID uuid.UUID, agentDefinitionID uuid.UUID) error {
 	if f.assignToSessionFunc == nil {
 		panic("fakeAgentDefinitionStore: AssignToSession called but no assignToSessionFunc set")
 	}
-	return f.assignToSessionFunc(ctx, sessionID, agentID, version)
+	return f.assignToSessionFunc(ctx, sessionID, agentDefinitionID)
 }
 
 func (f *fakeAgentDefinitionStore) CurrentAssignment(ctx context.Context, sessionID uuid.UUID) (*session.SessionAgent, error) {
@@ -83,14 +83,14 @@ var errTransport = errors.New("boom: connection reset")
 
 func strPtr(s string) *string { return &s }
 
-// TestScopeForAgent_ReturnsScopeFromLatestDefinition proves the happy
-// path: ScopeForAgent forwards to GetLatest and returns its Scope
+// TestScopeForAgent_ReturnsScopeFromCurrentDefinition proves the happy
+// path: ScopeForAgent forwards to GetCurrent and returns its Scope
 // unchanged.
-func TestScopeForAgent_ReturnsScopeFromLatestDefinition(t *testing.T) {
+func TestScopeForAgent_ReturnsScopeFromCurrentDefinition(t *testing.T) {
 	store := &fakeAgentDefinitionStore{
-		getLatestFunc: func(_ context.Context, agentID string) (*session.AgentDefinition, error) {
+		getCurrentFunc: func(_ context.Context, agentID string) (*session.AgentDefinition, error) {
 			assert.Equal(t, "research-agent", agentID)
-			return &session.AgentDefinition{AgentID: agentID, Scope: strPtr("audience_score_system"), Version: 3}, nil
+			return &session.AgentDefinition{AgentID: agentID, Scope: strPtr("audience_score_system")}, nil
 		},
 	}
 	r := New(store)
@@ -107,8 +107,8 @@ func TestScopeForAgent_ReturnsScopeFromLatestDefinition(t *testing.T) {
 // found".
 func TestScopeForAgent_NilScope_ReturnsNilWithoutError(t *testing.T) {
 	store := &fakeAgentDefinitionStore{
-		getLatestFunc: func(_ context.Context, agentID string) (*session.AgentDefinition, error) {
-			return &session.AgentDefinition{AgentID: agentID, Scope: nil, Version: 1}, nil
+		getCurrentFunc: func(_ context.Context, agentID string) (*session.AgentDefinition, error) {
+			return &session.AgentDefinition{AgentID: agentID, Scope: nil}, nil
 		},
 	}
 	r := New(store)
@@ -118,12 +118,12 @@ func TestScopeForAgent_NilScope_ReturnsNilWithoutError(t *testing.T) {
 	assert.Nil(t, scope)
 }
 
-// TestScopeForAgent_UnknownAgent_ReturnsErrNotFound proves GetLatest's
+// TestScopeForAgent_UnknownAgent_ReturnsErrNotFound proves GetCurrent's
 // documented "no rows -> nil, nil" contract maps to a distinguishable
 // ErrNotFound, not a nil scope with a nil error.
 func TestScopeForAgent_UnknownAgent_ReturnsErrNotFound(t *testing.T) {
 	store := &fakeAgentDefinitionStore{
-		getLatestFunc: func(context.Context, string) (*session.AgentDefinition, error) { return nil, nil },
+		getCurrentFunc: func(context.Context, string) (*session.AgentDefinition, error) { return nil, nil },
 	}
 	r := New(store)
 
@@ -139,7 +139,7 @@ func TestScopeForAgent_UnknownAgent_ReturnsErrNotFound(t *testing.T) {
 // exist" (4xx-shaped) apart from "couldn't ask" (5xx-shaped).
 func TestScopeForAgent_TransportError_NotMistakenForErrNotFound(t *testing.T) {
 	store := &fakeAgentDefinitionStore{
-		getLatestFunc: func(context.Context, string) (*session.AgentDefinition, error) { return nil, errTransport },
+		getCurrentFunc: func(context.Context, string) (*session.AgentDefinition, error) { return nil, errTransport },
 	}
 	r := New(store)
 
@@ -193,20 +193,20 @@ func TestScopeForSession_CurrentAssignmentTransportError_NotMistakenForErrNotFou
 	assert.False(t, errors.Is(err, ErrNotFound))
 }
 
-// TestScopeForSession_AssignedVersionMissing_ReturnsErrNotFound proves
+// TestScopeForSession_AssignedDefinitionMissing_ReturnsErrNotFound proves
 // the "assigned to an agent_definition row that no longer exists" edge
 // case the doc comment calls out: CurrentAssignment succeeds but the
-// exact (AgentID, Version) GetVersion is then asked for comes back nil.
-func TestScopeForSession_AssignedVersionMissing_ReturnsErrNotFound(t *testing.T) {
+// exact pinned definition id GetByID is then asked for comes back nil.
+func TestScopeForSession_AssignedDefinitionMissing_ReturnsErrNotFound(t *testing.T) {
 	sid := uuid.New()
+	defID := uuid.New()
 	store := &fakeAgentDefinitionStore{
 		currentAssignmentFunc: func(_ context.Context, gotSID uuid.UUID) (*session.SessionAgent, error) {
 			assert.Equal(t, sid, gotSID)
-			return &session.SessionAgent{SessionID: sid, AgentID: "research-agent", AgentVersion: 1}, nil
+			return &session.SessionAgent{SessionID: sid, AgentID: "research-agent", AgentDefinitionID: defID}, nil
 		},
-		getVersionFunc: func(_ context.Context, agentID string, version int) (*session.AgentDefinition, error) {
-			assert.Equal(t, "research-agent", agentID)
-			assert.Equal(t, 1, version)
+		getByIDFunc: func(_ context.Context, id uuid.UUID) (*session.AgentDefinition, error) {
+			assert.Equal(t, defID, id)
 			return nil, nil
 		},
 	}
@@ -218,15 +218,16 @@ func TestScopeForSession_AssignedVersionMissing_ReturnsErrNotFound(t *testing.T)
 	assert.True(t, errors.Is(err, ErrNotFound))
 }
 
-// TestScopeForSession_GetVersionTransportError_NotMistakenForErrNotFound
-// mirrors the transport-error case for the GetVersion call.
-func TestScopeForSession_GetVersionTransportError_NotMistakenForErrNotFound(t *testing.T) {
+// TestScopeForSession_GetByIDTransportError_NotMistakenForErrNotFound
+// mirrors the transport-error case for the GetByID call.
+func TestScopeForSession_GetByIDTransportError_NotMistakenForErrNotFound(t *testing.T) {
 	sid := uuid.New()
+	defID := uuid.New()
 	store := &fakeAgentDefinitionStore{
 		currentAssignmentFunc: func(context.Context, uuid.UUID) (*session.SessionAgent, error) {
-			return &session.SessionAgent{SessionID: sid, AgentID: "research-agent", AgentVersion: 1}, nil
+			return &session.SessionAgent{SessionID: sid, AgentID: "research-agent", AgentDefinitionID: defID}, nil
 		},
-		getVersionFunc: func(context.Context, string, int) (*session.AgentDefinition, error) { return nil, errTransport },
+		getByIDFunc: func(context.Context, uuid.UUID) (*session.AgentDefinition, error) { return nil, errTransport },
 	}
 	r := New(store)
 
@@ -236,23 +237,23 @@ func TestScopeForSession_GetVersionTransportError_NotMistakenForErrNotFound(t *t
 	assert.False(t, errors.Is(err, ErrNotFound))
 }
 
-// TestScopeForSession_UsesAssignedVersionNotLatest proves the doc
-// comment's core promise -- "never the current/latest version" -- at the
-// unit level: GetVersion is called with the exact version
+// TestScopeForSession_UsesPinnedDefinitionNotCurrent proves the doc
+// comment's core promise -- "never the current definition" -- at the
+// unit level: GetByID is called with the exact definition id
 // CurrentAssignment returned, and its Scope (not some other version's)
-// is what comes back. GetLatest is left unset entirely, so any call to it
+// is what comes back. GetCurrent is left unset entirely, so any call to it
 // would panic and fail the test -- the strongest possible proof this path
 // never falls back to "current".
-func TestScopeForSession_UsesAssignedVersionNotLatest(t *testing.T) {
+func TestScopeForSession_UsesPinnedDefinitionNotCurrent(t *testing.T) {
 	sid := uuid.New()
+	defID := uuid.New()
 	store := &fakeAgentDefinitionStore{
 		currentAssignmentFunc: func(context.Context, uuid.UUID) (*session.SessionAgent, error) {
-			return &session.SessionAgent{SessionID: sid, AgentID: "research-agent", AgentVersion: 1}, nil
+			return &session.SessionAgent{SessionID: sid, AgentID: "research-agent", AgentDefinitionID: defID}, nil
 		},
-		getVersionFunc: func(_ context.Context, agentID string, version int) (*session.AgentDefinition, error) {
-			require.Equal(t, "research-agent", agentID)
-			require.Equal(t, 1, version)
-			return &session.AgentDefinition{AgentID: agentID, Version: version, Scope: strPtr("old-scope")}, nil
+		getByIDFunc: func(_ context.Context, id uuid.UUID) (*session.AgentDefinition, error) {
+			require.Equal(t, defID, id)
+			return &session.AgentDefinition{ID: id, AgentID: "research-agent", Scope: strPtr("old-scope")}, nil
 		},
 	}
 	r := New(store)
