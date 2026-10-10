@@ -644,6 +644,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// #2432): app.grant.Store/Index is intentionally NOT threaded through
 	// WithAccessToken -- neither handler calls `api`, so no outbound
 	// forwarded token is needed here.
+	mux.HandleFunc("GET /cost", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCost)))
 	mux.HandleFunc("GET /grants", app.auth.RequireAuthFunc(app.handleGrants))
 	mux.HandleFunc("POST /grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsRevoke))
 
