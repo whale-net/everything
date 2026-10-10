@@ -29,5 +29,4 @@ Use when starting work on a GitHub issue or new feature. Skip for quick one-line
 ## Related Skills
 
 - `/test-bazel` — Run Bazel tests (used automatically)
-- `/release` — Create releases after merge
 - `/merge-pr-when-ready` — Auto-merge when CI passes
