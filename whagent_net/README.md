@@ -215,6 +215,8 @@ one-time, single-deploy cutover migration (`009_mcpauth_cutover`, issue
 
 ## Agent definition config
 
+To change an existing agent, call `SessionService.UpdateAgent` (admin role required) with the full desired definition; it supersedes the current row atomically. Code/config declarations only register absent agents.
+
 `whagent_net/config/agents.yaml` documents the row shape for
 `agent_definition` (and, if used, `model_definition`) — see that file's
 own doc comment for the exact field meanings. There is no seeder:

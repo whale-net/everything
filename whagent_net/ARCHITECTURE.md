@@ -917,6 +917,15 @@ fails closed. The response carries no version number.
 ordered by model then id, open to any authenticated caller; it feeds the
 agent edit form's model-definition choice.
 
+`UpdateAgent` (admin only, `PERMISSION_DENIED` otherwise, before any DB
+write) is the only in-service write path. It takes the full desired
+definition (full replacement, no field mask) and calls
+`AgentDefinitionStore.Supersede`: one transaction that locks the current row
+`FOR UPDATE`, sets its `valid_to` and inserts the new row with the same
+timestamp as `valid_from`. A concurrent supersede hits the partial unique
+index or finds the row closed and maps to `ABORTED`; an unknown agent is
+`NOT_FOUND`. Running sessions keep their pinned definition id.
+
 ## `mcp`'s start_session: two RPCs, one tool (issue #2120)
 
 `mcp`'s `start_session` tool takes an optional `first_turn` field
