@@ -68,7 +68,7 @@ func TestHandleAgentList_RendersEveryAgent(t *testing.T) {
 	body := w.Body.String()
 	for _, want := range []string{
 		`href="/agents/code-review"`, `href="/agents/helper"`,
-		"claude-opus-x", "md-77", "reviewer", "none", "3.5", ">12<", ">40<", ">5<", ">9<",
+		"claude-opus-x", "md-77", "reviewer", `badge-ghost">none<`, "3.5", ">12<", ">40<", ">5<", ">9<",
 	} {
 		require.Contains(t, body, want)
 	}
