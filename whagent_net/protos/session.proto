@@ -98,6 +98,11 @@ service SessionService {
   // when no admin role is configured).
   rpc GetAgent(GetAgentRequest) returns (GetAgentResponse);
 
+  // ListModelDefinitions returns every model_definition row ordered by
+  // model then id. Any authenticated caller may call it; feeds the agent
+  // edit form's model-definition choice.
+  rpc ListModelDefinitions(ListModelDefinitionsRequest) returns (ListModelDefinitionsResponse);
+
   // UpdateAgent atomically supersedes an agent's current definition with
   // the full desired definition in the request (full replacement, not a
   // field mask: every field is set, so omitted fields take their zero
@@ -397,6 +402,21 @@ message ListAgentsRequest {}
 
 message ListAgentsResponse {
   repeated AgentDefinition agents = 1;
+}
+
+// ModelDefinition is one model_definition row.
+message ModelDefinition {
+  string id = 1;
+  string name = 2;
+  string model = 3;
+  // JSON-encoded provider-routing preferences.
+  string provider = 4;
+}
+
+message ListModelDefinitionsRequest {}
+
+message ListModelDefinitionsResponse {
+  repeated ModelDefinition model_definitions = 1;
 }
 
 message GetAgentRequest {

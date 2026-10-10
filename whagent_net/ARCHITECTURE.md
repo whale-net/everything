@@ -923,6 +923,10 @@ timestamp as `valid_from`. A concurrent supersede hits the partial unique
 index or finds the row closed and maps to `ABORTED`; an unknown agent is
 `NOT_FOUND`. Running sessions keep their pinned definition id.
 
+`SessionService.ListModelDefinitions` returns every `model_definition` row
+ordered by model then id, open to any authenticated caller; it feeds the
+agent edit form's model-definition choice.
+
 ## `mcp`'s start_session: two RPCs, one tool (issue #2120)
 
 `mcp`'s `start_session` tool takes an optional `first_turn` field
