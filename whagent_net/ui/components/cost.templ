@@ -1,5 +1,7 @@
 package components
 
+import "fmt"
+
 // CostFilters carries GET /cost's controls as submitted.
 type CostFilters struct {
 	// Period is one of day|week|month|all|none.
@@ -33,6 +35,7 @@ type CostPageData struct {
 templ Cost(data CostPageData) {
 	@Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-4">Cost (UTC)</h1>
+		@costFilterForm(data.Filters)
 		<div id="cost-table">
 			@CostTable(data)
 		</div>
@@ -41,5 +44,82 @@ templ Cost(data CostPageData) {
 
 // CostTable renders the table fragment swapped by the controls.
 templ CostTable(data CostPageData) {
-	<div></div>
+	if data.FetchError != "" {
+		<div class="alert alert-error" role="alert">{ data.FetchError }</div>
+	} else if len(data.Rows) == 0 {
+		<div class="alert alert-info" role="status">No usage recorded for this view.</div>
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-zebra">
+				<thead>
+					<tr>
+						<th>Period (UTC)</th>
+						<th>Agent</th>
+						<th>Model</th>
+						<th class="text-right">Prompt tokens</th>
+						<th class="text-right">Completion tokens</th>
+						<th class="text-right">Turns</th>
+						<th class="text-right">Cost</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range data.Rows {
+						@costRow(row, false)
+					}
+				</tbody>
+				<tfoot>
+					@costRow(data.Total, true)
+				</tfoot>
+			</table>
+		</div>
+	}
+}
+
+templ costRow(row CostRowView, total bool) {
+	<tr class={ templ.KV("font-bold", total) }>
+		<td>
+			if total {
+				Total
+			} else {
+				{ row.PeriodLabel }
+			}
+		</td>
+		<td>{ row.Agent }</td>
+		<td>{ row.Model }</td>
+		<td class="text-right">{ fmt.Sprint(row.PromptTokens) }</td>
+		<td class="text-right">{ fmt.Sprint(row.CompletionTokens) }</td>
+		<td class="text-right">{ fmt.Sprint(row.Turns) }</td>
+		<td class="text-right">
+			{ fmt.Sprintf("$%.4f", row.CostUSD) }
+			if row.Estimated {
+				<span class="badge badge-warning badge-sm ml-1">estimated</span>
+			}
+		</td>
+	</tr>
+}
+
+// costFilterForm swaps #cost-table on any change and pushes the URL.
+templ costFilterForm(f CostFilters) {
+	<form
+		class="flex flex-wrap items-center gap-4 mb-4"
+		hx-get="/cost"
+		hx-target="#cost-table"
+		hx-swap="innerHTML"
+		hx-push-url="true"
+		hx-trigger="change"
+	>
+		<select name="period" class="select select-bordered select-sm" aria-label="Period">
+			for _, o := range []string{"day", "week", "month", "all", "none"} {
+				<option value={ o } selected?={ f.Period == o }>{ o }</option>
+			}
+		</select>
+		<label class="label cursor-pointer gap-2">
+			<input type="checkbox" name="agent" value="1" class="toggle toggle-sm" checked?={ f.ByAgent }/>
+			<span class="label-text">By agent</span>
+		</label>
+		<label class="label cursor-pointer gap-2">
+			<input type="checkbox" name="model" value="1" class="toggle toggle-sm" checked?={ f.ByModel }/>
+			<span class="label-text">By model</span>
+		</label>
+	</form>
 }
