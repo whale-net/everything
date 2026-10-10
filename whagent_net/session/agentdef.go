@@ -143,6 +143,10 @@ type AgentDefinitionStore interface {
 	// page (issue #2432) uses to offer a clickable consent link instead
 	// of requiring a hand-typed /mcp/consent?scope=<s> URL.
 	ListScopes(ctx context.Context) ([]string, error)
+	// ListCurrent returns every open (valid_to IS NULL) row ordered by agent_id.
+	ListCurrent(ctx context.Context) ([]*AgentDefinition, error)
+	// History returns every row for agentID ordered by valid_from ascending.
+	History(ctx context.Context, agentID string) ([]*AgentDefinition, error)
 }
 
 // agentDefinitionStore is the Postgres-backed AgentDefinitionStore
@@ -345,4 +349,44 @@ func RegisterAgentDefinition(ctx context.Context, q Querier, def *AgentDefinitio
 	}
 	def.ToolLoadingMode = toolLoadingMode
 	return true, nil
+}
+
+func (s agentDefinitionStore) queryDefs(ctx context.Context, what, query string, args ...any) ([]*AgentDefinition, error) {
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	defer rows.Close()
+	var out []*AgentDefinition
+	for rows.Next() {
+		def, err := scanAgentDefinition(rows)
+		if err != nil {
+			return nil, fmt.Errorf("%s: scan: %w", what, err)
+		}
+		out = append(out, def)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	return out, nil
+}
+
+// ListCurrent returns every open row ordered by agent_id.
+func (s agentDefinitionStore) ListCurrent(ctx context.Context) ([]*AgentDefinition, error) {
+	return s.queryDefs(ctx, "list current agent definitions", `
+		SELECT `+agentDefinitionColumns+`
+		FROM agent_definition
+		WHERE valid_to IS NULL
+		ORDER BY agent_id
+	`)
+}
+
+// History returns every row for agentID, oldest first.
+func (s agentDefinitionStore) History(ctx context.Context, agentID string) ([]*AgentDefinition, error) {
+	return s.queryDefs(ctx, "agent definition history", `
+		SELECT `+agentDefinitionColumns+`
+		FROM agent_definition
+		WHERE agent_id = $1
+		ORDER BY valid_from ASC, created_at ASC
+	`, agentID)
 }

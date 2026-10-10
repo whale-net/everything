@@ -60,6 +60,20 @@ import (
 // (start.go step 4) that would need one.
 func newServiceAccountTestServer(t *testing.T) (*handlers.SessionServer, *session.Store, *fakeTemporalClient) {
 	t.Helper()
+	srv, store, _, temporal := newServiceAccountTestServerFull(t)
+	return srv, store, temporal
+}
+
+// newServiceAccountTestServerWithDB also returns the Postgres, for tests
+// that supersede agent definitions.
+func newServiceAccountTestServerWithDB(t *testing.T) (*handlers.SessionServer, *session.Store, *dbtest.Postgres) {
+	t.Helper()
+	srv, store, db, _ := newServiceAccountTestServerFull(t)
+	return srv, store, db
+}
+
+func newServiceAccountTestServerFull(t *testing.T) (*handlers.SessionServer, *session.Store, *dbtest.Postgres, *fakeTemporalClient) {
+	t.Helper()
 	ctx := context.Background()
 
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -74,7 +88,7 @@ func newServiceAccountTestServer(t *testing.T) (*handlers.SessionServer, *sessio
 	store := session.New(db.Pool, nil)
 	temporal := &fakeTemporalClient{}
 	srv := handlers.NewSessionServer(ctx, store, testIssuer, temporal, "test-task-queue", nil, nil, nil)
-	return srv, store, temporal
+	return srv, store, db, temporal
 }
 
 // serviceClaims builds the grpcauth.Claims a Keycloak client-credentials

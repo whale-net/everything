@@ -169,6 +169,7 @@ func run() error {
 	}
 
 	sessionServer := handlers.NewSessionServer(ctx, store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog, eventsConsumer, parseOnBehalfOfAllowedClientIDs(os.Getenv("WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS")))
+	sessionServer.SetAgentAdminRole(os.Getenv("WHAGENT_API_ADMIN_ROLE"))
 
 	// agentDefs feeds DevRoles below: DevRoles matters only in
 	// AuthModeNone, where it makes the injected dev Claims carry every

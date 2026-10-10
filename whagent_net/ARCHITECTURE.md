@@ -904,6 +904,16 @@ API lacks such a field — one reason it is not a consumer of this product).
 Milestone cuts are owned by `PRODUCT.md` / `product/03-roadmap.md`; this
 list is the architectural dependency order, not the roadmap.
 
+## Agent definitions API
+
+`agent_definition` rows are SCD2 (`valid_from`/`valid_to`); sessions pin a
+row by id. `SessionService.ListAgents` returns every current row ordered by
+`agent_id`; `GetAgent` returns one current row (`NOT_FOUND` if absent). Both
+are open to any authenticated caller. `GetAgent{include_history}` returns
+all rows for the agent by `valid_from` and requires the caller's token roles
+to include `WHAGENT_API_ADMIN_ROLE` (`handlers.isAgentAdmin`); an unset role
+fails closed. The response carries no version number.
+
 ## `mcp`'s start_session: two RPCs, one tool (issue #2120)
 
 `mcp`'s `start_session` tool takes an optional `first_turn` field

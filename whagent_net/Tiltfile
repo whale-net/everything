@@ -217,6 +217,10 @@ whagent_oidc_issuer = os.environ.get('WHAGENT_OIDC_ISSUER', 'dev-issuer')
 # local .env to exercise the delegated path against a real Keycloak realm.
 whagent_on_behalf_of_allowed_client_ids = os.environ.get('WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS', '')
 
+# Realm role allowed to read agent definition history (ENV.md "`api` server").
+# Empty fails closed: nobody can read history.
+whagent_api_admin_role = os.environ.get('WHAGENT_API_ADMIN_ROLE', '')
+
 # ===========================
 # ASS link-acceptance URL (issue #2646, FR1 "Link ASS identity")
 # ===========================
@@ -384,6 +388,8 @@ spec:
           value: "{whagent_oidc_issuer}"
         - name: WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS
           value: "{whagent_on_behalf_of_allowed_client_ids}"
+        - name: WHAGENT_API_ADMIN_ROLE
+          value: "{whagent_api_admin_role}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
