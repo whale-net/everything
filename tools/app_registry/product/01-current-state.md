@@ -44,7 +44,9 @@ is flatly wrong.
 ArgoCD sync/health observation log, deliberately kept separate from
 `promotion_event`'s audit trail (see LB2). `TriggerArgoRefresh`/
 `PollArgoSyncStatus` (issue #1030) poll ArgoCD's REST API directly
-(`libs/go/argocd`) after every writeback (3 attempts, ~6 min bound).
+(`libs/go/argocd`) after every writeback (every 15s, ~15 min bound, a row
+per changed observation), and only call a promotion healthy once ArgoCD
+reports that promotion's own chart version or commit.
 `GetPromotionDetails` + the Promotion Details page (#1043/#1044) surface it
 via an inline badge, a manual retry-sync action (#1045, admin-gated), and
 the live SSE readiness banner. What's genuinely still missing: no

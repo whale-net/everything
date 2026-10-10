@@ -181,8 +181,8 @@ func TestArgoSyncActivities_PollArgoSyncStatus_WaitsForHookToFinish(t *testing.T
 
 	events, err := registry.Promotions().ListSyncEvents(t.Context(), promotionID)
 	require.NoError(t, err)
-	require.Len(t, events, 3, "expected one poll_observed row per attempt until the hook finished")
-	require.False(t, isTerminalArgoSyncState(events[0].SyncStatus, events[0].HealthStatus, events[0].OperationPhase),
+	require.Len(t, events, 2, "expected one poll_observed row per distinct observation: Running, then Succeeded")
+	require.Equal(t, "Running", events[0].OperationPhase,
 		"Synced+Healthy while the hook operation is Running must not be treated as terminal")
 }
 
@@ -233,9 +233,9 @@ func TestArgoSyncActivities_PollArgoSyncStatus_StopsEarlyOnDegraded(t *testing.T
 
 // TestArgoSyncActivities_PollArgoSyncStatus_ExhaustsAttempts_NeverFails
 // proves FR5/NFR3: when status never reaches a terminal state,
-// PollArgoSyncStatus runs all 3 attempts, returns success (nil error) with
-// the last-observed pair standing as "still pending", and writes 3
-// poll_observed rows -- one per attempt.
+// PollArgoSyncStatus runs every attempt, returns success (nil error) with
+// the last-observed pair standing as "still pending", and writes a single
+// poll_observed row since the observation never changed.
 func TestArgoSyncActivities_PollArgoSyncStatus_ExhaustsAttempts_NeverFails(t *testing.T) {
 	var calls int
 	a, registry, promotionID := newTestArgoSyncActivities(t, func(w http.ResponseWriter, r *http.Request) {
@@ -251,16 +251,14 @@ func TestArgoSyncActivities_PollArgoSyncStatus_ExhaustsAttempts_NeverFails(t *te
 
 	events, err := registry.Promotions().ListSyncEvents(t.Context(), promotionID)
 	require.NoError(t, err)
-	require.Len(t, events, pollArgoSyncMaxAttempts, "expected one poll_observed row per attempt")
-	for _, e := range events {
-		require.Equal(t, repository.PromotionSyncEventSourcePollObserved, e.Source)
-	}
+	require.Len(t, events, 1, "an unchanged observation must not write a row per attempt")
+	require.Equal(t, repository.PromotionSyncEventSourcePollObserved, events[0].Source)
 }
 
 // TestArgoSyncActivities_PollArgoSyncStatus_TransitionsToTerminalMidway
 // proves the loop bound is per-observation, not fixed: an OutOfSync/
 // Progressing pair on attempt 1 that becomes Synced/Healthy on attempt 2
-// stops at attempt 2, not attempt 3 -- exercising argoStatusServer's
+// stops at attempt 2, not later -- exercising argoStatusServer's
 // sequenced-response helper.
 func TestArgoSyncActivities_PollArgoSyncStatus_TransitionsToTerminalMidway(t *testing.T) {
 	a, registry, promotionID := newTestArgoSyncActivities(t, argoStatusServer([][3]string{
@@ -391,7 +389,7 @@ func TestArgoSyncActivities_RecordSyncEvent_PublishesAfterWrite(t *testing.T) {
 	pub := NewFakePublisher()
 	a.Publisher = pub
 
-	_, err := a.recordSyncEvent(t.Context(), promotionID, repository.PromotionSyncEventSourceRefreshTriggered, "", "", "")
+	_, err := a.recordSyncEvent(t.Context(), repository.PromotionSyncEvent{PromotionID: promotionID, Source: repository.PromotionSyncEventSourceRefreshTriggered})
 	require.NoError(t, err)
 
 	// Verify event was published with correct payload
@@ -411,7 +409,7 @@ func TestArgoSyncActivities_RecordSyncEvent_NoPublisherConfigured(t *testing.T) 
 	})
 	a.Publisher = nil // Explicitly nil
 
-	_, err := a.recordSyncEvent(t.Context(), promotionID, repository.PromotionSyncEventSourcePollObserved, "Synced", "Healthy", "Succeeded")
+	_, err := a.recordSyncEvent(t.Context(), repository.PromotionSyncEvent{PromotionID: promotionID, Source: repository.PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded"})
 	require.NoError(t, err)
 
 	// Verify the event was still recorded in the database
@@ -443,11 +441,71 @@ func TestArgoSyncActivities_RecordSyncEvent_PublishesCorrectEventKind(t *testing
 			pub := NewFakePublisher()
 			a.Publisher = pub
 
-			_, err := a.recordSyncEvent(t.Context(), promotionID, tt.source, "Synced", "Healthy", "Succeeded")
+			_, err := a.recordSyncEvent(t.Context(), repository.PromotionSyncEvent{PromotionID: promotionID, Source: tt.source, SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded"})
 			require.NoError(t, err)
 
 			require.Len(t, pub.events, 1)
 			require.Equal(t, tt.wantKind, pub.events[0].EventKind)
 		})
 	}
+}
+
+// argoRevisionServer serves full Application status bodies in order, one
+// per call, repeating the last -- for scripting revision transitions.
+func argoRevisionServer(bodies []string) http.HandlerFunc {
+	call := 0
+	return func(w http.ResponseWriter, r *http.Request) {
+		i := min(call, len(bodies)-1)
+		call++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(bodies[i]))
+	}
+}
+
+func argoAppBody(syncStatus, health, phase, syncRev, opRev string) string {
+	return `{"status":{"sync":{"status":"` + syncStatus + `","revision":"` + syncRev + `"},"health":{"status":"` + health +
+		`"},"operationState":{"phase":"` + phase + `","syncResult":{"revision":"` + opRev + `"}}}}`
+}
+
+// TestArgoSyncActivities_PollArgoSyncStatus_IgnoresPreviousReleaseHealthy
+// is the regression test for the eventual-consistency race: right after a
+// writeback ArgoCD still reports the PREVIOUS release as Synced/Healthy/
+// Succeeded. That must stay pending until ArgoCD reports the expected
+// revision, rather than flashing "healthy" on attempt 1.
+func TestArgoSyncActivities_PollArgoSyncStatus_IgnoresPreviousReleaseHealthy(t *testing.T) {
+	a, registry, promotionID := newTestArgoSyncActivities(t, argoRevisionServer([]string{
+		argoAppBody("Synced", "Healthy", "Succeeded", "0.0.38", "0.0.38"),
+		argoAppBody("Synced", "Healthy", "Succeeded", "0.0.38", "0.0.38"),
+		argoAppBody("OutOfSync", "Healthy", "Succeeded", "0.0.39", "0.0.38"),
+		argoAppBody("Synced", "Progressing", "Running", "0.0.39", "0.0.39"),
+		argoAppBody("Synced", "Healthy", "Succeeded", "0.0.39", "0.0.39"),
+	}))
+
+	in := ArgoSyncInput{PromotionID: promotionID, Domain: "acme", ApplicationName: "foo-stage", ExpectedRevision: "v0.0.39"}
+	result, err := runPollArgoSyncStatus(t, a, in)
+	require.NoError(t, err)
+	require.True(t, result.Terminal)
+	require.Equal(t, "0.0.39", result.SyncRevision)
+
+	events, err := registry.Promotions().ListSyncEvents(t.Context(), promotionID)
+	require.NoError(t, err)
+	require.Len(t, events, 4, "the repeated previous-release observation is recorded once")
+	require.Equal(t, "0.0.38", events[0].SyncRevision)
+	require.Equal(t, repository.PromotionSyncOutcomePending, repository.ClassifyArgoObservation(events[0], "v0.0.39"))
+	require.Equal(t, repository.PromotionSyncOutcomeSyncedHealthy, repository.ClassifyArgoObservation(events[3], "v0.0.39"))
+}
+
+// TestArgoSyncActivities_PollArgoSyncStatus_PreviousReleaseFailureNotTerminal
+// proves a Failed operation left over from the previous release doesn't
+// end polling for the new one.
+func TestArgoSyncActivities_PollArgoSyncStatus_PreviousReleaseFailureNotTerminal(t *testing.T) {
+	a, _, promotionID := newTestArgoSyncActivities(t, argoRevisionServer([]string{
+		argoAppBody("Synced", "Healthy", "Failed", "0.0.38", "0.0.38"),
+		argoAppBody("Synced", "Healthy", "Succeeded", "0.0.39", "0.0.39"),
+	}))
+
+	result, err := runPollArgoSyncStatus(t, a, ArgoSyncInput{PromotionID: promotionID, ExpectedRevision: "0.0.39"})
+	require.NoError(t, err)
+	require.True(t, result.Terminal)
+	require.Equal(t, "Succeeded", result.OperationPhase)
 }

@@ -456,13 +456,15 @@ func promotionSyncOutcomeToPB(o repository.PromotionSyncOutcome) pb.PromotionSyn
 
 func promotionSyncEventToPB(e repository.PromotionSyncEvent) *pb.PromotionSyncEvent {
 	return &pb.PromotionSyncEvent{
-		SyncEventId:    e.SyncEventID,
-		PromotionId:    e.PromotionID,
-		Source:         e.Source,
-		SyncStatus:     e.SyncStatus,
-		HealthStatus:   e.HealthStatus,
-		OperationPhase: e.OperationPhase,
-		OccurredAt:     timeToUnix(e.OccurredAt),
+		SyncEventId:       e.SyncEventID,
+		PromotionId:       e.PromotionID,
+		Source:            e.Source,
+		SyncStatus:        e.SyncStatus,
+		HealthStatus:      e.HealthStatus,
+		OperationPhase:    e.OperationPhase,
+		SyncRevision:      e.SyncRevision,
+		OperationRevision: e.OperationRevision,
+		OccurredAt:        timeToUnix(e.OccurredAt),
 	}
 }
 

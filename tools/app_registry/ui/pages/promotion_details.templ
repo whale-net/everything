@@ -54,6 +54,27 @@ func earliestRefreshTriggered(events []*pb.PromotionSyncEvent) *pb.PromotionSync
 	return nil
 }
 
+// currentSyncRevision returns the most recent poll observation's
+// sync_revision, "" if none has been recorded.
+func currentSyncRevision(events []*pb.PromotionSyncEvent) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		if r := events[i].GetSyncRevision(); r != "" {
+			return r
+		}
+	}
+	return ""
+}
+
+// waitingForArgoPickup reports whether ArgoCD reads fully healthy but the
+// outcome is still pending -- the server only does that when the healthy
+// state belongs to a different revision than this promotion's (ArgoCD
+// hasn't picked up the new desired state yet).
+func waitingForArgoPickup(d *pb.PromotionDetails) bool {
+	return d.GetOutcome() == pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_PENDING &&
+		d.GetCurrentSyncStatus() == "Synced" && d.GetCurrentHealthStatus() == "Healthy" &&
+		d.GetCurrentOperationPhase() == "Succeeded"
+}
+
 // syncEventSourceLabel renders PromotionSyncEvent.source for the timeline --
 // screen-local since no other screen (yet) needs this vocabulary. Mirrors
 // repository.PromotionSyncEvent's Source constants
@@ -196,7 +217,21 @@ templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 						<span class="opacity-60">—</span>
 					}
 				</dd>
+				<dt class="opacity-60">ArgoCD revision</dt>
+				{{ rev := currentSyncRevision(d.GetSyncEvents()) }}
+				<dd class="font-mono">
+					if rev != "" {
+						{ rev }
+					} else {
+						<span class="opacity-60">—</span>
+					}
+				</dd>
 			</dl>
+			if waitingForArgoPickup(d) {
+				<div role="status" class="alert alert-info mt-2">
+					<span>ArgoCD reports healthy, but not yet on { d.GetToVersion() } — waiting for it to pick up this promotion.</span>
+				</div>
+			}
 			if d.GetOutcome() == pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNC_FAILED {
 				<div role="alert" class="alert alert-error mt-2">
 					<span>Sync failed: { d.GetCurrentSyncStatus() } / { d.GetCurrentHealthStatus() }</span>
@@ -222,6 +257,9 @@ templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 								{ syncEventSourceLabel(e.GetSource()) }
 								if e.GetSyncStatus() != "" || e.GetHealthStatus() != "" || e.GetOperationPhase() != "" {
 									— { e.GetSyncStatus() } / { e.GetHealthStatus() } / { e.GetOperationPhase() }
+								}
+								if e.GetSyncRevision() != "" {
+									<span class="font-mono text-xs opacity-60">{ "@ " + e.GetSyncRevision() }</span>
 								}
 							</div>
 							if i < len(d.GetSyncEvents())-1 {

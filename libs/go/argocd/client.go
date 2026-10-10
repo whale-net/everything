@@ -128,12 +128,27 @@ func (c *Client) Sync(ctx context.Context, project, name string) error {
 	return nil
 }
 
+// applicationSource is the subset of an ArgoCD ApplicationSource this
+// client reads -- only the revision it targets.
+type applicationSource struct {
+	TargetRevision string `json:"targetRevision"`
+}
+
 // applicationResponse is the subset of ArgoCD's Application JSON response
 // this client parses.
 type applicationResponse struct {
 	Status struct {
 		Sync struct {
 			Status string `json:"status"`
+			// Revision/Revisions are the resolved revision(s) Argo compared
+			// against: a git SHA for a git source, a chart version for a
+			// Helm source. Revisions is set instead for multi-source apps.
+			Revision   string   `json:"revision"`
+			Revisions  []string `json:"revisions"`
+			ComparedTo struct {
+				Source  applicationSource   `json:"source"`
+				Sources []applicationSource `json:"sources"`
+			} `json:"comparedTo"`
 		} `json:"sync"`
 		Health struct {
 			Status string `json:"status"`
@@ -148,39 +163,107 @@ type applicationResponse struct {
 		// "Terminating"), "" if no operation has ever run against this
 		// Application.
 		OperationState struct {
-			Phase string `json:"phase"`
+			Phase     string `json:"phase"`
+			Operation struct {
+				Sync struct {
+					Revision  string   `json:"revision"`
+					Revisions []string `json:"revisions"`
+				} `json:"sync"`
+			} `json:"operation"`
+			SyncResult struct {
+				Revision  string   `json:"revision"`
+				Revisions []string `json:"revisions"`
+			} `json:"syncResult"`
 		} `json:"operationState"`
 	} `json:"status"`
 }
 
-// GetStatus fetches the named Application's current sync, health, and
-// operation-phase status, scoped to project. It corresponds to
+// ApplicationStatus is GetApplicationStatus's result.
+type ApplicationStatus struct {
+	// SyncStatus is one of ArgoCD's sync states (e.g. "Synced"/"OutOfSync"/"Unknown").
+	SyncStatus string
+	// HealthStatus is one of ArgoCD's health states (e.g. "Healthy"/
+	// "Progressing"/"Degraded"/"Suspended"/"Missing"/"Unknown").
+	HealthStatus string
+	// OperationPhase is the most recent sync operation's phase, "" if none
+	// has run. See applicationResponse's OperationState comment.
+	OperationPhase string
+	// SyncRevisions are the revisions SyncStatus was computed against:
+	// status.sync.revision(s) plus status.sync.comparedTo's
+	// targetRevision(s), deduplicated, empties dropped. A "Synced" status
+	// only means "synced to these", which may still be the previous
+	// release if Argo hasn't picked up the new desired state yet.
+	SyncRevisions []string
+	// OperationRevisions are the revisions the most recent sync operation
+	// (OperationPhase) ran against, same shape as SyncRevisions. A
+	// "Succeeded" phase left over from the previous release's sync carries
+	// the previous release's revision here.
+	OperationRevisions []string
+}
+
+// GetApplicationStatus fetches the named Application's sync, health,
+// operation-phase status, and the revisions each refers to, scoped to
+// project. It corresponds to
 // GET {ServerURL}/api/v1/applications/{name}?project={project}.
-//
-// syncStatus is one of ArgoCD's sync states (e.g. "Synced"/"OutOfSync"/
-// "Unknown"); health is one of ArgoCD's health states (e.g.
-// "Healthy"/"Progressing"/"Degraded"/"Suspended"/"Missing"/"Unknown");
-// operationPhase is the most recent sync operation's phase (e.g.
-// "Running"/"Succeeded"/"Failed"/"Error"/"Terminating"), "" if none has run.
-// Callers that want to know whether EVERY resource ArgoCD manages for this
-// Application -- including hooks -- has finished rolling out must check
-// operationPhase == "Succeeded" in addition to syncStatus/health, since
-// health alone does not cover hook resources.
-func (c *Client) GetStatus(ctx context.Context, project, name string) (syncStatus, health, operationPhase string, err error) {
+func (c *Client) GetApplicationStatus(ctx context.Context, project, name string) (ApplicationStatus, error) {
 	q := url.Values{}
 	q.Set("project", project)
 	reqURL := fmt.Sprintf("%s/api/v1/applications/%s?%s", c.serverURL, url.PathEscape(name), q.Encode())
 
 	respBody, err := c.do(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return "", "", "", fmt.Errorf("argocd: GetStatus(%s/%s): %w", project, name, err)
+		return ApplicationStatus{}, fmt.Errorf("argocd: GetStatus(%s/%s): %w", project, name, err)
 	}
 
 	var app applicationResponse
 	if err := json.Unmarshal(respBody, &app); err != nil {
-		return "", "", "", fmt.Errorf("argocd: GetStatus(%s/%s): parse response: %w", project, name, err)
+		return ApplicationStatus{}, fmt.Errorf("argocd: GetStatus(%s/%s): parse response: %w", project, name, err)
 	}
-	return app.Status.Sync.Status, app.Status.Health.Status, app.Status.OperationState.Phase, nil
+	st := app.Status
+	syncRevs := []string{st.Sync.Revision}
+	syncRevs = append(syncRevs, st.Sync.Revisions...)
+	syncRevs = append(syncRevs, st.Sync.ComparedTo.Source.TargetRevision)
+	for _, s := range st.Sync.ComparedTo.Sources {
+		syncRevs = append(syncRevs, s.TargetRevision)
+	}
+	opRevs := []string{st.OperationState.SyncResult.Revision}
+	opRevs = append(opRevs, st.OperationState.SyncResult.Revisions...)
+	opRevs = append(opRevs, st.OperationState.Operation.Sync.Revision)
+	opRevs = append(opRevs, st.OperationState.Operation.Sync.Revisions...)
+	return ApplicationStatus{
+		SyncStatus:         st.Sync.Status,
+		HealthStatus:       st.Health.Status,
+		OperationPhase:     st.OperationState.Phase,
+		SyncRevisions:      dedupeNonEmpty(syncRevs),
+		OperationRevisions: dedupeNonEmpty(opRevs),
+	}, nil
+}
+
+// GetStatus is GetApplicationStatus without the revisions.
+//
+// Callers that want to know whether EVERY resource ArgoCD manages for this
+// Application -- including hooks -- has finished rolling out must check
+// operationPhase == "Succeeded" in addition to syncStatus/health, since
+// health alone does not cover hook resources.
+func (c *Client) GetStatus(ctx context.Context, project, name string) (syncStatus, health, operationPhase string, err error) {
+	st, err := c.GetApplicationStatus(ctx, project, name)
+	if err != nil {
+		return "", "", "", err
+	}
+	return st.SyncStatus, st.HealthStatus, st.OperationPhase, nil
+}
+
+func dedupeNonEmpty(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // do issues an HTTP request with the bearer token attached and returns the

@@ -186,6 +186,11 @@ message PromotionSyncEvent {
   // migration Job) -- ArgoCD's health rollup excludes hooks entirely, so
   // sync_status/health_status alone never show a hook still in flight.
   string operation_phase = 7;
+  // Comma-joined revisions ArgoCD reported sync_status / operation_phase
+  // against (migration 027) -- a chart version or git SHA. '' on trigger
+  // rows and rows recorded before revisions were tracked.
+  string sync_revision = 8;
+  string operation_revision = 9;
 }
 
 // PromotionSyncOutcome is FR8's visibly-distinct-not-conflated summary of
