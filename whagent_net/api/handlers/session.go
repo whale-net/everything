@@ -546,6 +546,8 @@ func statusToProto(st session.Status) pb.SessionState {
 		return pb.SessionState_SESSION_STATE_FAILED
 	case session.StatusCapped:
 		return pb.SessionState_SESSION_STATE_CAPPED
+	case session.StatusExpired:
+		return pb.SessionState_SESSION_STATE_EXPIRED
 	default:
 		return pb.SessionState_SESSION_STATE_UNSPECIFIED
 	}
@@ -630,6 +632,8 @@ func statusFromProto(st pb.SessionState) session.Status {
 		return session.StatusFailed
 	case pb.SessionState_SESSION_STATE_CAPPED:
 		return session.StatusCapped
+	case pb.SessionState_SESSION_STATE_EXPIRED:
+		return session.StatusExpired
 	default:
 		return ""
 	}

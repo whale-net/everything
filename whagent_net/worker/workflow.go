@@ -1021,7 +1021,7 @@ func commitStatusChangeEvent(ctx workflow.Context, sessionID uuid.UUID, turn int
 		return nil
 	}
 	switch status {
-	case session.StatusRunning, session.StatusAwaitingInput, session.StatusDone, session.StatusStopped:
+	case session.StatusRunning, session.StatusAwaitingInput, session.StatusDone, session.StatusStopped, session.StatusExpired:
 	default:
 		return nil
 	}

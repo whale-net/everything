@@ -32,6 +32,8 @@ func sessionStateString(s whagentpb.SessionState) string {
 		return "failed"
 	case whagentpb.SessionState_SESSION_STATE_CAPPED:
 		return "capped"
+	case whagentpb.SessionState_SESSION_STATE_EXPIRED:
+		return "expired"
 	default:
 		return "unspecified"
 	}
@@ -96,6 +98,8 @@ func sessionStateFromString(s string) (state whagentpb.SessionState, ok bool) {
 		return whagentpb.SessionState_SESSION_STATE_FAILED, true
 	case "capped":
 		return whagentpb.SessionState_SESSION_STATE_CAPPED, true
+	case "expired":
+		return whagentpb.SessionState_SESSION_STATE_EXPIRED, true
 	default:
 		return whagentpb.SessionState_SESSION_STATE_UNSPECIFIED, false
 	}

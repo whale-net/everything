@@ -152,6 +152,7 @@ enum SessionState {
   SESSION_STATE_STOPPED = 4;
   SESSION_STATE_FAILED = 5;
   SESSION_STATE_CAPPED = 6;
+  SESSION_STATE_EXPIRED = 7;
 }
 
 // CapKind names which guardrail ended a session in SESSION_STATE_CAPPED
