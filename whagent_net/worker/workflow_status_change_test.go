@@ -198,11 +198,11 @@ func TestSessionWorkflow_StatusChangeEvent_NotDuplicatedForCappedOrFailed(t *tes
 
 	tracker := &statusTracker{}
 	rec := &callRecorder{}
-	def := session.AgentDefinition{MaxTurns: 1, MaxCostUSD: 100}
+	// MaxTurns 1 would end as done (single-turn), so the capped trip is a cost cap.
+	def := session.AgentDefinition{MaxTurns: 100, MaxCostUSD: 0.5}
 	wireCapTestActivities(env, def, tracker, rec)
 	wireSuccessfulCallModel(env)
-	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
-		Return(SumCostResult{CostUSD: 0}, nil)
+	wireSumCostStepped(env, 0.5)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "turn one"})
