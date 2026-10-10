@@ -420,3 +420,16 @@ func TestParse_RejectsVersionKey(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "version")
 }
+
+func TestValidate_MaxTurns_ZeroUnsetAndOneAccepted_NegativeFails(t *testing.T) {
+	for _, n := range []int{0, 1, 100} {
+		agent := validAgent()
+		agent.MaxTurns = n
+		assert.NoError(t, Validate(nil, []AgentDefinitionConfig{agent}), "max_turns=%d", n)
+	}
+	agent := validAgent()
+	agent.MaxTurns = -1
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max_turns must be >= 1")
+}
