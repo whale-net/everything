@@ -106,3 +106,23 @@ func (f *fakeSessionServiceClient) GetUsageReport(context.Context, *pb.GetUsageR
 func (f *fakeSessionServiceClient) StreamEvents(context.Context, *pb.StreamEventsRequest, ...grpc.CallOption) (pb.SessionService_StreamEventsClient, error) {
 	panic("fakeSessionServiceClient: StreamEvents called -- no whagent-net mcp tool forwards to this RPC")
 }
+
+func (f *fakeSessionServiceClient) ListAgents(context.Context, *pb.ListAgentsRequest, ...grpc.CallOption) (*pb.ListAgentsResponse, error) {
+	panic("fakeSessionServiceClient: ListAgents called -- no whagent-net mcp tool forwards to this RPC")
+}
+
+func (f *fakeSessionServiceClient) GetAgent(context.Context, *pb.GetAgentRequest, ...grpc.CallOption) (*pb.GetAgentResponse, error) {
+	panic("fakeSessionServiceClient: GetAgent called -- no whagent-net mcp tool forwards to this RPC")
+}
+
+func (f *fakeSessionServiceClient) ListModelDefinitions(context.Context, *pb.ListModelDefinitionsRequest, ...grpc.CallOption) (*pb.ListModelDefinitionsResponse, error) {
+	panic("fakeSessionServiceClient: ListModelDefinitions called -- no whagent-net mcp tool forwards to this RPC")
+}
+
+func (f *fakeSessionServiceClient) UpdateAgent(context.Context, *pb.UpdateAgentRequest, ...grpc.CallOption) (*pb.UpdateAgentResponse, error) {
+	panic("fakeSessionServiceClient: UpdateAgent called -- no whagent-net mcp tool forwards to this RPC")
+}
+
+func (f *fakeSessionServiceClient) GetDashboardSummary(context.Context, *pb.GetDashboardSummaryRequest, ...grpc.CallOption) (*pb.GetDashboardSummaryResponse, error) {
+	panic("fakeSessionServiceClient: GetDashboardSummary called -- no whagent-net mcp tool forwards to this RPC")
+}

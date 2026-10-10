@@ -1,0 +1,139 @@
+package components
+
+// ModelDefOption is one entry of the model-definition select.
+type ModelDefOption struct {
+	ID   string
+	Name string
+}
+
+// AgentFormValues are the raw submitted/prefilled form strings, kept verbatim
+// so a failed submit re-renders exactly what was typed.
+type AgentFormValues struct {
+	ModelKind         string // "model" or "model_definition"
+	Model             string
+	ModelDefinitionID string
+	ToolSet           string
+	MaxTurns          string
+	MaxCostUSD        string
+	MaxToolIterations string
+	ToolLoadingMode   string
+	RequiredRole      string
+	Scope             string
+	SystemPrompt      string
+}
+
+// AgentEditPageData carries the edit page / form fragment parameters.
+type AgentEditPageData struct {
+	Layout          LayoutData
+	AgentID         string
+	Values          AgentFormValues
+	ModelDefinitions []ModelDefOption
+	Error           string
+}
+
+// AgentHistoryRow is one definition in the history table.
+type AgentHistoryRow struct {
+	ValidFrom string
+	ValidTo   string
+	Current   bool
+	Changed   []string
+}
+
+// AgentHistoryPageData carries the history page parameters.
+type AgentHistoryPageData struct {
+	Layout  LayoutData
+	AgentID string
+	Rows    []AgentHistoryRow
+}
+
+templ AgentEditPage(data AgentEditPageData) {
+	@Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">Edit { data.AgentID }</h1>
+		@AgentEditForm(data)
+	}
+}
+
+templ AgentEditForm(data AgentEditPageData) {
+	<form
+		id="agent-edit-form"
+		class="flex flex-col gap-4 max-w-3xl"
+		hx-post={ "/agents/" + data.AgentID }
+		hx-target="this"
+		hx-swap="outerHTML"
+	>
+		if data.Error != "" {
+			<div class="alert alert-error" role="alert">{ data.Error }</div>
+		}
+		<div class="flex gap-6" hx-on:change="var d=this.querySelector('input[name=model_kind]:checked').value==='model_definition';this.querySelector('[name=model]').disabled=d;this.querySelector('[name=model_definition_id]').disabled=!d;">
+			<label class="label cursor-pointer gap-2">
+				<input type="radio" name="model_kind" value="model" class="radio" checked?={ data.Values.ModelKind != "model_definition" }/>
+				<span>Model</span>
+			</label>
+			<label class="label cursor-pointer gap-2">
+				<input type="radio" name="model_kind" value="model_definition" class="radio" checked?={ data.Values.ModelKind == "model_definition" }/>
+				<span>Model definition</span>
+			</label>
+		</div>
+		<input type="text" name="model" class="input input-bordered w-full" placeholder="Model" value={ data.Values.Model } disabled?={ data.Values.ModelKind == "model_definition" }/>
+		<select name="model_definition_id" class="select select-bordered w-full" disabled?={ data.Values.ModelKind != "model_definition" }>
+			for _, md := range data.ModelDefinitions {
+				<option value={ md.ID } selected?={ md.ID == data.Values.ModelDefinitionID }>{ md.Name }</option>
+			}
+		</select>
+		<label class="form-control"><span class="label-text">Tool set (JSON)</span><input type="text" name="tool_set" class="input input-bordered w-full font-mono" value={ data.Values.ToolSet }/></label>
+		<label class="form-control"><span class="label-text">Max turns</span><input type="text" name="max_turns" class="input input-bordered w-full" value={ data.Values.MaxTurns }/></label>
+		<label class="form-control"><span class="label-text">Max cost (USD)</span><input type="text" name="max_cost_usd" class="input input-bordered w-full" value={ data.Values.MaxCostUSD }/></label>
+		<label class="form-control"><span class="label-text">Max tool iterations</span><input type="text" name="max_tool_iterations" class="input input-bordered w-full" value={ data.Values.MaxToolIterations }/></label>
+		<label class="form-control"><span class="label-text">Tool loading mode</span><input type="text" name="tool_loading_mode" class="input input-bordered w-full" value={ data.Values.ToolLoadingMode }/></label>
+		<label class="form-control"><span class="label-text">Required role</span><input type="text" name="required_role" class="input input-bordered w-full" value={ data.Values.RequiredRole }/></label>
+		<label class="form-control"><span class="label-text">Scope</span><input type="text" name="scope" class="input input-bordered w-full" value={ data.Values.Scope }/></label>
+		<label class="form-control"><span class="label-text">System prompt</span><textarea name="system_prompt" rows="12" class="textarea textarea-bordered w-full font-mono">{ data.Values.SystemPrompt }</textarea></label>
+		<div class="flex gap-2">
+			<button type="submit" class="btn btn-primary">Save</button>
+			<a class="btn btn-ghost" href={ templ.URL("/agents/" + data.AgentID) }>Cancel</a>
+		</div>
+	</form>
+}
+
+// AgentSaved is the success swap target: the new current definition.
+templ AgentSaved(a AgentView) {
+	<div id="agent-saved">
+		<div class="alert alert-success mb-4" role="status">Saved.</div>
+		@AgentFields(a)
+		<a class="btn btn-ghost btn-sm mt-4" href={ templ.URL("/agents/" + a.AgentID) }>Back to agent</a>
+	</div>
+}
+
+templ AgentHistoryPage(data AgentHistoryPageData) {
+	@Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">{ data.AgentID } history</h1>
+		<table class="table table-sm" id="agent-history">
+			<thead>
+				<tr><th>Valid from</th><th>Valid to</th><th>Changed fields</th></tr>
+			</thead>
+			<tbody>
+				for _, r := range data.Rows {
+					<tr>
+						<td>{ r.ValidFrom }</td>
+						<td>
+							if r.Current {
+								<span class="badge badge-success">current</span>
+							} else {
+								{ r.ValidTo }
+							}
+						</td>
+						<td>
+							if len(r.Changed) == 0 {
+								<span class="text-base-content/70">initial</span>
+							}
+							for _, c := range r.Changed {
+								<span class="badge badge-warning mr-1">{ c }</span>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<a class="btn btn-ghost btn-sm mt-4" href={ templ.URL("/agents/" + data.AgentID) }>Back to agent</a>
+	}
+}

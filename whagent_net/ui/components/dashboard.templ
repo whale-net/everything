@@ -1,0 +1,75 @@
+package components
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// AgentTrafficView is one dashboard table row.
+type AgentTrafficView struct {
+	AgentID       string
+	SessionsToday int64
+	TurnsToday    int64
+}
+
+// DashboardPageData carries the landing page's parameters.
+type DashboardPageData struct {
+	Layout               LayoutData
+	UTCDate              string
+	Agents               []AgentTrafficView
+	TotalCostUSDToday    float64
+	CostIncludesEstimate bool
+	// FetchError is non-empty when the summary RPC failed.
+	FetchError string
+}
+
+// Dashboard is the landing page at "/".
+templ Dashboard(data DashboardPageData) {
+	@Layout(data.Layout) {
+		<div class="flex items-center justify-between mb-4">
+			<h1 class="text-2xl font-bold text-base-content">Dashboard</h1>
+			<span class="text-sm text-base-content/60">Today is { data.UTCDate } (UTC)</span>
+		</div>
+		if data.FetchError != "" {
+			<div class="alert alert-error mb-4" role="alert">Failed to load dashboard: { data.FetchError }</div>
+		} else {
+			<div class="stats shadow mb-6">
+				<div class="stat">
+					<div class="stat-title">Total cost today (UTC)</div>
+					<div class="stat-value">{ fmt.Sprintf("$%.4f", data.TotalCostUSDToday) }</div>
+					if data.CostIncludesEstimate {
+						<div class="stat-desc">
+							@htmxui.Badge("estimated", htmxui.BadgeWarning, htmxui.BadgeSizeSM, true, nil)
+						</div>
+					}
+				</div>
+			</div>
+			<div class="overflow-x-auto mb-6">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th>Agent</th>
+							<th>Sessions today</th>
+							<th>Turns today</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, a := range data.Agents {
+							<tr>
+								<td>{ a.AgentID }</td>
+								<td>{ fmt.Sprint(a.SessionsToday) }</td>
+								<td>{ fmt.Sprint(a.TurnsToday) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+		<div class="flex gap-3">
+			<a class="btn btn-sm btn-primary" href="/sessions">Sessions</a>
+			<a class="btn btn-sm" href="/agents">Agents</a>
+			<a class="btn btn-sm" href="/cost">Cost</a>
+		</div>
+	}
+}

@@ -140,6 +140,11 @@ type config struct {
 	// "everyone is admin" default.
 	GrantAdminRole string
 
+	// AgentAdminRole (WHAGENT_AGENT_ADMIN_ROLE) gates the agent edit and
+	// history controls; must match the api's WHAGENT_API_ADMIN_ROLE. Unset
+	// hides them for everyone.
+	AgentAdminRole string
+
 	// DefaultScope (WHAGENT_UI_DEFAULT_SCOPE) is the one
 	// AgentDefinition.Scope (issue #2424's FR1) authorizeConsentGate
 	// (handlers_consent.go, issue #2428) requires the operator have an
@@ -205,6 +210,7 @@ func loadConfig() config {
 		GrantRedirectURI:   getEnv("WHAGENT_GRANT_REDIRECT_URI", ""),
 		GrantEncryptionKey: getEnv("WHAGENT_GRANT_ENCRYPTION_KEY", ""),
 		GrantAdminRole:     getEnv("WHAGENT_GRANT_ADMIN_ROLE", ""),
+		AgentAdminRole:     getEnv("WHAGENT_AGENT_ADMIN_ROLE", ""),
 		DefaultScope:       getEnv("WHAGENT_UI_DEFAULT_SCOPE", ""),
 
 		LinkAssertSigningKey:   getEnv("WHAGENT_UI_SIGNING_KEY", ""),
@@ -267,6 +273,11 @@ type App struct {
 	// for (FR15/NFR3, issue #2433). Empty means the admin page is
 	// unreachable to everyone, not "everyone is admin".
 	adminRole string
+
+	// agentAdminRole is cfg.AgentAdminRole; agentTokens overrides auth as the
+	// token source in tests.
+	agentAdminRole string
+	agentTokens    accessTokenReader
 
 	// defaultScope is cfg.DefaultScope verbatim -- the one scope
 	// authorizeConsentGate (handlers_consent.go, issue #2428) gates
@@ -385,15 +396,16 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	}
 
 	app := &App{
-		auth:          auth,
-		session:       sessionClient,
-		oidcIssuer:    cfg.OIDCIssuer,
-		sseHub:        initializeSSEHub(cfg),
-		adminRole:     cfg.GrantAdminRole,
-		defaultScope:  cfg.DefaultScope,
-		consentStore:  newConsentStore(cfg.SessionSecret),
-		linkAssertKey: linkAssertKey,
-		assLinkURL:    cfg.ASSLinkURL,
+		auth:           auth,
+		session:        sessionClient,
+		oidcIssuer:     cfg.OIDCIssuer,
+		sseHub:         initializeSSEHub(cfg),
+		adminRole:      cfg.GrantAdminRole,
+		agentAdminRole: cfg.AgentAdminRole,
+		defaultScope:   cfg.DefaultScope,
+		consentStore:   newConsentStore(cfg.SessionSecret),
+		linkAssertKey:  linkAssertKey,
+		assLinkURL:     cfg.ASSLinkURL,
 
 		manmanv2LinkURL: cfg.Manmanv2LinkURL,
 		publicURL:       cfg.UIPublicURL,
@@ -600,11 +612,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /mcp/consent", app.auth.RequireAuthFunc(app.handleMCPConsentConfirm))
 	mux.HandleFunc("GET /mcp/consent/callback", app.auth.RequireAuthFunc(app.handleMCPConsentCallback))
 
-	// Session list (FR3/C15, NFR3, issue #2247): the authenticated landing
-	// page, mounted at both "/" and "/sessions" -- replacing issue #2236's
-	// placeholder index -- so a bare sign-in and an explicit nav click both
-	// land here.
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionList)))
+	// Dashboard at "/" (the landing page) and the session list at /sessions.
+	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboard)))
 	mux.HandleFunc("GET /sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionList)))
 
 	// Session lifecycle controls (FR1, issue #2246): start form, turn
@@ -613,6 +622,11 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// means "/sessions/new" always wins over "/sessions/{id}" regardless
 	// of registration order, but the two are still grouped here so the
 	// whole session route family reads top-to-bottom as one block.
+	mux.HandleFunc("GET /agents", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAgentList)))
+	mux.HandleFunc("GET /agents/{agent_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAgentDetail)))
+	mux.HandleFunc("GET /agents/{agent_id}/edit", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAgentEdit)))
+	mux.HandleFunc("GET /agents/{agent_id}/history", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAgentHistory)))
+	mux.HandleFunc("POST /agents/{agent_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAgentUpdate)))
 	mux.HandleFunc("GET /sessions/new", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleNewSession)))
 	mux.HandleFunc("POST /sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleStartSession)))
 	mux.HandleFunc("POST /sessions/{id}/turns", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSendTurn)))

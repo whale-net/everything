@@ -67,6 +67,8 @@ type ModelDefinitionStore interface {
 	// in place -- see this type's doc comment for why a config author
 	// should prefer a new Name over relying on this replace behavior.
 	Upsert(ctx context.Context, def *ModelDefinition) error
+	// List returns every row ordered by model then id.
+	List(ctx context.Context) ([]*ModelDefinition, error)
 }
 
 // modelDefinitionStore is the Postgres-backed ModelDefinitionStore
@@ -135,6 +137,52 @@ func (s modelDefinitionStore) Upsert(ctx context.Context, def *ModelDefinition) 
 	`, def.Name, def.Model, provider).Scan(&def.ID, &def.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert model definition: %w", err)
+	}
+	return nil
+}
+
+func (s modelDefinitionStore) List(ctx context.Context) ([]*ModelDefinition, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+modelDefinitionColumns+`
+		FROM model_definition
+		ORDER BY model, id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list model definitions: %w", err)
+	}
+	defer rows.Close()
+	var out []*ModelDefinition
+	for rows.Next() {
+		def, err := scanModelDefinition(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan model definition: %w", err)
+		}
+		out = append(out, def)
+	}
+	return out, rows.Err()
+}
+
+// EnsureModelDefinition creates def under its Name if absent and leaves an
+// existing row untouched; either way def.ID is set to the row's id.
+func EnsureModelDefinition(ctx context.Context, q Querier, def *ModelDefinition) error {
+	provider, err := json.Marshal(def.Provider)
+	if err != nil {
+		return fmt.Errorf("marshal provider: %w", err)
+	}
+	err = q.QueryRow(ctx, `
+		WITH ins AS (
+			INSERT INTO model_definition (name, model, provider)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (name) DO NOTHING
+			RETURNING id, created_at
+		)
+		SELECT id, created_at FROM ins
+		UNION ALL
+		SELECT id, created_at FROM model_definition WHERE name = $1
+		LIMIT 1
+	`, def.Name, def.Model, provider).Scan(&def.ID, &def.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("ensure model definition: %w", err)
 	}
 	return nil
 }
