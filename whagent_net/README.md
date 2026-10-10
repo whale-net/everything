@@ -43,7 +43,7 @@ discussion: GitHub issue #1552.
 
 | Binary | app_type | Responsibility | `bazel run` |
 |--------|----------|-----------------|-------------|
-| `migrate/` | `job` | Applies `session` store migrations only — `agent_definition`/`model_definition` rows are inserted by hand (see "Agent definition config" below). | `bazel run //whagent_net/migrate:migrate` |
+| `migrate/` | `job` | Applies `session` store migrations, then registers `agents.yaml` agents that have no current row (see "Agent definition config" below). | `bazel run //whagent_net/migrate:migrate` |
 | `api/` | `external-api` | Session service gRPC: start/send-turn/stop/get/list/read-transcript; publishes the JWKS every domain-owned MCP server verifies a `worker`-minted persona credential against. | `bazel run //whagent_net/api:api` |
 | `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call — looping back to the model with the tool results until it stops requesting tools or `max_tool_iterations` is reached — commit the turn, enforce turn/cost/tool-iteration caps. Also hosts `ArchiveWorkflow` (FR7/C18, issue #2244, `worker/archive.go`): a Temporal Schedule periodically batches a terminal session's transcript out of Postgres past `WHAGENT_TRANSCRIPT_TTL`, gzips and uploads it to S3, commits the `transcript_archive` index row, and only then trims the hot-tier rows — registered only when `WHAGENT_S3_BUCKET` is set; there is no separate archiver binary. | `bazel run //whagent_net/worker:worker` |
 | `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. | `bazel run //whagent_net/mcp:mcp` |
@@ -215,16 +215,16 @@ one-time, single-deploy cutover migration (`009_mcpauth_cutover`, issue
 
 ## Agent definition config
 
-`whagent_net/config/agents.yaml` documents the row shape for
-`agent_definition` (and, if used, `model_definition`) — see that file's
-own doc comment for the exact field meanings. There is no seeder:
-`migrate` only applies schema migrations, and a human inserts these rows
-directly, by hand, against Postgres. `agent_definition` stays a real,
-versioned table (LB5/NFR6), never a config-lookup shortcut — never edit a
-version already pinned to a session in place; insert a new version
-instead whenever a definition's fields (`model`, `tool_set`, `max_turns`,
-`max_cost_usd`, `max_tool_iterations`, `required_role`, `scope`,
-`tool_loading_mode`, `system_prompt`) change.
+`whagent_net/config/agents.yaml` declares the `agent_definition` (and
+`model_definition`) rows; see that file's own doc comment for the field
+meanings. The `migrate` job registers it on every deploy, right after the
+schema migrations apply: an agent with no current row is created, an agent
+that already has one is left untouched (the yaml never replaces or updates
+a row). To change an existing agent, use `UpdateAgent` or the Agents page,
+not the yaml. `agent_definition` is an SCD2 table (`valid_from`/`valid_to`);
+a `version:` key in the yaml is rejected. `agents.yaml` is embedded in the
+binary, so the migrate image needs no extra file or env var. Registration is
+skipped for `-down` and the other non-up commands.
 
 **`scope` is optional (migration 009/010).** When set, it names the one
 grant-scope (often, but not required to be, an `AGENTS.md` Domains-table
@@ -238,83 +238,27 @@ allowed to derive a delegated-grant key from (FR4) — parsing `agent_id`,
 forbidden. Left unset, the agent definition carries no delegated-grant
 scoping at all — it still runs with whatever `tool_set` is configured.
 
-For example, to insert the `audience-score-system-research` definition
-`agents.yaml` documents, as version 1:
-
-```sql
-INSERT INTO agent_definition
-  (agent_id, scope, version, model, tool_set, max_turns, max_cost_usd, required_role, tool_loading_mode)
-VALUES (
-  'audience-score-system-research',
-  'audience_score_system',
-  1,
-  'z-ai/glm-5.3-flash',
-  '[{"server_url": "http://audience-score-system-mcp.audience-score-system-local-dev.svc.cluster.local:8081/", "allowed_tools": null}]',
-  100,
-  1.0,
-  'whagent-audience-score-system-research',
-  'bulk'
-);
-```
-
-Omitting `tool_loading_mode` entirely also works — the column defaults
-to `'bulk'` (migration 013). Set it to `'search'` instead to opt a
-definition into the FR3/FR4 search-based tool-discovery mode this
-milestone adds the plumbing for.
+`tool_loading_mode` defaults to `'bulk'`; set it to `'search'` to opt a
+definition into the search-based tool-discovery mode.
 
 `system_prompt` (migration 015) is an optional `TEXT` column for a
 system-role instruction, `NULL` by default. When set, `worker/activities.go`'s
 `CallModel` prepends it to the request as a `RoleSystem` message on every
 model call this agent definition makes.
 
-The `manmanv2-ops` definition (read + deployment-lifecycle tools only,
-requires realm role `whagent-manmanv2-ops`), as version 1. Its `scope` is
-`NULL` on purpose: identity comes from the "Link manmanv2 identity" link
-(below), not a whagent-net delegated grant, so no "Grant manmanv2" button
-should exist on `/grants`:
+The `manmanv2-ops` definition has `scope: null` on purpose: identity comes
+from the "Link manmanv2 identity" link (below), not a whagent-net delegated
+grant, so no "Grant manmanv2" button should exist on `/grants`.
 
-```sql
-INSERT INTO agent_definition
-  (agent_id, scope, version, model, tool_set, max_turns, max_cost_usd, required_role, tool_loading_mode)
-VALUES (
-  'manmanv2-ops',
-  NULL,
-  1,
-  'z-ai/glm-5.3-flash',
-  '[{"server_url": "http://manmanv2-mcp.manmanv2-local-dev.svc.cluster.local:8081/", "allowed_tools": ["whoami","list_servers","get_server","list_deployments","get_deployment","get_connect_address","list_pending_restarts","get_session_actions","list_action_definitions","get_action_definition","start_deployment","stop_deployment","restart_deployment","execute_action"]}]',
-  100,
-  1.0,
-  'whagent-manmanv2-ops',
-  'bulk'
-);
-```
+`allowed_tools` (C22) narrows an agent to a subset of a server's tools;
+leave it `null` for "whatever the server exposes". A name the server does
+not expose is harmless and is not validated against its live catalog.
 
-To further constrain that same agent to only two of the server's tools
-(C22 — e.g. a research-only agent that must never call a write tool the
-`/mcp/research` endpoint still happens to expose), set `allowed_tools`
-instead of leaving it `null`:
-
-```sql
-'[{"server_url": "http://audience-score-system-mcp.audience-score-system-local-dev.svc.cluster.local:8081/", "allowed_tools": ["search_research_notes", "get_channel"]}]'
-```
-
-A tool name in `allowed_tools` that the server does not itself expose is
-harmless (it simply never matches anything `ListToolNames` returns); it is
-not validated against the server's live catalog at insert time.
-
-`version` is `1` for a brand-new `agent_id`, or `(current max version for
-that agent_id) + 1` when changing an existing definition — never an
-`UPDATE` of an existing row (`id` gets its own surrogate default and
-needs no value here). `tool_set` is a JSON array of
-`{server_url, allowed_tools}` objects (`allowed_tools: null` means
-"whatever the server exposes"). An agent with no tools at all (a
-base-prompt-only agent, e.g. `shitposter-reflector` in `agents.yaml`)
-declares `tools: none` and carries an empty `tool_set`; without that
-declaration an empty `tool_set` is a config error. To route through a `model_definitions`
-entry instead of naming `model` directly, insert into `model_definition`
-first (upsert by `name`, not versioned) and reference its `id` via
-`model_definition_id` — exactly one of `model` / `model_definition_id` is
-set per `agent_definition` row.
+An agent with no tools at all (e.g. `shitposter-reflector`) declares
+`tools: none` and an empty `tool_set`; without that declaration an empty
+`tool_set` is a config error. To route through a `model_definitions` entry
+instead of naming `model`, set `model_definition` to its `name`; exactly
+one of `model` / `model_definition` is set per agent.
 
 ### Deploying manmanv2-ops to dev and prod (operator runbook)
 
@@ -350,6 +294,12 @@ Applied by hand per environment; nothing here is run by CI. Do dev first.
    linked, tool calls fail with `unauthenticated: whagent identity could not
    be resolved: ... Link manmanv2 identity`.
 7. Record env, version and `server_url` in the krill task summary.
+
+Definitions are SCD2 rows. `SessionService.ListAgents` (current rows) and
+`GetAgent` (current row; `include_history` adds every row by `valid_from`)
+read them; history needs the API admin role (see "Keycloak role").
+Try it: `grpcurl -plaintext localhost:50051 whagent.v1.SessionService/ListAgents`
+(adjust the service name to `session.proto`'s package).
 
 ## Keycloak role
 
@@ -397,6 +347,13 @@ token's roles on `grpcauth.Claims.Roles` for every RPC; `StartSession`'s
 call — a `start_session` for this agent as an operator without the role
 must fail with `PermissionDenied` and no session row created (M1
 Validation criterion 1).
+
+**API admin role.** Reading agent definition history needs a second realm
+role, whose name you choose (e.g. `whagent-api-admin`): create it under
+**Realm roles**, add it to an operator group's **Role mapping**, and set
+`WHAGENT_API_ADMIN_ROLE` on `api` to the same name. With the variable unset
+no one can read history. It is unrelated to the ui's
+`WHAGENT_GRANT_ADMIN_ROLE`.
 
 Realm configuration itself (creating the role, the group, and granting
 it) is **manual** in this repo today — there is no in-repo Keycloak
@@ -505,7 +462,7 @@ listing ("Unauthorized", #2151).
 terminals):
 
 ```bash
-bazel run //whagent_net/migrate:migrate       # applies migrations (agent_definition is populated by hand, see above)
+bazel run //whagent_net/migrate:migrate       # applies migrations, then registers new agents from agents.yaml
 bazel run //whagent_net/api:api               # SessionService gRPC + JWKS
 bazel run //whagent_net/worker:worker         # SessionWorkflow
 bazel run //whagent_net/mcp:mcp               # the Claude-Code-facing MCP surface

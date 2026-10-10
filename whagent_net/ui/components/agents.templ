@@ -1,0 +1,124 @@
+package components
+
+import "strconv"
+
+// AgentView is one agent_definition row as the Agents pages render it.
+// Model is the effective model label (model, or the model_definition id).
+type AgentView struct {
+	ID                string
+	AgentID           string
+	Scope             string
+	Model             string
+	ModelDefinitionID string
+	ToolSet           string
+	MaxTurns          int32
+	MaxCostUSD        string
+	MaxToolIterations int32
+	ToolLoadingMode   string
+	RequiredRole      string
+	SystemPrompt      string
+	ValidFrom         string
+}
+
+// AgentListPageData carries the Agents list page's parameters.
+type AgentListPageData struct {
+	Layout     LayoutData
+	Agents     []AgentView
+	FetchError string
+}
+
+// AgentDetailPageData carries the agent detail page's parameters.
+type AgentDetailPageData struct {
+	Layout LayoutData
+	Agent  AgentView
+	// CanAdmin shows the edit button and history link.
+	CanAdmin bool
+}
+
+func itoa(n int32) string { return strconv.Itoa(int(n)) }
+
+templ roleBadge(role string) {
+	if role == "" {
+		<span class="badge badge-ghost">none</span>
+	} else {
+		<span class="badge badge-info">{ role }</span>
+	}
+}
+
+templ AgentList(data AgentListPageData) {
+	@Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">Agents</h1>
+		if data.FetchError != "" {
+			<div class="alert alert-error" role="alert">{ data.FetchError }</div>
+		} else if len(data.Agents) == 0 {
+			<p class="text-base-content/70">No agents defined.</p>
+		} else {
+			<table class="table table-sm" id="agent-list">
+				<thead>
+					<tr>
+						<th>Agent</th>
+						<th>Model</th>
+						<th>Required role</th>
+						<th>Max turns</th>
+						<th>Max cost (USD)</th>
+						<th>Max tool iterations</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, a := range data.Agents {
+						<tr>
+							<td><a class="link link-primary" href={ templ.URL("/agents/" + a.AgentID) }>{ a.AgentID }</a></td>
+							<td>{ a.Model }</td>
+							<td>@roleBadge(a.RequiredRole)</td>
+							<td>{ itoa(a.MaxTurns) }</td>
+							<td>{ a.MaxCostUSD }</td>
+							<td>{ itoa(a.MaxToolIterations) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// AgentDetail renders every field of one current definition. The
+// agent-actions block is the slot for the edit control and history link.
+templ AgentDetail(data AgentDetailPageData) {
+	@Layout(data.Layout) {
+		<div class="flex items-center justify-between mb-4">
+			<h1 class="text-2xl font-bold text-base-content">{ data.Agent.AgentID }</h1>
+			<div id="agent-actions" class="flex gap-2">
+				if data.CanAdmin {
+					<a class="btn btn-primary btn-sm" href={ templ.URL("/agents/" + data.Agent.AgentID + "/edit") }>Edit</a>
+					<a class="btn btn-ghost btn-sm" href={ templ.URL("/agents/" + data.Agent.AgentID + "/history") }>History</a>
+				}
+			</div>
+		</div>
+		@AgentFields(data.Agent)
+	}
+}
+
+// AgentFields is the swappable current-definition block.
+templ AgentFields(a AgentView) {
+	<div id="agent-current">
+		<dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2" id="agent-fields">
+			<dt class="font-semibold">Id</dt><dd>{ a.ID }</dd>
+			<dt class="font-semibold">Agent id</dt><dd>{ a.AgentID }</dd>
+			<dt class="font-semibold">Scope</dt><dd>{ a.Scope }</dd>
+			if a.ModelDefinitionID != "" {
+				<dt class="font-semibold">Model definition id</dt><dd>{ a.ModelDefinitionID }</dd>
+			} else {
+				<dt class="font-semibold">Model</dt><dd>{ a.Model }</dd>
+			}
+			<dt class="font-semibold">Tool set</dt><dd><code>{ a.ToolSet }</code></dd>
+			<dt class="font-semibold">Max turns</dt><dd>{ itoa(a.MaxTurns) }</dd>
+			<dt class="font-semibold">Max cost (USD)</dt><dd>{ a.MaxCostUSD }</dd>
+			<dt class="font-semibold">Max tool iterations</dt><dd>{ itoa(a.MaxToolIterations) }</dd>
+			<dt class="font-semibold">Tool loading mode</dt><dd>{ a.ToolLoadingMode }</dd>
+			<dt class="font-semibold">Required role</dt><dd>@roleBadge(a.RequiredRole)</dd>
+			<dt class="font-semibold">Valid from</dt><dd>{ a.ValidFrom }</dd>
+		</dl>
+		<h2 class="text-lg font-semibold mt-6 mb-2">System prompt</h2>
+		<pre class="font-mono text-sm whitespace-pre-wrap bg-base-200 rounded p-4" id="agent-system-prompt">{ a.SystemPrompt }</pre>
+	</div>
+}

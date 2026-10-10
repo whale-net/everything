@@ -14,8 +14,10 @@ go_library(
     srcs = [
         "convert.go",
         "delegatedgrant.go",
+        "handlers_agents.go",
         "grpc_client.go",
         "handlers_consent.go",
+        "handlers_dashboard.go",
         "handlers_grants.go",
         "handlers_grants_admin.go",
         "handlers_link.go",
@@ -128,9 +130,12 @@ go_test(
     srcs = [
         "delegatedgrant_test.go",
         "grpc_client_test.go",
+        "handlers_agents_edit_test.go",
+        "handlers_agents_test.go",
         "handlers_consent_gate_test.go",
         "handlers_consent_test.go",
         "handlers_consent_unauth_test.go",
+        "handlers_dashboard_test.go",
         "handlers_grants_test.go",
         "handlers_grants_admin_test.go",
         "handlers_link_test.go",

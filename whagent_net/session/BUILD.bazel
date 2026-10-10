@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "agentdef.go",
         "archive.go",
+        "dashboard.go",
         "idempotency.go",
         "modeldef.go",
         "session.go",
@@ -21,6 +22,7 @@ go_library(
         "//whagent_net/events",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
@@ -61,6 +63,7 @@ go_test(
     timeout = "long",
     srcs = [
         "agentdef_integration_test.go",
+        "dashboard_integration_test.go",
         "idempotency_integration_test.go",
         "modeldef_integration_test.go",
         "sessions_integration_test.go",
@@ -92,6 +95,7 @@ go_test(
         "@com_github_aws_aws_sdk_go_v2_config//:config",
         "@com_github_aws_aws_sdk_go_v2_service_s3//:s3",
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

@@ -58,6 +58,10 @@ func (f *fakeAgentDefinitionStore) Upsert(ctx context.Context, def *session.Agen
 	return f.upsertFunc(ctx, def)
 }
 
+func (f *fakeAgentDefinitionStore) Register(ctx context.Context, def *session.AgentDefinition) (bool, error) {
+	return false, nil
+}
+
 func (f *fakeAgentDefinitionStore) AssignToSession(ctx context.Context, sessionID uuid.UUID, agentDefinitionID uuid.UUID) error {
 	if f.assignToSessionFunc == nil {
 		panic("fakeAgentDefinitionStore: AssignToSession called but no assignToSessionFunc set")
@@ -70,6 +74,10 @@ func (f *fakeAgentDefinitionStore) CurrentAssignment(ctx context.Context, sessio
 		panic("fakeAgentDefinitionStore: CurrentAssignment called but no currentAssignmentFunc set")
 	}
 	return f.currentAssignmentFunc(ctx, sessionID)
+}
+
+func (f *fakeAgentDefinitionStore) Supersede(ctx context.Context, agentID string, newDef *session.AgentDefinition) (*session.AgentDefinition, error) {
+	panic("fakeAgentDefinitionStore: Supersede not supported")
 }
 
 func (f *fakeAgentDefinitionStore) ListScopes(ctx context.Context) ([]string, error) {
@@ -262,4 +270,12 @@ func TestScopeForSession_UsesPinnedDefinitionNotCurrent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, scope)
 	assert.Equal(t, "old-scope", *scope)
+}
+
+func (f *fakeAgentDefinitionStore) ListCurrent(context.Context) ([]*session.AgentDefinition, error) {
+	panic("fakeAgentDefinitionStore: ListCurrent not used by mcpscope")
+}
+
+func (f *fakeAgentDefinitionStore) History(context.Context, string) ([]*session.AgentDefinition, error) {
+	panic("fakeAgentDefinitionStore: History not used by mcpscope")
 }

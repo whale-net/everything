@@ -50,6 +50,11 @@ func (c *SessionClient) Client() whagentpb.SessionServiceClient {
 	return c.client
 }
 
+// GetDashboardSummary fetches today's (UTC) per-agent traffic and cost.
+func (c *SessionClient) GetDashboardSummary(ctx context.Context) (*whagentpb.GetDashboardSummaryResponse, error) {
+	return c.client.GetDashboardSummary(ctx, &whagentpb.GetDashboardSummaryRequest{})
+}
+
 // GetUsageReport calls SessionService.GetUsageReport.
 func (c *SessionClient) GetUsageReport(ctx context.Context, req *whagentpb.GetUsageReportRequest) (*whagentpb.GetUsageReportResponse, error) {
 	return c.client.GetUsageReport(ctx, req)

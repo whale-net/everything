@@ -19,6 +19,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
@@ -112,6 +113,10 @@ type SessionServer struct {
 	// silently treated as a non-delegated start. Nil and empty are equivalent
 	// here -- the membership test below never mutates the map.
 	onBehalfOfAllowlist map[string]struct{}
+
+	// agentAdminRole is the token role required for agent definition history
+	// and updates. Empty fails closed: nobody is an agent admin.
+	agentAdminRole string
 	// eventsConsumer is StreamEvents' (issue #2239) shared, per-process
 	// subscription onto the whagent/events exchange -- declared/bound
 	// once at api startup (main.go's initializeEventsConsumer), mirroring
@@ -199,6 +204,9 @@ func NewSessionServer(ctx context.Context, store *session.Store, issuer string, 
 		broadcaster:         broadcaster,
 	}
 }
+
+// SetAgentAdminRole configures the role isAgentAdmin checks; empty fails closed.
+func (s *SessionServer) SetAgentAdminRole(role string) { s.agentAdminRole = strings.TrimSpace(role) }
 
 // GetSession is a read path (FR3): reads the `sessions` row
 // (session.Store.Sessions().GetByID) and maps it to a Session proto --
