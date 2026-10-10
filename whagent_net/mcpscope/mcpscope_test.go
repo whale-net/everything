@@ -27,7 +27,7 @@ import (
 // method's behavior is supplied by a caller-set func field, nil meaning
 // "must not be called".
 type fakeAgentDefinitionStore struct {
-	getCurrentFunc         func(ctx context.Context, agentID string) (*session.AgentDefinition, error)
+	getCurrentFunc        func(ctx context.Context, agentID string) (*session.AgentDefinition, error)
 	getByIDFunc           func(ctx context.Context, id uuid.UUID) (*session.AgentDefinition, error)
 	upsertFunc            func(ctx context.Context, def *session.AgentDefinition) error
 	assignToSessionFunc   func(ctx context.Context, sessionID uuid.UUID, agentDefinitionID uuid.UUID) error
