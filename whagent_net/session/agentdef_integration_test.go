@@ -6,141 +6,165 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/whagent_net/session"
 )
 
 func strPtr(s string) *string { return &s }
 
-func newTestAgentDefinition(agentID string, version int) *session.AgentDefinition {
+func newTestAgentDefinition(agentID string) *session.AgentDefinition {
 	return &session.AgentDefinition{
 		AgentID:  agentID,
 		Scope:    strPtr("test-scope"),
-		Version:  version,
 		Model:    strPtr("test-model"),
 		ToolSet:  []session.ToolServerRef{{ServerURL: "https://mcp.example.com/research"}},
 		MaxTurns: 100,
 	}
 }
 
-// TestAgentDefinitionStore_Upsert_GetLatest_GetVersion_RoundTrip proves the
-// basic write/read paths, including that GetLatest returns the
-// highest-version row and Upsert's ON CONFLICT replace path keeps
-// created_at from the original insert.
-func TestAgentDefinitionStore_Upsert_GetLatest_GetVersion_RoundTrip(t *testing.T) {
-	ctx := context.Background()
-	s, _ := newStore(t)
-
-	def1 := newTestAgentDefinition("research-agent", 1)
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def1))
-	assert.False(t, def1.CreatedAt.IsZero())
-
-	def2 := newTestAgentDefinition("research-agent", 2)
-	def2.Model = strPtr("test-model-v2")
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def2))
-
-	latest, err := s.AgentDefinitions().GetLatest(ctx, "research-agent")
+// supersedeAgentDefinition closes agentID's open row and inserts def as its
+// replacement, standing in for the UpdateAgent write path in fixtures.
+func supersedeAgentDefinition(t *testing.T, ctx context.Context, s *session.Store, db *dbtest.Postgres, def *session.AgentDefinition) {
+	t.Helper()
+	_, err := db.Pool.Exec(ctx, `UPDATE agent_definition SET valid_to = NOW() WHERE agent_id = $1 AND valid_to IS NULL`, def.AgentID)
 	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.Equal(t, 2, latest.Version)
-	require.NotNil(t, latest.Model)
-	assert.Equal(t, "test-model-v2", *latest.Model)
-
-	v1, err := s.AgentDefinitions().GetVersion(ctx, "research-agent", 1)
-	require.NoError(t, err)
-	require.NotNil(t, v1)
-	require.NotNil(t, v1.Model)
-	assert.Equal(t, "test-model", *v1.Model)
-
-	// Re-upsert version 1 with a different model -- created_at must be
-	// unchanged (the doc comment's "replace every column except
-	// created_at" promise).
-	replacement := newTestAgentDefinition("research-agent", 1)
-	replacement.Model = strPtr("test-model-replaced")
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, replacement))
-	assert.Equal(t, def1.CreatedAt.UTC(), replacement.CreatedAt.UTC(), "re-upserting an existing (agent_id, version) must keep the original created_at")
-
-	reread, err := s.AgentDefinitions().GetVersion(ctx, "research-agent", 1)
-	require.NoError(t, err)
-	require.NotNil(t, reread.Model)
-	assert.Equal(t, "test-model-replaced", *reread.Model)
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
 }
 
-// TestAgentDefinitionStore_Scope_RoundTripsThroughGetVersion proves an
+// upsertAgent inserts a fresh definition for agentID and returns it.
+func upsertAgent(t *testing.T, ctx context.Context, s *session.Store, agentID string) *session.AgentDefinition {
+	t.Helper()
+	def := newTestAgentDefinition(agentID)
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
+	return def
+}
+
+// assignNewAgent upserts a fresh definition for agentID and pins sess to it.
+func assignNewAgent(t *testing.T, ctx context.Context, s *session.Store, sess *session.Session, agentID string) *session.AgentDefinition {
+	t.Helper()
+	def := upsertAgent(t, ctx, s, agentID)
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.ID))
+	return def
+}
+
+// TestAgentDefinitionStore_GetCurrent_GetByID_RoundTrip proves GetCurrent
+// returns only the open row, GetByID returns superseded rows too, and a
+// second Upsert for an agent with an open row is rejected rather than
+// replacing it in place.
+func TestAgentDefinitionStore_GetCurrent_GetByID_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+
+	def1 := newTestAgentDefinition("research-agent")
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def1))
+	assert.False(t, def1.CreatedAt.IsZero())
+	assert.False(t, def1.ValidFrom.IsZero())
+
+	assert.Error(t, s.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("research-agent")),
+		"Upsert must not replace an open row in place")
+
+	def2 := newTestAgentDefinition("research-agent")
+	def2.Model = strPtr("test-model-v2")
+	supersedeAgentDefinition(t, ctx, s, db, def2)
+	assert.NotEqual(t, def1.ID, def2.ID)
+
+	current, err := s.AgentDefinitions().GetCurrent(ctx, "research-agent")
+	require.NoError(t, err)
+	require.NotNil(t, current)
+	assert.Equal(t, def2.ID, current.ID)
+	assert.Nil(t, current.ValidTo)
+	require.NotNil(t, current.Model)
+	assert.Equal(t, "test-model-v2", *current.Model)
+
+	old, err := s.AgentDefinitions().GetByID(ctx, def1.ID)
+	require.NoError(t, err)
+	require.NotNil(t, old)
+	require.NotNil(t, old.ValidTo, "superseded row must be closed")
+	require.NotNil(t, old.Model)
+	assert.Equal(t, "test-model", *old.Model)
+
+	missing, err := s.AgentDefinitions().GetByID(ctx, uuid.New())
+	require.NoError(t, err)
+	assert.Nil(t, missing)
+}
+
+// TestAgentDefinitionStore_Scope_RoundTripsThroughGetByID proves an
 // AgentDefinition written with a Scope (issue #2424 FR1) round-trips
-// through GetVersion unchanged, and that CurrentAssignment -> GetVersion
+// through GetByID unchanged, and that CurrentAssignment -> GetByID
 // (the exact path worker/activities.go's ResolveAgentDefinition walks to
 // find the grant key's input, FR4) resolves a non-empty Scope.
-func TestAgentDefinitionStore_Scope_RoundTripsThroughGetVersion(t *testing.T) {
+func TestAgentDefinitionStore_Scope_RoundTripsThroughGetByID(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStore(t)
 	sess := createTestSession(t, ctx, s)
 
-	def := newTestAgentDefinition("scope-agent", 1)
+	def := newTestAgentDefinition("scope-agent")
 	def.Scope = strPtr("audience_score_system")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
 
-	got, err := s.AgentDefinitions().GetVersion(ctx, "scope-agent", 1)
+	got, err := s.AgentDefinitions().GetCurrent(ctx, "scope-agent")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.NotNil(t, got.Scope)
 	assert.Equal(t, "audience_score_system", *got.Scope)
 
-	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "scope-agent", 1))
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, def.ID))
 	assignment, err := s.AgentDefinitions().CurrentAssignment(ctx, sess.SessionID)
 	require.NoError(t, err)
 	require.NotNil(t, assignment)
 
-	resolved, err := s.AgentDefinitions().GetVersion(ctx, assignment.AgentID, assignment.AgentVersion)
+	resolved, err := s.AgentDefinitions().GetByID(ctx, assignment.AgentDefinitionID)
 	require.NoError(t, err)
 	require.NotNil(t, resolved)
-	require.NotNil(t, resolved.Scope, "CurrentAssignment -> GetVersion must resolve a non-nil Scope")
+	require.NotNil(t, resolved.Scope, "CurrentAssignment -> GetByID must resolve a non-nil Scope")
 	assert.Equal(t, "audience_score_system", *resolved.Scope)
 }
 
-// TestAgentDefinitionStore_NilScope_RoundTripsThroughGetVersion proves an
+// TestAgentDefinitionStore_NilScope_RoundTripsThroughGetByID proves an
 // AgentDefinition written with no Scope at all round-trips as nil, not as
 // an empty string or an error -- the "no delegated-grant scoping" case
 // this field's nullability exists for.
-func TestAgentDefinitionStore_NilScope_RoundTripsThroughGetVersion(t *testing.T) {
+func TestAgentDefinitionStore_NilScope_RoundTripsThroughGetByID(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStore(t)
 
-	def := newTestAgentDefinition("scopeless-agent", 1)
+	def := newTestAgentDefinition("scopeless-agent")
 	def.Scope = nil
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
 
-	got, err := s.AgentDefinitions().GetVersion(ctx, "scopeless-agent", 1)
+	got, err := s.AgentDefinitions().GetCurrent(ctx, "scopeless-agent")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Nil(t, got.Scope)
 }
 
-// TestAgentDefinitionStore_SystemPrompt_RoundTripsThroughGetVersion proves
+// TestAgentDefinitionStore_SystemPrompt_RoundTripsThroughGetByID proves
 // an AgentDefinition written with a SystemPrompt (migration 015)
-// round-trips through GetVersion unchanged, and that leaving it unset
+// round-trips through GetByID unchanged, and that leaving it unset
 // round-trips as nil rather than an empty string or an error -- the "no
 // system prompt configured" case this field's nullability exists for.
-func TestAgentDefinitionStore_SystemPrompt_RoundTripsThroughGetVersion(t *testing.T) {
+func TestAgentDefinitionStore_SystemPrompt_RoundTripsThroughGetByID(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStore(t)
 
-	def := newTestAgentDefinition("system-prompt-agent", 1)
+	def := newTestAgentDefinition("system-prompt-agent")
 	def.SystemPrompt = strPtr("You are a helpful research assistant.")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
 
-	got, err := s.AgentDefinitions().GetVersion(ctx, "system-prompt-agent", 1)
+	got, err := s.AgentDefinitions().GetCurrent(ctx, "system-prompt-agent")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.NotNil(t, got.SystemPrompt)
 	assert.Equal(t, "You are a helpful research assistant.", *got.SystemPrompt)
 
-	unset := newTestAgentDefinition("system-prompt-unset-agent", 1)
+	unset := newTestAgentDefinition("system-prompt-unset-agent")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, unset))
 
-	gotUnset, err := s.AgentDefinitions().GetVersion(ctx, "system-prompt-unset-agent", 1)
+	gotUnset, err := s.AgentDefinitions().GetCurrent(ctx, "system-prompt-unset-agent")
 	require.NoError(t, err)
 	require.NotNil(t, gotUnset)
 	assert.Nil(t, gotUnset.SystemPrompt)
@@ -153,19 +177,19 @@ func TestAgentDefinitionStore_ListScopes_DistinctSortedExcludingNull(t *testing.
 	ctx := context.Background()
 	s, _ := newStore(t)
 
-	manman := newTestAgentDefinition("agent-manman", 1)
+	manman := newTestAgentDefinition("agent-manman")
 	manman.Scope = strPtr("manmanv2")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, manman))
 
-	ass1 := newTestAgentDefinition("agent-ass", 1)
+	ass1 := newTestAgentDefinition("agent-ass")
 	ass1.Scope = strPtr("audience_score_system")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, ass1))
 
-	ass2 := newTestAgentDefinition("agent-ass-2", 1)
+	ass2 := newTestAgentDefinition("agent-ass-2")
 	ass2.Scope = strPtr("audience_score_system")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, ass2))
 
-	scopeless := newTestAgentDefinition("agent-scopeless", 1)
+	scopeless := newTestAgentDefinition("agent-scopeless")
 	scopeless.Scope = nil
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, scopeless))
 
@@ -174,13 +198,13 @@ func TestAgentDefinitionStore_ListScopes_DistinctSortedExcludingNull(t *testing.
 	assert.Equal(t, []string{"audience_score_system", "manmanv2"}, scopes)
 }
 
-// TestAgentDefinitionStore_GetLatest_UnknownAgent_ReturnsNilNotError proves
-// GetLatest's documented "no rows -> nil, nil" contract.
-func TestAgentDefinitionStore_GetLatest_UnknownAgent_ReturnsNilNotError(t *testing.T) {
+// TestAgentDefinitionStore_GetCurrent_UnknownAgent_ReturnsNilNotError proves
+// GetCurrent's documented "no rows -> nil, nil" contract.
+func TestAgentDefinitionStore_GetCurrent_UnknownAgent_ReturnsNilNotError(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStore(t)
 
-	got, err := s.AgentDefinitions().GetLatest(ctx, "does-not-exist")
+	got, err := s.AgentDefinitions().GetCurrent(ctx, "does-not-exist")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
@@ -193,22 +217,24 @@ func TestAgentDefinitionStore_AssignToSession_TwiceClosesFirstOpensOne(t *testin
 	s, db := newStore(t)
 	sess := createTestSession(t, ctx, s)
 
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("agent-a", 1)))
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("agent-b", 1)))
+	defA := upsertAgent(t, ctx, s, "agent-a")
+	defB := upsertAgent(t, ctx, s, "agent-b")
 
-	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "agent-a", 1))
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, defA.ID))
 	first, err := s.AgentDefinitions().CurrentAssignment(ctx, sess.SessionID)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	assert.Equal(t, "agent-a", first.AgentID)
+	assert.Equal(t, defA.ID, first.AgentDefinitionID)
 	assert.Nil(t, first.ValidTo)
 
-	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "agent-b", 1))
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, defB.ID))
 
 	current, err := s.AgentDefinitions().CurrentAssignment(ctx, sess.SessionID)
 	require.NoError(t, err)
 	require.NotNil(t, current)
 	assert.Equal(t, "agent-b", current.AgentID)
+	assert.Equal(t, defB.ID, current.AgentDefinitionID)
 	assert.Nil(t, current.ValidTo)
 
 	// Exactly one open row must exist for the session.
@@ -228,23 +254,23 @@ func TestAgentDefinitionStore_AssignToSession_TwiceClosesFirstOpensOne(t *testin
 
 // TestAgentDefinitionStore_ToolLoadingMode_UnsetRoundTripsAsBulk proves an
 // AgentDefinition written with ToolLoadingMode left at its zero value
-// round-trips as ToolLoadingModeBulk through both GetLatest and GetVersion
+// round-trips as ToolLoadingModeBulk through both GetCurrent and GetByID
 // (FR1: the zero value means bulk, by construction, not by caller
 // convention alone).
 func TestAgentDefinitionStore_ToolLoadingMode_UnsetRoundTripsAsBulk(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStore(t)
 
-	def := newTestAgentDefinition("bulk-default-agent", 1)
+	def := newTestAgentDefinition("bulk-default-agent")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
 	assert.Equal(t, session.ToolLoadingModeBulk, def.ToolLoadingMode, "Upsert must normalize the zero value on def itself")
 
-	latest, err := s.AgentDefinitions().GetLatest(ctx, "bulk-default-agent")
+	latest, err := s.AgentDefinitions().GetCurrent(ctx, "bulk-default-agent")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.Equal(t, session.ToolLoadingModeBulk, latest.ToolLoadingMode)
 
-	version, err := s.AgentDefinitions().GetVersion(ctx, "bulk-default-agent", 1)
+	version, err := s.AgentDefinitions().GetCurrent(ctx, "bulk-default-agent")
 	require.NoError(t, err)
 	require.NotNil(t, version)
 	assert.Equal(t, session.ToolLoadingModeBulk, version.ToolLoadingMode)
@@ -257,50 +283,52 @@ func TestAgentDefinitionStore_ToolLoadingMode_SearchRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStore(t)
 
-	def := newTestAgentDefinition("search-agent", 1)
+	def := newTestAgentDefinition("search-agent")
 	def.ToolLoadingMode = session.ToolLoadingModeSearch
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
 
-	latest, err := s.AgentDefinitions().GetLatest(ctx, "search-agent")
+	latest, err := s.AgentDefinitions().GetCurrent(ctx, "search-agent")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.Equal(t, session.ToolLoadingModeSearch, latest.ToolLoadingMode)
 
-	version, err := s.AgentDefinitions().GetVersion(ctx, "search-agent", 1)
+	version, err := s.AgentDefinitions().GetCurrent(ctx, "search-agent")
 	require.NoError(t, err)
 	require.NotNil(t, version)
 	assert.Equal(t, session.ToolLoadingModeSearch, version.ToolLoadingMode)
 }
 
-// TestAgentDefinitionStore_ToolLoadingMode_UpsertReplaceTakesEffect proves
-// Upsert's ON CONFLICT DO UPDATE actually replaces tool_loading_mode on an
-// existing (agent_id, version), in both directions -- omitting the column
-// from the DO UPDATE SET list would silently strand the row on whatever
-// mode it was first written with.
-func TestAgentDefinitionStore_ToolLoadingMode_UpsertReplaceTakesEffect(t *testing.T) {
+// TestAgentDefinitionStore_ToolLoadingMode_SupersedeTakesEffect proves a
+// superseding row's tool_loading_mode is what GetCurrent returns, in both
+// directions, while the superseded row keeps its own mode.
+func TestAgentDefinitionStore_ToolLoadingMode_SupersedeTakesEffect(t *testing.T) {
 	ctx := context.Background()
-	s, _ := newStore(t)
+	s, db := newStore(t)
 
-	def := newTestAgentDefinition("flip-agent", 1)
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
+	first := upsertAgent(t, ctx, s, "flip-agent")
 
-	toSearch := newTestAgentDefinition("flip-agent", 1)
+	toSearch := newTestAgentDefinition("flip-agent")
 	toSearch.ToolLoadingMode = session.ToolLoadingModeSearch
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, toSearch))
+	supersedeAgentDefinition(t, ctx, s, db, toSearch)
 
-	afterSearch, err := s.AgentDefinitions().GetVersion(ctx, "flip-agent", 1)
+	afterSearch, err := s.AgentDefinitions().GetCurrent(ctx, "flip-agent")
 	require.NoError(t, err)
 	require.NotNil(t, afterSearch)
-	assert.Equal(t, session.ToolLoadingModeSearch, afterSearch.ToolLoadingMode, "replacing bulk -> search must take effect")
+	assert.Equal(t, session.ToolLoadingModeSearch, afterSearch.ToolLoadingMode, "bulk -> search must take effect")
 
-	backToBulk := newTestAgentDefinition("flip-agent", 1)
+	backToBulk := newTestAgentDefinition("flip-agent")
 	backToBulk.ToolLoadingMode = session.ToolLoadingModeBulk
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, backToBulk))
+	supersedeAgentDefinition(t, ctx, s, db, backToBulk)
 
-	afterBulk, err := s.AgentDefinitions().GetVersion(ctx, "flip-agent", 1)
+	afterBulk, err := s.AgentDefinitions().GetCurrent(ctx, "flip-agent")
 	require.NoError(t, err)
 	require.NotNil(t, afterBulk)
-	assert.Equal(t, session.ToolLoadingModeBulk, afterBulk.ToolLoadingMode, "replacing search -> bulk must take effect")
+	assert.Equal(t, session.ToolLoadingModeBulk, afterBulk.ToolLoadingMode, "search -> bulk must take effect")
+
+	old, err := s.AgentDefinitions().GetByID(ctx, first.ID)
+	require.NoError(t, err)
+	require.NotNil(t, old)
+	assert.Equal(t, session.ToolLoadingModeBulk, old.ToolLoadingMode)
 }
 
 // TestAgentDefinition_ToolLoadingMode_RawInsertOmittingColumn_DefaultsToBulk
@@ -317,7 +345,7 @@ func TestAgentDefinition_ToolLoadingMode_RawInsertOmittingColumn_DefaultsToBulk(
 	`)
 	require.NoError(t, err)
 
-	got, err := s.AgentDefinitions().GetVersion(ctx, "raw-insert-agent", 1)
+	got, err := s.AgentDefinitions().GetCurrent(ctx, "raw-insert-agent")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, session.ToolLoadingModeBulk, got.ToolLoadingMode)
@@ -348,12 +376,12 @@ func TestAgentDefinitionStore_PartialUniqueIndex_RejectsTwoOpenRows(t *testing.T
 	s, db := newStore(t)
 	sess := createTestSession(t, ctx, s)
 
-	require.NoError(t, s.AgentDefinitions().Upsert(ctx, newTestAgentDefinition("agent-a", 1)))
-	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "agent-a", 1))
+	defA := upsertAgent(t, ctx, s, "agent-a")
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, defA.ID))
 
 	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO session_agent (session_id, agent_id, agent_version) VALUES ($1, 'agent-a', 1)
-	`, sess.SessionID)
+		INSERT INTO session_agent (session_id, agent_id, agent_definition_id) VALUES ($1, 'agent-a', $2)
+	`, sess.SessionID, defA.ID)
 	assert.Error(t, err, "a second open session_agent row for the same session must be rejected by the partial unique index")
 
 	var openCount int

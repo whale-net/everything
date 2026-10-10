@@ -104,7 +104,6 @@ func seedServiceTestAgent(t *testing.T, ctx context.Context, store *session.Stor
 	t.Helper()
 	require.NoError(t, store.AgentDefinitions().Upsert(ctx, &session.AgentDefinition{
 		AgentID:      agentID,
-		Version:      1,
 		Model:        strPtr2("test-model"),
 		ToolSet:      []session.ToolServerRef{},
 		MaxTurns:     100,

@@ -23,7 +23,6 @@ func upsertScopedAgentDefinition(t *testing.T, ctx context.Context, store *sessi
 	def := &session.AgentDefinition{
 		AgentID:  agentID,
 		Scope:    scope,
-		Version:  1,
 		Model:    strPtr2("test-model"),
 		MaxTurns: 100,
 	}

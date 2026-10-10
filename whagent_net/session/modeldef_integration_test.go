@@ -75,7 +75,7 @@ func TestModelDefinitionStore_GetByID_GetByName_UnknownReturnsNilNotError(t *tes
 
 // TestAgentDefinitionStore_ModelDefinitionID_RoundTrips proves an
 // AgentDefinition seeded with ModelDefinitionID (not Model) round-trips
-// correctly through Upsert/GetLatest -- Model stays nil, exactly the
+// correctly through Upsert/GetCurrent -- Model stays nil, exactly the
 // shape worker/activities.go's resolveModel expects (migration 006's XOR
 // CHECK constraint is exercised implicitly: this insert would be rejected
 // by Postgres itself if both were set).
@@ -88,14 +88,13 @@ func TestAgentDefinitionStore_ModelDefinitionID_RoundTrips(t *testing.T) {
 
 	def := &session.AgentDefinition{
 		AgentID:           "agent-with-model-definition",
-		Version:           1,
 		ModelDefinitionID: &modelDef.ID,
 		ToolSet:           []session.ToolServerRef{{ServerURL: "https://mcp.example.com/research"}},
 		MaxTurns:          100,
 	}
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
 
-	latest, err := s.AgentDefinitions().GetLatest(ctx, "agent-with-model-definition")
+	latest, err := s.AgentDefinitions().GetCurrent(ctx, "agent-with-model-definition")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.Nil(t, latest.Model)

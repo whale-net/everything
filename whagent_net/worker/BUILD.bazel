@@ -101,6 +101,7 @@ go_test(
     timeout = "long",
     srcs = [
         "context_integration_test.go",
+        "resolve_pinned_integration_test.go",
         "search_mode_e2e_integration_test.go",
         "search_tools_integration_test.go",
         "tool_loop_integration_test.go",

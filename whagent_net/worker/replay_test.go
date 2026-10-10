@@ -792,3 +792,61 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithSearchToolsCall_NoNonDetermin
 	// it and the existing pre-change-ID fixture replay without a
 	// non-determinism error").
 }
+
+// TestSessionWorkflow_ReplayRecordedHistory_LegacyDefinitionVersionInResult_NoNonDeterminismError
+// replays a history recorded before AgentDefinition.Version was removed:
+// the ResolveAgentDefinition result JSON still carries "Version" (and no
+// ValidFrom/ValidTo). The decoder must drop the unknown field and replay.
+func TestSessionWorkflow_ReplayRecordedHistory_LegacyDefinitionVersionInResult_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: testSessionID()})
+	require.NoError(t, err)
+	signalPayload, err := dc.ToPayloads(SendTurnSignal{Input: "hello"})
+	require.NoError(t, err)
+
+	legacyResult := map[string]any{
+		"Definition": map[string]any{
+			"ID":        uuid.New().String(),
+			"AgentID":   "legacy-agent",
+			"Version":   3,
+			"MaxTurns":  10,
+			"ToolSet":   []any{},
+			"CreatedAt": "2026-01-01T00:00:00Z",
+		},
+		"Model":    "replay-model",
+		"Provider": nil,
+	}
+
+	// The legacy payload must decode into the current result type.
+	legacyPayloads, err := dc.ToPayloads(legacyResult)
+	require.NoError(t, err)
+	var decoded ResolveAgentDefinitionResult
+	require.NoError(t, dc.FromPayloads(legacyPayloads, &decoded))
+	require.Equal(t, "legacy-agent", decoded.Definition.AgentID)
+	require.Equal(t, "replay-model", decoded.Model)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+	completedID := b.decision()
+	b.marker("session-workflow-status-transitions", 1, completedID)
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+	b.signal(SignalSendTurn, signalPayload)
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+	b.decision()
+	b.activity(ActivityResolveAgentDefinition, legacyResult)
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}})
+	b.decision()
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "hi there"}}})
+	b.decision()
+	b.activity(ActivityCommitTurn, CommitTurnResult{Done: false})
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+	b.openDecision()
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+	require.NoError(t, replayer.ReplayWorkflowHistory(nil, b.build()))
+}
