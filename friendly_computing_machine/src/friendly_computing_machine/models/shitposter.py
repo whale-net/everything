@@ -425,6 +425,7 @@ class ShitposterBrainJobKind(str, Enum):
     REFLECT = "reflect"
     WRITE = "write"
     SNAPSHOT = "snapshot"
+    IDEA_GENERATE = "idea_generate"
 
 
 class ShitposterBrainJobTrigger(str, Enum):
@@ -453,7 +454,7 @@ class ShitposterBrainJobRun(Base, table=True):
             sqlite_where=text("status = 'running'"),
         ),
         CheckConstraint(
-            "job_kind IN ('harvest', 'reflect', 'write', 'snapshot')",
+            "job_kind IN ('harvest', 'reflect', 'write', 'snapshot', 'idea_generate')",
             name="ck_shitposterbrainjobrun_job_kind",
         ),
         CheckConstraint(

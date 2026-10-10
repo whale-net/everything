@@ -22,6 +22,18 @@ class ShitposterAttributeStatusEnum(str, Enum):
 class ShitposterLoreKindEnum(str, Enum):
     HIT = "hit"
     CONSOLIDATED = "consolidated"
+    THEME = "theme"
+    NOVEL = "novel"
+
+
+_GENERATED_LORE_KINDS = frozenset(
+    {ShitposterLoreKindEnum.THEME, ShitposterLoreKindEnum.NOVEL}
+)
+
+
+def is_generated_lore(kind: ShitposterLoreKindEnum | str) -> bool:
+    """True for lore written by the idea-generator (theme or novel)."""
+    return ShitposterLoreKindEnum(kind) in _GENERATED_LORE_KINDS
 
 
 class ShitposterMemoryEntityKindEnum(str, Enum):
@@ -43,6 +55,10 @@ class ShitposterMemoryCauseKindEnum(str, Enum):
     SUGGESTION = "suggestion"
     OPERATOR = "operator"
     FOLD = "fold"
+    # cause_ref holds the cited lore entry ids
+    THEME_SYNTHESIS = "theme_synthesis"
+    # cause_ref holds the novel gate reading
+    NOVEL_GATE = "novel_gate"
 
 
 class ShitposterPersonaAttribute(Base, table=True):
@@ -89,7 +105,7 @@ class ShitposterLoreEntry(Base, table=True):
             sqlite_where=text("valid_to IS NULL"),
         ),
         CheckConstraint(
-            "kind IN ('hit', 'consolidated')",
+            "kind IN ('hit', 'consolidated', 'theme', 'novel')",
             name="ck_shitposterloreentry_kind",
         ),
     )
@@ -128,7 +144,9 @@ class ShitposterMemoryChange(Base, table=True):
             name="ck_shitpostermemorychange_operation",
         ),
         CheckConstraint(
-            "cause_kind IN ('post_engagement', 'suggestion', 'operator', 'fold')",
+            "cause_kind IN ("
+            "'post_engagement', 'suggestion', 'operator', 'fold', "
+            "'theme_synthesis', 'novel_gate')",
             name="ck_shitpostermemorychange_cause_kind",
         ),
         CheckConstraint(

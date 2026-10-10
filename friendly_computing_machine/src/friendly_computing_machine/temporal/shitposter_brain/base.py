@@ -1,6 +1,6 @@
 """Shared shape of a Shitposter brain job run.
 
-Every brain job (harvest, reflect, write, snapshot) runs as FCM's service
+Every brain job (harvest, reflect, write, snapshot, idea_generate) runs as FCM's service
 subject with no on_behalf_of. At most one job per persona runs at a time: the
 runner takes the per-persona lock by inserting a `running` row, and a job that
 finds one already present records a `skipped` row and returns. A job's
@@ -25,6 +25,7 @@ BRAIN_JOB_TIMEOUTS: dict[ShitposterBrainJobKind, timedelta] = {
     ShitposterBrainJobKind.REFLECT: timedelta(minutes=30),
     ShitposterBrainJobKind.WRITE: timedelta(minutes=30),
     ShitposterBrainJobKind.SNAPSHOT: timedelta(minutes=5),
+    ShitposterBrainJobKind.IDEA_GENERATE: timedelta(minutes=30),
 }
 
 # A running row older than its job timeout plus this slack has no live workflow
