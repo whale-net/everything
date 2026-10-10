@@ -287,7 +287,7 @@ func (app *App) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		logging.Get("main").Error("failed to update agent", "agent_id", agentID, "error", err)
 		msg := status.Convert(err).Message()
 		if status.Code(err) == codes.Aborted {
-			msg = "the agent changed since you loaded it; reload and retry (" + msg + ")"
+			msg = "Another change to this agent landed first. Reload the page to see the latest definition, then re-apply your edit."
 		}
 		fail(msg)
 		return
