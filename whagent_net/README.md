@@ -43,7 +43,7 @@ discussion: GitHub issue #1552.
 
 | Binary | app_type | Responsibility | `bazel run` |
 |--------|----------|-----------------|-------------|
-| `migrate/` | `job` | Applies `session` store migrations only — `agent_definition`/`model_definition` rows are inserted by hand (see "Agent definition config" below). | `bazel run //whagent_net/migrate:migrate` |
+| `migrate/` | `job` | Applies `session` store migrations, then registers `agents.yaml` agents that have no current row (see "Agent definition config" below). | `bazel run //whagent_net/migrate:migrate` |
 | `api/` | `external-api` | Session service gRPC: start/send-turn/stop/get/list/read-transcript; publishes the JWKS every domain-owned MCP server verifies a `worker`-minted persona credential against. | `bazel run //whagent_net/api:api` |
 | `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call — looping back to the model with the tool results until it stops requesting tools or `max_tool_iterations` is reached — commit the turn, enforce turn/cost/tool-iteration caps. Also hosts `ArchiveWorkflow` (FR7/C18, issue #2244, `worker/archive.go`): a Temporal Schedule periodically batches a terminal session's transcript out of Postgres past `WHAGENT_TRANSCRIPT_TTL`, gzips and uploads it to S3, commits the `transcript_archive` index row, and only then trims the hot-tier rows — registered only when `WHAGENT_S3_BUCKET` is set; there is no separate archiver binary. | `bazel run //whagent_net/worker:worker` |
 | `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. | `bazel run //whagent_net/mcp:mcp` |
@@ -449,7 +449,7 @@ listing ("Unauthorized", #2151).
 terminals):
 
 ```bash
-bazel run //whagent_net/migrate:migrate       # applies migrations (agent_definition is populated by hand, see above)
+bazel run //whagent_net/migrate:migrate       # applies migrations, then registers new agents from agents.yaml
 bazel run //whagent_net/api:api               # SessionService gRPC + JWKS
 bazel run //whagent_net/worker:worker         # SessionWorkflow
 bazel run //whagent_net/mcp:mcp               # the Claude-Code-facing MCP surface
