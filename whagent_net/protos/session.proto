@@ -87,6 +87,17 @@ service SessionService {
   // already establish (#2237).
   rpc ListAgentDefinitionScopes(ListAgentDefinitionScopesRequest) returns (ListAgentDefinitionScopesResponse);
 
+  // ListAgents returns every current (valid_to IS NULL) agent definition,
+  // ordered by agent_id. Any authenticated caller may call it.
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+
+  // GetAgent returns one agent's current definition (NOT_FOUND if the
+  // agent_id is unknown). include_history additionally returns every row
+  // for the agent_id ordered by valid_from ascending and requires the
+  // configured API admin role (PERMISSION_DENIED otherwise; fail closed
+  // when no admin role is configured).
+  rpc GetAgent(GetAgentRequest) returns (GetAgentResponse);
+
   // StreamEvents is FR5/C17's server-streaming bridge over the
   // `whagent/events` exchange (NFR4, LB7, issue #2239): a programmatic
   // client follows a session's events live without ever holding RabbitMQ
@@ -347,6 +358,45 @@ message ListAgentDefinitionScopesResponse {
   // Sorted alphabetically, deduplicated -- whagent_net/session.
   // AgentDefinitionStore.ListScopes' contract.
   repeated string scopes = 1;
+}
+
+// AgentDefinition is one agent_definition row. No version field: rows are
+// identified by id and ordered by valid_from.
+message AgentDefinition {
+  string id = 1;
+  string agent_id = 2;
+  string scope = 3;
+  // Exactly one of model / model_definition_id is set.
+  string model = 4;
+  optional string model_definition_id = 5;
+  // JSON-encoded tool_set array.
+  string tool_set = 6;
+  int32 max_turns = 7;
+  double max_cost_usd = 8;
+  int32 max_tool_iterations = 9;
+  string tool_loading_mode = 10;
+  optional string required_role = 11;
+  string system_prompt = 12;
+  google.protobuf.Timestamp valid_from = 13;
+  // Unset on the current row.
+  google.protobuf.Timestamp valid_to = 14;
+}
+
+message ListAgentsRequest {}
+
+message ListAgentsResponse {
+  repeated AgentDefinition agents = 1;
+}
+
+message GetAgentRequest {
+  string agent_id = 1;
+  bool include_history = 2;
+}
+
+message GetAgentResponse {
+  AgentDefinition current = 1;
+  // Populated only when include_history was requested; valid_from ascending.
+  repeated AgentDefinition history = 2;
 }
 
 message StreamEventsRequest {
