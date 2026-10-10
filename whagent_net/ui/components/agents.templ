@@ -31,6 +31,8 @@ type AgentListPageData struct {
 type AgentDetailPageData struct {
 	Layout LayoutData
 	Agent  AgentView
+	// CanAdmin shows the edit button and history link.
+	CanAdmin bool
 }
 
 func itoa(n int32) string { return strconv.Itoa(int(n)) }
@@ -85,26 +87,38 @@ templ AgentDetail(data AgentDetailPageData) {
 	@Layout(data.Layout) {
 		<div class="flex items-center justify-between mb-4">
 			<h1 class="text-2xl font-bold text-base-content">{ data.Agent.AgentID }</h1>
-			<div id="agent-actions"></div>
+			<div id="agent-actions" class="flex gap-2">
+				if data.CanAdmin {
+					<a class="btn btn-primary btn-sm" href={ templ.URL("/agents/" + data.Agent.AgentID + "/edit") }>Edit</a>
+					<a class="btn btn-ghost btn-sm" href={ templ.URL("/agents/" + data.Agent.AgentID + "/history") }>History</a>
+				}
+			</div>
 		</div>
+		@AgentFields(data.Agent)
+	}
+}
+
+// AgentFields is the swappable current-definition block.
+templ AgentFields(a AgentView) {
+	<div id="agent-current">
 		<dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2" id="agent-fields">
-			<dt class="font-semibold">Id</dt><dd>{ data.Agent.ID }</dd>
-			<dt class="font-semibold">Agent id</dt><dd>{ data.Agent.AgentID }</dd>
-			<dt class="font-semibold">Scope</dt><dd>{ data.Agent.Scope }</dd>
-			if data.Agent.ModelDefinitionID != "" {
-				<dt class="font-semibold">Model definition id</dt><dd>{ data.Agent.ModelDefinitionID }</dd>
+			<dt class="font-semibold">Id</dt><dd>{ a.ID }</dd>
+			<dt class="font-semibold">Agent id</dt><dd>{ a.AgentID }</dd>
+			<dt class="font-semibold">Scope</dt><dd>{ a.Scope }</dd>
+			if a.ModelDefinitionID != "" {
+				<dt class="font-semibold">Model definition id</dt><dd>{ a.ModelDefinitionID }</dd>
 			} else {
-				<dt class="font-semibold">Model</dt><dd>{ data.Agent.Model }</dd>
+				<dt class="font-semibold">Model</dt><dd>{ a.Model }</dd>
 			}
-			<dt class="font-semibold">Tool set</dt><dd><code>{ data.Agent.ToolSet }</code></dd>
-			<dt class="font-semibold">Max turns</dt><dd>{ itoa(data.Agent.MaxTurns) }</dd>
-			<dt class="font-semibold">Max cost (USD)</dt><dd>{ data.Agent.MaxCostUSD }</dd>
-			<dt class="font-semibold">Max tool iterations</dt><dd>{ itoa(data.Agent.MaxToolIterations) }</dd>
-			<dt class="font-semibold">Tool loading mode</dt><dd>{ data.Agent.ToolLoadingMode }</dd>
-			<dt class="font-semibold">Required role</dt><dd>@roleBadge(data.Agent.RequiredRole)</dd>
-			<dt class="font-semibold">Valid from</dt><dd>{ data.Agent.ValidFrom }</dd>
+			<dt class="font-semibold">Tool set</dt><dd><code>{ a.ToolSet }</code></dd>
+			<dt class="font-semibold">Max turns</dt><dd>{ itoa(a.MaxTurns) }</dd>
+			<dt class="font-semibold">Max cost (USD)</dt><dd>{ a.MaxCostUSD }</dd>
+			<dt class="font-semibold">Max tool iterations</dt><dd>{ itoa(a.MaxToolIterations) }</dd>
+			<dt class="font-semibold">Tool loading mode</dt><dd>{ a.ToolLoadingMode }</dd>
+			<dt class="font-semibold">Required role</dt><dd>@roleBadge(a.RequiredRole)</dd>
+			<dt class="font-semibold">Valid from</dt><dd>{ a.ValidFrom }</dd>
 		</dl>
 		<h2 class="text-lg font-semibold mt-6 mb-2">System prompt</h2>
-		<pre class="font-mono text-sm whitespace-pre-wrap bg-base-200 rounded p-4" id="agent-system-prompt">{ data.Agent.SystemPrompt }</pre>
-	}
+		<pre class="font-mono text-sm whitespace-pre-wrap bg-base-200 rounded p-4" id="agent-system-prompt">{ a.SystemPrompt }</pre>
+	</div>
 }

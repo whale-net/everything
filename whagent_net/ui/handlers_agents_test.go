@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +20,37 @@ import (
 // fakeAgentServer serves ListAgents/GetAgent from a fixed slice.
 type fakeAgentServer struct {
 	whagentpb.UnimplementedSessionServiceServer
-	agents []*whagentpb.AgentDefinition
+	agents    []*whagentpb.AgentDefinition
+	history   []*whagentpb.AgentDefinition
+	modelDefs []*whagentpb.ModelDefinition
+	updateErr error
+	mu        sync.Mutex
+	updates   []*whagentpb.UpdateAgentRequest
+}
+
+func (f *fakeAgentServer) UpdateAgent(_ context.Context, req *whagentpb.UpdateAgentRequest) (*whagentpb.UpdateAgentResponse, error) {
+	f.mu.Lock()
+	f.updates = append(f.updates, req)
+	f.mu.Unlock()
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	return &whagentpb.UpdateAgentResponse{Current: &whagentpb.AgentDefinition{
+		Id: "def-new", AgentId: req.GetAgentId(), Scope: req.GetScope(), Model: req.GetModel(),
+		ModelDefinitionId: req.ModelDefinitionId, ToolSet: req.GetToolSet(), MaxTurns: req.GetMaxTurns(),
+		MaxCostUsd: req.GetMaxCostUsd(), MaxToolIterations: req.GetMaxToolIterations(),
+		ToolLoadingMode: req.GetToolLoadingMode(), SystemPrompt: req.GetSystemPrompt(),
+	}}, nil
+}
+
+func (f *fakeAgentServer) updateCalls() []*whagentpb.UpdateAgentRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*whagentpb.UpdateAgentRequest(nil), f.updates...)
+}
+
+func (f *fakeAgentServer) ListModelDefinitions(context.Context, *whagentpb.ListModelDefinitionsRequest) (*whagentpb.ListModelDefinitionsResponse, error) {
+	return &whagentpb.ListModelDefinitionsResponse{ModelDefinitions: f.modelDefs}, nil
 }
 
 func (f *fakeAgentServer) ListAgents(context.Context, *whagentpb.ListAgentsRequest) (*whagentpb.ListAgentsResponse, error) {
@@ -29,7 +60,11 @@ func (f *fakeAgentServer) ListAgents(context.Context, *whagentpb.ListAgentsReque
 func (f *fakeAgentServer) GetAgent(_ context.Context, req *whagentpb.GetAgentRequest) (*whagentpb.GetAgentResponse, error) {
 	for _, a := range f.agents {
 		if a.GetAgentId() == req.GetAgentId() {
-			return &whagentpb.GetAgentResponse{Current: a}, nil
+			resp := &whagentpb.GetAgentResponse{Current: a}
+			if req.GetIncludeHistory() {
+				resp.History = f.history
+			}
+			return resp, nil
 		}
 	}
 	return nil, status.Error(codes.NotFound, "no such agent")
