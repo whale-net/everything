@@ -171,6 +171,8 @@ var whagentRouteTable = []struct {
 	// Protected.
 	{http.MethodGet, "/"},
 	{http.MethodGet, "/sessions/new"},
+	{http.MethodGet, "/agents"},
+	{http.MethodGet, "/agents/code-review"},
 	{http.MethodGet, "/grants"},
 	{http.MethodPost, "/grants/revoke"},
 	{http.MethodGet, "/admin/grants"},
