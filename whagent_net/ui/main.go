@@ -613,6 +613,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// means "/sessions/new" always wins over "/sessions/{id}" regardless
 	// of registration order, but the two are still grouped here so the
 	// whole session route family reads top-to-bottom as one block.
+	mux.HandleFunc("GET /agents", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAgentList)))
+	mux.HandleFunc("GET /agents/{agent_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAgentDetail)))
 	mux.HandleFunc("GET /sessions/new", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleNewSession)))
 	mux.HandleFunc("POST /sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleStartSession)))
 	mux.HandleFunc("POST /sessions/{id}/turns", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSendTurn)))
