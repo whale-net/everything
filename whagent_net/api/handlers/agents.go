@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -205,4 +206,23 @@ func (s *SessionServer) validateUpdateAgent(ctx context.Context, req *pb.UpdateA
 		def.SystemPrompt = &sp
 	}
 	return def, nil
+}
+
+// GetDashboardSummary returns today's (UTC) per-agent traffic and cost.
+// Any authenticated caller may call it.
+func (s *SessionServer) GetDashboardSummary(ctx context.Context, _ *pb.GetDashboardSummaryRequest) (*pb.GetDashboardSummaryResponse, error) {
+	today := time.Now().UTC().Format("2006-01-02")
+	sum, err := s.store.GetDashboardSummary(ctx, today)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "dashboard summary: %v", err)
+	}
+	resp := &pb.GetDashboardSummaryResponse{
+		UtcDate:              sum.UTCDate,
+		TotalCostUsdToday:    sum.TotalCostUSDToday,
+		CostIncludesEstimate: sum.CostIncludesEstimate,
+	}
+	for _, a := range sum.Agents {
+		resp.Agents = append(resp.Agents, &pb.AgentTraffic{AgentId: a.AgentID, SessionsToday: a.SessionsToday, TurnsToday: a.TurnsToday})
+	}
+	return resp, nil
 }
