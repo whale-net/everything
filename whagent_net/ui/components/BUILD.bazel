@@ -37,6 +37,7 @@ go_test(
     name = "components_test",
     size = "small",
     srcs = [
+        "cost_test.go",
         "layout_test.go",
         "session_test.go",
         "session_usage_test.go",
