@@ -511,15 +511,25 @@ instead of interleaving ids through prose.
 
 ## Model tiers
 
+Per-persona defaults:
+
 | Persona | Model | Why |
 |---|---|---|
 | producer, architect, planner | `opus` | Deep reasoning for requirements gathering, architecture reconciliation, and task breakdown |
-| stakeholder | `sonnet` | Bounded single-persona critique; runs once per persona in parallel, so cost multiplies |
-| reviewer | `opus` | Stands in for a human judgment call (`loop-design-panel` only) |
+| stakeholder | `haiku` | Bounded single-persona critique; runs once per persona in parallel, so cost multiplies |
+| reviewer | `sonnet` | Stands in for a human judgment call (`loop-design-panel` only) |
 | worker, validator | `haiku` | Fast, cost-efficient execution of scoped swimlane tasks |
 | mergepush | `haiku` | Mechanical push/PR integration — no reasoning about code |
-| system-validator | `opus` (effort: max) | Comprehensive whole-system validation in a running environment |
-| help | `sonnet` | Bounded single-turn triage against a known decision table |
+| system-validator | `sonnet` (effort: max) | Comprehensive whole-system validation in a running environment |
+| help | `haiku` | Bounded single-turn triage against a known decision table |
+
+A skill that dispatches a lowered persona — or delegates to one that does —
+takes `--with-strong-models`, which restores that persona's pre-lowering
+model for the run: `stakeholder`/`help` → `sonnet`, `reviewer`/`system-validator`
+→ `opus`. `producer`/`architect`/`planner` stay `opus`;
+`worker`/`validator`/`mergepush` stay `haiku`. Off by default: current-
+generation models make the lower tier sufficient; opt in for a run that
+needs deeper reasoning.
 
 ## API call volume
 

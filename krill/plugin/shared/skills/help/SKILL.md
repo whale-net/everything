@@ -20,13 +20,16 @@ Subagent Usage.
 /help "how do I tell if this needs product first?"
 ```
 
+`--with-strong-models` — run the `help` persona at its pre-lowering model
+(`sonnet`; CONVENTIONS.md "Model tiers").
+
 ## Steps
 
 1. Dispatch this plugin's `help` persona (`krill-design:help` when run from
    `krill-design`, `krill-work:help` when run from `krill-work` — same file,
    symlinked) via `Agent`, passing the requester's question verbatim plus any
    design-session id / product id / milestone id they mentioned.
-   Default model: `sonnet` — this is bounded single-turn triage against a
+   Default model: `haiku` — this is bounded single-turn triage against a
    known decision table, not open-ended design work.
 2. Relay its recommendation as-is: the exact command to run next, and its
    one-sentence reasoning. If it asked a clarifying question instead of

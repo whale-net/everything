@@ -38,6 +38,9 @@ you it wasn't one — `status` and `get_design_session` both surface this.
   rounds. Defaults to 3. Hitting it means a disagreement `reviewer`
   genuinely can't settle; the loop stops and hands it to the user rather
   than manufacturing a ruling.
+- `--with-strong-models` — run the `reviewer` at `opus` (its pre-lowering
+  model); forwarded to the initial `design` dispatch and each stakeholder
+  meeting.
 
 ## Steps
 
@@ -50,7 +53,7 @@ you it wasn't one — `status` and `get_design_session` both surface this.
 2. **Design phase (subagent).** Dispatch a fresh `general-purpose` subagent:
    invoke `Skill` with `skill: "krill-design:design"`, forwarding the target,
    `--milestone`, `--stakeholder-meeting` (always included), and
-   `--stakeholder-rounds`/`--personas` if given. Add one explicit
+   `--stakeholder-rounds`/`--personas`/`--with-strong-models` if given. Add one explicit
    unattended-run instruction: if intake is still needed, apply
    `agents/producer.md` Mode 0's "thinner input, note the assumptions"
    allowance immediately instead of pausing for live back-and-forth — the
@@ -69,7 +72,7 @@ you it wasn't one — `status` and `get_design_session` both surface this.
    - **Blocked: stakeholder disagreement** → step 4.
 
 4. **Panel round.** Track a panel-round counter, starting at 1.
-   a. Dispatch `krill-design:reviewer` (model `opus`) with Mode: Ruling — the
+   a. Dispatch `krill-design:reviewer` (model `sonnet`) with Mode: Ruling — the
       design-session id and the round number. It appends a `ruling` revision
       event (sustained `SB-` questions stay open with the required change;
       overruled ones resolve, each with an `SR-` rationale question) and
@@ -84,14 +87,15 @@ you it wasn't one — `status` and `get_design_session` both surface this.
       producer↔architect exactly as `design` steps 5-6 do until sign-off
       (cap 5 rounds).
    d. Once clear, invoke `/krill-design:stakeholder-meeting
-      <design-session-id>` directly for the next round.
+      <design-session-id>` directly for the next round, passing
+      `--with-strong-models` if given.
    e. **Cleared** → step 5. **Blocked again** → increment the panel-round
       counter; at `--max-panel-rounds`, stop and report the standing
       disagreement (including `reviewer`'s prior rulings) to the user.
       Otherwise repeat from 4a.
 
 5. **Agent review (subagent).** Dispatch `krill-design:reviewer` (model
-   `opus`) with Mode: Agent review — the design-session id. It appends a
+   `sonnet`) with Mode: Agent review — the design-session id. It appends a
    `signoff` revision event (`approved` or `changes_requested`) with its
    reasoning in the dispatch response.
 

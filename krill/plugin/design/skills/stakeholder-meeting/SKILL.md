@@ -22,6 +22,9 @@ Callable directly, or automatically by `/krill-design:design
 /krill-design:stakeholder-meeting <target> --add-persona "On-call SRE"
 ```
 
+`--with-strong-models` — run the stakeholder personas at their pre-lowering
+model (`sonnet`; CONVENTIONS.md "Model tiers").
+
 ## Steps
 
 1. **Resolve the target and read the design.** Call `get_design_session
