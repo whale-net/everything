@@ -177,3 +177,66 @@ def draft_expiry_hours() -> int:
     return _positive_int_env(
         "FCM_SHITPOSTER_DRAFT_EXPIRY_HOURS", DEFAULT_DRAFT_EXPIRY_HOURS
     )
+
+
+THEME_GENERATOR_AGENT_DEFINITION = "shitposter-theme-generator"
+NOVEL_GENERATOR_AGENT_DEFINITION = "shitposter-novel-generator"
+DEFAULT_IDEA_GENERATOR_RUN_CAP = 2
+DEFAULT_IDEA_GENERATOR_CADENCE_HOURS = 24
+DEFAULT_THEME_TARGET_WEIGHT = 0.15
+DEFAULT_NOVEL_TARGET_WEIGHT = 0.10
+
+
+def load_theme_generator_agent_id() -> str:
+    """Agent definition for theme synthesis; FCM_SHITPOSTER_THEME_GENERATOR_AGENT_ID overrides it."""
+    override = os.environ.get("FCM_SHITPOSTER_THEME_GENERATOR_AGENT_ID", "").strip()
+    return override or THEME_GENERATOR_AGENT_DEFINITION
+
+
+def load_novel_generator_agent_id() -> str:
+    """Agent definition for novel exploration; FCM_SHITPOSTER_NOVEL_GENERATOR_AGENT_ID overrides it."""
+    override = os.environ.get("FCM_SHITPOSTER_NOVEL_GENERATOR_AGENT_ID", "").strip()
+    return override or NOVEL_GENERATOR_AGENT_DEFINITION
+
+
+def idea_generator_run_cap() -> int:
+    """Most theme plus novel lore entries one idea-generator run writes (FCM_SHITPOSTER_IDEA_GENERATOR_RUN_CAP)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_IDEA_GENERATOR_RUN_CAP", DEFAULT_IDEA_GENERATOR_RUN_CAP
+    )
+
+
+def idea_generator_cadence_hours() -> int | None:
+    """Hours between scheduled idea-generator runs; None when FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS is "off"."""
+    name = "FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS"
+    if os.environ.get(name, "").strip().lower() == "off":
+        return None
+    return _positive_int_env(name, DEFAULT_IDEA_GENERATOR_CADENCE_HOURS)
+
+
+def _unit_fraction_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if not 0 < value <= 1:
+        logger.warning("%s=%r is not a fraction in (0, 1]; using %s", name, raw, default)
+        return default
+    return value
+
+
+def theme_target_weight() -> float:
+    """Target share of theme lore among active lore (FCM_SHITPOSTER_THEME_TARGET_WEIGHT)."""
+    return _unit_fraction_env(
+        "FCM_SHITPOSTER_THEME_TARGET_WEIGHT", DEFAULT_THEME_TARGET_WEIGHT
+    )
+
+
+def novel_target_weight() -> float:
+    """Target share of novel lore among active lore (FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT)."""
+    return _unit_fraction_env(
+        "FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT", DEFAULT_NOVEL_TARGET_WEIGHT
+    )
