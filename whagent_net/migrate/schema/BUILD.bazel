@@ -42,6 +42,7 @@ go_test(
     srcs = [
         "agent_definition_scd2_integration_test.go",
         "delegatedgrant_integration_test.go",
+        "drop_version_integration_test.go",
         "mcpauth_cutover_integration_test.go",
         "schema_integration_test.go",
     ],

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -44,11 +45,9 @@ const (
 // inherits unless overridden (FR5/FR6/FR7, FR9's required_role).
 // ID is the surrogate primary key (migration 009): a single stable handle
 // for one row, so callers, logs, and any future FK never need to repeat
-// both AgentID and Version to name one. AgentID remains the stable,
+// both AgentID and a validity window to name one. AgentID remains the stable,
 // human-authored business key (agents.yaml, MCP tool inputs, UI filters --
-// LB5/NFR6); (AgentID, Version) stays UNIQUE at the database layer, it is
-// just no longer the primary key. Versions are never mutated in place,
-// only inserted.
+// LB5/NFR6). Rows are never mutated in place, only inserted.
 //
 // Exactly one of Model and ModelDefinitionID is set (migration 006's
 // agent_definition_model_xor_model_definition CHECK constraint;
@@ -124,6 +123,11 @@ type AgentDefinitionStore interface {
 	// not replace an existing row in place). Fills in ID, CreatedAt and
 	// ValidFrom.
 	Upsert(ctx context.Context, def *AgentDefinition) error
+	// Register inserts def as agentID's current row only when agentID has
+	// none; created reports whether it did. It never updates a row, and
+	// concurrent registrations of one agent_id leave exactly one current
+	// row with no error. Fills in ID, CreatedAt and ValidFrom when created.
+	Register(ctx context.Context, def *AgentDefinition) (created bool, err error)
 	// AssignToSession writes the SCD2 close-and-open pair: closes the
 	// session's currently-open session_agent row (if any) and opens a new
 	// one pinned to agentDefinitionID.
@@ -142,9 +146,21 @@ type AgentDefinitionStore interface {
 	ListScopes(ctx context.Context) ([]string, error)
 	// ListCurrent returns every open (valid_to IS NULL) row ordered by agent_id.
 	ListCurrent(ctx context.Context) ([]*AgentDefinition, error)
+	// Supersede atomically closes agentID's current row and opens newDef as
+	// the new current row, in one transaction with one shared timestamp.
+	// Returns ErrAgentNotFound when agentID has no current row and
+	// ErrSupersedeConflict when a concurrent supersede won the race.
+	Supersede(ctx context.Context, agentID string, newDef *AgentDefinition) (*AgentDefinition, error)
 	// History returns every row for agentID ordered by valid_from ascending.
 	History(ctx context.Context, agentID string) ([]*AgentDefinition, error)
 }
+
+var (
+	// ErrAgentNotFound: Supersede found no current row for the agent_id.
+	ErrAgentNotFound = errors.New("agent definition not found")
+	// ErrSupersedeConflict: a concurrent Supersede changed the current row.
+	ErrSupersedeConflict = errors.New("agent definition superseded concurrently")
+)
 
 // agentDefinitionStore is the Postgres-backed AgentDefinitionStore
 // implementation.
@@ -244,11 +260,9 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 		toolLoadingMode = ToolLoadingModeBulk
 	}
 
-	// version is still NOT NULL until the contract migration; derive it so
-	// the legacy UNIQUE (agent_id, version) holds. Nothing reads it back.
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
-		VALUES ($1, $2, (SELECT COALESCE(MAX(version), 0) + 1 FROM agent_definition WHERE agent_id = $1), $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, valid_from
 	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode, def.SystemPrompt).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
 	if err != nil {
@@ -308,6 +322,48 @@ func (s agentDefinitionStore) CurrentAssignment(ctx context.Context, sessionID u
 	return &sa, nil
 }
 
+// Querier is the QueryRow surface shared by *pgxpool.Pool and *pgx.Conn, so
+// registration can run from either the store or the migrate job's
+// database/sql connection.
+type Querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// Register implements AgentDefinitionStore.
+func (s agentDefinitionStore) Register(ctx context.Context, def *AgentDefinition) (bool, error) {
+	return RegisterAgentDefinition(ctx, s.pool, def)
+}
+
+// RegisterAgentDefinition inserts def only if its agent_id has no current
+// row. A single statement guarded by idx_agent_definition_current, so racing
+// callers leave one current row and none errors.
+func RegisterAgentDefinition(ctx context.Context, q Querier, def *AgentDefinition) (bool, error) {
+	toolSet, err := json.Marshal(def.ToolSet)
+	if err != nil {
+		return false, fmt.Errorf("marshal tool_set: %w", err)
+	}
+	toolLoadingMode := def.ToolLoadingMode
+	if toolLoadingMode == "" {
+		toolLoadingMode = ToolLoadingModeBulk
+	}
+
+	err = q.QueryRow(ctx, `
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
+		SELECT $1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+		WHERE NOT EXISTS (SELECT 1 FROM agent_definition WHERE agent_id = $1::text AND valid_to IS NULL)
+		ON CONFLICT (agent_id) WHERE valid_to IS NULL DO NOTHING
+		RETURNING id, created_at, valid_from
+	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, string(toolLoadingMode), def.SystemPrompt).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("register agent definition: %w", err)
+	}
+	def.ToolLoadingMode = toolLoadingMode
+	return true, nil
+}
+
 func (s agentDefinitionStore) queryDefs(ctx context.Context, what, query string, args ...any) ([]*AgentDefinition, error) {
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -346,4 +402,75 @@ func (s agentDefinitionStore) History(ctx context.Context, agentID string) ([]*A
 		WHERE agent_id = $1
 		ORDER BY valid_from ASC, created_at ASC
 	`, agentID)
+}
+
+// Supersede closes agentID's current row and inserts newDef as the new
+// current row in one transaction, both stamped with the same timestamp so
+// the history has no gap or overlap. Fills newDef's ID, CreatedAt and
+// ValidFrom and returns it.
+func (s agentDefinitionStore) Supersede(ctx context.Context, agentID string, newDef *AgentDefinition) (*AgentDefinition, error) {
+	toolSet, err := json.Marshal(newDef.ToolSet)
+	if err != nil {
+		return nil, fmt.Errorf("marshal tool_set: %w", err)
+	}
+	mode := newDef.ToolLoadingMode
+	if mode == "" {
+		mode = ToolLoadingModeBulk
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var curID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM agent_definition
+		WHERE agent_id = $1 AND valid_to IS NULL
+		FOR UPDATE
+	`, agentID).Scan(&curID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A concurrent supersede may have closed the row we waited on.
+		var any bool
+		if qerr := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_definition WHERE agent_id = $1)`, agentID).Scan(&any); qerr != nil {
+			return nil, fmt.Errorf("check agent definition exists: %w", qerr)
+		}
+		if any {
+			return nil, ErrSupersedeConflict
+		}
+		return nil, ErrAgentNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock current agent definition: %w", err)
+	}
+
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return nil, fmt.Errorf("read clock: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_definition SET valid_to = $2 WHERE id = $1`, curID, now); err != nil {
+		return nil, fmt.Errorf("close current agent definition: %w", err)
+	}
+
+	out := *newDef
+	out.AgentID = agentID
+	out.ToolLoadingMode = mode
+	out.ValidTo = nil
+	err = tx.QueryRow(ctx, `
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, valid_from)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING id, created_at, valid_from
+	`, agentID, out.Scope, out.Model, out.ModelDefinitionID, toolSet, out.MaxTurns, out.MaxCostUSD, out.MaxToolIterations, out.RequiredRole, mode, out.SystemPrompt, now).Scan(&out.ID, &out.CreatedAt, &out.ValidFrom)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrSupersedeConflict
+		}
+		return nil, fmt.Errorf("insert superseding agent definition: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return &out, nil
 }

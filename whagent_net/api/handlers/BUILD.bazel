@@ -5,9 +5,9 @@ go_library(
     srcs = [
         "agent_definition.go",
         "agents.go",
-        "model_definition.go",
         "auth.go",
         "broadcast.go",
+        "model_definition.go",
         "send.go",
         "session.go",
         "start.go",
@@ -83,6 +83,7 @@ go_test(
     srcs = [
         "agent_definition_scopes_integration_test.go",
         "agents_integration_test.go",
+        "agents_update_integration_test.go",
         "control_on_behalf_of_integration_test.go",
         "delegated_manmanv2_ops_integration_test.go",
         "fake_temporal_test.go",

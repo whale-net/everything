@@ -409,3 +409,14 @@ func TestRealAgentsYAML_ManmanV2Ops(t *testing.T) {
 	}, got.ToolSet[0].AllowedTools)
 	assert.Contains(t, RequiredRoles(agents), "whagent-manmanv2-ops")
 }
+
+func TestParse_RejectsVersionKey(t *testing.T) {
+	_, _, err := Parse([]byte(`agents:
+  - agent_id: a
+    version: 1
+    model: m
+    tools: none
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version")
+}

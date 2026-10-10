@@ -113,3 +113,7 @@ func (f *fakeSessionServiceClient) GetAgent(context.Context, *pb.GetAgentRequest
 func (f *fakeSessionServiceClient) ListModelDefinitions(context.Context, *pb.ListModelDefinitionsRequest, ...grpc.CallOption) (*pb.ListModelDefinitionsResponse, error) {
 	panic("fakeSessionServiceClient: ListModelDefinitions called -- no whagent-net mcp tool forwards to this RPC")
 }
+
+func (f *fakeSessionServiceClient) UpdateAgent(context.Context, *pb.UpdateAgentRequest, ...grpc.CallOption) (*pb.UpdateAgentResponse, error) {
+	panic("fakeSessionServiceClient: UpdateAgent called -- no whagent-net mcp tool forwards to this RPC")
+}
