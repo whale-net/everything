@@ -40,6 +40,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "agent_definition_scd2_integration_test.go",
         "delegatedgrant_integration_test.go",
         "mcpauth_cutover_integration_test.go",
         "schema_integration_test.go",
