@@ -109,3 +109,11 @@ func (s *SessionServer) GetAgent(ctx context.Context, req *pb.GetAgentRequest) (
 	}
 	return resp, nil
 }
+
+// UpdateAgent supersedes an agent's current definition (admin only).
+func (s *SessionServer) UpdateAgent(ctx context.Context, req *pb.UpdateAgentRequest) (*pb.UpdateAgentResponse, error) {
+	if !s.isAgentAdmin(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "updating an agent requires the agent admin role")
+	}
+	return nil, status.Error(codes.Unimplemented, "UpdateAgent not implemented")
+}

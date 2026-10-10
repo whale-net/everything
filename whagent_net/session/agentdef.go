@@ -140,9 +140,21 @@ type AgentDefinitionStore interface {
 	ListScopes(ctx context.Context) ([]string, error)
 	// ListCurrent returns every open (valid_to IS NULL) row ordered by agent_id.
 	ListCurrent(ctx context.Context) ([]*AgentDefinition, error)
+	// Supersede atomically closes agentID's current row and opens newDef as
+	// the new current row, in one transaction with one shared timestamp.
+	// Returns ErrAgentNotFound when agentID has no current row and
+	// ErrSupersedeConflict when a concurrent supersede won the race.
+	Supersede(ctx context.Context, agentID string, newDef *AgentDefinition) (*AgentDefinition, error)
 	// History returns every row for agentID ordered by valid_from ascending.
 	History(ctx context.Context, agentID string) ([]*AgentDefinition, error)
 }
+
+var (
+	// ErrAgentNotFound: Supersede found no current row for the agent_id.
+	ErrAgentNotFound = errors.New("agent definition not found")
+	// ErrSupersedeConflict: a concurrent Supersede changed the current row.
+	ErrSupersedeConflict = errors.New("agent definition superseded concurrently")
+)
 
 // agentDefinitionStore is the Postgres-backed AgentDefinitionStore
 // implementation.
@@ -342,4 +354,9 @@ func (s agentDefinitionStore) History(ctx context.Context, agentID string) ([]*A
 		WHERE agent_id = $1
 		ORDER BY valid_from ASC, created_at ASC
 	`, agentID)
+}
+
+// Supersede is implemented in the Implementation lane.
+func (s agentDefinitionStore) Supersede(ctx context.Context, agentID string, newDef *AgentDefinition) (*AgentDefinition, error) {
+	return nil, errors.New("agent definition supersede: not implemented")
 }

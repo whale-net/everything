@@ -72,6 +72,10 @@ func (f *fakeAgentDefinitionStore) CurrentAssignment(ctx context.Context, sessio
 	return f.currentAssignmentFunc(ctx, sessionID)
 }
 
+func (f *fakeAgentDefinitionStore) Supersede(ctx context.Context, agentID string, newDef *session.AgentDefinition) (*session.AgentDefinition, error) {
+	panic("fakeAgentDefinitionStore: Supersede not supported")
+}
+
 func (f *fakeAgentDefinitionStore) ListScopes(ctx context.Context) ([]string, error) {
 	if f.listScopesFunc == nil {
 		panic("fakeAgentDefinitionStore: ListScopes called but no listScopesFunc set")
