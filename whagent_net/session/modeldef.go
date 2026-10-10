@@ -138,3 +138,28 @@ func (s modelDefinitionStore) Upsert(ctx context.Context, def *ModelDefinition) 
 	}
 	return nil
 }
+
+// EnsureModelDefinition creates def under its Name if absent and leaves an
+// existing row untouched; either way def.ID is set to the row's id.
+func EnsureModelDefinition(ctx context.Context, q Querier, def *ModelDefinition) error {
+	provider, err := json.Marshal(def.Provider)
+	if err != nil {
+		return fmt.Errorf("marshal provider: %w", err)
+	}
+	err = q.QueryRow(ctx, `
+		WITH ins AS (
+			INSERT INTO model_definition (name, model, provider)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (name) DO NOTHING
+			RETURNING id, created_at
+		)
+		SELECT id, created_at FROM ins
+		UNION ALL
+		SELECT id, created_at FROM model_definition WHERE name = $1
+		LIMIT 1
+	`, def.Name, def.Model, provider).Scan(&def.ID, &def.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("ensure model definition: %w", err)
+	}
+	return nil
+}

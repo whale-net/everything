@@ -3,10 +3,9 @@
 // the tool contract"): agents.yaml (embedded below, so the binary carries
 // its own copy rather than reading a mounted path at runtime -- mirrors
 // firmware/sensor/catalog's chips.yaml precedent) plus the Go shape Load
-// decodes it into. There is no automatic seeder consuming Load into the
-// database (see whagent_net/README.md "Agent definition config" for the
-// manual insert example) -- whagent_net/api/main.go's own use of Load is
-// the only production caller today, for RequiredRoles/DevRoles below.
+// decodes it into. whagent_net/migrate registers Load's result on each
+// deploy, creating only agents with no current row; whagent_net/api/main.go
+// also uses it for RequiredRoles/DevRoles below.
 //
 // Load and Validate check the config's shape only, no I/O: the
 // model-catalogue check (an unserved model, checked against
@@ -15,8 +14,11 @@
 package config
 
 import (
+	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
+	"io"
 
 	"gopkg.in/yaml.v3"
 )
@@ -53,8 +55,7 @@ type ProviderPreferencesConfig struct {
 
 // ModelDefinitionConfig is agents.yaml's top-level model_definitions entry
 // shape -- decodes into whagent_net/session.ModelDefinition minus
-// ID/CreatedAt, which whoever inserts the row assigns (see
-// whagent_net/README.md "Agent definition config"). A named, reusable
+// ID/CreatedAt, which the database assigns. A named, reusable
 // model + provider-routing bundle an AgentDefinitionConfig can reference
 // by name (AgentDefinitionConfig.ModelDefinition) instead of naming a
 // model directly, so more than one agent can share identical routing
@@ -66,10 +67,8 @@ type ModelDefinitionConfig struct {
 }
 
 // AgentDefinitionConfig is agents.yaml's per-agent entry shape -- decodes
-// into whagent_net/session.AgentDefinition minus Version/CreatedAt, which
-// whoever inserts the row assigns (see whagent_net/README.md "Agent
-// definition config" for the version-diff rule a manual insert must
-// preserve).
+// into whagent_net/session.AgentDefinition minus the id and timestamps the
+// database assigns.
 //
 // Scope is optional: the one grant-scope this agent definition belongs
 // to, when set. Every tool_set entry below is understood to belong to
@@ -132,8 +131,16 @@ type document struct {
 // itself, before whagent_net/api/main.go's config.Load call (the sole
 // production caller today) can derive DevRoles from it.
 func Load() ([]ModelDefinitionConfig, []AgentDefinitionConfig, error) {
+	return Parse(agentsYAML)
+}
+
+// Parse decodes and validates agents.yaml-shaped data. Unknown keys are
+// rejected (a stale `version:` included) rather than silently ignored.
+func Parse(data []byte) ([]ModelDefinitionConfig, []AgentDefinitionConfig, error) {
 	var doc document
-	if err := yaml.Unmarshal(agentsYAML, &doc); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&doc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, nil, fmt.Errorf("config: parse agents.yaml: %w", err)
 	}
 	if err := Validate(doc.ModelDefinitions, doc.Agents); err != nil {

@@ -9,18 +9,19 @@
 // here assumed no other package would need the embedded FS; that
 // assumption didn't survive Testing.)
 //
-// There is no agent-definition seeder here: `agent_definition`/
-// `model_definition` rows are populated by hand (see
-// whagent_net/README.md "Agent definition config" for a worked example),
-// never automatically on `migrate` -- `whagent_net/config/agents.yaml`
-// documents the row shape but is no longer loaded by this binary.
+// After the schema migrations apply on the up/default path, it registers
+// the agents declared in whagent_net/config/agents.yaml (embedded in the
+// binary) that have no current agent_definition row. An existing agent is
+// never updated; change one via UpdateAgent. Down and other commands skip
+// registration.
 package main
 
 import (
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/whagent_net/migrate/register"
 	"github.com/whale-net/everything/whagent_net/migrate/schema"
 )
 
 func main() {
-	migrate.RunCLI(schema.Migrations, schema.Dir)
+	migrate.RunCLI(schema.Migrations, schema.Dir, migrate.WithSeeder(register.Seeder))
 }
