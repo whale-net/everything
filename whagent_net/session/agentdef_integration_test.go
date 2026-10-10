@@ -340,8 +340,8 @@ func TestAgentDefinition_ToolLoadingMode_RawInsertOmittingColumn_DefaultsToBulk(
 	s, db := newStore(t)
 
 	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO agent_definition (agent_id, version, model, tool_set)
-		VALUES ('raw-insert-agent', 1, 'test-model', '[]'::jsonb)
+		INSERT INTO agent_definition (agent_id, model, tool_set)
+		VALUES ('raw-insert-agent', 'test-model', '[]'::jsonb)
 	`)
 	require.NoError(t, err)
 
@@ -360,10 +360,10 @@ func TestAgentDefinition_ToolLoadingMode_CheckConstraint_RejectsUnknownValue(t *
 	_, db := newStore(t)
 
 	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO agent_definition (agent_id, version, model, tool_set, tool_loading_mode)
-		VALUES ('bad-mode-agent', 1, 'test-model', '[]'::jsonb, 'semantic')
+		INSERT INTO agent_definition (agent_id, model, tool_set, tool_loading_mode)
+		VALUES ('bad-mode-agent', 'test-model', '[]'::jsonb, 'semantic')
 	`)
-	assert.Error(t, err, "an unrecognized tool_loading_mode must be rejected by the CHECK constraint")
+	require.ErrorContains(t, err, "tool_loading_mode", "an unrecognized tool_loading_mode must be rejected by the CHECK constraint")
 }
 
 // TestAgentDefinitionStore_PartialUniqueIndex_RejectsTwoOpenRows proves the
