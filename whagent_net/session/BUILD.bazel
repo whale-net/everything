@@ -38,6 +38,7 @@ go_library(
 go_test(
     name = "session_test",
     srcs = [
+        "maxcost_test.go",
         "maxturns_test.go",
         "sessions_test.go",
     ],
