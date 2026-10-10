@@ -4,6 +4,7 @@ package session_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -340,8 +341,8 @@ func TestAgentDefinition_ToolLoadingMode_RawInsertOmittingColumn_DefaultsToBulk(
 	s, db := newStore(t)
 
 	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO agent_definition (agent_id, version, model, tool_set)
-		VALUES ('raw-insert-agent', 1, 'test-model', '[]'::jsonb)
+		INSERT INTO agent_definition (agent_id, model, tool_set)
+		VALUES ('raw-insert-agent', 'test-model', '[]'::jsonb)
 	`)
 	require.NoError(t, err)
 
@@ -360,10 +361,10 @@ func TestAgentDefinition_ToolLoadingMode_CheckConstraint_RejectsUnknownValue(t *
 	_, db := newStore(t)
 
 	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO agent_definition (agent_id, version, model, tool_set, tool_loading_mode)
-		VALUES ('bad-mode-agent', 1, 'test-model', '[]'::jsonb, 'semantic')
+		INSERT INTO agent_definition (agent_id, model, tool_set, tool_loading_mode)
+		VALUES ('bad-mode-agent', 'test-model', '[]'::jsonb, 'semantic')
 	`)
-	assert.Error(t, err, "an unrecognized tool_loading_mode must be rejected by the CHECK constraint")
+	require.ErrorContains(t, err, "tool_loading_mode", "an unrecognized tool_loading_mode must be rejected by the CHECK constraint")
 }
 
 // TestAgentDefinitionStore_PartialUniqueIndex_RejectsTwoOpenRows proves the
@@ -389,4 +390,141 @@ func TestAgentDefinitionStore_PartialUniqueIndex_RejectsTwoOpenRows(t *testing.T
 		SELECT count(*) FROM session_agent WHERE session_id = $1 AND valid_to IS NULL
 	`, sess.SessionID).Scan(&openCount))
 	assert.Equal(t, 1, openCount, "the rejected insert must not leave a second open row behind")
+}
+
+// TestAgentDefinitionStore_Supersede_ClosesAndOpensWithSameTimestamp proves
+// the old row's valid_to equals the new row's valid_from.
+func TestAgentDefinitionStore_Supersede_ClosesAndOpensWithSameTimestamp(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	old := upsertAgent(t, ctx, s, "sup-agent")
+
+	nd := newTestAgentDefinition("sup-agent")
+	nd.Model = strPtr("model-v2")
+	nd.MaxTurns = 5
+	got, err := s.AgentDefinitions().Supersede(ctx, "sup-agent", nd)
+	require.NoError(t, err)
+	assert.NotEqual(t, old.ID, got.ID)
+
+	hist, err := s.AgentDefinitions().History(ctx, "sup-agent")
+	require.NoError(t, err)
+	require.Len(t, hist, 2)
+	require.NotNil(t, hist[0].ValidTo)
+	assert.Equal(t, hist[1].ValidFrom, *hist[0].ValidTo)
+	assert.Nil(t, hist[1].ValidTo)
+
+	cur, err := s.AgentDefinitions().GetCurrent(ctx, "sup-agent")
+	require.NoError(t, err)
+	assert.Equal(t, got.ID, cur.ID)
+	assert.Equal(t, 5, cur.MaxTurns)
+}
+
+func TestAgentDefinitionStore_Supersede_UnknownAgent_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	_, err := s.AgentDefinitions().Supersede(ctx, "ghost", newTestAgentDefinition("ghost"))
+	assert.ErrorIs(t, err, session.ErrAgentNotFound)
+}
+
+// TestAgentDefinitionStore_Supersede_InsertFails_RollsBack proves a failing
+// INSERT (dangling model_definition_id) leaves the prior row current.
+func TestAgentDefinitionStore_Supersede_InsertFails_RollsBack(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	old := upsertAgent(t, ctx, s, "rb-agent")
+
+	bad := newTestAgentDefinition("rb-agent")
+	bad.Model = nil
+	missing := uuid.New()
+	bad.ModelDefinitionID = &missing
+	_, err := s.AgentDefinitions().Supersede(ctx, "rb-agent", bad)
+	require.Error(t, err)
+
+	cur, err := s.AgentDefinitions().GetCurrent(ctx, "rb-agent")
+	require.NoError(t, err)
+	require.NotNil(t, cur)
+	assert.Equal(t, old.ID, cur.ID)
+	var n int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_definition WHERE agent_id = 'rb-agent'`).Scan(&n))
+	assert.Equal(t, 1, n)
+}
+
+// TestAgentDefinitionStore_Supersede_Concurrent_LeavesOneCurrentRow proves
+// racing supersedes never leave two open rows.
+func TestAgentDefinitionStore_Supersede_Concurrent_LeavesOneCurrentRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	upsertAgent(t, ctx, s, "race-agent")
+
+	const n = 8
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			_, err := s.AgentDefinitions().Supersede(ctx, "race-agent", newTestAgentDefinition("race-agent"))
+			errs <- err
+		}()
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			assert.ErrorIs(t, err, session.ErrSupersedeConflict)
+		}
+	}
+	var open, total int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_definition WHERE agent_id = 'race-agent' AND valid_to IS NULL`).Scan(&open))
+	assert.Equal(t, 1, open)
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_definition WHERE agent_id = 'race-agent'`).Scan(&total))
+	assert.GreaterOrEqual(t, total, 2)
+}
+
+func TestAgentDefinitionStore_Register_CreatesOnceAndNeverUpdates(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	first := newTestAgentDefinition("reg-agent")
+	created, err := s.AgentDefinitions().Register(ctx, first)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	changed := newTestAgentDefinition("reg-agent")
+	changed.MaxTurns = 5
+	created, err = s.AgentDefinitions().Register(ctx, changed)
+	require.NoError(t, err)
+	assert.False(t, created)
+
+	got, err := s.AgentDefinitions().GetCurrent(ctx, "reg-agent")
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, got.ID)
+	assert.Equal(t, 100, got.MaxTurns)
+	assert.True(t, first.ValidFrom.Equal(got.ValidFrom))
+}
+
+func TestAgentDefinitionStore_Register_ConcurrentLeavesOneCurrentRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+
+	const n = 20
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	createdCount := make([]bool, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			createdCount[i], errs[i] = s.AgentDefinitions().Register(ctx, newTestAgentDefinition("race-agent"))
+		}(i)
+	}
+	wg.Wait()
+
+	wins := 0
+	for i := 0; i < n; i++ {
+		require.NoError(t, errs[i])
+		if createdCount[i] {
+			wins++
+		}
+	}
+	assert.Equal(t, 1, wins)
+
+	var rows int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_definition WHERE agent_id = 'race-agent' AND valid_to IS NULL`).Scan(&rows))
+	assert.Equal(t, 1, rows)
 }
