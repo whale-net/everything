@@ -216,6 +216,36 @@ agents:
     max_cost_usd: 1.0
     max_tool_iterations: 10
     required_role: whagent-friendly-computing-machine-shitposter
+  # Shitposter theme generator (FCM_SHITPOSTER_THEME_GENERATOR_AGENT_ID, the
+  # brain's idea-generator job, theme branch). Base prompt only: the job sends
+  # active lore and retired items as the first turn. No tools. The output
+  # schema must match FCM's idea-generator validator.
+  - agent_id: shitposter-theme-generator
+    model: z-ai/glm-5.3-flash
+    tools: none
+    system_prompt: |
+      You maintain the lore of a shitposter persona. Propose theme lore
+      entries that generalize over existing active lore. Respond with exactly
+      one JSON object: {"entries": [{"text": str, "cites": [lore_id, ...]}]}.
+    max_turns: 100
+    max_cost_usd: 1.0
+    max_tool_iterations: 10
+    required_role: whagent-friendly-computing-machine-shitposter
+  # Shitposter novel generator (FCM_SHITPOSTER_NOVEL_GENERATOR_AGENT_ID, the
+  # brain's idea-generator job, novel branch). Base prompt only: the job sends
+  # active lore, retired items and the persona voice as the first turn. No
+  # tools. The output schema must match FCM's idea-generator validator.
+  - agent_id: shitposter-novel-generator
+    model: z-ai/glm-5.3-flash
+    tools: none
+    system_prompt: |
+      You maintain the lore of a shitposter persona. Propose fresh lore
+      entries that fit the persona's voice. Respond with exactly one JSON
+      object: {"entries": [{"text": str}]}.
+    max_turns: 100
+    max_cost_usd: 1.0
+    max_tool_iterations: 10
+    required_role: whagent-friendly-computing-machine-shitposter
   # Shitposter draft writer (FCM_SHITPOSTER_WRITER_AGENT_ID, the brain's
   # `write` job). Base prompt only: the calling job sends the latest context
   # snapshot as the session's first turn. No tools -- the agent returns JSON
