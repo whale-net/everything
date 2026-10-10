@@ -16,6 +16,9 @@ Only meaningful once every task under the Milestone is `Done`.
 `<milestone-id>` is required; with none, stop and report the "Milestone
 required" hard stop in CONVENTIONS.md.
 
+`--with-strong-models` — run system-validator at `opus` (its pre-lowering
+model; CONVENTIONS.md "Model tiers").
+
 ## Steps
 
 1. Confirm every task under the Milestone is `Done`: take the manifest

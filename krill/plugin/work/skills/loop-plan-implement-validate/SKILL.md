@@ -35,7 +35,7 @@ stop.
 
 ```
 /krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id>
-/krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id> --max-subagents 2 --planner-model opus
+/krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id> --max-subagents 2 --with-strong-models
 /krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id> --max-iterations 8
 ```
 
@@ -43,6 +43,9 @@ stop.
   every iteration. Defaults to 4.
 - `--planner-model <model>` — forwarded to `/krill-work:plan`, first
   iteration only. Defaults to `opus`.
+- `--with-strong-models` — forwarded to `/krill-work:validate`, whose
+  system-validator then runs at `opus` (its pre-lowering model); the other
+  phases dispatch personas with unchanged models.
 - `--max-iterations <N>` — safety cap on `implement`↔`validate` cycles
   before stopping and reporting the plan stuck. Defaults to 3; a
   well-scoped plan converges in 1-2, so hitting the cap points at
@@ -77,7 +80,7 @@ stop.
 
 4. **Validate phase (subagent).** Dispatch a fresh `general-purpose`
    subagent: invoke `Skill` with `skill: "krill-work:validate"`, args
-   `<milestone-id>`, let it finish, then report back *only*:
+   `<milestone-id>` (plus `--with-strong-models` if given), let it finish, then report back *only*:
    - **Clean pass:** the finalized `<plan-branches>` (branch → PR
      number/URL, all merged).
    - **Findings:** the new follow-up task ids `validate` had `planner`

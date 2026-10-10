@@ -26,6 +26,7 @@ it produces the spec, not the tasks. Mechanics: `krill/plugin/shared/CONVENTIONS
 | `--stakeholder-rounds <n>` | `2` | Max meeting rounds before summarizing standing blockers. Implies `--stakeholder-meeting`. |
 | `--personas "<a,b>"` | spec personas | Meet only these personas. Implies `--stakeholder-meeting`. |
 | `--resume-agents` | off | Continue the same `producer-<id>`/`architect-<id>` subagents via `SendMessage` within this invocation; falls back to a fresh dispatch if the name isn't live. Never spans invocations. |
+| `--with-strong-models` | off | Run the stakeholder meeting (step 7) at its pre-lowering models; the producer/architect it dispatches stay `opus`. |
 
 ## Steps
 
@@ -87,7 +88,7 @@ it produces the spec, not the tasks. Mechanics: `krill/plugin/shared/CONVENTIONS
 
 7. **Stakeholder meeting (only with `--stakeholder-meeting`).** After architect
    sign-off, invoke `/krill-design:stakeholder-meeting <design-session-id>`,
-   passing `--personas` through. Cleared → step 8. Blocked → dispatch producer
+   passing `--personas` and `--with-strong-models` through. Cleared → step 8. Blocked → dispatch producer
    (Mode 2) with the session id and round number (it reads the open `SB-`
    questions itself), then architect for a fresh `reconciliation`, then hold the
    next round. Cap at `--stakeholder-rounds`; if blockers still stand, stop and
