@@ -98,6 +98,11 @@ service SessionService {
   // when no admin role is configured).
   rpc GetAgent(GetAgentRequest) returns (GetAgentResponse);
 
+  // GetDashboardSummary returns today's (UTC calendar date) sessions and
+  // turns per current agent plus total cost today. Any authenticated
+  // caller may call it.
+  rpc GetDashboardSummary(GetDashboardSummaryRequest) returns (GetDashboardSummaryResponse);
+
   // StreamEvents is FR5/C17's server-streaming bridge over the
   // `whagent/events` exchange (NFR4, LB7, issue #2239): a programmatic
   // client follows a session's events live without ever holding RabbitMQ
@@ -406,4 +411,22 @@ message StreamEventsRequest {
   // drop passes the last-seen seq + 1 here to resume with no gap or
   // duplicate (FR5).
   int64 from_seq = 2;
+}
+
+message GetDashboardSummaryRequest {}
+
+message AgentTraffic {
+  string agent_id = 1;
+  int64 sessions_today = 2;
+  int64 turns_today = 3;
+}
+
+message GetDashboardSummaryResponse {
+  // Server's current UTC date, YYYY-MM-DD.
+  string utc_date = 1;
+  // One row per current agent, zeros when idle; ordered by agent_id.
+  repeated AgentTraffic agents = 2;
+  double total_cost_usd_today = 3;
+  // True when any of today's turn costs is an estimate.
+  bool cost_includes_estimate = 4;
 }

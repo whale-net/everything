@@ -109,3 +109,9 @@ func (s *SessionServer) GetAgent(ctx context.Context, req *pb.GetAgentRequest) (
 	}
 	return resp, nil
 }
+
+// GetDashboardSummary returns today's (UTC) per-agent traffic and cost.
+// Any authenticated caller may call it.
+func (s *SessionServer) GetDashboardSummary(ctx context.Context, _ *pb.GetDashboardSummaryRequest) (*pb.GetDashboardSummaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetDashboardSummary not implemented")
+}
