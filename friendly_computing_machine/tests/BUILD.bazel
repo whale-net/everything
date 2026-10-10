@@ -419,6 +419,19 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Idea-generator schema kinds: CHECK migration DDL round-trip (Postgres,
+# rendered offline), model constraints, row acceptance, and runner timeouts.
+py_test(
+    name = "test_shitposter_idea_generator_kinds",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_shitposter_idea_generator_kinds.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Context snapshot job: budget, random pick, retirement, versioning, and source text.
 py_test(
     name = "test_shitposter_context_snapshot",
