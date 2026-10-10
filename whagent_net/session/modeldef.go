@@ -67,6 +67,8 @@ type ModelDefinitionStore interface {
 	// in place -- see this type's doc comment for why a config author
 	// should prefer a new Name over relying on this replace behavior.
 	Upsert(ctx context.Context, def *ModelDefinition) error
+	// List returns every row ordered by model then id.
+	List(ctx context.Context) ([]*ModelDefinition, error)
 }
 
 // modelDefinitionStore is the Postgres-backed ModelDefinitionStore
@@ -137,4 +139,25 @@ func (s modelDefinitionStore) Upsert(ctx context.Context, def *ModelDefinition) 
 		return fmt.Errorf("upsert model definition: %w", err)
 	}
 	return nil
+}
+
+func (s modelDefinitionStore) List(ctx context.Context) ([]*ModelDefinition, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+modelDefinitionColumns+`
+		FROM model_definition
+		ORDER BY model, id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list model definitions: %w", err)
+	}
+	defer rows.Close()
+	var out []*ModelDefinition
+	for rows.Next() {
+		def, err := scanModelDefinition(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan model definition: %w", err)
+		}
+		out = append(out, def)
+	}
+	return out, rows.Err()
 }
