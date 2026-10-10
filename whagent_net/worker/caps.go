@@ -1,10 +1,9 @@
 // Cap evaluation (issue #2119; ARCHITECTURE.md "Guardrails"): FR6's turn
 // cap and FR7's cost cap, both sourced from the session's pinned agent
-// definition (session.AgentDefinition.MaxTurns/MaxCostUSD) -- there is no
-// per-session cap override in M1 (deliberate: caps are a safety backstop
-// the agent's owner sets, not a per-run dial the operator tunes). Defaults
-// are defaultMaxTurns/defaultMaxCostUSD when the definition's fields are
-// zero-valued.
+// definition (session.AgentDefinition.MaxTurns/MaxCostUSD). A pinned cost
+// override (sessions.max_cost_usd_override) reaches checkCaps via
+// ResolveAgentDefinition, which substitutes it into MaxCostUSD for the turn.
+// Defaults are defaultMaxTurns/defaultMaxCostUSD when the fields are zero-valued.
 //
 // checkCaps is invoked by SessionWorkflow.processTurn (workflow.go) both
 // before a turn starts and after the turn's LLM response is committed

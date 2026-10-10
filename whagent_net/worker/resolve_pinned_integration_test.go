@@ -70,3 +70,38 @@ func TestActivities_ResolveAgentDefinition_NoAssignment_ErrorsWithoutVersion(t *
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "version")
 }
+
+// TestActivities_ResolveAgentDefinition_CostOverrideIsEffectiveCap proves the
+// pinned max_cost_usd_override replaces the definition's cap for the turn,
+// without mutating the stored definition, and that an unset override falls
+// back to the definition's value.
+func TestActivities_ResolveAgentDefinition_CostOverrideIsEffectiveCap(t *testing.T) {
+	ctx := context.Background()
+	store, db := newTestStore(t)
+	a := &Activities{Store: store}
+
+	def := &session.AgentDefinition{AgentID: "cost-agent", Model: strPtrW("model-c"), MaxTurns: 10, MaxCostUSD: 3}
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, def))
+
+	overridden := newTestSessionRow(t, ctx, store)
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, overridden.SessionID, def.ID))
+	_, err := db.Pool.Exec(ctx, `UPDATE sessions SET max_cost_usd_override = $1 WHERE session_id = $2`, 7.5, overridden.SessionID)
+	require.NoError(t, err)
+
+	res, err := a.ResolveAgentDefinition(ctx, overridden.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 7.5, res.Definition.MaxCostUSD, "pinned override must be the effective cap")
+
+	plain := newTestSessionRow(t, ctx, store)
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, plain.SessionID, def.ID))
+	res, err = a.ResolveAgentDefinition(ctx, plain.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 3.0, res.Definition.MaxCostUSD, "no override falls back to the definition's cap")
+
+	stored, err := store.AgentDefinitions().GetByID(ctx, def.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, 3.0, stored.MaxCostUSD, "the stored definition is never mutated by an override")
+}
+
+func strPtrW(s string) *string { return &s }

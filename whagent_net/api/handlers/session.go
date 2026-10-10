@@ -236,6 +236,12 @@ func (s *SessionServer) GetSession(ctx context.Context, req *pb.GetSessionReques
 	// there is no anonymous read path despite the absence of an explicit
 	// check.
 	resp := &pb.GetSessionResponse{Session: sessionToProto(sess)}
+	def, err := s.currentDefinition(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	resp.EffectiveMaxTurns = int32(session.EffectiveMaxTurns(sess.MaxTurnsOverride, def))
+	resp.EffectiveMaxCostUsd = session.EffectiveMaxCostUSD(sess.MaxCostUSDOverride, def)
 	// Text is returned only on request, and never logged (presence/bytes are on Session).
 	if req.GetIncludePinnedContext() && sess.PinnedContextBytes > 0 {
 		text, err := s.store.Sessions().GetPinnedContext(ctx, id)
@@ -245,6 +251,27 @@ func (s *SessionServer) GetSession(ctx context.Context, req *pb.GetSessionReques
 		resp.PinnedContext = text
 	}
 	return resp, nil
+}
+
+// currentDefinition returns the agent definition assigned to sessionID, or a
+// zero-valued definition when none is assigned, so the effective-limit
+// resolvers fall back to their platform defaults.
+func (s *SessionServer) currentDefinition(ctx context.Context, sessionID uuid.UUID) (session.AgentDefinition, error) {
+	assignment, err := s.store.AgentDefinitions().CurrentAssignment(ctx, sessionID)
+	if err != nil {
+		return session.AgentDefinition{}, status.Errorf(codes.Internal, "get current agent assignment: %v", err)
+	}
+	if assignment == nil {
+		return session.AgentDefinition{}, nil
+	}
+	def, err := s.store.AgentDefinitions().GetByID(ctx, assignment.AgentDefinitionID)
+	if err != nil {
+		return session.AgentDefinition{}, status.Errorf(codes.Internal, "get agent definition: %v", err)
+	}
+	if def == nil {
+		return session.AgentDefinition{}, nil
+	}
+	return *def, nil
 }
 
 // ListSessions returns sessions matching req's filters, keyset-paginated

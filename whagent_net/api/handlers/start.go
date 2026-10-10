@@ -33,9 +33,9 @@ import (
 //  6. write the SCD2 `session_agent` assignment row
 //  7. start the Temporal workflow, workflow ID == session ID (LB2)
 //
-// max_turns_override is pinned on the sessions row (must be >=1); a request
-// carrying max_cost_usd_override is rejected outright (InvalidArgument) before
-// any of the steps above run, never silently ignored.
+// max_turns_override (>=1) and max_cost_usd_override (in (0, $10]) are pinned on
+// the sessions row; an out-of-range value is rejected (InvalidArgument) before
+// any of the steps above run.
 func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
 	agentID := req.GetAgentId()
 	if agentID == "" {
@@ -49,8 +49,13 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 		v := req.GetMaxTurnsOverride()
 		maxTurnsOverride = &v
 	}
+	var maxCostUSDOverride *float64
 	if req.MaxCostUsdOverride != nil {
-		return nil, status.Error(codes.InvalidArgument, "max_cost_usd_override is not supported in M1: caps are agent-definition-level only")
+		v := req.GetMaxCostUsdOverride()
+		if err := session.ValidateMaxCostUSD("max_cost_usd_override", v); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		maxCostUSDOverride = &v
 	}
 
 	// Empty pinned_context is the same as absent. Validated before any row exists.
@@ -184,15 +189,16 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 	// parent_session_id is always NULL in M1.
 	sessionID := uuid.New()
 	sess := &session.Session{
-		SessionID:        sessionID,
-		Subject:          caller,
-		OnBehalfOf:       onBehalfOf,
-		AgentID:          agentID,
-		Model:            resolvedModel,
-		ModelOverride:    modelOverride,
-		MaxTurnsOverride: maxTurnsOverride,
-		PinnedContext:    pinnedContext,
-		Status:           session.StatusRunning,
+		SessionID:          sessionID,
+		Subject:            caller,
+		OnBehalfOf:         onBehalfOf,
+		AgentID:            agentID,
+		Model:              resolvedModel,
+		ModelOverride:      modelOverride,
+		MaxTurnsOverride:   maxTurnsOverride,
+		MaxCostUSDOverride: maxCostUSDOverride,
+		PinnedContext:      pinnedContext,
+		Status:             session.StatusRunning,
 	}
 	if err := s.store.Sessions().Create(ctx, sess); err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
