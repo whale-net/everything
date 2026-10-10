@@ -102,6 +102,7 @@ service SessionService {
   // model then id. Any authenticated caller may call it; feeds the agent
   // edit form's model-definition choice.
   rpc ListModelDefinitions(ListModelDefinitionsRequest) returns (ListModelDefinitionsResponse);
+
   // UpdateAgent atomically supersedes an agent's current definition with
   // the full desired definition in the request (full replacement, not a
   // field mask: every field is set, so omitted fields take their zero

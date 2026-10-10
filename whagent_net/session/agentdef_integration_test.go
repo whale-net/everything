@@ -4,6 +4,7 @@ package session_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -473,4 +474,57 @@ func TestAgentDefinitionStore_Supersede_Concurrent_LeavesOneCurrentRow(t *testin
 	assert.Equal(t, 1, open)
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_definition WHERE agent_id = 'race-agent'`).Scan(&total))
 	assert.GreaterOrEqual(t, total, 2)
+}
+
+func TestAgentDefinitionStore_Register_CreatesOnceAndNeverUpdates(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	first := newTestAgentDefinition("reg-agent")
+	created, err := s.AgentDefinitions().Register(ctx, first)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	changed := newTestAgentDefinition("reg-agent")
+	changed.MaxTurns = 5
+	created, err = s.AgentDefinitions().Register(ctx, changed)
+	require.NoError(t, err)
+	assert.False(t, created)
+
+	got, err := s.AgentDefinitions().GetCurrent(ctx, "reg-agent")
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, got.ID)
+	assert.Equal(t, 100, got.MaxTurns)
+	assert.True(t, first.ValidFrom.Equal(got.ValidFrom))
+}
+
+func TestAgentDefinitionStore_Register_ConcurrentLeavesOneCurrentRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+
+	const n = 20
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	createdCount := make([]bool, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			createdCount[i], errs[i] = s.AgentDefinitions().Register(ctx, newTestAgentDefinition("race-agent"))
+		}(i)
+	}
+	wg.Wait()
+
+	wins := 0
+	for i := 0; i < n; i++ {
+		require.NoError(t, errs[i])
+		if createdCount[i] {
+			wins++
+		}
+	}
+	assert.Equal(t, 1, wins)
+
+	var rows int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_definition WHERE agent_id = 'race-agent' AND valid_to IS NULL`).Scan(&rows))
+	assert.Equal(t, 1, rows)
 }

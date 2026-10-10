@@ -41,6 +41,10 @@ type fakeLifecycleSessionServer struct {
 
 	session *whagentpb.Session
 
+	// agents is what ListAgents returns; nil means one "code-review" agent.
+	agents    []*whagentpb.AgentDefinition
+	agentsErr error
+
 	getSessionCalls     int
 	readTranscriptCalls int
 
@@ -55,6 +59,16 @@ type fakeLifecycleSessionServer struct {
 	stopCalled bool
 	stopReq    *whagentpb.StopSessionRequest
 	stopErr    error
+}
+
+func (f *fakeLifecycleSessionServer) ListAgents(context.Context, *whagentpb.ListAgentsRequest) (*whagentpb.ListAgentsResponse, error) {
+	if f.agentsErr != nil {
+		return nil, f.agentsErr
+	}
+	if f.agents == nil {
+		return &whagentpb.ListAgentsResponse{Agents: []*whagentpb.AgentDefinition{{AgentId: "code-review", Model: "claude-x"}}}, nil
+	}
+	return &whagentpb.ListAgentsResponse{Agents: f.agents}, nil
 }
 
 func (f *fakeLifecycleSessionServer) GetSession(ctx context.Context, req *whagentpb.GetSessionRequest) (*whagentpb.GetSessionResponse, error) {
@@ -190,18 +204,66 @@ func TestHandleStartSession_CallsStartSessionWithFormArgs(t *testing.T) {
 	require.Equal(t, "opus", server.startReq.GetModelOverride())
 }
 
-// TestHandleStartSession_MissingAgentID proves a blank agent_id is refused
-// before StartSession is ever called (client-side validation still guarded
-// server-side, since a plain POST bypasses the form's `required` attr).
-func TestHandleStartSession_MissingAgentID(t *testing.T) {
+// TestHandleStartSession_UnlistedAgentRejected proves an agent_id outside
+// the current ListAgents result returns 400, never reaches StartSession,
+// and preserves the model override.
+func TestHandleStartSession_UnlistedAgentRejected(t *testing.T) {
 	server := &fakeLifecycleSessionServer{}
 	app := newLifecycleTestApp(t, server, "")
 
-	w := postForm(t, app, app.handleStartSession, "/sessions", "", url.Values{"agent_id": {"  "}})
+	w := postForm(t, app, app.handleStartSession, "/sessions", "", url.Values{"agent_id": {"evil"}, "model_override": {"opus-keep"}})
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Nil(t, server.startReq, "StartSession must never be called for an unlisted agent")
+	require.Contains(t, w.Body.String(), "Select an agent from the list.")
+	require.Contains(t, w.Body.String(), `value="opus-keep"`)
+}
+
+// TestHandleNewSession_RendersDropdown proves one option per agent and no
+// free-text agent_id input.
+func TestHandleNewSession_RendersDropdown(t *testing.T) {
+	server := &fakeLifecycleSessionServer{agents: []*whagentpb.AgentDefinition{
+		{AgentId: "alpha", Model: "m1"}, {AgentId: "beta", Model: "m2"},
+	}}
+	app := newLifecycleTestApp(t, server, "")
+
+	w := httptest.NewRecorder()
+	app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleNewSession))(w, httptest.NewRequest(http.MethodGet, "/sessions/new", nil))
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Nil(t, server.startReq, "StartSession must never be called for a missing agent id")
-	require.Contains(t, w.Body.String(), "Agent ID is required.")
+	body := w.Body.String()
+	require.Contains(t, body, `<select name="agent_id"`)
+	require.Equal(t, 2, strings.Count(body, "<option "))
+	require.Contains(t, body, `value="alpha"`)
+	require.Contains(t, body, "beta (m2)")
+	require.NotContains(t, body, `<input type="text" name="agent_id"`)
+}
+
+// TestHandleNewSession_ListAgentsError shows an alert instead of a select.
+func TestHandleNewSession_ListAgentsError(t *testing.T) {
+	server := &fakeLifecycleSessionServer{agentsErr: status.Error(codes.Unavailable, "down")}
+	app := newLifecycleTestApp(t, server, "")
+
+	w := httptest.NewRecorder()
+	app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleNewSession))(w, httptest.NewRequest(http.MethodGet, "/sessions/new", nil))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), "alert-error")
+	require.Contains(t, w.Body.String(), "Could not load agents")
+	require.NotContains(t, w.Body.String(), "<option ")
+}
+
+// TestHandleNewSession_NoAgents shows a disabled select and a link to /agents.
+func TestHandleNewSession_NoAgents(t *testing.T) {
+	server := &fakeLifecycleSessionServer{agents: []*whagentpb.AgentDefinition{}}
+	app := newLifecycleTestApp(t, server, "")
+
+	w := httptest.NewRecorder()
+	app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleNewSession))(w, httptest.NewRequest(http.MethodGet, "/sessions/new", nil))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `href="/agents"`)
+	require.Regexp(t, `<select[^>]*disabled`, w.Body.String())
 }
 
 // TestHandleStartSession_PermissionDeniedRendersInlineMessage is FR1's
