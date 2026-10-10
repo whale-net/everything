@@ -9,6 +9,7 @@ import (
 	"context"
 
 	pb "github.com/whale-net/everything/whagent_net/protos"
+	"github.com/whale-net/everything/whagent_net/session"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -91,5 +92,57 @@ func (s *SessionServer) GetSessionUsage(ctx context.Context, req *pb.GetSessionU
 // GetUsageReport aggregates usage by UTC period, agent and model; any
 // authenticated caller may call it.
 func (s *SessionServer) GetUsageReport(ctx context.Context, req *pb.GetUsageReportRequest) (*pb.GetUsageReportResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "GetUsageReport not implemented")
+	var period session.UsagePeriod
+	switch req.GetPeriod() {
+	case pb.UsagePeriod_USAGE_PERIOD_NONE:
+		period = session.UsagePeriodNone
+	case pb.UsagePeriod_USAGE_PERIOD_DAY:
+		period = session.UsagePeriodDay
+	case pb.UsagePeriod_USAGE_PERIOD_WEEK:
+		period = session.UsagePeriodWeek
+	case pb.UsagePeriod_USAGE_PERIOD_MONTH:
+		period = session.UsagePeriodMonth
+	case pb.UsagePeriod_USAGE_PERIOD_ALL_TIME:
+		period = session.UsagePeriodAllTime
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "invalid period %d", req.GetPeriod())
+	}
+
+	q := session.UsageReportQuery{Period: period, ByAgent: req.GetByAgent(), ByModel: req.GetByModel()}
+	if req.GetFrom() != nil {
+		t := req.GetFrom().AsTime()
+		q.From = &t
+	}
+	if req.GetTo() != nil {
+		t := req.GetTo().AsTime()
+		q.To = &t
+	}
+
+	rep, err := s.store.Usage().UsageReport(ctx, q)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "usage report: %v", err)
+	}
+
+	resp := &pb.GetUsageReportResponse{
+		Total: &pb.UsageTotals{
+			PromptTokens:         rep.Total.PromptTokens,
+			CompletionTokens:     rep.Total.CompletionTokens,
+			CostUsd:              rep.Total.CostUSD,
+			Turns:                rep.Total.Turns,
+			CostIncludesEstimate: rep.Total.CostIncludesEstimate,
+		},
+	}
+	for _, r := range rep.Rows {
+		resp.Rows = append(resp.Rows, &pb.UsageRow{
+			PeriodStart:          r.PeriodStart,
+			AgentId:              r.AgentID,
+			Model:                r.Model,
+			PromptTokens:         r.PromptTokens,
+			CompletionTokens:     r.CompletionTokens,
+			CostUsd:              r.CostUSD,
+			Turns:                r.Turns,
+			CostIncludesEstimate: r.CostIncludesEstimate,
+		})
+	}
+	return resp, nil
 }
