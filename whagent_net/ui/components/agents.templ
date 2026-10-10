@@ -1,0 +1,110 @@
+package components
+
+import "strconv"
+
+// AgentView is one agent_definition row as the Agents pages render it.
+// Model is the effective model label (model, or the model_definition id).
+type AgentView struct {
+	ID                string
+	AgentID           string
+	Scope             string
+	Model             string
+	ModelDefinitionID string
+	ToolSet           string
+	MaxTurns          int32
+	MaxCostUSD        string
+	MaxToolIterations int32
+	ToolLoadingMode   string
+	RequiredRole      string
+	SystemPrompt      string
+	ValidFrom         string
+}
+
+// AgentListPageData carries the Agents list page's parameters.
+type AgentListPageData struct {
+	Layout     LayoutData
+	Agents     []AgentView
+	FetchError string
+}
+
+// AgentDetailPageData carries the agent detail page's parameters.
+type AgentDetailPageData struct {
+	Layout LayoutData
+	Agent  AgentView
+}
+
+func itoa(n int32) string { return strconv.Itoa(int(n)) }
+
+templ roleBadge(role string) {
+	if role == "" {
+		<span class="badge badge-ghost">none</span>
+	} else {
+		<span class="badge badge-info">{ role }</span>
+	}
+}
+
+templ AgentList(data AgentListPageData) {
+	@Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">Agents</h1>
+		if data.FetchError != "" {
+			<div class="alert alert-error" role="alert">{ data.FetchError }</div>
+		} else if len(data.Agents) == 0 {
+			<p class="text-base-content/70">No agents defined.</p>
+		} else {
+			<table class="table table-sm" id="agent-list">
+				<thead>
+					<tr>
+						<th>Agent</th>
+						<th>Model</th>
+						<th>Required role</th>
+						<th>Max turns</th>
+						<th>Max cost (USD)</th>
+						<th>Max tool iterations</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, a := range data.Agents {
+						<tr>
+							<td><a class="link link-primary" href={ templ.URL("/agents/" + a.AgentID) }>{ a.AgentID }</a></td>
+							<td>{ a.Model }</td>
+							<td>@roleBadge(a.RequiredRole)</td>
+							<td>{ itoa(a.MaxTurns) }</td>
+							<td>{ a.MaxCostUSD }</td>
+							<td>{ itoa(a.MaxToolIterations) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// AgentDetail renders every field of one current definition. The
+// agent-actions block is the slot for the edit control and history link.
+templ AgentDetail(data AgentDetailPageData) {
+	@Layout(data.Layout) {
+		<div class="flex items-center justify-between mb-4">
+			<h1 class="text-2xl font-bold text-base-content">{ data.Agent.AgentID }</h1>
+			<div id="agent-actions"></div>
+		</div>
+		<dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2" id="agent-fields">
+			<dt class="font-semibold">Id</dt><dd>{ data.Agent.ID }</dd>
+			<dt class="font-semibold">Agent id</dt><dd>{ data.Agent.AgentID }</dd>
+			<dt class="font-semibold">Scope</dt><dd>{ data.Agent.Scope }</dd>
+			if data.Agent.ModelDefinitionID != "" {
+				<dt class="font-semibold">Model definition id</dt><dd>{ data.Agent.ModelDefinitionID }</dd>
+			} else {
+				<dt class="font-semibold">Model</dt><dd>{ data.Agent.Model }</dd>
+			}
+			<dt class="font-semibold">Tool set</dt><dd><code>{ data.Agent.ToolSet }</code></dd>
+			<dt class="font-semibold">Max turns</dt><dd>{ itoa(data.Agent.MaxTurns) }</dd>
+			<dt class="font-semibold">Max cost (USD)</dt><dd>{ data.Agent.MaxCostUSD }</dd>
+			<dt class="font-semibold">Max tool iterations</dt><dd>{ itoa(data.Agent.MaxToolIterations) }</dd>
+			<dt class="font-semibold">Tool loading mode</dt><dd>{ data.Agent.ToolLoadingMode }</dd>
+			<dt class="font-semibold">Required role</dt><dd>@roleBadge(data.Agent.RequiredRole)</dd>
+			<dt class="font-semibold">Valid from</dt><dd>{ data.Agent.ValidFrom }</dd>
+		</dl>
+		<h2 class="text-lg font-semibold mt-6 mb-2">System prompt</h2>
+		<pre class="font-mono text-sm whitespace-pre-wrap bg-base-200 rounded p-4" id="agent-system-prompt">{ data.Agent.SystemPrompt }</pre>
+	}
+}
