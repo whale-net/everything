@@ -51,7 +51,9 @@ defaults to 4.
 1. **Discovery**: use the task manifest `krill-work:plan`/`planner`
    reported (every task id, title, starting lane, and dependency edges) if
    you have it. If you don't, call `list_tasks {milestone_id}`
-   (CONVENTIONS.md "Work axis") for the task ids, then `get_task {id}` on
+   (CONVENTIONS.md "Work axis") for the task ids — and on each milepebble
+   from `list_milepebbles`, whose tasks never list under the parent
+   (CONVENTIONS.md "Milestone given: check its milepebbles first") — then `get_task {id}` on
    each for its dependency edges — `list_tasks` itself doesn't carry
    dependencies, only id/title/`current_lane`/attempt count/live-claim.
 2. For each task whose dependencies are all `Done` — call `get_task {id}`

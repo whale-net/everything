@@ -398,6 +398,28 @@ product (or host a new one), then `/krill-design:design <product-id>
 --milestone M<n>`, then re-run." Never substitute an issue, a board, or any
 other tracking store.
 
+### Milestone given: check its milepebbles first
+
+Before designing, planning, or implementing against a milestone id, call
+`list_milepebbles {milestone_id}`. Milepebbles are separate containers:
+`list_tasks`, `get_milestone_status`, and status history on the parent
+never include a milepebble's tasks or design sessions, so skipping this
+re-plans work that already exists. If any are cut, for each one read
+`get_milestone {id}` (its `Delivers`), `get_milestone_status_history {id}`
+(design-session id or task ids in the notes), and `list_tasks
+{milestone_id: <milepebble id>}`. Then:
+
+- Scope a milepebble already delivers is owned: resume its design session
+  or task manifest instead of re-speccing or re-tasking it.
+- Only parent `Delivers` scope not covered by any milepebble is new work;
+  it goes into a new or existing milepebble (`create_task` rejects a
+  parent that has milepebbles cut).
+- If every milepebble is covered, report each one's status and next
+  command (e.g. `/krill-work:implement <milepebble-id>`) and stop.
+
+Report the milepebbles found and what each already has before doing any
+new planning.
+
 ## Git hygiene
 
 Each task gets its own branch and worktree and, once pushed, its own small

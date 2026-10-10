@@ -44,7 +44,10 @@ than opening a second owner.
    `get_design_session` gives you both). If not, point the user to
    `/krill-design:design`, `/krill-design:review`, or
    `/krill-design:loop-design-panel`. Call `get_milestone {id}` to confirm
-   the Milestone exists and belongs to the same Product. For idempotency,
+   the Milestone exists and belongs to the same Product. Run CONVENTIONS.md
+   "Milestone given: check its milepebbles first" — a milepebble's tasks
+   never appear under its parent — and pass `planner` only uncovered scope
+   plus the milepebble id(s) it should target. For idempotency,
    don't trust bare `get_milestone_status {id}` alone: `planned` is
    ambiguous — `/krill-design:design`/`review`/
    `loop-design-panel` all set a krill-hosted milestone to `planned` the
