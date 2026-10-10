@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -356,7 +357,73 @@ func (s agentDefinitionStore) History(ctx context.Context, agentID string) ([]*A
 	`, agentID)
 }
 
-// Supersede is implemented in the Implementation lane.
+// Supersede closes agentID's current row and inserts newDef as the new
+// current row in one transaction, both stamped with the same timestamp so
+// the history has no gap or overlap. Fills newDef's ID, CreatedAt and
+// ValidFrom and returns it.
 func (s agentDefinitionStore) Supersede(ctx context.Context, agentID string, newDef *AgentDefinition) (*AgentDefinition, error) {
-	return nil, errors.New("agent definition supersede: not implemented")
+	toolSet, err := json.Marshal(newDef.ToolSet)
+	if err != nil {
+		return nil, fmt.Errorf("marshal tool_set: %w", err)
+	}
+	mode := newDef.ToolLoadingMode
+	if mode == "" {
+		mode = ToolLoadingModeBulk
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var curID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM agent_definition
+		WHERE agent_id = $1 AND valid_to IS NULL
+		FOR UPDATE
+	`, agentID).Scan(&curID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A concurrent supersede may have closed the row we waited on.
+		var any bool
+		if qerr := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_definition WHERE agent_id = $1)`, agentID).Scan(&any); qerr != nil {
+			return nil, fmt.Errorf("check agent definition exists: %w", qerr)
+		}
+		if any {
+			return nil, ErrSupersedeConflict
+		}
+		return nil, ErrAgentNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock current agent definition: %w", err)
+	}
+
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return nil, fmt.Errorf("read clock: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_definition SET valid_to = $2 WHERE id = $1`, curID, now); err != nil {
+		return nil, fmt.Errorf("close current agent definition: %w", err)
+	}
+
+	out := *newDef
+	out.AgentID = agentID
+	out.ToolLoadingMode = mode
+	out.ValidTo = nil
+	err = tx.QueryRow(ctx, `
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, valid_from)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING id, created_at, valid_from
+	`, agentID, out.Scope, out.Model, out.ModelDefinitionID, toolSet, out.MaxTurns, out.MaxCostUSD, out.MaxToolIterations, out.RequiredRole, mode, out.SystemPrompt, now).Scan(&out.ID, &out.CreatedAt, &out.ValidFrom)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrSupersedeConflict
+		}
+		return nil, fmt.Errorf("insert superseding agent definition: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return &out, nil
 }

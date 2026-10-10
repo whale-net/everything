@@ -3,6 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	pb "github.com/whale-net/everything/whagent_net/protos"
@@ -110,10 +114,95 @@ func (s *SessionServer) GetAgent(ctx context.Context, req *pb.GetAgentRequest) (
 	return resp, nil
 }
 
-// UpdateAgent supersedes an agent's current definition (admin only).
+// UpdateAgent supersedes an agent's current definition with the full
+// desired definition in the request (admin only).
 func (s *SessionServer) UpdateAgent(ctx context.Context, req *pb.UpdateAgentRequest) (*pb.UpdateAgentResponse, error) {
 	if !s.isAgentAdmin(ctx) {
 		return nil, status.Error(codes.PermissionDenied, "updating an agent requires the agent admin role")
 	}
-	return nil, status.Error(codes.Unimplemented, "UpdateAgent not implemented")
+	def, err := s.validateUpdateAgent(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	cur, err := s.store.AgentDefinitions().Supersede(ctx, req.GetAgentId(), def)
+	switch {
+	case errors.Is(err, session.ErrAgentNotFound):
+		return nil, status.Errorf(codes.NotFound, "agent %q not found", req.GetAgentId())
+	case errors.Is(err, session.ErrSupersedeConflict):
+		return nil, status.Errorf(codes.Aborted, "agent %q was modified concurrently; retry", req.GetAgentId())
+	case err != nil:
+		return nil, status.Errorf(codes.Internal, "update agent: %v", err)
+	}
+	p, err := agentDefToProto(cur)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "encode agent: %v", err)
+	}
+	return &pb.UpdateAgentResponse{Current: p}, nil
+}
+
+func (s *SessionServer) validateUpdateAgent(ctx context.Context, req *pb.UpdateAgentRequest) (*session.AgentDefinition, error) {
+	bad := func(format string, a ...any) error { return status.Errorf(codes.InvalidArgument, format, a...) }
+	if req.GetAgentId() == "" {
+		return nil, bad("agent_id is required")
+	}
+	def := &session.AgentDefinition{
+		AgentID:           req.GetAgentId(),
+		MaxTurns:          int(req.GetMaxTurns()),
+		MaxCostUSD:        req.GetMaxCostUsd(),
+		MaxToolIterations: int(req.GetMaxToolIterations()),
+		ToolLoadingMode:   session.ToolLoadingMode(req.GetToolLoadingMode()),
+		RequiredRole:      req.RequiredRole,
+	}
+	hasModel, hasDef := req.GetModel() != "", req.ModelDefinitionId != nil
+	if hasModel == hasDef {
+		return nil, bad("exactly one of model or model_definition_id must be set")
+	}
+	if hasModel {
+		m := req.GetModel()
+		def.Model = &m
+	} else {
+		id, err := uuid.Parse(req.GetModelDefinitionId())
+		if err != nil {
+			return nil, bad("model_definition_id is not a valid UUID")
+		}
+		md, err := s.store.ModelDefinitions().GetByID(ctx, id)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "look up model definition: %v", err)
+		}
+		if md == nil {
+			return nil, bad("model_definition_id %s does not exist", id)
+		}
+		def.ModelDefinitionID = &id
+	}
+	if def.MaxTurns <= 0 || def.MaxToolIterations <= 0 || def.MaxCostUSD <= 0 {
+		return nil, bad("max_turns, max_cost_usd and max_tool_iterations must be positive")
+	}
+	switch def.ToolLoadingMode {
+	case session.ToolLoadingModeBulk, session.ToolLoadingModeSearch:
+	default:
+		return nil, bad("tool_loading_mode %q must be \"bulk\" or \"search\"", req.GetToolLoadingMode())
+	}
+	// Scope is optional; when set it must be non-blank (config.Validate rule).
+	if req.GetScope() != "" {
+		sc := req.GetScope()
+		if strings.TrimSpace(sc) == "" {
+			return nil, bad("scope, if set, must not be blank")
+		}
+		def.Scope = &sc
+	}
+	if req.GetToolSet() != "" {
+		if err := json.Unmarshal([]byte(req.GetToolSet()), &def.ToolSet); err != nil {
+			return nil, bad("tool_set must be a JSON array of tool server refs: %v", err)
+		}
+		for i, ref := range def.ToolSet {
+			if ref.ServerURL == "" {
+				return nil, bad("tool_set[%d]: server_url is required", i)
+			}
+		}
+	}
+	if req.GetSystemPrompt() != "" {
+		sp := req.GetSystemPrompt()
+		def.SystemPrompt = &sp
+	}
+	return def, nil
 }

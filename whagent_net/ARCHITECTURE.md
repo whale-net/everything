@@ -914,6 +914,15 @@ all rows for the agent by `valid_from` and requires the caller's token roles
 to include `WHAGENT_API_ADMIN_ROLE` (`handlers.isAgentAdmin`); an unset role
 fails closed. The response carries no version number.
 
+`UpdateAgent` (admin only, `PERMISSION_DENIED` otherwise, before any DB
+write) is the only in-service write path. It takes the full desired
+definition (full replacement, no field mask) and calls
+`AgentDefinitionStore.Supersede`: one transaction that locks the current row
+`FOR UPDATE`, sets its `valid_to` and inserts the new row with the same
+timestamp as `valid_from`. A concurrent supersede hits the partial unique
+index or finds the row closed and maps to `ABORTED`; an unknown agent is
+`NOT_FOUND`. Running sessions keep their pinned definition id.
+
 ## `mcp`'s start_session: two RPCs, one tool (issue #2120)
 
 `mcp`'s `start_session` tool takes an optional `first_turn` field
