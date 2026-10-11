@@ -15,6 +15,9 @@ from friendly_computing_machine.src.friendly_computing_machine.db import util as
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     shitposter_memory_dal as dal,
 )
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+    shitposter_weight_dal,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
     ShitposterChannelOptIn,
@@ -326,3 +329,35 @@ def test_reply_without_entries_list_fails_the_run(engine, persona_id, monkeypatc
     monkeypatch.setattr(idea_generate, "_call_theme_agent", lambda *_: "no json here")
     with pytest.raises(ValueError):
         idea_generate._compute(BrainJobInput(persona_id=persona_id, job_kind="idea_generate"))
+
+
+def test_first_run_seeds_and_uses_starting_weights(engine, persona_id, monkeypatch):
+    _hits(engine, persona_id, 2)
+    _agent(monkeypatch, [])
+    payload, _ = _run(engine, persona_id)
+    assert payload["theme"]["target"] == pytest.approx(0.15)
+    current = shitposter_weight_dal.get_current_weights(persona_id)
+    assert float(current["theme"].weight) == pytest.approx(0.15)
+    assert float(current["novel"].weight) == pytest.approx(0.10)
+
+
+def test_generator_targets_the_stored_weight_not_the_env(engine, persona_id, monkeypatch):
+    shitposter_weight_dal.get_current_weights(persona_id)
+    with Session(engine) as s:
+        shitposter_weight_dal.revise_weight(s, persona_id, "theme", 0.25, {"test": True})
+        s.commit()
+    # the starting-weight env no longer applies once weights are stored
+    monkeypatch.setenv("FCM_SHITPOSTER_THEME_TARGET_WEIGHT", "0.05")
+    _hits(engine, persona_id, 17)
+    for i in range(3):  # share 0.15: at the 0.15 default, below the stored 0.25
+        _lore(engine, persona_id, "theme", f"theme {i}")
+    calls: list = []
+    _agent(monkeypatch, [], calls)
+
+    payload, _ = _run(engine, persona_id)
+
+    assert payload["theme"]["target"] == pytest.approx(0.25)
+    assert len(calls) == 1
+    assert idea_generate.current_weights(persona_id) == idea_generate.TargetWeights(
+        theme=pytest.approx(0.25), novel=pytest.approx(0.10)
+    )

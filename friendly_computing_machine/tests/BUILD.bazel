@@ -429,6 +429,19 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Shitposter source weights: SCD2 migration round-trip (head derived), lazy
+# seed, revisions, history, and bounds/ceiling/start-weight validation.
+py_test(
+    name = "test_shitposter_source_weight",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_shitposter_source_weight.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Idea-generator schema kinds: CHECK migration DDL round-trip (Postgres,
 # rendered offline), model constraints, row acceptance, and runner timeouts.
 py_test(
