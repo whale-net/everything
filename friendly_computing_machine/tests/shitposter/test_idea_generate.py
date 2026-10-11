@@ -393,7 +393,7 @@ def _theme_at_target(engine, persona_id, hits=17):
 
 
 def _novel_agent(monkeypatch, entries, calls=None):
-    def fake(active, retired, max_entries):
+    def fake(active, retired, max_entries, attributes=None):
         if calls is not None:
             calls.append({"active": active, "retired": retired, "max": max_entries})
         return json.dumps({"entries": entries})
