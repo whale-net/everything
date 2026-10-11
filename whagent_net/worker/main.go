@@ -136,6 +136,7 @@ func run() error {
 	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
 	w.RegisterActivityWithOptions(acts.CommitTurn, activity.RegisterOptions{Name: ActivityCommitTurn})
 	w.RegisterActivityWithOptions(acts.UpdateSessionStatus, activity.RegisterOptions{Name: ActivityUpdateSessionStatus})
+	w.RegisterActivityWithOptions(acts.ResolveIdleTimeout, activity.RegisterOptions{Name: ActivityResolveIdleTimeout})
 	// SumCost/CommitTerminalEvent (issue #2119): registered now so the
 	// worker binary exposes them from Scaffold phase onward, even though
 	// processTurn does not call either yet -- Implementation phase wires

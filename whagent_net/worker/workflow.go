@@ -102,6 +102,9 @@
 // across this deploy keeps taking the pre-M5 path: updateSessionStatus
 // writes the session's status without committing any status_change
 // transcript event first.
+// The idle expiry change (ResolveIdleTimeout at start, see idle.go) is gated
+// behind "session-workflow-idle-expiry": a pre-change run never calls it and
+// starts an idle clock only when the pre-deploy ArmIdleTimer sweep arrives.
 // The next behavior-changing edit to this file must add its own change ID
 // the same way.
 //
@@ -230,6 +233,16 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 
 	turnCh := workflow.GetSignalChannel(ctx, SignalSendTurn)
 	stopCh := workflow.GetSignalChannel(ctx, SignalStop)
+	armCh := workflow.GetSignalChannel(ctx, SignalArmIdleTimer)
+
+	idle := &idleState{}
+	if workflow.GetVersion(ctx, idleExpiryChangeID, workflow.DefaultVersion, 1) >= 1 {
+		var resolved ResolveIdleTimeoutResult
+		if err := workflow.ExecuteActivity(ctx, ActivityResolveIdleTimeout, in.SessionID).Get(ctx, &resolved); err != nil {
+			return err
+		}
+		idle.timeout = resolved.EffectiveTimeout
+	}
 
 	if err := updateSessionStatus(ctx, in.SessionID, 0, session.StatusAwaitingInput, nil); err != nil {
 		return err
@@ -237,26 +250,18 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 
 	turn := 0
 	for {
-		var signal SendTurnSignal
-		stopped := false
+		waited, signal := awaitInput(ctx, idle, turnCh, stopCh, armCh)
 
-		sel := workflow.NewSelector(ctx)
-		sel.AddReceive(turnCh, func(c workflow.ReceiveChannel, more bool) {
-			c.Receive(ctx, &signal)
-		})
-		sel.AddReceive(stopCh, func(c workflow.ReceiveChannel, more bool) {
-			var empty struct{}
-			c.Receive(ctx, &empty)
-			stopped = true
-		})
-		sel.Select(ctx)
-
-		if stopped {
-			// Nothing is in flight in this branch (the selector above only
-			// ever unblocks between turns, where the session is already
-			// idle) -- writing `stopped` is the only work left to do.
+		if waited == waitStop {
+			// Nothing is in flight in this branch (awaitInput only ever
+			// unblocks between turns, where the session is already idle) --
+			// writing `stopped` is the only work left to do.
 			logger.Info("session stop signal received while awaiting input", "session_id", in.SessionID.String(), "turn", turn)
 			return updateSessionStatus(ctx, in.SessionID, turn, session.StatusStopped, nil)
+		}
+		if waited == waitExpired {
+			logger.Info("session idle timeout elapsed while awaiting input", "session_id", in.SessionID.String(), "turn", turn)
+			return updateSessionStatusWithReason(ctx, in.SessionID, turn, session.StatusExpired, nil, events.StatusChangeReasonIdleTimeout)
 		}
 
 		turn++
