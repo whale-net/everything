@@ -42,6 +42,8 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
 )
 
 MEMORY_REVISION = "e5b0d3a8c2f5"
+# later lore migrations the DAL needs on top of the memory tables
+LORE_KEY_REVISION = "b7039c37db2c"
 MEMORY_TABLES = frozenset(
     {"shitposterpersonaattribute", "shitposterloreentry", "shitpostermemorychange"}
 )
@@ -111,9 +113,17 @@ def pre_engine():
     return engine
 
 
+@pytest.fixture(scope="module")
+def lore_key_migration() -> ModuleType:
+    matches = sorted(_versions_dir().glob(f"*{LORE_KEY_REVISION}*.py"))
+    assert len(matches) == 1
+    return _load(matches[0])
+
+
 @pytest.fixture
-def engine(pre_engine, migration):
+def engine(pre_engine, migration, lore_key_migration):
     _run(migration, "upgrade", pre_engine)
+    _run(lore_key_migration, "upgrade", pre_engine)
     return pre_engine
 
 
