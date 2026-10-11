@@ -4,6 +4,8 @@ Attributes go in first, in id order. Lore follows, ranked by a score of
 recency decay plus lifetime popularity, bounded to the top N (the ranked
 section). One lore entry ranked below N is then picked at random if it fits. Every item is checked against the budget against
 the full rendered text, so a pick is dropped rather than overflowing.
+Generated (theme/novel) lore never outnumbers non-generated lore in one
+snapshot; with no non-generated lore included, at most one generated entry is.
 
 Suggestion text is never read here; only attributes derived from it are.
 """
@@ -117,8 +119,8 @@ def lore_score(
 
 def generated_allowed(generated_taken: int, non_generated_taken: int) -> bool:
     """Whether one more generated lore item keeps generated items a non-majority."""
-    # TODO(implementation): enforce generated <= non-generated, or at most one with no non-generated
-    return True
+    # with no non-generated lore in the snapshot, a single generated item is allowed
+    return generated_taken < max(1, non_generated_taken)
 
 
 def select_items(
@@ -132,14 +134,25 @@ def select_items(
     lines: list[str] = []
     chosen: list[SelectedItem] = []
     included: set[tuple[str, int]] = set()
+    lore_counts = {"generated": 0, "non_generated": 0}
+
+    def allowed(candidate: Candidate) -> bool:
+        if not candidate.is_generated:
+            return True
+        return generated_allowed(
+            lore_counts["generated"], lore_counts["non_generated"]
+        )
 
     def fits(line: str) -> bool:
         return approx_tokens("\n".join([*lines, line])) <= budget
 
     def take(candidate: Candidate, is_random: bool) -> bool:
         line = render_line(candidate.text)
-        if not fits(line):
+        if not allowed(candidate) or not fits(line):
             return False
+        if candidate.item_kind == ITEM_LORE:
+            key = "generated" if candidate.is_generated else "non_generated"
+            lore_counts[key] += 1
         lines.append(line)
         chosen.append(
             SelectedItem(
@@ -169,7 +182,9 @@ def select_items(
     pool = [
         c
         for c in ranked_lore[ranked_lore_cap:]
-        if (c.item_kind, c.item_id) not in included and fits(render_line(c.text))
+        if (c.item_kind, c.item_id) not in included
+        and allowed(c)
+        and fits(render_line(c.text))
     ]
     if pool:
         take(rng.choice(pool), True)
