@@ -46,12 +46,14 @@ go_test(
     srcs = [
         "auth_test.go",
         "control_test.go",
+        "expired_state_test.go",
         "stream_sequencer_test.go",
     ],
     embed = [":handlers"],
     deps = [
         "//libs/go/grpcauth",
         "//whagent_net/events",
+        "//whagent_net/protos:whagentpb",
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",

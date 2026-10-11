@@ -168,6 +168,10 @@ type StatusChangeEventPayload struct {
 // event for a session whose effective max_turns is 1.
 const StatusChangeReasonSingleTurn = "single_turn"
 
+// StatusChangeReasonIdleTimeout is the Reason on a `status_change:expired`
+// event: the session sat in awaiting_input past its effective idle timeout.
+const StatusChangeReasonIdleTimeout = "idle_timeout"
+
 // Event is the whagent-net LB1 record: the single definition of a
 // committed transcript event. The `transcript_event` Postgres row, the
 // RabbitMQ message body, and -- later -- the S3 jsonl line are all this

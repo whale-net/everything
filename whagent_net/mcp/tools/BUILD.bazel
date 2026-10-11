@@ -37,6 +37,7 @@ go_test(
     srcs = [
         "deps_test.go",
         "dispatch_reauth_test.go",
+        "expired_state_test.go",
         "dispatch_test.go",
         "errors_test.go",
         "fake_client_test.go",

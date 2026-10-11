@@ -26,7 +26,7 @@ const (
 
 // Status is a session's control-plane lifecycle state
 // (ARCHITECTURE.md "Three nouns"). running/awaiting_input are
-// non-terminal; done/stopped/failed/capped are terminal and, once
+// non-terminal; the values in terminalStatuses are terminal and, once
 // written, are never overwritten by a later non-terminal write (see
 // SessionStore.UpdateStatus).
 type Status string
@@ -38,18 +38,24 @@ const (
 	StatusStopped       Status = "stopped"
 	StatusFailed        Status = "failed"
 	StatusCapped        Status = "capped"
+	StatusExpired       Status = "expired"
 )
+
+// terminalStatuses is the single definition of the terminal set.
+// IsTerminal, UpdateStatus's CAS predicate and ListArchiveEligible all
+// derive from it so they cannot drift.
+var terminalStatuses = []Status{StatusDone, StatusStopped, StatusFailed, StatusCapped, StatusExpired}
 
 // IsTerminal reports whether s is one of the terminal statuses that
 // UpdateStatus's compare-and-swap protects from being overwritten by a
 // later non-terminal write.
 func (s Status) IsTerminal() bool {
-	switch s {
-	case StatusDone, StatusStopped, StatusFailed, StatusCapped:
-		return true
-	default:
-		return false
+	for _, t := range terminalStatuses {
+		if s == t {
+			return true
+		}
 	}
+	return false
 }
 
 // CapKind names which guardrail ended a session in the capped status
@@ -346,10 +352,16 @@ func (s sessionStore) UpdateStatus(ctx context.Context, id uuid.UUID, status Sta
 	return nil
 }
 
-// terminalStatusList is the SQL-literal IN-list of Status.IsTerminal's
-// terminal values, kept in one place so UpdateStatus's CAS predicate
-// cannot drift from IsTerminal's Go-side definition.
-const terminalStatusList = `'done', 'stopped', 'failed', 'capped'`
+// terminalStatusList is the SQL-literal IN-list of terminalStatuses, so
+// UpdateStatus's CAS predicate and archival selection cannot drift from
+// IsTerminal's Go-side definition.
+var terminalStatusList = func() string {
+	quoted := make([]string, 0, len(terminalStatuses))
+	for _, t := range terminalStatuses {
+		quoted = append(quoted, "'"+string(t)+"'")
+	}
+	return strings.Join(quoted, ", ")
+}()
 
 // ListArchiveEligible implements SessionStore.ListArchiveEligible (see
 // that doc comment for the two cases this query unions): a LEFT JOIN

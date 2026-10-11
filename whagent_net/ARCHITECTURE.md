@@ -81,7 +81,7 @@ the API shape obvious:
 
 | Noun | What it is | Mutability | Owner |
 |---|---|---|---|
-| **Session** | Control-plane record: id, subject (who it runs as), agent definition, model, caps, `parent_session_id`, status (`running` / `awaiting_input` / `done` / `stopped` / `capped` / `failed`), Temporal workflow handle | Small, mutable | `api` + Temporal (source of truth for status is the workflow; the `sessions` row mirrors it with compare-and-swap on terminal writes, same as manmanv2 control-api/event-processor) |
+| **Session** | Control-plane record: id, subject (who it runs as), agent definition, model, caps, `parent_session_id`, status (`running` / `awaiting_input` / `done` / `stopped` / `capped` / `failed` / `expired`), Temporal workflow handle | Small, mutable | `api` + Temporal (source of truth for status is the workflow; the `sessions` row mirrors it with compare-and-swap on terminal writes, same as manmanv2 control-api/event-processor) |
 | **Transcript** | Append-only event log: user turns, model messages, tool calls, tool results, summaries | Immutable, grows | `session` store package, tiered — see [Transcript storage tiers](#transcript-storage-tiers) |
 | **Context** | What the model *sees* at turn N: a projection over the transcript — recent events + summaries + agent definition, fitted to a token budget | Derived, ephemeral, rebuilt every turn | `worker` activity. Never stored; each turn records the event-ID list it was built from so a debug `GetTurnContext` can be added later without a schema change |
 

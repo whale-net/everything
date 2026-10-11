@@ -23,7 +23,7 @@ type GetSessionInput struct {
 // (session.proto's "Session" message doc).
 type GetSessionOutput struct {
 	SessionID            string `json:"session_id" jsonschema:"The session's id"`
-	State                string `json:"state" jsonschema:"One of the six SessionState values (running, awaiting_input, done, stopped, failed, capped)"`
+	State                string `json:"state" jsonschema:"One of the seven SessionState values (running, awaiting_input, done, stopped, failed, capped, expired)"`
 	AgentID              string `json:"agent_id" jsonschema:"The agent definition this session runs"`
 	Model                string `json:"model" jsonschema:"The model this session is running (after any FR5 override resolution)"`
 	CapKind              string `json:"cap_kind,omitempty" jsonschema:"Set only when state is capped: which guardrail ended the session (turns or cost)"`
