@@ -5,6 +5,7 @@ append-only and every row names at least one cause.
 """
 
 import datetime
+import json
 from dataclasses import dataclass
 from enum import Enum
 
@@ -72,12 +73,29 @@ class NovelGateReading:
     fraction: float
 
     def to_cause_ref(self) -> str:
-        raise NotImplementedError
+        return json.dumps(
+            {
+                "recent_mean": self.recent_mean,
+                "baseline_mean": self.baseline_mean,
+                "fraction": self.fraction,
+            },
+            sort_keys=True,
+        )
 
     @classmethod
     def from_cause_ref(cls, cause_ref: str | None) -> "NovelGateReading | None":
         """Parsed reading, or None when cause_ref is not in this format."""
-        raise NotImplementedError
+        if not cause_ref:
+            return None
+        try:
+            obj = json.loads(cause_ref)
+            return cls(
+                recent_mean=float(obj["recent_mean"]),
+                baseline_mean=float(obj["baseline_mean"]),
+                fraction=float(obj["fraction"]),
+            )
+        except (ValueError, TypeError, KeyError):
+            return None
 
 
 class ShitposterPersonaAttribute(Base, table=True):
