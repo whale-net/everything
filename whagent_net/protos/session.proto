@@ -241,6 +241,11 @@ message GetSessionResponse {
   // include_pinned_context was requested and the session has one. Lives on
   // the response, not Session, so no other RPC can carry it.
   optional string pinned_context = 2;
+
+  // Effective limits for this session: the pinned override when set, else the
+  // agent definition's value, else the platform default.
+  int32 effective_max_turns = 3;
+  double effective_max_cost_usd = 4;
 }
 
 message ListSessionsRequest {

@@ -49,7 +49,7 @@ _SNAPSHOT_TEXT_CAP = 3500
 class ChangeCause:
     """Resolved cause of one memory change, rendered for the operator."""
 
-    kind: str  # "post_engagement" | "suggestion" | "operator" | "fold"
+    kind: str  # "post_engagement" | "suggestion" | "operator" | "fold" | "theme_synthesis" | "novel_gate"
     detail: str  # engagement summary, backer names (operator-only), or subject
     occurred_at: Optional[datetime.datetime] = None
 

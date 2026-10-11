@@ -257,6 +257,16 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Idea-generator config tunables (agent ids, run cap, cadence, target weights).
+py_test(
+    name = "test_idea_generator_config",
+    size = "small",
+    srcs = [
+        "shitposter/test_idea_generator_config.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # /shitpost summon handler (fakes the bolt App singleton, so its own target).
 py_test(
     name = "test_shitpost_summon",
@@ -414,6 +424,19 @@ py_test(
     srcs = [
         "conftest.py",
         "db/test_shitposter_memory.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Idea-generator schema kinds: CHECK migration DDL round-trip (Postgres,
+# rendered offline), model constraints, row acceptance, and runner timeouts.
+py_test(
+    name = "test_shitposter_idea_generator_kinds",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_shitposter_idea_generator_kinds.py",
     ],
     data = ["//friendly_computing_machine/src/migrations:migration_versions"],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
