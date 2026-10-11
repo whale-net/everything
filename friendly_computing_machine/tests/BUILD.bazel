@@ -472,3 +472,13 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# Idea-generator job: theme branch, pool targeting, run cap, guardrails, initial popularity.
+py_test(
+    name = "test_shitposter_idea_generate",
+    size = "small",
+    srcs = [
+        "shitposter/test_idea_generate.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)

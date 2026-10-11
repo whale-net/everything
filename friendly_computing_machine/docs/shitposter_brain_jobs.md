@@ -3,7 +3,7 @@
 The brain job runner is the shared shape for Shitposter persona jobs (harvest,
 reflect, write, snapshot). Each job kind plugs a compute step and an apply step
 into it. The harvest (`harvest.py`), snapshot (`snapshot.py`), and reflect (`reflect.py`) job bodies are
-registered, and so is write. Worker startup registers the harvest, reflect and write schedules for
+registered, and so are write and idea-generate (`idea_generate.py`). Worker startup registers the harvest, reflect and write schedules for
 every persona (see [Schedules](#schedules)); snapshot has none and runs after a successful reflect.
 
 Code: `src/friendly_computing_machine/temporal/shitposter_brain/`
@@ -165,6 +165,48 @@ transaction if one is registered.
 `register_reflect_schedule(...)` creates the daily schedule at worker startup. `brain-trigger <persona_id> reflect` runs it on demand. The
 snapshot trigger after a successful run is wired (see the reflect section above).
 
+## Idea-generator job
+
+`idea_generate.py` keeps generated lore near its standing-pool target. Compute
+reads the persona's active lore and takes each generated kind's share (theme or
+novel count over all active lore). Targets come from `current_weights(...)`, the
+one seam for target weights (today `FCM_SHITPOSTER_THEME_TARGET_WEIGHT` and
+`FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT`). With no active lore, both shares count as
+below target. Hit promotion is not done here; `lore_promotion.py` owns it.
+
+- **Theme.** When the theme share is below target, the theme agent
+  (`shitposter-theme-generator`, overridable with
+  `FCM_SHITPOSTER_THEME_GENERATOR_AGENT_ID`) gets the active lore and the
+  operator-retired attributes and lore. It returns
+  `{"entries": [{"text", "cites": [lore_id, ...]}]}`.
+- **Novel.** Stub: it records `gate: "not_implemented"` and emits nothing.
+
+Each proposal is rejected, writing nothing and never failing the run, with one of these reasons:
+
+- `malformed`: missing, empty or over-long text
+- `insufficient_citations`: a theme entry citing fewer than two active lore ids
+- `targets_member`, `instruction`: the reflector's member-name and instruction checks
+- `retired_readd`: the text matches or rewords (high word overlap) operator-retired lore or an attribute
+- `run_cap`: past `FCM_SHITPOSTER_IDEA_GENERATOR_RUN_CAP` (default 2) entries across theme and novel
+
+The guardrail checks live in `shitposter_brain/guardrails.py`, shared with the reflector.
+
+Apply writes each accepted entry as `shitposterloreentry` (`kind=theme`), with
+`popularity_score` set to the median popularity of active hit lore, or 0 when
+there is none. Each entry gets a `shitpostermemorychange` add row with
+`cause_kind=theme_synthesis` and `cause_ref` listing the cited entries
+(`lore:<id>,lore:<id>`). The run is `succeeded` when anything is written and
+`no_op` otherwise. Run details:
+
+```
+{"theme": {"share", "target"}, "novel": {"share", "target", "gate"},
+ "entries": [{"lore_id", "kind", "agent_id", "cited"}],
+ "rejections": [{"kind", "text", "reason"}],
+ "refreshes": [], "weight_changes": []}
+```
+
+A share is `null` when the pool is empty.
+
 ## Timeouts
 
 Per-kind workflow timeouts live in `BRAIN_JOB_TIMEOUTS` in `temporal/shitposter_brain/base.py`:
@@ -175,6 +217,7 @@ Per-kind workflow timeouts live in `BRAIN_JOB_TIMEOUTS` in `temporal/shitposter_
 | reflect | 30 min |
 | write | 30 min |
 | snapshot | 5 min |
+| idea_generate | 30 min |
 
 `STALE_LOCK_SLACK` is 5 min. Both are code constants, not environment variables.
 See [ENV.md](../ENV.md#shitposter-brain-job-runner).
