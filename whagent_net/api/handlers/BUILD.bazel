@@ -48,6 +48,7 @@ go_test(
         "control_test.go",
         "expired_state_test.go",
         "stream_sequencer_test.go",
+        "usage_test.go",
     ],
     embed = [":handlers"],
     deps = [

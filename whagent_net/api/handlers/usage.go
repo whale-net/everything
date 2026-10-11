@@ -19,8 +19,9 @@ import (
 // GetSessionUsage is a read path (FR4/NFR5): resolves the session
 // (NOT_FOUND if unknown), reads the caps from the session's current SCD2
 // agent assignment (session.AgentDefinitionStore.CurrentAssignment ->
-// GetByID), applying the defaults above when a definition field is
-// zero-valued, and combines that with session.UsageStore.Summary --
+// GetByID) through session.EffectiveMaxTurns/EffectiveMaxCostUSD, so a
+// pinned session override wins and platform defaults fill zero-valued
+// fields, and combines that with session.UsageStore.Summary --
 // every figure summed fresh from committed turn_usage rows, never a
 // separately-mutated counter. Authorization follows the same rule as
 // GetSession/ReadTranscript: any authenticated caller may read any
