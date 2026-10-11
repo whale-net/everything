@@ -40,6 +40,7 @@ go_test(
     name = "session_test",
     srcs = [
         "expired_status_test.go",
+        "idletimeout_test.go",
         "maxcost_test.go",
         "maxturns_test.go",
         "sessions_test.go",
@@ -48,6 +49,7 @@ go_test(
     deps = [
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
 
@@ -72,6 +74,7 @@ go_test(
     timeout = "long",
     srcs = [
         "agentdef_integration_test.go",
+        "idletimeout_integration_test.go",
         "dashboard_integration_test.go",
         "idempotency_integration_test.go",
         "modeldef_integration_test.go",
