@@ -31,6 +31,32 @@ def shitposter_runs(page: int = PageOption, page_size: int = PageSizeOption):
     typer.echo(page_runs(page, page_size))
 
 
+@shitposter_app.command("lore")
+def shitposter_lore(
+    source: str = typer.Option(
+        None, "--source", help="Only this source: hit, consolidated, theme or novel."
+    ),
+    page: int = PageOption,
+    page_size: int = PageSizeOption,
+):
+    """Active lore with each entry's source."""
+    from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.shitposter_operator import (
+        page_lore,
+    )
+
+    typer.echo(page_lore(source, page, page_size))
+
+
+@shitposter_app.command("ideas")
+def shitposter_ideas(page: int = PageOption, page_size: int = PageSizeOption):
+    """Idea-generator runs with readings, entries and rejections, newest first."""
+    from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.shitposter_operator import (
+        page_idea_runs,
+    )
+
+    typer.echo(page_idea_runs(page, page_size))
+
+
 # NO LONGER NEEDED
 # BUT SOMETIMES IT IS, SO LEAVING IT FOR FUTURE USE
 @app.command()

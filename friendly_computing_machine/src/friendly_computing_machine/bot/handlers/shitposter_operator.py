@@ -1,5 +1,5 @@
 """Operator surface for the Shitposter persona: change history, run rejections,
-retire, and per-post snapshot lookup. Admin-only; output is ephemeral.
+active lore by source, idea-generator runs, retire, and per-post snapshot lookup. Admin-only; output is ephemeral.
 
 Also rendered by `fcm tools shitposter` so long output can be paged from a shell.
 """
@@ -22,7 +22,12 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
 from friendly_computing_machine.src.friendly_computing_machine.db.dal.slack_dal import (
     get_slack_channel,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
+    ShitposterBrainJobRun,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
+    NovelGateReading,
+    ShitposterLoreKindEnum,
     ShitposterMemoryCauseKindEnum,
     ShitposterMemoryChange,
     ShitposterMemoryEntityKindEnum,
@@ -32,10 +37,15 @@ logger = logging.getLogger(__name__)
 
 OPERATOR_USAGE = (
     "Usage: `/shitpost admin history [n]`, `/shitpost admin runs [n]`, "
+    "`/shitpost admin lore [hit|consolidated|theme|novel] [n]`, "
+    "`/shitpost admin ideas [n]`, "
     "`/shitpost admin retire <attribute|lore> <id>`, "
     "`/shitpost admin snapshot <post permalink>`"
 )
-OPERATOR_SUBCOMMANDS = frozenset({"history", "runs", "retire", "snapshot"})
+OPERATOR_SUBCOMMANDS = frozenset(
+    {"history", "runs", "lore", "ideas", "retire", "snapshot"}
+)
+LORE_SOURCES = tuple(k.value for k in ShitposterLoreKindEnum)
 NOT_ADMIN = "Only Shitposter admins can run admin commands."
 NO_PERSONA = "No Shitposter persona is seeded yet."
 DEFAULT_PAGE_SIZE = 20
@@ -109,6 +119,29 @@ def handle_operator_command(
             return render_history(persona_id, limit)
         return render_runs(persona_id, limit)
 
+    if sub == "lore":
+        source = None
+        if args and args[0].lower() in LORE_SOURCES:
+            source, args = args[0].lower(), args[1:]
+        try:
+            limit = _parse_limit(args)
+        except ValueError:
+            return OPERATOR_USAGE
+        persona_id = _default_persona_id()
+        if persona_id is None:
+            return NO_PERSONA
+        return render_lore(persona_id, source, limit)
+
+    if sub == "ideas":
+        try:
+            limit = _parse_limit(args)
+        except ValueError:
+            return OPERATOR_USAGE
+        persona_id = _default_persona_id()
+        if persona_id is None:
+            return NO_PERSONA
+        return render_idea_runs(persona_id, limit)
+
     if sub == "retire":
         if len(args) != 2 or args[0].lower() not in (
             ShitposterMemoryEntityKindEnum.ATTRIBUTE.value,
@@ -164,6 +197,16 @@ def _describe_suggestion(suggestion_id: int) -> tuple[str, Optional[datetime.dat
         f"backed by {len(backers)}: {people}"
     )
     return text, suggestion.promoted_at
+
+
+def _describe_theme_synthesis(change: ShitposterMemoryChange) -> str:
+    """'theme: generalizes lore #a, #b' from the cited lore refs."""
+    raise NotImplementedError
+
+
+def _describe_novel_gate(change: ShitposterMemoryChange) -> str:
+    """'novel: recent mean X < F x baseline mean Y'; the raw ref when it does not parse."""
+    raise NotImplementedError
 
 
 def describe_cause(change: ShitposterMemoryChange) -> ChangeCause:
@@ -245,6 +288,33 @@ def render_runs(persona_id: int, limit: int, offset: int = 0) -> str:
     return "\n".join([header, *(_render_run(run, started) for run, started in rows)])
 
 
+def _render_lore_entry(entry) -> str:
+    raise NotImplementedError
+
+
+def render_lore(
+    persona_id: int, source: Optional[str], limit: int, offset: int = 0
+) -> str:
+    """Active lore with each entry's source, optionally filtered to one source."""
+    raise NotImplementedError
+
+
+def _render_rows(label: str, rows: list, render_row) -> list[str]:
+    """One line per row under `label`; an empty list renders as 'none'."""
+    raise NotImplementedError
+
+
+def _render_idea_run(run: ShitposterBrainJobRun) -> str:
+    """Status and reason, shares vs target, novel gate, entries, rejections,
+    refreshes and weight changes from the run's details."""
+    raise NotImplementedError
+
+
+def render_idea_runs(persona_id: int, limit: int, offset: int = 0) -> str:
+    """Idea-generator runs, newest first."""
+    raise NotImplementedError
+
+
 def retire_entry(
     entity_kind: str,
     entity_id: int,
@@ -321,3 +391,13 @@ def page_runs(page: int, page_size: int) -> str:
         return NO_PERSONA
     size = max(1, min(page_size, MAX_PAGE_SIZE))
     return render_runs(persona_id, size, (max(page, 1) - 1) * size)
+
+
+def page_lore(source: Optional[str], page: int, page_size: int) -> str:
+    """CLI paging: 1-based page over the persona's active lore."""
+    raise NotImplementedError
+
+
+def page_idea_runs(page: int, page_size: int) -> str:
+    """CLI paging: 1-based page over the persona's idea-generator runs."""
+    raise NotImplementedError

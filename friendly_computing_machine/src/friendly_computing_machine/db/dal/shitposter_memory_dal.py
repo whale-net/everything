@@ -891,6 +891,40 @@ def count_reflector_runs(persona_id: int, session: Optional[Session] = None) -> 
         ).one()
 
 
+def list_lore_for_operator(
+    persona_id: int,
+    source: Optional[str],
+    limit: int,
+    offset: int = 0,
+    session: Optional[Session] = None,
+) -> list[ShitposterLoreEntry]:
+    """Active lore, optionally filtered to one source kind, ordered by source then id."""
+    raise NotImplementedError
+
+
+def count_lore_for_operator(
+    persona_id: int, source: Optional[str], session: Optional[Session] = None
+) -> int:
+    raise NotImplementedError
+
+
+def list_brain_job_runs(
+    persona_id: int,
+    job_kind: str,
+    limit: int,
+    offset: int = 0,
+    session: Optional[Session] = None,
+) -> list[ShitposterBrainJobRun]:
+    """Brain job runs of one kind (running runs excluded), newest first."""
+    raise NotImplementedError
+
+
+def count_brain_job_runs(
+    persona_id: int, job_kind: str, session: Optional[Session] = None
+) -> int:
+    raise NotImplementedError
+
+
 def get_post_engagement(
     post_id: int, session: Optional[Session] = None
 ) -> ShitposterPostEngagement | None:
