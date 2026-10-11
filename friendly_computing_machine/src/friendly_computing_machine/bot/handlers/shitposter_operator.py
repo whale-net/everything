@@ -33,6 +33,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterMemoryCauseKindEnum,
     ShitposterMemoryChange,
     ShitposterMemoryEntityKindEnum,
+    ShitposterMemoryOperationEnum,
 )
 
 logger = logging.getLogger(__name__)
@@ -229,12 +230,20 @@ def _describe_novel_gate(change: ShitposterMemoryChange) -> str:
 
 def _describe_refresh(change: ShitposterMemoryChange) -> str:
     """'refresh: mean of posts #a, #b' from the contributing post refs."""
-    raise NotImplementedError
+    posts = []
+    for ref in _cause_refs(change):
+        head, _, ident = ref.partition(":")
+        posts.append(f"#{ident}" if head == "post" and ident.isdigit() else ref)
+    if not posts:
+        return "refresh: mean of posts (no posts recorded)"
+    return f"refresh: mean of posts {', '.join(posts)}"
 
 
 def describe_cause(change: ShitposterMemoryChange) -> ChangeCause:
     """Join memory_change to engagement rows or suggestion backers; never empty."""
     kind = change.cause_kind
+    if change.operation == ShitposterMemoryOperationEnum.REFRESH.value:
+        return ChangeCause(kind, _describe_refresh(change), change.changed_at)
     if kind == ShitposterMemoryCauseKindEnum.OPERATOR.value:
         return ChangeCause(kind, f"operator {change.cause_ref}", change.changed_at)
     if kind == ShitposterMemoryCauseKindEnum.FOLD.value:
@@ -399,7 +408,11 @@ def _idea_run_reason(run: ShitposterBrainJobRun, details: dict) -> str:
         return run.error or "no error recorded"
     entries = details.get("entries") or []
     if status == ShitposterBrainJobStatus.SUCCEEDED.value:
-        return f"wrote {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
+        wrote = f"wrote {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
+        refreshes = details.get("refreshes") or []
+        if refreshes:
+            wrote += f", refreshed {len(refreshes)}"
+        return wrote
     if status == ShitposterBrainJobStatus.NO_OP.value:
         rejections = details.get("rejections") or []
         if rejections:

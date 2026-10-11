@@ -23,6 +23,10 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterPost,
     ShitposterPostEngagement,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_context import (
+    ShitposterContextSnapshot,
+    ShitposterSnapshotItem,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
     NovelGateReading,
     ShitposterLoreEntry,
@@ -49,6 +53,8 @@ TABLES = [
     ShitposterPersona.__table__,
     ShitposterPersonaRevision.__table__,
     ShitposterChannelOptIn.__table__,
+    ShitposterContextSnapshot.__table__,
+    ShitposterSnapshotItem.__table__,
     ShitposterPost.__table__,
     ShitposterPostEngagement.__table__,
     ShitposterPersonaAttribute.__table__,

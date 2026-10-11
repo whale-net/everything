@@ -711,6 +711,20 @@ def _fold_attribute_source(session: Session, attribute_id: int) -> ShitposterPer
     return row
 
 
+def _current_lore_id_for(session: Session, lore_id: int) -> int:
+    """The current revision's id sharing lore_id's lore_key, so an earlier revision id still retires the entry."""
+    row = session.get(ShitposterLoreEntry, lore_id)
+    if row is None or row.valid_to is None:
+        return lore_id
+    current = session.exec(
+        select(ShitposterLoreEntry.id)
+        .where(ShitposterLoreEntry.persona_id == row.persona_id)
+        .where(ShitposterLoreEntry.lore_key == row.lore_key)
+        .where(ShitposterLoreEntry.valid_to.is_(None))  # type: ignore[union-attr]
+    ).first()
+    return lore_id if current is None else current
+
+
 def operator_retire(
     entity_kind: str,
     entity_id: int,
@@ -740,7 +754,7 @@ def operator_retire(
         else:
             _, change = _retire_lore(
                 s,
-                entity_id,
+                _current_lore_id_for(s, entity_id),
                 cause_kind=cause,
                 cause_post_id=None,
                 cause_ref=operator_subject,
@@ -901,7 +915,15 @@ def first_valid_from_by_key(
     session: Session, persona_id: int, lore_keys: list[uuid.UUID]
 ) -> dict[uuid.UUID, datetime.datetime]:
     """Each lore_key's first revision valid_from, so recency survives a refresh."""
-    raise NotImplementedError
+    if not lore_keys:
+        return {}
+    rows = session.exec(
+        select(ShitposterLoreEntry.lore_key, func.min(ShitposterLoreEntry.valid_from))
+        .where(ShitposterLoreEntry.persona_id == persona_id)
+        .where(ShitposterLoreEntry.lore_key.in_(set(lore_keys)))  # type: ignore[attr-defined]
+        .group_by(ShitposterLoreEntry.lore_key)
+    ).all()
+    return {key: first for key, first in rows}
 
 
 def refresh_lore_popularity(
@@ -914,7 +936,50 @@ def refresh_lore_popularity(
 ) -> tuple[ShitposterLoreEntry, ShitposterMemoryChange]:
     """Open a new revision of lore_id (same lore_key) carrying the earned popularity,
     logging a refresh whose cause names the contributing posts. Caller commits."""
-    raise NotImplementedError
+    if not post_ids:
+        raise ValueError("refresh requires at least one contributing post")
+    current = _current_lore(session, lore_id)
+    successor = _supersede_lore(
+        session, current, now=now, popularity_score=popularity_score
+    )
+    change = _log(
+        session,
+        persona_id=current.persona_id,
+        entity_kind=ShitposterMemoryEntityKindEnum.LORE.value,
+        entity_id=current.id,
+        operation=ShitposterMemoryOperationEnum.REFRESH,
+        before_text=current.text,
+        after_text=successor.text,
+        cause_kind=ShitposterMemoryCauseKindEnum.POST_ENGAGEMENT.value,
+        cause_post_id=None,
+        cause_ref=refresh_cause_ref(post_ids),
+        reflector_run_id=None,
+        now=now,
+    )
+    return successor, change
+
+
+def refresh_cause_ref(post_ids: list[int]) -> str:
+    """'post:a,post:b' over the distinct contributing posts, ascending."""
+    return ",".join(f"post:{i}" for i in sorted(set(post_ids)))
+
+
+def lore_keys_retired_by_operator(
+    session: Session, lore_ids: list[int]
+) -> set[uuid.UUID]:
+    """lore_keys of the given row versions whose entry the operator retired in any revision."""
+    if not lore_ids:
+        return set()
+    keys = select(ShitposterLoreEntry.lore_key).where(
+        ShitposterLoreEntry.id.in_(set(lore_ids))  # type: ignore[union-attr]
+    )
+    return set(
+        session.exec(
+            select(ShitposterLoreEntry.lore_key)
+            .where(ShitposterLoreEntry.lore_key.in_(keys))  # type: ignore[attr-defined]
+            .where(ShitposterLoreEntry.retired_by_operator.is_(True))  # type: ignore[attr-defined]
+        ).all()
+    )
 
 
 def change_history(
