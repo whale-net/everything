@@ -2,6 +2,7 @@
 
 import logging
 import os
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,9 @@ DEFAULT_IDEA_GENERATOR_RUN_CAP = 2
 DEFAULT_IDEA_GENERATOR_CADENCE_HOURS = 24
 DEFAULT_THEME_TARGET_WEIGHT = 0.15
 DEFAULT_NOVEL_TARGET_WEIGHT = 0.10
+DEFAULT_SOURCE_WEIGHT_MIN = 0.05
+DEFAULT_SOURCE_WEIGHT_MAX = 0.30
+DEFAULT_SOURCE_WEIGHT_CEILING = 0.40
 
 
 def load_theme_generator_agent_id() -> str:
@@ -240,3 +244,23 @@ def novel_target_weight() -> float:
     return _unit_fraction_env(
         "FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT", DEFAULT_NOVEL_TARGET_WEIGHT
     )
+
+
+@dataclass(frozen=True)
+class SourceWeightConfig:
+    """Starting weights, per-source bounds and combined ceiling for theme/novel weights."""
+
+    theme_start: float
+    novel_start: float
+    theme_min: float
+    theme_max: float
+    novel_min: float
+    novel_max: float
+    ceiling: float
+    # True when configured starting weights were rejected for the defaults
+    fell_back: bool = False
+
+
+def load_source_weight_config() -> SourceWeightConfig:
+    """Source-weight config; invalid starting weights fall back to the defaults with a warning."""
+    raise NotImplementedError
