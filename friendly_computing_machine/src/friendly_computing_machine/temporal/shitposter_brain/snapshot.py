@@ -27,6 +27,9 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterBrainJobKind,
     ShitposterBrainJobStatus,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
+    is_generated_lore,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_context import (
     ShitposterContextSnapshot,
     ShitposterSnapshotItem,
@@ -70,6 +73,8 @@ class Candidate:
     text: str
     # lore only; higher ranks first
     score: float = 0.0
+    # lore only; theme/novel entries written by the idea-generator
+    is_generated: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,12 @@ def lore_score(
     recency = 0.5 ** (age_hours / half_life_hours)
     popularity = max(0, popularity_score) / (max(0, popularity_score) + 1)
     return recency + popularity
+
+
+def generated_allowed(generated_taken: int, non_generated_taken: int) -> bool:
+    """Whether one more generated lore item keeps generated items a non-majority."""
+    # TODO(implementation): enforce generated <= non-generated, or at most one with no non-generated
+    return True
 
 
 def select_items(
@@ -202,6 +213,7 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
             row.id,
             row.text,
             lore_score(row.popularity_score, _aware(row.valid_from), now, half_life),
+            is_generated=is_generated_lore(row.kind),
         )
         for row in active_lore(persona_id, session=session)
     ]
