@@ -187,7 +187,11 @@ func (a *Activities) ResolveAgentDefinition(ctx context.Context, sessionID uuid.
 		provider = nil
 	}
 
-	return ResolveAgentDefinitionResult{Definition: *def, Model: model, Provider: provider}, nil
+	// The pinned session override replaces the definition's cost cap for this
+	// turn's checkCaps; the stored definition itself is never mutated.
+	effective := *def
+	effective.MaxCostUSD = session.EffectiveMaxCostUSD(sess.MaxCostUSDOverride, *def)
+	return ResolveAgentDefinitionResult{Definition: effective, Model: model, Provider: provider}, nil
 }
 
 // resolveModel resolves def's effective model and OpenRouter
@@ -373,6 +377,10 @@ type CommitTurnResult struct {
 	// waiting for the next signalled turn, until a future task teaches
 	// CommitTurn to recognize a real finish signal.
 	Done bool
+
+	// DoneReason is events.StatusChangeReasonSingleTurn when Done ends a
+	// single-turn session; empty otherwise.
+	DoneReason string
 
 	// Capped and CapKind report a tripped turn or cost cap (FR6/FR7):
 	// SessionWorkflow's loop (workflow.go) writes session.StatusCapped

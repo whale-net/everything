@@ -57,7 +57,9 @@ stop.
    ended in `signoff`/`approved` — the same check `krill-work:plan` step 1
    does; if not, point the user to `/krill-design:design`,
    `/krill-design:review`, or `/krill-design:loop-design-panel` and stop.
-   Note whether tasks already exist (`list_tasks {milestone_id}`).
+   Note whether tasks already exist (`list_tasks {milestone_id}`, plus each
+   milepebble's per CONVENTIONS.md "Milestone given: check its milepebbles
+   first").
 
 2. **Plan phase (subagent), only if no tasks exist yet.** Dispatch a fresh
    `general-purpose` subagent with a self-contained prompt: invoke `Skill`

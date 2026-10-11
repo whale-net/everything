@@ -81,6 +81,9 @@ type ModelDefinitionConfig struct {
 // with whatever ToolSet is configured below, just without a cross-domain
 // grant key derived or checked.
 //
+// maxCostUSDCeiling mirrors session.MaxCostUSDCeiling; config does not import session.
+const maxCostUSDCeiling = 10.0
+
 // Exactly one of Model and ModelDefinition is set (Validate enforces
 // this): Model names an OpenRouter model id directly, with OpenRouter's
 // default full-pool routing; ModelDefinition instead names a
@@ -252,6 +255,10 @@ func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig)
 		// 0 means unset (the platform default applies); a negative cap is never valid.
 		if a.MaxTurns < 0 {
 			return fmt.Errorf("agent %q: max_turns must be >= 1 (or unset): got %d", a.AgentID, a.MaxTurns)
+		}
+		// Same unset-or-positive rule; the platform ceiling caps the definition value.
+		if a.MaxCostUSD < 0 || a.MaxCostUSD > maxCostUSDCeiling {
+			return fmt.Errorf("agent %q: max_cost_usd must be > 0 (or unset) and <= %g: got %g (ceiling %g)", a.AgentID, maxCostUSDCeiling, a.MaxCostUSD, maxCostUSDCeiling)
 		}
 	}
 	return nil
