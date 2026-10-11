@@ -63,6 +63,7 @@ go_test(
         "context_test.go",
         "idle_sweep_test.go",
         "idle_test.go",
+        "pinned_caps_test.go",
         "replay_test.go",
         "workflow_caps_test.go",
         "workflow_search_test.go",
