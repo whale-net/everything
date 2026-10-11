@@ -11,7 +11,6 @@ import datetime
 import json
 import logging
 import os
-import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -37,7 +36,6 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterSuggestionStatusEnum,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
-    ShitposterAttributeStatusEnum,
     ShitposterMemoryCauseKindEnum,
     ShitposterPersonaAttribute,
 )
@@ -51,6 +49,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.guardrails import (
     find_member_name,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
+    guardrails,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.base import (
     ApplyOutcome,
@@ -79,20 +80,13 @@ ADD_KINDS = frozenset({"trait", "instruction"})
 REASON_MALFORMED = "malformed"
 REASON_NO_VALID_CAUSE = "no_valid_cause"
 REASON_MISSING_ATTRIBUTE = "missing_attribute"
-REASON_TARGETS_MEMBER = "targets_member"
-REASON_INSTRUCTION = "instruction"
+REASON_TARGETS_MEMBER = guardrails.REASON_TARGETS_MEMBER
+REASON_INSTRUCTION = guardrails.REASON_INSTRUCTION
+REASON_RETIRED_READD = guardrails.REASON_RETIRED_READD
 REASON_NEGATIVE_REINFORCE = "negative_reinforce"
-REASON_RETIRED_READD = "retired_readd"
 REASON_KEY_EXISTS = "key_exists"
 REASON_CONFLICTING_OP = "conflicting_op"
 REASON_ATTRIBUTE_CAP = "attribute_cap"
-
-# Phrasing that marks an instruction rather than a trait: imperative openers and second-person or directive modals.
-_INSTRUCTION_RE = re.compile(
-    r"^\s*(reply|respond|post|say|use|tell|stop|start|always|never|do|don't|ignore)\b"
-    r"|\b(you|your|must|should|from now on)\b",
-    re.IGNORECASE,
-)
 
 # Hook for the fold task: called with (session, persona_id, retired attribute ids, run id)
 # inside the apply transaction after retire and merge ops land.
@@ -122,10 +116,6 @@ def _utc(dt: datetime.datetime | None) -> datetime.datetime | None:
 
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
-
-
-def _normalize(text: str) -> str:
-    return " ".join(text.lower().split())
 
 
 def _engagement_record(row: ShitposterPostEngagement) -> dict[str, Any]:
@@ -182,21 +172,6 @@ def _public_input(rec: dict[str, Any]) -> dict[str, Any]:
     out = {k: v for k, v in rec.items() if k not in ("at", "negative_dominant")}
     out["at"] = rec["at"].isoformat()
     return out
-
-
-def _operator_retired(session: Session, persona_id: int) -> list[dict[str, Any]]:
-    rows = session.exec(
-        select(ShitposterPersonaAttribute).where(
-            ShitposterPersonaAttribute.persona_id == persona_id,
-            ShitposterPersonaAttribute.status == ShitposterAttributeStatusEnum.RETIRED.value,
-            ShitposterPersonaAttribute.retired_by_operator.is_(True),  # type: ignore[attr-defined]
-            ShitposterPersonaAttribute.valid_to.is_(None),  # type: ignore[union-attr]
-        )
-    ).all()
-    return [
-        {"key": r.attribute_key, "text": r.text, "retired_at": _utc(r.valid_from)}
-        for r in rows
-    ]
 
 
 def _prompt(active: list[dict[str, Any]], inputs: list[dict[str, Any]]) -> str:
@@ -295,13 +270,13 @@ def _check_op(
             return None, REASON_KEY_EXISTS, causes_valid
         if find_member_name(text, ctx["member_names"]):
             return None, REASON_TARGETS_MEMBER, causes_valid
-        if kind == "instruction" or _INSTRUCTION_RE.search(text):
+        if kind == "instruction" or guardrails.reads_as_instruction(text):
             return None, REASON_INSTRUCTION, causes_valid
         evidence_at = max(inputs[c]["at"] for c in causes_valid)
         matches = [
             r
             for r in ctx["retired"]
-            if r["key"] == key or _normalize(r["text"]) == _normalize(text)
+            if r["key"] == key or guardrails.normalize(r["text"]) == guardrails.normalize(text)
         ]
         if matches:
             latest_retirement = max(r["retired_at"] for r in matches)
@@ -409,7 +384,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
             }
         active = shitposter_memory_dal.active_attributes(persona_id, session=session)
         active_view = [{"key": a.attribute_key, "text": a.text} for a in active]
-        retired = _operator_retired(session, persona_id)
+        retired = guardrails.operator_retired_attributes(session, persona_id)
         member_names = _member_names()
 
     # the session is closed before the agent call so no transaction spans it
