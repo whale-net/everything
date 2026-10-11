@@ -79,10 +79,23 @@ const (
 // between api and worker) -- plus a Temporal client (issue #2117's
 // Scaffold) the write RPCs (start.go/send.go/stop.go) use to start and
 // signal each session's SessionWorkflow (#2114).
+// sessionStore is the subset of *session.Store the handlers read through;
+// unit tests substitute in-memory fakes for it.
+type sessionStore interface {
+	Sessions() session.SessionStore
+	AgentDefinitions() session.AgentDefinitionStore
+	ModelDefinitions() session.ModelDefinitionStore
+	Transcript() session.TranscriptStore
+	Usage() session.UsageStore
+	GetDashboardSummary(ctx context.Context, utcDate string) (*session.DashboardSummary, error)
+}
+
+var _ sessionStore = (*session.Store)(nil)
+
 type SessionServer struct {
 	pb.UnimplementedSessionServiceServer
 
-	store *session.Store
+	store sessionStore
 	// issuer is the Keycloak realm issuer URL every verified token's `iss`
 	// claim matches (grpcauth.ServerConfig.IssuerURL in main.go) --
 	// grpcauth.Claims itself carries only Subject (the `sub` claim), so
