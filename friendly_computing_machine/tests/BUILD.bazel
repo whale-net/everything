@@ -432,6 +432,18 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Stable lore_key: backfill across SCD2 revision chains and DAL carry-forward.
+py_test(
+    name = "test_shitposter_lore_key",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_shitposter_lore_key.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Context snapshot job: budget, random pick, retirement, versioning, and source text.
 py_test(
     name = "test_shitposter_context_snapshot",
