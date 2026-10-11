@@ -103,6 +103,9 @@ Scheduled shitposts run as the FCM service subject with no `on_behalf_of`; whage
 | `FCM_SHITPOSTER_THEME_WEIGHT_MIN` / `FCM_SHITPOSTER_THEME_WEIGHT_MAX` | no | Bounds of the theme target weight (defaults `0.05` / `0.30`). Fractions in (0, 1]; if min > max, or the two mins sum above the ceiling, all bounds and the ceiling use their defaults with a warning. |
 | `FCM_SHITPOSTER_NOVEL_WEIGHT_MIN` / `FCM_SHITPOSTER_NOVEL_WEIGHT_MAX` | no | Bounds of the novel target weight (defaults `0.05` / `0.30`), validated like the theme bounds. |
 | `FCM_SHITPOSTER_SOURCE_WEIGHT_CEILING` | no | Most the theme and novel target weights may sum to (default `0.40`). Shown with the bounds in `/shitpost admin lore`. |
+| `FCM_SHITPOSTER_NOVEL_GATE_RECENT_DAYS` | no | Recent window, in days, of the novel gate: the mean popularity of posts whose engagement finalized in it is compared with the baseline window's (default `7`). Must be a positive integer; otherwise the default is used with a warning. Read per idea-generator run. |
+| `FCM_SHITPOSTER_NOVEL_GATE_BASELINE_DAYS` | no | Baseline window, in days, of the novel gate (default `30`). Must be a positive integer; otherwise the default is used with a warning. Read per idea-generator run. |
+| `FCM_SHITPOSTER_NOVEL_GATE_FRACTION` | no | The novel gate opens only when the recent-window mean popularity is below this fraction (0, 1] of the baseline-window mean (default `0.8`). Either window without finalized engagement keeps the gate closed. Invalid values use the default with a warning. Read per idea-generator run. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 
 Required Keycloak client config (provisioned through normal release/human steps, not by this repo):

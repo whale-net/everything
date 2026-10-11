@@ -189,6 +189,9 @@ DEFAULT_NOVEL_TARGET_WEIGHT = 0.10
 DEFAULT_SOURCE_WEIGHT_MIN = 0.05
 DEFAULT_SOURCE_WEIGHT_MAX = 0.30
 DEFAULT_SOURCE_WEIGHT_CEILING = 0.40
+DEFAULT_NOVEL_GATE_RECENT_DAYS = 7
+DEFAULT_NOVEL_GATE_BASELINE_DAYS = 30
+DEFAULT_NOVEL_GATE_FRACTION = 0.8
 
 
 def load_theme_generator_agent_id() -> str:
@@ -319,4 +322,25 @@ def load_source_weight_config() -> SourceWeightConfig:
         novel_max=novel_max,
         ceiling=ceiling,
         fell_back=fell_back,
+    )
+
+
+def novel_gate_recent_days() -> int:
+    """Recent window of the novel gate, in days (FCM_SHITPOSTER_NOVEL_GATE_RECENT_DAYS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_NOVEL_GATE_RECENT_DAYS", DEFAULT_NOVEL_GATE_RECENT_DAYS
+    )
+
+
+def novel_gate_baseline_days() -> int:
+    """Baseline window of the novel gate, in days (FCM_SHITPOSTER_NOVEL_GATE_BASELINE_DAYS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_NOVEL_GATE_BASELINE_DAYS", DEFAULT_NOVEL_GATE_BASELINE_DAYS
+    )
+
+
+def novel_gate_fraction() -> float:
+    """Gate opens when the recent mean is below this fraction of the baseline mean (FCM_SHITPOSTER_NOVEL_GATE_FRACTION)."""
+    return _unit_fraction_env(
+        "FCM_SHITPOSTER_NOVEL_GATE_FRACTION", DEFAULT_NOVEL_GATE_FRACTION
     )
