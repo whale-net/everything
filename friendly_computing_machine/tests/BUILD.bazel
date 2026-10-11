@@ -485,6 +485,16 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Earned popularity refresh for generated lore and identity across its revisions.
+py_test(
+    name = "test_shitposter_lore_refresh",
+    size = "small",
+    srcs = [
+        "shitposter/test_lore_refresh.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Idea-generator job: theme branch, pool targeting, run cap, guardrails, initial popularity.
 py_test(
     name = "test_shitposter_idea_generate",

@@ -321,6 +321,61 @@ def test_never_appeared_lore_uses_creation_time(engine):
         assert _is_current_lore(s, young_unseen)
 
 
+def _refresh(s: Session, lore_id: int, at: datetime.datetime) -> int:
+    successor, _ = memory.refresh_lore_popularity(
+        s, lore_id, popularity_score=5, post_ids=[1], now=at
+    )
+    s.commit()
+    return successor.id
+
+
+def test_stale_fold_counts_appearances_across_revisions(engine):
+    # last seen 40 days ago as the first revision; the refresh 29 days ago is not an appearance
+    with Session(engine) as s:
+        pid = _persona(s)
+        rev1 = _lore(s, pid, "refreshed joke", T0 - 90 * DAY)
+        _appear(s, pid, rev1, T0 - 40 * DAY, version=1)
+        rev2 = _refresh(s, rev1, T0 - 29 * DAY)
+
+    with Session(engine) as s:
+        assert fold.fold_stale_lore(pid, now=T0, session=s) == 1
+        s.commit()
+
+    with Session(engine) as s:
+        assert not _is_current_lore(s, rev2)
+
+
+def test_stale_fold_appearance_of_earlier_revision_keeps_entry(engine):
+    with Session(engine) as s:
+        pid = _persona(s)
+        rev1 = _lore(s, pid, "refreshed joke", T0 - 90 * DAY)
+        rev2 = _refresh(s, rev1, T0 - 60 * DAY)
+        _appear(s, pid, rev2, T0 - 50 * DAY, version=1)
+        # an earlier revision's id still in a recent snapshot counts for the entry
+        _appear(s, pid, rev1, T0 - 1 * DAY, version=2)
+        rev3 = _refresh(s, rev2, T0 - 45 * DAY)
+
+    with Session(engine) as s:
+        assert fold.fold_stale_lore(pid, now=T0, session=s) == 0
+
+    with Session(engine) as s:
+        assert _is_current_lore(s, rev3)
+
+
+def test_never_appeared_refreshed_lore_ages_from_first_revision(engine):
+    with Session(engine) as s:
+        pid = _persona(s)
+        rev1 = _lore(s, pid, "unseen refreshed joke", T0 - 90 * DAY)
+        rev2 = _refresh(s, rev1, T0 - 1 * DAY)
+
+    with Session(engine) as s:
+        assert fold.fold_stale_lore(pid, now=T0, session=s) == 1
+        s.commit()
+
+    with Session(engine) as s:
+        assert not _is_current_lore(s, rev2)
+
+
 def test_recent_appearance_keeps_old_lore_current(engine):
     with Session(engine) as s:
         pid = _persona(s)
