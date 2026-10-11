@@ -13,6 +13,7 @@ go_library(
         "classify.go",
         "context.go",
         "idle.go",
+        "idle_sweep.go",
         "main.go",
         "workflow.go",
     ],
