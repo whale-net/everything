@@ -18,6 +18,7 @@ from friendly_computing_machine.src.friendly_computing_machine.db.util import (
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
     ShitposterBrainJobRun,
+    ShitposterBrainJobStatus,
     ShitposterPostEngagement,
     ShitposterReflectorRun,
     ShitposterSuggestion,
@@ -966,6 +967,86 @@ def count_reflector_runs(persona_id: int, session: Optional[Session] = None) -> 
             .select_from(ShitposterReflectorRun)
             .where(ShitposterReflectorRun.persona_id == persona_id)
         ).one()
+
+
+def _operator_lore_query(stmt, persona_id: int, source: Optional[str]):
+    stmt = stmt.where(ShitposterLoreEntry.persona_id == persona_id).where(
+        ShitposterLoreEntry.valid_to.is_(None)  # type: ignore[union-attr]
+    )
+    if source is not None:
+        if source not in _LORE_KINDS:
+            raise ValueError(f"unknown lore source {source!r}")
+        stmt = stmt.where(ShitposterLoreEntry.kind == source)
+    return stmt
+
+
+def list_lore_for_operator(
+    persona_id: int,
+    source: Optional[str],
+    limit: int,
+    offset: int = 0,
+    session: Optional[Session] = None,
+) -> list[ShitposterLoreEntry]:
+    """Active lore, optionally filtered to one source kind, ordered by source then id."""
+    with SessionManager(session) as s:
+        stmt = _operator_lore_query(select(ShitposterLoreEntry), persona_id, source)
+        return list(
+            s.exec(
+                stmt.order_by(ShitposterLoreEntry.kind, ShitposterLoreEntry.id)
+                .offset(offset)
+                .limit(limit)
+            ).all()
+        )
+
+
+def count_lore_for_operator(
+    persona_id: int, source: Optional[str], session: Optional[Session] = None
+) -> int:
+    with SessionManager(session) as s:
+        stmt = _operator_lore_query(
+            select(func.count()).select_from(ShitposterLoreEntry), persona_id, source
+        )
+        return s.exec(stmt).one()
+
+
+def _brain_job_runs_query(stmt, persona_id: int, job_kind: str):
+    return (
+        stmt.where(ShitposterBrainJobRun.persona_id == persona_id)
+        .where(ShitposterBrainJobRun.job_kind == job_kind)
+        .where(ShitposterBrainJobRun.status != ShitposterBrainJobStatus.RUNNING.value)
+    )
+
+
+def list_brain_job_runs(
+    persona_id: int,
+    job_kind: str,
+    limit: int,
+    offset: int = 0,
+    session: Optional[Session] = None,
+) -> list[ShitposterBrainJobRun]:
+    """Brain job runs of one kind (running runs excluded), newest first."""
+    with SessionManager(session) as s:
+        stmt = _brain_job_runs_query(select(ShitposterBrainJobRun), persona_id, job_kind)
+        return list(
+            s.exec(
+                stmt.order_by(
+                    ShitposterBrainJobRun.started_at.desc(),  # type: ignore[union-attr]
+                    ShitposterBrainJobRun.id.desc(),  # type: ignore[union-attr]
+                )
+                .offset(offset)
+                .limit(limit)
+            ).all()
+        )
+
+
+def count_brain_job_runs(
+    persona_id: int, job_kind: str, session: Optional[Session] = None
+) -> int:
+    with SessionManager(session) as s:
+        stmt = _brain_job_runs_query(
+            select(func.count()).select_from(ShitposterBrainJobRun), persona_id, job_kind
+        )
+        return s.exec(stmt).one()
 
 
 def get_post_engagement(

@@ -5,7 +5,9 @@ append-only and every row names at least one cause.
 """
 
 import datetime
+import json
 import uuid
+from dataclasses import dataclass
 from enum import Enum
 
 from sqlalchemy import CheckConstraint, Column, DateTime, Index, Uuid, func, text
@@ -60,6 +62,41 @@ class ShitposterMemoryCauseKindEnum(str, Enum):
     THEME_SYNTHESIS = "theme_synthesis"
     # cause_ref holds the novel gate reading
     NOVEL_GATE = "novel_gate"
+
+
+@dataclass(frozen=True)
+class NovelGateReading:
+    """Novel-gate reading stored in a novel_gate change's cause_ref as JSON
+    {recent_mean, baseline_mean, fraction}; the gate opens when recent < fraction x baseline."""
+
+    recent_mean: float
+    baseline_mean: float
+    fraction: float
+
+    def to_cause_ref(self) -> str:
+        return json.dumps(
+            {
+                "recent_mean": self.recent_mean,
+                "baseline_mean": self.baseline_mean,
+                "fraction": self.fraction,
+            },
+            sort_keys=True,
+        )
+
+    @classmethod
+    def from_cause_ref(cls, cause_ref: str | None) -> "NovelGateReading | None":
+        """Parsed reading, or None when cause_ref is not in this format."""
+        if not cause_ref:
+            return None
+        try:
+            obj = json.loads(cause_ref)
+            return cls(
+                recent_mean=float(obj["recent_mean"]),
+                baseline_mean=float(obj["baseline_mean"]),
+                fraction=float(obj["fraction"]),
+            )
+        except (ValueError, TypeError, KeyError):
+            return None
 
 
 class ShitposterPersonaAttribute(Base, table=True):

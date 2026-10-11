@@ -466,7 +466,7 @@ py_test(
 )
 
 # Operator surface: newest-first history, per-kind causes, admin-only retire,
-# and snapshot-for-post lookup (SQLite-backed). Fakes the bolt App singleton, so its own target.
+# lore by source, idea-generator runs (admin and CLI), and snapshot-for-post lookup (SQLite-backed). Fakes the bolt App singleton, so its own target.
 py_test(
     name = "test_shitposter_operator",
     size = "small",

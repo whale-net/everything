@@ -21,6 +21,8 @@ snapshot text are visible only to the caller.
 |---------|-------|
 | `/shitpost admin history [n]` | Attribute and lore changes, newest first (default 20, max 100) |
 | `/shitpost admin runs [n]` | Reflector runs with rejection count and reasons |
+| `/shitpost admin lore [hit\|consolidated\|theme\|novel] [n]` | Active lore with each entry's source, optionally one source only |
+| `/shitpost admin ideas [n]` | Idea-generator runs: status, shares, gate, entries, rejections |
 | `/shitpost admin retire <attribute\|lore> <id>` | Retires a current entry, cause = operator |
 | `/shitpost admin snapshot <post permalink>` | Snapshot the post was written from |
 
@@ -29,6 +31,8 @@ Paging for long output runs from a shell with the same data:
 ```
 fcm tools shitposter history --page 2 --page-size 20
 fcm tools shitposter runs --page 1 --page-size 50
+fcm tools shitposter lore --source theme --page 1
+fcm tools shitposter ideas --page 1 --page-size 10
 ```
 
 `--page` is 1-based; `--page-size` is 1-100. The header line reports the
@@ -50,6 +54,10 @@ Cause lines:
   so a backer who withdrew after promotion no longer appears.
 - **operator**: `operator slack:<user id>` for a retire by an admin.
 - **fold**: a lore consolidation, with the fold run reference.
+- **theme**: `theme: generalizes lore #a, #b`, the active lore the theme entry cites.
+- **novel**: `novel: recent mean X < F x baseline mean Y`, the gate reading stored as
+  JSON `{recent_mean, baseline_mean, fraction}` in `cause_ref`. A ref that does
+  not parse is shown raw.
 
 ## Retiring an entry
 
@@ -80,6 +88,26 @@ snapshots were recorded report no snapshot and the latest snapshot version.
 `/shitpost admin runs [n]` lists each run's start time, input count, carried-over
 count, applied count, rejection count, and one line per rejected change with its
 op and reason. Use it to see why a reflector proposal did not land.
+
+## Reading active lore
+
+`/shitpost admin lore [source] [n]` lists active lore ordered by source then id.
+Each entry shows its id, source (`hit`, `consolidated`, `theme`, `novel`),
+popularity and text. Pass a source to see only that kind.
+
+## Reading idea-generator runs
+
+`/shitpost admin ideas [n]` lists idea-generator runs, newest first (running
+runs are not listed). Each run shows:
+
+- status (`succeeded`, `no_op`, `skipped`, `failed`) and trigger, with a reason:
+  entries written, why nothing was written, the skip reason, or the error.
+- theme and novel share against target (`n/a (empty pool)` with no active lore).
+- the novel gate, open or closed. A gate not yet implemented reads as closed.
+- each entry written with its agent and cited lore, and each rejection with its reason.
+- popularity refreshes and weight changes, `none` when empty.
+
+A failed run keeps whatever readings were computed before it failed.
 
 ## Triggering jobs
 

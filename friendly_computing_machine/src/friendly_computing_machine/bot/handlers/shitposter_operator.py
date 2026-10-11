@@ -1,5 +1,5 @@
 """Operator surface for the Shitposter persona: change history, run rejections,
-retire, and per-post snapshot lookup. Admin-only; output is ephemeral.
+active lore by source, idea-generator runs, retire, and per-post snapshot lookup. Admin-only; output is ephemeral.
 
 Also rendered by `fcm tools shitposter` so long output can be paged from a shell.
 """
@@ -22,7 +22,14 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
 from friendly_computing_machine.src.friendly_computing_machine.db.dal.slack_dal import (
     get_slack_channel,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
+    ShitposterBrainJobKind,
+    ShitposterBrainJobRun,
+    ShitposterBrainJobStatus,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
+    NovelGateReading,
+    ShitposterLoreKindEnum,
     ShitposterMemoryCauseKindEnum,
     ShitposterMemoryChange,
     ShitposterMemoryEntityKindEnum,
@@ -32,10 +39,15 @@ logger = logging.getLogger(__name__)
 
 OPERATOR_USAGE = (
     "Usage: `/shitpost admin history [n]`, `/shitpost admin runs [n]`, "
+    "`/shitpost admin lore [hit|consolidated|theme|novel] [n]`, "
+    "`/shitpost admin ideas [n]`, "
     "`/shitpost admin retire <attribute|lore> <id>`, "
     "`/shitpost admin snapshot <post permalink>`"
 )
-OPERATOR_SUBCOMMANDS = frozenset({"history", "runs", "retire", "snapshot"})
+OPERATOR_SUBCOMMANDS = frozenset(
+    {"history", "runs", "lore", "ideas", "retire", "snapshot"}
+)
+LORE_SOURCES = tuple(k.value for k in ShitposterLoreKindEnum)
 NOT_ADMIN = "Only Shitposter admins can run admin commands."
 NO_PERSONA = "No Shitposter persona is seeded yet."
 DEFAULT_PAGE_SIZE = 20
@@ -109,6 +121,29 @@ def handle_operator_command(
             return render_history(persona_id, limit)
         return render_runs(persona_id, limit)
 
+    if sub == "lore":
+        source = None
+        if args and args[0].lower() in LORE_SOURCES:
+            source, args = args[0].lower(), args[1:]
+        try:
+            limit = _parse_limit(args)
+        except ValueError:
+            return OPERATOR_USAGE
+        persona_id = _default_persona_id()
+        if persona_id is None:
+            return NO_PERSONA
+        return render_lore(persona_id, source, limit)
+
+    if sub == "ideas":
+        try:
+            limit = _parse_limit(args)
+        except ValueError:
+            return OPERATOR_USAGE
+        persona_id = _default_persona_id()
+        if persona_id is None:
+            return NO_PERSONA
+        return render_idea_runs(persona_id, limit)
+
     if sub == "retire":
         if len(args) != 2 or args[0].lower() not in (
             ShitposterMemoryEntityKindEnum.ATTRIBUTE.value,
@@ -166,6 +201,32 @@ def _describe_suggestion(suggestion_id: int) -> tuple[str, Optional[datetime.dat
     return text, suggestion.promoted_at
 
 
+def _describe_theme_synthesis(change: ShitposterMemoryChange) -> str:
+    """'theme: generalizes lore #a, #b' from the cited lore refs."""
+    cited = []
+    for ref in _cause_refs(change):
+        head, _, ident = ref.partition(":")
+        cited.append(f"#{ident}" if head == "lore" and ident.isdigit() else ref)
+    if not cited:
+        return "theme: generalizes lore (no citations recorded)"
+    return f"theme: generalizes lore {', '.join(cited)}"
+
+
+def _fmt_num(value: float) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".") or "0"
+
+
+def _describe_novel_gate(change: ShitposterMemoryChange) -> str:
+    """'novel: recent mean X < F x baseline mean Y'; the raw ref when it does not parse."""
+    reading = NovelGateReading.from_cause_ref(change.cause_ref)
+    if reading is None:
+        return f"novel: {change.cause_ref or '(no gate reading recorded)'}"
+    return (
+        f"novel: recent mean {_fmt_num(reading.recent_mean)} < "
+        f"{_fmt_num(reading.fraction)} x baseline mean {_fmt_num(reading.baseline_mean)}"
+    )
+
+
 def describe_cause(change: ShitposterMemoryChange) -> ChangeCause:
     """Join memory_change to engagement rows or suggestion backers; never empty."""
     kind = change.cause_kind
@@ -173,6 +234,10 @@ def describe_cause(change: ShitposterMemoryChange) -> ChangeCause:
         return ChangeCause(kind, f"operator {change.cause_ref}", change.changed_at)
     if kind == ShitposterMemoryCauseKindEnum.FOLD.value:
         return ChangeCause(kind, f"fold {change.cause_ref}", change.changed_at)
+    if kind == ShitposterMemoryCauseKindEnum.THEME_SYNTHESIS.value:
+        return ChangeCause(kind, _describe_theme_synthesis(change), change.changed_at)
+    if kind == ShitposterMemoryCauseKindEnum.NOVEL_GATE.value:
+        return ChangeCause(kind, _describe_novel_gate(change), change.changed_at)
 
     parts: list[str] = []
     occurred: Optional[datetime.datetime] = None
@@ -243,6 +308,136 @@ def render_runs(persona_id: int, limit: int, offset: int = 0) -> str:
         return f"No reflector runs at offset {offset} ({total} total)."
     header = f"Reflector runs {offset + 1}-{offset + len(rows)} of {total}, newest first."
     return "\n".join([header, *(_render_run(run, started) for run, started in rows)])
+
+
+def _render_lore_entry(entry) -> str:
+    return (
+        f"#{entry.id} [{entry.kind}] popularity {entry.popularity_score} · "
+        f"since {_when(entry.valid_from)}\n  \"{entry.text}\""
+    )
+
+
+def render_lore(
+    persona_id: int, source: Optional[str], limit: int, offset: int = 0
+) -> str:
+    """Active lore with each entry's source, optionally filtered to one source."""
+    total = memory_dal.count_lore_for_operator(persona_id, source)
+    rows = memory_dal.list_lore_for_operator(persona_id, source, limit, offset)
+    scope = f"{source} lore" if source else "lore"
+    if not rows:
+        return f"No active {scope} at offset {offset} ({total} total)."
+    header = (
+        f"Active {scope} {offset + 1}-{offset + len(rows)} of {total}, "
+        "by source then id."
+    )
+    return "\n".join([header, *(_render_lore_entry(e) for e in rows)])
+
+
+def _render_rows(label: str, rows: list, render_row) -> list[str]:
+    """One line per row under `label`; an empty list renders as 'none'."""
+    if not rows:
+        return [f"  {label}: none"]
+    return [f"  {label}:", *(f"    {render_row(row)}" for row in rows)]
+
+
+def _render_generic_row(row) -> str:
+    if isinstance(row, dict):
+        return ", ".join(f"{k} {v}" for k, v in row.items())
+    return str(row)
+
+
+def _render_entry_row(row: dict) -> str:
+    cited = row.get("cited") or []
+    cites = f", cites {', '.join(f'#{c}' for c in cited)}" if cited else ""
+    return (
+        f"lore #{row.get('lore_id', '?')} {row.get('kind', '?')} "
+        f"by agent {row.get('agent_id', '?')}{cites}"
+    )
+
+
+def _render_rejection_row(row: dict) -> str:
+    text = row.get("text")
+    quoted = f' "{text}"' if text else ""
+    return f"{row.get('kind', '?')}{quoted}: {row.get('reason', '?')}"
+
+
+def _render_share(label: str, reading) -> str:
+    if not isinstance(reading, dict):
+        return f"{label} n/a"
+    share = reading.get("share")
+    shown = "n/a (empty pool)" if share is None else _fmt_num(float(share))
+    target = reading.get("target")
+    target_shown = "?" if target is None else _fmt_num(float(target))
+    return f"{label} share {shown} / target {target_shown}"
+
+
+def _render_gate(novel) -> str:
+    """Novel gate as open or closed; a not-yet-computed gate counts as closed."""
+    gate = novel.get("gate") if isinstance(novel, dict) else None
+    if gate is None:
+        return "novel gate: not computed"
+    if isinstance(gate, dict):
+        state = "open" if gate.get("open") else "closed"
+        rest = {k: v for k, v in gate.items() if k != "open"}
+        detail = f" ({_render_generic_row(rest)})" if rest else ""
+        return f"novel gate: {state}{detail}"
+    if gate in ("open", "closed"):
+        return f"novel gate: {gate}"
+    return f"novel gate: closed ({gate})"
+
+
+def _idea_run_reason(run: ShitposterBrainJobRun, details: dict) -> str:
+    status = run.status
+    if status == ShitposterBrainJobStatus.SKIPPED.value:
+        return run.skip_reason or "no reason recorded"
+    if status == ShitposterBrainJobStatus.FAILED.value:
+        return run.error or "no error recorded"
+    entries = details.get("entries") or []
+    if status == ShitposterBrainJobStatus.SUCCEEDED.value:
+        return f"wrote {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
+    if status == ShitposterBrainJobStatus.NO_OP.value:
+        rejections = details.get("rejections") or []
+        if rejections:
+            return f"every proposal rejected ({len(rejections)})"
+        return "shares at or above target"
+    return status
+
+
+def _render_idea_run(run: ShitposterBrainJobRun) -> str:
+    """Status and reason, shares vs target, novel gate, entries, rejections,
+    refreshes and weight changes from the run's details."""
+    details = run.details if isinstance(run.details, dict) else {}
+    lines = [
+        f"#{run.id} {_when(run.started_at)} · {run.status} ({run.trigger}): "
+        f"{_idea_run_reason(run, details)}",
+        f"  {_render_share('theme', details.get('theme'))} · "
+        f"{_render_share('novel', details.get('novel'))}",
+        f"  {_render_gate(details.get('novel'))}",
+    ]
+    lines += _render_rows("entries", details.get("entries") or [], _render_entry_row)
+    lines += _render_rows(
+        "rejections", details.get("rejections") or [], _render_rejection_row
+    )
+    lines += _render_rows(
+        "refreshes", details.get("refreshes") or [], _render_generic_row
+    )
+    lines += _render_rows(
+        "weight changes", details.get("weight_changes") or [], _render_generic_row
+    )
+    return "\n".join(lines)
+
+
+def render_idea_runs(persona_id: int, limit: int, offset: int = 0) -> str:
+    """Idea-generator runs, newest first."""
+    kind = ShitposterBrainJobKind.IDEA_GENERATE.value
+    total = memory_dal.count_brain_job_runs(persona_id, kind)
+    rows = memory_dal.list_brain_job_runs(persona_id, kind, limit, offset)
+    if not rows:
+        return f"No idea-generator runs at offset {offset} ({total} total)."
+    header = (
+        f"Idea-generator runs {offset + 1}-{offset + len(rows)} of {total}, newest first."
+    )
+    return "\n".join([header, *(_render_idea_run(r) for r in rows)])
 
 
 def retire_entry(
@@ -321,3 +516,25 @@ def page_runs(page: int, page_size: int) -> str:
         return NO_PERSONA
     size = max(1, min(page_size, MAX_PAGE_SIZE))
     return render_runs(persona_id, size, (max(page, 1) - 1) * size)
+
+
+def page_lore(source: Optional[str], page: int, page_size: int) -> str:
+    """CLI paging: 1-based page over the persona's active lore."""
+    if source is not None:
+        source = source.lower()
+        if source not in LORE_SOURCES:
+            return f"Unknown source {source!r}; use one of {', '.join(LORE_SOURCES)}."
+    persona_id = _default_persona_id()
+    if persona_id is None:
+        return NO_PERSONA
+    size = max(1, min(page_size, MAX_PAGE_SIZE))
+    return render_lore(persona_id, source, size, (max(page, 1) - 1) * size)
+
+
+def page_idea_runs(page: int, page_size: int) -> str:
+    """CLI paging: 1-based page over the persona's idea-generator runs."""
+    persona_id = _default_persona_id()
+    if persona_id is None:
+        return NO_PERSONA
+    size = max(1, min(page_size, MAX_PAGE_SIZE))
+    return render_idea_runs(persona_id, size, (max(page, 1) - 1) * size)
