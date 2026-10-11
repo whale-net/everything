@@ -102,3 +102,13 @@ async def register_brain_schedule(
         if e.status != RPCStatusCode.ALREADY_EXISTS:
             raise
         logger.debug("brain schedule already registered: %s", sid)
+
+
+async def remove_brain_schedule(
+    client: Client,
+    persona_id: int,
+    job_kind: str,
+    app_env: str | None = None,
+) -> None:
+    """Delete the recurring schedule for one persona and job kind; no-op if none exists."""
+    raise NotImplementedError

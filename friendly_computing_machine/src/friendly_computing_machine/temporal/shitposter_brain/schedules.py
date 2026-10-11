@@ -1,4 +1,9 @@
-"""Worker-startup registration of the per-persona brain job schedules."""
+"""Worker-startup registration of the per-persona brain job schedules.
+
+Harvest, reflect, write, snapshot and idea_generate each get one schedule per
+persona. The idea_generate registrar removes the schedule instead when its
+cadence is "off"; on-demand runs (brain-trigger) work either way.
+"""
 
 import logging
 from collections.abc import Awaitable, Callable
@@ -11,11 +16,15 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.harvest import (
     register_harvest_schedule,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.idea_generate import (
+    register_idea_generate_schedule,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.reflect import (
     register_reflect_schedule,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.snapshot import (
     register_snapshot_schedule,
+    register_idea_generate_schedule,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.write import (
     register_write_schedule,
@@ -31,6 +40,7 @@ BRAIN_SCHEDULE_REGISTRARS: tuple[Register, ...] = (
     register_reflect_schedule,
     register_write_schedule,
     register_snapshot_schedule,
+    register_idea_generate_schedule,
 )
 
 
@@ -39,7 +49,7 @@ async def register_brain_schedules_async(
     task_queue: str,
     app_env: str | None = None,
 ) -> None:
-    """Create harvest, reflect and write schedules for every persona; a failure is logged and skipped."""
+    """Run every brain schedule registrar for every persona; a failure is logged and skipped."""
     persona_ids = shitposter_dal.list_persona_ids()
     for persona_id in persona_ids:
         for register in BRAIN_SCHEDULE_REGISTRARS:
