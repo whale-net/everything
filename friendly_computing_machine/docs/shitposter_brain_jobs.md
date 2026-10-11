@@ -169,10 +169,15 @@ snapshot trigger after a successful run is wired (see the reflect section above)
 
 `idea_generate.py` keeps generated lore near its standing-pool target. Compute
 reads the persona's active lore and takes each generated kind's share (theme or
-novel count over all active lore). Targets come from `current_weights(...)`, the
-one seam for target weights (today `FCM_SHITPOSTER_THEME_TARGET_WEIGHT` and
-`FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT`). With no active lore, both shares count as
-below target. Hit promotion is not done here; `lore_promotion.py` owns it.
+novel count over all active lore). Targets come from `current_weights(...)`,
+which reads the persona's current rows in `fcm.shitpostersourceweight` (SCD2,
+one current row per source, each revision carrying a JSON `cause`). The first
+read seeds them from the starting weights `FCM_SHITPOSTER_THEME_TARGET_WEIGHT`
+and `FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT` (cause `initial`, or `fallback` when
+those were outside their bounds or over the combined ceiling; see `ENV.md`).
+`shitposter_weight_dal.revise_weight` closes and opens rows for later steps;
+`/shitpost admin lore` shows current weights, bounds and ceiling. With no
+active lore, both shares count as below target. Hit promotion is not done here; `lore_promotion.py` owns it.
 
 - **Theme.** When the theme share is below target, the theme agent
   (`shitposter-theme-generator`, overridable with

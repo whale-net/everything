@@ -80,6 +80,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterLoreEntry,
     ShitposterMemoryChange,
     ShitposterPersonaAttribute,
+    ShitposterSourceWeight,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (  # noqa: E402
     SlackChannel,
@@ -110,6 +111,7 @@ TABLES = [
     ShitposterPersonaAttribute.__table__,
     ShitposterLoreEntry.__table__,
     ShitposterMemoryChange.__table__,
+    ShitposterSourceWeight.__table__,
 ]
 
 
@@ -628,7 +630,7 @@ def test_lore_listing_filters_to_one_source(persona, source):
 def test_lore_listing_empty_source_and_bad_limit(persona):
     memory.add_lore(persona.id, "a", kind="hit", cause_kind="operator", cause_ref="x", now=T0)
 
-    assert operator.handle_operator_command("lore theme", ADMIN, ADMINS) == (
+    assert operator.handle_operator_command("lore theme", ADMIN, ADMINS).startswith(
         "No active theme lore at offset 0 (0 total)."
     )
     assert operator.handle_operator_command("lore bogus", ADMIN, ADMINS) == operator.OPERATOR_USAGE

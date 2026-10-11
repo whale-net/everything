@@ -19,6 +19,9 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     shitposter_snapshot_dal as snapshot_dal,
 )
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+    shitposter_weight_dal as weight_dal,
+)
 from friendly_computing_machine.src.friendly_computing_machine.db.dal.slack_dal import (
     get_slack_channel,
 )
@@ -33,6 +36,10 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterMemoryCauseKindEnum,
     ShitposterMemoryChange,
     ShitposterMemoryEntityKindEnum,
+    ShitposterWeightSourceEnum,
+)
+from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
+    load_source_weight_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -324,13 +331,34 @@ def render_lore(
     total = memory_dal.count_lore_for_operator(persona_id, source)
     rows = memory_dal.list_lore_for_operator(persona_id, source, limit, offset)
     scope = f"{source} lore" if source else "lore"
+    weights = render_source_weights(persona_id)
     if not rows:
-        return f"No active {scope} at offset {offset} ({total} total)."
+        return f"No active {scope} at offset {offset} ({total} total).\n{weights}"
     header = (
         f"Active {scope} {offset + 1}-{offset + len(rows)} of {total}, "
         "by source then id."
     )
-    return "\n".join([header, *(_render_lore_entry(e) for e in rows)])
+    return "\n".join([header, *(_render_lore_entry(e) for e in rows), weights])
+
+
+def render_source_weights(persona_id: int) -> str:
+    """Current theme/novel target weights with their bounds and the combined ceiling."""
+    cfg = load_source_weight_config()
+    rows = weight_dal.get_current_weights(persona_id, config=cfg)
+    bounds = {
+        ShitposterWeightSourceEnum.THEME.value: (cfg.theme_min, cfg.theme_max),
+        ShitposterWeightSourceEnum.NOVEL.value: (cfg.novel_min, cfg.novel_max),
+    }
+    parts = []
+    for source, (lo, hi) in bounds.items():
+        row = rows.get(source)
+        current = "unset" if row is None else _pct(float(row.weight))
+        parts.append(f"{source} {current} (bounds {_pct(lo)}-{_pct(hi)})")
+    return f"Source weights: {', '.join(parts)}; combined ceiling {_pct(cfg.ceiling)}."
+
+
+def _pct(value: float) -> str:
+    return f"{value * 100:g}%"
 
 
 def _render_rows(label: str, rows: list, render_row) -> list[str]:
