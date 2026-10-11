@@ -104,4 +104,46 @@ func TestActivities_ResolveAgentDefinition_CostOverrideIsEffectiveCap(t *testing
 	assert.Equal(t, 3.0, stored.MaxCostUSD, "the stored definition is never mutated by an override")
 }
 
+// TestActivities_ResolveAgentDefinition_MaxTurnsOverrideIsEffectiveTurnCap
+// proves the pinned max_turns_override replaces the definition's turn cap for
+// the turn (including override=1 on a multi-turn definition), without mutating
+// the stored definition, and that an unset override falls back to the
+// definition's value, then the platform default when that is 0.
+func TestActivities_ResolveAgentDefinition_MaxTurnsOverrideIsEffectiveTurnCap(t *testing.T) {
+	ctx := context.Background()
+	store, db := newTestStore(t)
+	a := &Activities{Store: store}
+
+	def := &session.AgentDefinition{AgentID: "turns-agent", Model: strPtrW("model-t"), MaxTurns: 10, MaxCostUSD: 3}
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, def))
+
+	overridden := newTestSessionRow(t, ctx, store)
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, overridden.SessionID, def.ID))
+	_, err := db.Pool.Exec(ctx, `UPDATE sessions SET max_turns_override = $1 WHERE session_id = $2`, 1, overridden.SessionID)
+	require.NoError(t, err)
+
+	res, err := a.ResolveAgentDefinition(ctx, overridden.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Definition.MaxTurns, "pinned override=1 must be the effective turn cap")
+
+	plain := newTestSessionRow(t, ctx, store)
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, plain.SessionID, def.ID))
+	res, err = a.ResolveAgentDefinition(ctx, plain.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 10, res.Definition.MaxTurns, "no override falls back to the definition's max_turns")
+
+	unlimited := &session.AgentDefinition{AgentID: "turns-default", Model: strPtrW("model-d"), MaxTurns: 0}
+	require.NoError(t, store.AgentDefinitions().Upsert(ctx, unlimited))
+	defaulted := newTestSessionRow(t, ctx, store)
+	require.NoError(t, store.AgentDefinitions().AssignToSession(ctx, defaulted.SessionID, unlimited.ID))
+	res, err = a.ResolveAgentDefinition(ctx, defaulted.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, session.DefaultMaxTurns, res.Definition.MaxTurns, "unset definition max_turns resolves to the platform default")
+
+	stored, err := store.AgentDefinitions().GetByID(ctx, def.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, 10, stored.MaxTurns, "the stored definition is never mutated by an override")
+}
+
 func strPtrW(s string) *string { return &s }
