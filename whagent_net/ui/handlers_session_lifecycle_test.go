@@ -578,3 +578,55 @@ func TestHandleStartSession_NonNumericCapRejectedBeforeAPI(t *testing.T) {
 		require.Contains(t, w.Body.String(), tc.field)
 	}
 }
+
+// TestHandleStartSession_IdleTimeoutOverrideForwarded proves the
+// idle_timeout_override form value reaches StartSessionRequest verbatim.
+func TestHandleStartSession_IdleTimeoutOverrideForwarded(t *testing.T) {
+	server := &fakeLifecycleSessionServer{
+		startResp: &whagentpb.StartSessionResponse{
+			Session: newFixtureSession(uuid.New(), whagentpb.SessionState_SESSION_STATE_RUNNING, ownerSubject()),
+		},
+	}
+	app := newLifecycleTestApp(t, server, "")
+
+	w := postForm(t, app, app.handleStartSession, "/sessions", "", url.Values{"agent_id": {"code-review"}, "idle_timeout_override": {"36h"}})
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.NotNil(t, server.startReq)
+	require.NotNil(t, server.startReq.IdleTimeoutOverride)
+	require.Equal(t, "36h", server.startReq.GetIdleTimeoutOverride())
+}
+
+// TestHandleStartSession_BlankIdleTimeoutLeftUnset proves an empty idle
+// timeout field is never sent as an override.
+func TestHandleStartSession_BlankIdleTimeoutLeftUnset(t *testing.T) {
+	server := &fakeLifecycleSessionServer{
+		startResp: &whagentpb.StartSessionResponse{
+			Session: newFixtureSession(uuid.New(), whagentpb.SessionState_SESSION_STATE_RUNNING, ownerSubject()),
+		},
+	}
+	app := newLifecycleTestApp(t, server, "")
+
+	w := postForm(t, app, app.handleStartSession, "/sessions", "", url.Values{"agent_id": {"code-review"}, "idle_timeout_override": {"  "}})
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.NotNil(t, server.startReq)
+	require.Nil(t, server.startReq.IdleTimeoutOverride)
+}
+
+// TestHandleStartSession_IdleTimeoutRejectedRendersFieldAndValue proves api's
+// InvalidArgument for a bad idle timeout renders inline, naming the field and
+// value, and keeps the submitted value in the form.
+func TestHandleStartSession_IdleTimeoutRejectedRendersFieldAndValue(t *testing.T) {
+	server := &fakeLifecycleSessionServer{
+		startErr: status.Error(codes.InvalidArgument, "idle_timeout_override must be a positive Go duration: supplied \"-5m\""),
+	}
+	app := newLifecycleTestApp(t, server, "")
+
+	w := postForm(t, app, app.handleStartSession, "/sessions", "", url.Values{"agent_id": {"code-review"}, "idle_timeout_override": {"-5m"}})
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), "idle_timeout_override")
+	require.Contains(t, w.Body.String(), "-5m")
+	require.NotContains(t, w.Body.String(), "rpc error")
+}
