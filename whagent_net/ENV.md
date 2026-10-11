@@ -117,6 +117,7 @@ per-agent rather than process-wide.
 | `WHAGENT_DEFAULT_MODEL` | worker, api | — | Model used when neither agent definition nor session specifies one. |
 | `WHAGENT_DEFAULT_MAX_TURNS` | api | `100` | Per-session turn cap default. |
 | `WHAGENT_DEFAULT_MAX_COST_USD` | api | `1` | Per-session cost cap default. |
+| `WHAGENT_DEFAULT_IDLE_TIMEOUT` | api | `24h` | Platform idle timeout (Go duration string, whole seconds, > 0) used when neither a session's `idle_timeout_override` nor its agent definition's `idle_timeout` is set. Resolved once at StartSession and pinned in workflow history. An invalid value is a startup failure. |
 | `WHAGENT_MODEL_CATALOG_TTL` | worker, api | `5m` | How long `llm.Catalog` caches OpenRouter's model list (FR5) before refetching. |
 | `WHAGENT_PRICE_TABLE_PATH` | worker | *(required)* | Path to the per-model price table `llm.LoadPriceTable` reads (LB6: contents and source stay cheap to change -- a config file, not a code table). JSON object keyed on model id, e.g. `{"openai/gpt-4o": {"prompt_usd_per_million": 2.5, "completion_usd_per_million": 10}}`; read fresh on every call, so an edit takes effect without a code change. |
 

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
@@ -117,6 +118,9 @@ type SessionServer struct {
 	// agentAdminRole is the token role required for agent definition history
 	// and updates. Empty fails closed: nobody is an agent admin.
 	agentAdminRole string
+	// defaultIdleTimeout is the platform idle timeout (WHAGENT_DEFAULT_IDLE_TIMEOUT);
+	// zero means session.DefaultIdleTimeout.
+	defaultIdleTimeout time.Duration
 	// eventsConsumer is StreamEvents' (issue #2239) shared, per-process
 	// subscription onto the whagent/events exchange -- declared/bound
 	// once at api startup (main.go's initializeEventsConsumer), mirroring
@@ -208,6 +212,18 @@ func NewSessionServer(ctx context.Context, store *session.Store, issuer string, 
 // SetAgentAdminRole configures the role isAgentAdmin checks; empty fails closed.
 func (s *SessionServer) SetAgentAdminRole(role string) { s.agentAdminRole = strings.TrimSpace(role) }
 
+// SetDefaultIdleTimeout sets the platform idle timeout used when neither a
+// session override nor the definition sets one. Zero keeps session.DefaultIdleTimeout.
+func (s *SessionServer) SetDefaultIdleTimeout(d time.Duration) { s.defaultIdleTimeout = d }
+
+// platformIdleTimeout is the configured platform default, or session.DefaultIdleTimeout.
+func (s *SessionServer) platformIdleTimeout() time.Duration {
+	if s.defaultIdleTimeout > 0 {
+		return s.defaultIdleTimeout
+	}
+	return session.DefaultIdleTimeout
+}
+
 // GetSession is a read path (FR3): reads the `sessions` row
 // (session.Store.Sessions().GetByID) and maps it to a Session proto --
 // NOT_FOUND for an unknown session id. Any authenticated caller may read
@@ -242,6 +258,8 @@ func (s *SessionServer) GetSession(ctx context.Context, req *pb.GetSessionReques
 	}
 	resp.EffectiveMaxTurns = int32(session.EffectiveMaxTurns(sess.MaxTurnsOverride, def))
 	resp.EffectiveMaxCostUsd = session.EffectiveMaxCostUSD(sess.MaxCostUSDOverride, def)
+	resp.EffectiveIdleTimeout = session.FormatIdleTimeout(session.IdleTimeoutSeconds(
+		session.EffectiveIdleTimeout(sess.IdleTimeoutOverride, def, s.platformIdleTimeout())))
 	// Text is returned only on request, and never logged (presence/bytes are on Session).
 	if req.GetIncludePinnedContext() && sess.PinnedContextBytes > 0 {
 		text, err := s.store.Sessions().GetPinnedContext(ctx, id)

@@ -21,7 +21,9 @@ type SessionNewData struct {
 	ModelOverride string
 	MaxTurns      string
 	MaxCostUSD    string
-	Error         string
+	// IdleTimeout echoes the submitted idle_timeout_override on a rejection.
+	IdleTimeout string
+	Error       string
 }
 
 // SessionNew is the start-session form (GET /sessions/new): a plain POST
@@ -58,6 +60,10 @@ templ SessionNew(data SessionNewData) {
 			<label class="form-control">
 				<span class="label-text">Max cost USD (optional)</span>
 				<input type="text" name="max_cost_usd" value={ data.MaxCostUSD } class="input input-bordered w-full"/>
+			</label>
+			<label class="form-control">
+				<span class="label-text">Idle timeout (optional, e.g. 24h)</span>
+				<input type="text" name="idle_timeout_override" value={ data.IdleTimeout } class="input input-bordered w-full"/>
 			</label>
 			<button type="submit" class="btn btn-primary" disabled?={ len(data.Agents) == 0 }>Start session</button>
 		</form>

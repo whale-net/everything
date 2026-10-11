@@ -59,6 +59,14 @@ func Run(ctx context.Context, q session.Querier, modelDefs []config.ModelDefinit
 			r := a.RequiredRole
 			def.RequiredRole = &r
 		}
+		if a.IdleTimeout != "" {
+			d, err := session.ParseIdleTimeout("idle_timeout", a.IdleTimeout)
+			if err != nil {
+				return created, fmt.Errorf("agent %q: %w", a.AgentID, err)
+			}
+			secs := session.IdleTimeoutSeconds(d)
+			def.IdleTimeoutSeconds = &secs
+		}
 		if a.SystemPrompt != "" {
 			p := a.SystemPrompt
 			def.SystemPrompt = &p

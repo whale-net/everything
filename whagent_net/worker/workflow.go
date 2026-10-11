@@ -160,6 +160,10 @@ const (
 // Determinism section describes for I/O.
 type SessionWorkflowInput struct {
 	SessionID uuid.UUID
+	// IdleTimeoutSeconds is the session's effective idle timeout, resolved by
+	// api StartSession and fixed in workflow history. Zero means the caller
+	// did not resolve one (runs started before this field existed).
+	IdleTimeoutSeconds int32
 }
 
 // SendTurnSignal is SendTurn's signal payload -- mirrors
