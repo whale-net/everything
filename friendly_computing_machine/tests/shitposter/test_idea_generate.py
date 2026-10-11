@@ -87,7 +87,10 @@ def engine(monkeypatch):
         "FCM_SHITPOSTER_THEME_GENERATOR_AGENT_ID",
     ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(idea_generate, "_member_names", lambda: ["Alice"])
+    monkeypatch.delenv("FCM_SHITPOSTER_MEMBER_ALIASES", raising=False)
+    with Session(engine) as s:
+        s.add(SlackUser(slack_id="U_ALICE", name="Alice", is_bot=False))
+        s.commit()
     return engine
 
 

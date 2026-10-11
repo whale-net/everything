@@ -236,13 +236,17 @@ def upsert_slack_users_activity(
             session.refresh(user)
             result = user
         elif (
-            result.name == slack_user.name
+            result.name != slack_user.name
+            or result.display_name != slack_user.display_name
+            or result.real_name != slack_user.real_name
             # these aren't expected to change but keeping for consistency
             or result.slack_team_slack_id != slack_user.slack_team_slack_id
             or result.slack_team_id != slack_team_id
         ):
             # TODO - pydantic idiomatic way of doing this
             result.name = slack_user.name
+            result.display_name = slack_user.display_name
+            result.real_name = slack_user.real_name
             result.slack_team_slack_id = slack_user.slack_team_slack_id
             result.slack_team_id = slack_team_id
 

@@ -41,6 +41,9 @@ class SlackUserBase(Base):
     name: str
     is_bot: bool = False
     slack_team_slack_id: str = Field(nullable=True)
+    # Slack profile names stored separately; name keeps display_name or real_name
+    display_name: Optional[str] = Field(default=None, nullable=True)
+    real_name: Optional[str] = Field(default=None, nullable=True)
 
 
 class SlackUser(SlackUserBase, table=True):
@@ -57,6 +60,8 @@ class SlackUserCreate(SlackUserBase):
             is_bot=self.is_bot,
             slack_team_slack_id=self.slack_team_slack_id,
             slack_team_id=slack_team_id,
+            display_name=self.display_name,
+            real_name=self.real_name,
         )
 
 

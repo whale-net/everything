@@ -53,7 +53,6 @@ from friendly_computing_machine.src.friendly_computing_machine.shitposter_config
     novel_gate_recent_days,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.activity import (
-    _member_names,
     _wait_for_reply,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
@@ -409,7 +408,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         # read before any agent call so a failed run still records it
         gate = read_novel_gate(session, persona_id, now)
         refreshes = [r.to_payload() for r in lore_refresh.compute_refreshes(session, persona_id)]
-    member_names = _member_names()
+        member_names = guardrails.member_identifiers(session)
     stepped = source_weights.effective_weights(weight_decisions)
     weights = TargetWeights(
         theme=stepped.get(THEME, seeded.theme), novel=stepped.get(NOVEL, seeded.novel)

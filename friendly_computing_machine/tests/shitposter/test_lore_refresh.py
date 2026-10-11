@@ -97,7 +97,9 @@ def engine(monkeypatch):
         "FCM_SHITPOSTER_NOVEL_GATE_FRACTION",
     ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(idea_generate, "_member_names", lambda: ["Alice"])
+    monkeypatch.setattr(
+        idea_generate.guardrails, "member_identifiers", lambda session: ["Alice"]
+    )
     return engine
 
 

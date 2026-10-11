@@ -134,7 +134,9 @@ def engine(monkeypatch):
     for name in list(os.environ):
         if name.startswith("FCM_SHITPOSTER_"):
             monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(idea_generate, "_member_names", lambda: ["Alice"])
+    monkeypatch.setattr(
+        idea_generate.guardrails, "member_identifiers", lambda session: ["Alice"]
+    )
     return engine
 
 

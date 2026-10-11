@@ -15,6 +15,10 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterLoreEntry,
     ShitposterPersonaAttribute,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import SlackUser
+from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
+    load_member_aliases,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.guardrails import (
     find_member_name,
     find_mention,
@@ -35,6 +39,21 @@ INSTRUCTION_RE = re.compile(
 # Word-set overlap at or above which a text counts as a reword of a retired one.
 REWORD_SIMILARITY = 0.75
 _WORD_RE = re.compile(r"[a-z0-9']+")
+
+# A name token (e.g. a first name) shorter than this, or a common word, is too ambiguous to match alone.
+MIN_NAME_TOKEN_LEN = 3
+_NAME_TOKEN_RE = re.compile(r"[^\W_]+")
+COMMON_WORDS = frozenset(
+    """
+    the and for are but not you all any can her was one our out day get has him his how man new
+    now old see two way who boy did its let put say she too use art bill bob may mark will rich
+    joy hope grace faith rose dawn summer autumn april june august sky ray jack pat frank grant
+    chase hunter king bishop baker cook carter mason miller page young brown green white black
+    gray grey love lucky happy sunny big little real fake cool dude bro guy man men boss chief
+    doc dev admin user bot cat dog fox bear wolf bird bee ace max sun moon star angel storm
+    official team the mr mrs ms dr jr sr
+    """.split()
+)
 
 
 def _utc(dt: datetime.datetime | None) -> datetime.datetime | None:
@@ -94,6 +113,32 @@ def matches_retired(text: str, retired: list[dict[str, Any]]) -> bool:
         if words and other and len(words & other) / len(words | other) >= REWORD_SIMILARITY:
             return True
     return False
+
+
+def name_identifiers(name: str | None) -> list[str]:
+    """A stored name plus its distinctive tokens (e.g. first and last name)."""
+    if not name or not name.strip():
+        return []
+    out = [name.strip()]
+    for token in _NAME_TOKEN_RE.findall(name):
+        if len(token) >= MIN_NAME_TOKEN_LEN and token.lower() not in COMMON_WORDS:
+            out.append(token)
+    return out
+
+
+def member_identifiers(session: Session) -> list[str]:
+    """Every string that identifies a current or former channel member: stored names, their
+    distinctive tokens, and operator-configured aliases. Longest first, case-insensitively unique."""
+    rows = session.exec(
+        select(SlackUser.name, SlackUser.display_name, SlackUser.real_name).where(
+            SlackUser.is_bot.is_(False)  # type: ignore[attr-defined]
+        )
+    ).all()
+    seen: dict[str, str] = {}
+    candidates = [i for row in rows for n in row for i in name_identifiers(n)]
+    for ident in [*candidates, *load_member_aliases()]:
+        seen.setdefault(ident.lower(), ident)
+    return sorted(seen.values(), key=lambda i: (-len(i), i.lower()))
 
 
 def generated_text_refusal(

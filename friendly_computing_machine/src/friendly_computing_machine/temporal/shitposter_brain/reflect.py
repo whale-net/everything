@@ -44,7 +44,6 @@ from friendly_computing_machine.src.friendly_computing_machine.shitposter_config
     reflector_input_cap,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.activity import (
-    _member_names,
     _wait_for_reply,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.guardrails import (
@@ -385,7 +384,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         active = shitposter_memory_dal.active_attributes(persona_id, session=session)
         active_view = [{"key": a.attribute_key, "text": a.text} for a in active]
         retired = guardrails.operator_retired_attributes(session, persona_id)
-        member_names = _member_names()
+        member_names = guardrails.member_identifiers(session)
 
     # the session is closed before the agent call so no transaction spans it
     raw_ops = _parse_ops(

@@ -483,7 +483,9 @@ def idea_pool(engine, persona_id, monkeypatch):
         "FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT",
     ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(idea_generate, "_member_names", lambda: ["Alice"])
+    monkeypatch.setattr(
+        idea_generate.guardrails, "member_identifiers", lambda session: ["Alice"]
+    )
     ids = []
     with Session(engine) as s:
         for i in range(4):
