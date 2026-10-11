@@ -70,7 +70,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 
 APP_ENV = "test"
 TASK_QUEUE = "fcm-brain-schedules-test"
-KINDS = ("harvest", "reflect", "write", "snapshot")
+KINDS = ("harvest", "reflect", "write", "snapshot", "idea_generate")
 TABLES = [
     ShitposterPersona.__table__,
     ShitposterPersonaRevision.__table__,
@@ -241,6 +241,7 @@ def test_fresh_namespace_creates_harvest_reflect_and_write_per_persona(
             "reflect": REFLECT_SCHEDULE_EVERY,
             "write": datetime.timedelta(hours=3),
             "snapshot": datetime.timedelta(hours=12),
+            "idea_generate": datetime.timedelta(hours=24),
         }
         for kind in KINDS:
             sched = client.schedules[control.schedule_id(pid, kind, APP_ENV)]

@@ -1,10 +1,11 @@
 # Shitposter brain job runner
 
 The brain job runner is the shared shape for Shitposter persona jobs (harvest,
-reflect, write, snapshot). Each job kind plugs a compute step and an apply step
+reflect, write, snapshot, idea_generate). Each job kind plugs a compute step and an apply step
 into it. The harvest (`harvest.py`), snapshot (`snapshot.py`), and reflect (`reflect.py`) job bodies are
-registered, and so are write and idea-generate (`idea_generate.py`). Worker startup registers the harvest, reflect and write schedules for
-every persona (see [Schedules](#schedules)); snapshot has none and runs after a successful reflect.
+registered, and so are write and idea-generate (`idea_generate.py`). Worker startup registers the harvest, reflect, write, snapshot and idea_generate
+schedules for every persona (see [Schedules](#schedules)); a successful reflect also
+enqueues a snapshot.
 
 Code: `src/friendly_computing_machine/temporal/shitposter_brain/`
 (`base.py` constants and job-body registry, `activity.py` lock/compute/apply/fail,
@@ -207,6 +208,12 @@ there is none. Each entry gets a `shitpostermemorychange` add row with
 
 A share is `null` when the pool is empty.
 
+Runs every `FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS` (default 24) and on demand with
+`brain-trigger <persona_id> idea_generate`. Setting the cadence to `off` removes the
+persona's schedule at the next worker start; `brain-trigger` still works. Runs share the
+per-persona lock, so one overlapping another brain job is recorded `skipped`, and a
+failed or timed-out run writes no lore.
+
 ## Timeouts
 
 Per-kind workflow timeouts live in `BRAIN_JOB_TIMEOUTS` in `temporal/shitposter_brain/base.py`:
@@ -228,7 +235,7 @@ Runs one job now through the same per-persona lock as scheduled runs. It is a
 command on the `workflow` CLI (`src/friendly_computing_machine/cli/workflow_cli.py`):
 
 ```
-fcm workflow brain-trigger <persona_id> <harvest|reflect|write|snapshot>
+fcm workflow brain-trigger <persona_id> <harvest|reflect|write|snapshot|idea_generate>
 ```
 
 It prints `run_id=<n> status=<status>`, plus `skip_reason=...` when the run was
@@ -243,11 +250,15 @@ persona and job kind, id `fcm-<app_env>-shitposter-brain-<kind>-<persona_id>`,
 with overlap policy `SKIP`. It is a no-op when the schedule already exists.
 
 `temporal/shitposter_brain/schedules.py` `register_brain_schedules_async` runs at worker
-startup (from `run_worker`) and calls the harvest, reflect, write and snapshot registrars for
+startup (from `run_worker`) and calls the harvest, reflect, write, snapshot and idea_generate registrars for
 every row in `shitposter_dal.list_persona_ids()`. Each registration is logged and skipped on
 failure, so one bad persona or a Temporal error does not stop the worker. Restarts create
 no duplicates. Write cadence is `FCM_SHITPOSTER_WRITE_CADENCE_HOURS`; snapshot cadence is
-`FCM_SHITPOSTER_SNAPSHOT_CADENCE_HOURS` (default 24). A successful reflect still enqueues a
+`FCM_SHITPOSTER_SNAPSHOT_CADENCE_HOURS` (default 24); idea_generate cadence is
+`FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS` (default 24). When that is `off`,
+`remove_brain_schedule(...)` deletes the persona's idea_generate schedule (a no-op if none
+exists) and none is created. An existing schedule keeps its interval until removed, so
+changing a cadence needs the schedule deleted first. A successful reflect still enqueues a
 snapshot on top of the schedule.
 
 ## Verifying

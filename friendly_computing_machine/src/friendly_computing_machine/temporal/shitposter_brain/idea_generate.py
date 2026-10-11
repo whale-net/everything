@@ -363,7 +363,23 @@ async def register_idea_generate_schedule(
 
     When the cadence is "off", any existing schedule is removed and none is created.
     """
-    raise NotImplementedError
+    hours = idea_generator_cadence_hours()
+    if hours is None:
+        await remove_brain_schedule(
+            client,
+            persona_id,
+            ShitposterBrainJobKind.IDEA_GENERATE.value,
+            app_env=app_env,
+        )
+        return
+    await register_brain_schedule(
+        client,
+        task_queue,
+        persona_id,
+        ShitposterBrainJobKind.IDEA_GENERATE.value,
+        every=datetime.timedelta(hours=hours),
+        app_env=app_env,
+    )
 
 
 register_job_body(

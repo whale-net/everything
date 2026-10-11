@@ -24,7 +24,6 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.snapshot import (
     register_snapshot_schedule,
-    register_idea_generate_schedule,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.write import (
     register_write_schedule,

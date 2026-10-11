@@ -111,4 +111,13 @@ async def remove_brain_schedule(
     app_env: str | None = None,
 ) -> None:
     """Delete the recurring schedule for one persona and job kind; no-op if none exists."""
-    raise NotImplementedError
+    job_kind = ShitposterBrainJobKind(job_kind).value
+    sid = schedule_id(persona_id, job_kind, app_env)
+    try:
+        await client.get_schedule_handle(sid).delete()
+    except RPCError as e:
+        if e.status != RPCStatusCode.NOT_FOUND:
+            raise
+        logger.debug("brain schedule not registered, nothing to remove: %s", sid)
+        return
+    logger.info("brain schedule removed: %s", sid)
