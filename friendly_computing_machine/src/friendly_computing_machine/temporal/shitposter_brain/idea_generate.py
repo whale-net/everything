@@ -2,7 +2,8 @@
 
 Compute reads the persona's active lore, compares each generated kind's share
 against its target weight, and asks that kind's agent for proposals only when
-the share is below target. Each proposal is validated (citations, guardrails)
+the share is below target; novel is asked only while the novel gate reads a
+relative engagement drop. Each proposal is validated (citations, guardrails)
 and the run cap applies across kinds. Apply writes the accepted entries and
 their change-log rows in the runner's single transaction. Hit promotion is not
 done here; lore_promotion owns it.
@@ -29,8 +30,10 @@ from friendly_computing_machine.src.friendly_computing_machine.db.util import (
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
     ShitposterBrainJobKind,
     ShitposterBrainJobStatus,
+    ShitposterPostEngagement,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
+    NovelGateReading,
     ShitposterLoreEntry,
     ShitposterLoreKindEnum,
     ShitposterMemoryCauseKindEnum,
@@ -38,7 +41,11 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
     idea_generator_cadence_hours,
     idea_generator_run_cap,
+    load_novel_generator_agent_id,
     load_theme_generator_agent_id,
+    novel_gate_baseline_days,
+    novel_gate_fraction,
+    novel_gate_recent_days,
     novel_target_weight,
     theme_target_weight,
 )
@@ -59,6 +66,9 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     register_brain_schedule,
     remove_brain_schedule,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.lore_promotion import (
+    popularity_score,
+)
 from friendly_computing_machine.src.friendly_computing_machine.whagent.client import (
     get_whagent_client,
 )
@@ -75,7 +85,10 @@ REASON_MALFORMED = "malformed"
 REASON_INSUFFICIENT_CITATIONS = "insufficient_citations"
 REASON_RUN_CAP = "run_cap"
 
-NOVEL_GATE_NOT_IMPLEMENTED = "not_implemented"
+# Novel gate reasons recorded in the run's novel.gate reading.
+GATE_REASON_OPEN = "engagement_drop"
+GATE_REASON_NO_DROP = "no_engagement_drop"
+GATE_REASON_NO_ENGAGEMENT = "no_engagement_in_window"
 
 THEME = ShitposterLoreKindEnum.THEME.value
 NOVEL = ShitposterLoreKindEnum.NOVEL.value
@@ -116,6 +129,123 @@ def median_hit_popularity(session: Session, persona_id: int) -> int:
     if not scores:
         return 0
     return round(statistics.median(scores))
+
+
+@dataclass(frozen=True)
+class NovelGate:
+    """One run's novel-gate reading; means are None when their window has no finalized engagement."""
+
+    open: bool
+    recent_mean: float | None
+    baseline_mean: float | None
+    fraction: float
+    reason: str
+
+    def as_details(self) -> dict[str, Any]:
+        return {
+            "open": self.open,
+            "recent_mean": self.recent_mean,
+            "baseline_mean": self.baseline_mean,
+            "fraction": self.fraction,
+            "reason": self.reason,
+        }
+
+
+def _utc(dt: datetime.datetime) -> datetime.datetime:
+    # sqlite returns naive datetimes; stored timestamps are UTC
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=datetime.timezone.utc)
+
+
+def finalized_mean_popularity(
+    session: Session,
+    persona_id: int,
+    since: datetime.datetime,
+    until: datetime.datetime | None = None,
+) -> float | None:
+    """Mean popularity of the persona's posts whose engagement finalized at or after `since`."""
+    rows = session.exec(
+        select(
+            ShitposterPostEngagement.distinct_reactors,
+            ShitposterPostEngagement.distinct_repliers,
+            ShitposterPostEngagement.finalized_at,
+        ).where(ShitposterPostEngagement.persona_id == persona_id)
+    ).all()
+    scores = [
+        popularity_score(reactors, repliers)
+        for reactors, repliers, finalized_at in rows
+        if _utc(finalized_at) >= since and (until is None or _utc(finalized_at) <= until)
+    ]
+    if not scores:
+        return None
+    return statistics.fmean(scores)
+
+
+def read_novel_gate(
+    session: Session, persona_id: int, now: datetime.datetime
+) -> NovelGate:
+    """Open only when the recent-window mean is below fraction x the baseline-window mean."""
+    fraction = novel_gate_fraction()
+    recent = finalized_mean_popularity(
+        session, persona_id, now - datetime.timedelta(days=novel_gate_recent_days()), now
+    )
+    baseline = finalized_mean_popularity(
+        session, persona_id, now - datetime.timedelta(days=novel_gate_baseline_days()), now
+    )
+    if recent is None or baseline is None:
+        return NovelGate(False, recent, baseline, fraction, GATE_REASON_NO_ENGAGEMENT)
+    if recent < fraction * baseline:
+        return NovelGate(True, recent, baseline, fraction, GATE_REASON_OPEN)
+    return NovelGate(False, recent, baseline, fraction, GATE_REASON_NO_DROP)
+
+
+def _novel_prompt(
+    active: list[dict[str, Any]], retired: list[dict[str, Any]], max_entries: int
+) -> str:
+    # engagement figures stay out of the prompt so a slump nudges rather than swings the voice
+    return (
+        f"Propose at most {max_entries} novel lore entries: fresh running bits that fit "
+        'this persona. Reply with only one JSON object: {"entries": [{"text": str}]}.\n\n'
+        f"Active lore: {json.dumps(active)}\n"
+        f"Retired by the operator: {json.dumps([r['text'] for r in retired])}"
+    )
+
+
+def _call_novel_agent(
+    active: list[dict[str, Any]], retired: list[dict[str, Any]], max_entries: int
+) -> str:
+    client = get_whagent_client()
+    deadline = time.monotonic() + AGENT_DEADLINE_SECONDS
+    session = client.start_session(
+        load_novel_generator_agent_id(),
+        first_turn=_novel_prompt(active, retired, max_entries),
+    )
+    return _wait_for_reply(client, session.session_id, 0, deadline)
+
+
+def _validate_novel(
+    raw_entries: list[Any],
+    member_names: list[str],
+    retired: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Accepted novel entries and rejections ({kind, text, reason}); no citation requirement."""
+    accepted: list[dict[str, Any]] = []
+    rejections: list[dict[str, Any]] = []
+    for raw in raw_entries:
+        text = _entry_text(raw)
+        if text is None:
+            raw_text = raw.get("text") if isinstance(raw, dict) else None
+            rejections.append(
+                {"kind": NOVEL, "text": raw_text if isinstance(raw_text, str) else None, "reason": REASON_MALFORMED}
+            )
+            continue
+        reason = guardrails.generated_text_refusal(text, member_names, retired)
+        if reason is not None:
+            rejections.append({"kind": NOVEL, "text": text, "reason": reason})
+            continue
+        accepted.append(
+            {"kind": NOVEL, "text": text, "cited": [], "agent_id": load_novel_generator_agent_id()}
+        )
+    return accepted, rejections
 
 
 def _theme_prompt(
@@ -214,26 +344,34 @@ def _branch_reading(ctx: dict[str, Any], kind: str) -> dict[str, Any]:
     return {"share": ctx["shares"][kind], "target": getattr(ctx["weights"], kind)}
 
 
-def _theme_branch(ctx: dict[str, Any]) -> dict[str, Any]:
+def _theme_branch(ctx: dict[str, Any], slots: int) -> dict[str, Any]:
     reading = _branch_reading(ctx, THEME)
-    if not below_target(reading["share"], reading["target"]):
+    if slots <= 0 or not below_target(reading["share"], reading["target"]):
         return {"reading": reading, "accepted": [], "rejections": []}
-    raw = _parse_entries(_call_theme_agent(ctx["active"], ctx["retired"], ctx["cap"]))
+    raw = _parse_entries(_call_theme_agent(ctx["active"], ctx["retired"], slots))
     accepted, rejections = _validate_theme(
         raw, ctx["active_ids"], ctx["member_names"], ctx["retired"]
     )
     return {"reading": reading, "accepted": accepted, "rejections": rejections}
 
 
-def _novel_branch(ctx: dict[str, Any]) -> dict[str, Any]:
-    """Novel exploration: gate not implemented yet, so it records the reading and emits nothing."""
+def _novel_branch(ctx: dict[str, Any], slots: int) -> dict[str, Any]:
+    """Novel exploration, only while the gate reads an engagement drop and the share is below target."""
     reading = _branch_reading(ctx, NOVEL)
-    reading["gate"] = NOVEL_GATE_NOT_IMPLEMENTED
-    return {"reading": reading, "accepted": [], "rejections": []}
+    reading["gate"] = ctx["gate"].as_details()
+    if (
+        slots <= 0
+        or not ctx["gate"].open
+        or not below_target(reading["share"], reading["target"])
+    ):
+        return {"reading": reading, "accepted": [], "rejections": []}
+    raw = _parse_entries(_call_novel_agent(ctx["active"], ctx["retired"], slots))
+    accepted, rejections = _validate_novel(raw, ctx["member_names"], ctx["retired"])
+    return {"reading": reading, "accepted": accepted, "rejections": rejections}
 
 
 # Generated kinds in dispatch order; earlier kinds take run-cap slots first.
-_BRANCHES: list[tuple[str, Callable[[dict[str, Any]], dict[str, Any]]]] = [
+_BRANCHES: list[tuple[str, Callable[[dict[str, Any], int], dict[str, Any]]]] = [
     (THEME, _theme_branch),
     (NOVEL, _novel_branch),
 ]
@@ -257,6 +395,8 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         retired = guardrails.operator_retired_attributes(
             session, persona_id
         ) + guardrails.operator_retired_lore(session, persona_id)
+        # read before any agent call so a failed run still records it
+        gate = read_novel_gate(session, persona_id, datetime.datetime.now(datetime.timezone.utc))
     member_names = _member_names()
 
     # the session is closed before any agent call so no transaction spans it
@@ -268,16 +408,33 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         "member_names": member_names,
         "shares": pool_shares([r.kind for r in active_rows]),
         "weights": weights,
+        "gate": gate,
         "cap": cap,
     }
-    readings: dict[str, dict[str, Any]] = {}
+    readings: dict[str, dict[str, Any]] = {
+        THEME: _branch_reading(ctx, THEME),
+        NOVEL: {**_branch_reading(ctx, NOVEL), "gate": gate.as_details()},
+    }
     accepted: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
-    for kind, branch in _BRANCHES:
-        result = branch(ctx)
-        readings[kind] = result["reading"]
-        accepted += result["accepted"]
-        rejections += result["rejections"]
+    try:
+        for kind, branch in _BRANCHES:
+            # each kind is asked only for the slots earlier kinds left under the cap
+            result = branch(ctx, cap - len(accepted))
+            readings[kind] = result["reading"]
+            accepted += result["accepted"]
+            rejections += result["rejections"]
+    except Exception as e:
+        # the apply ends the run as failed, keeping the readings taken so far
+        logger.error("idea_generate failed persona=%s: %s", persona_id, e)
+        return {
+            "persona_id": persona_id,
+            THEME: readings[THEME],
+            NOVEL: readings[NOVEL],
+            "proposals": [],
+            "rejections": rejections,
+            "error": f"{type(e).__name__}: {e}",
+        }
     accepted = _enforce_run_cap(accepted, rejections, cap)
     logger.info(
         "idea_generate computed persona=%s active=%d accepted=%d rejected=%d",
@@ -299,8 +456,30 @@ def _cause_ref(cited: list[int]) -> str:
     return ",".join(f"lore:{i}" for i in cited)
 
 
+def _novel_cause_ref(gate: dict[str, Any]) -> str:
+    return NovelGateReading(
+        recent_mean=gate["recent_mean"],
+        baseline_mean=gate["baseline_mean"],
+        fraction=gate["fraction"],
+    ).to_cause_ref()
+
+
 def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutcome:
     persona_id = payload["persona_id"]
+    if payload.get("error"):
+        details = {
+            THEME: payload[THEME],
+            NOVEL: payload[NOVEL],
+            "entries": [],
+            "rejections": list(payload["rejections"]),
+            "refreshes": [],
+            "weight_changes": [],
+        }
+        return ApplyOutcome(
+            status=ShitposterBrainJobStatus.FAILED.value,
+            details=details,
+            error=payload["error"],
+        )
     now = datetime.datetime.now(datetime.timezone.utc)
     rejections: list[dict[str, Any]] = list(payload["rejections"])
     entries: list[dict[str, Any]] = []
@@ -316,15 +495,21 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         if p["kind"] == THEME and len(cited) < MIN_THEME_CITATIONS:
             rejections.append({"kind": THEME, "text": p["text"], "reason": REASON_INSUFFICIENT_CITATIONS})
             continue
+        if p["kind"] == NOVEL:
+            cause_kind = ShitposterMemoryCauseKindEnum.NOVEL_GATE.value
+            cause_ref = _novel_cause_ref(payload[NOVEL]["gate"])
+        else:
+            cause_kind = ShitposterMemoryCauseKindEnum.THEME_SYNTHESIS.value
+            cause_ref = _cause_ref(cited)
         row = shitposter_memory_dal._add_lore(
             session,
             persona_id=persona_id,
             text=p["text"],
             kind=p["kind"],
-            cause_kind=ShitposterMemoryCauseKindEnum.THEME_SYNTHESIS.value,
+            cause_kind=cause_kind,
             source_post_id=None,
             cause_post_id=None,
-            cause_ref=_cause_ref(cited),
+            cause_ref=cause_ref,
             reflector_run_id=None,
             popularity_score=popularity,
             now=now,
