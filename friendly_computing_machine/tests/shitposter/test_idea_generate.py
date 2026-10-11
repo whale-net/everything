@@ -393,7 +393,7 @@ def _theme_at_target(engine, persona_id, hits=17):
 
 
 def _novel_agent(monkeypatch, entries, calls=None):
-    def fake(active, retired, max_entries):
+    def fake(active, retired, max_entries, attributes=None):
         if calls is not None:
             calls.append({"active": active, "retired": retired, "max": max_entries})
         return json.dumps({"entries": entries})
@@ -640,6 +640,87 @@ def test_failed_run_after_gate_keeps_gate_reading(
     assert gate["fraction"] == pytest.approx(0.8)
     assert outcome.details["entries"] == []
     assert _novels(engine, persona_id) == []
+
+
+def _attribute(engine, persona_id, key, text, status="active") -> int:
+    with Session(engine) as s:
+        row = ShitposterPersonaAttribute(
+            persona_id=persona_id, attribute_key=key, text=text, status=status
+        )
+        s.add(row)
+        s.commit()
+        return row.id
+
+
+def _capture_novel_first_turn(monkeypatch) -> list[str]:
+    """Mock the whagent client so the real _call_novel_agent runs; collect its first turn."""
+    turns: list[str] = []
+
+    class _Client:
+        def start_session(self, agent_id, first_turn):
+            turns.append(first_turn)
+            return type("S", (), {"session_id": "s-1"})()
+
+    monkeypatch.setattr(idea_generate, "get_whagent_client", lambda: _Client())
+    monkeypatch.setattr(
+        idea_generate,
+        "_wait_for_reply",
+        lambda *_: json.dumps({"entries": [{"text": "Hums sea shanties at noon"}]}),
+    )
+    monkeypatch.setattr(idea_generate, "load_novel_generator_agent_id", lambda: "novel")
+    return turns
+
+
+def _open_gate_distinct(engine, persona_id):
+    # recent mean 37, baseline mean (37+1234)/2 = 635.5; figures unlikely to collide
+    _engagement(engine, persona_id, 37, days_ago=1)
+    _engagement(engine, persona_id, 1234, days_ago=20)
+
+
+def test_novel_prompt_carries_active_persona_attributes(
+    engine, persona_id, gate_env, monkeypatch
+):
+    _theme_at_target(engine, persona_id)
+    _open_gate_distinct(engine, persona_id)
+    voice = _attribute(engine, persona_id, "voice", "Speaks entirely in weary sighs")
+    obsession = _attribute(engine, persona_id, "obsession", "Obsessed with lighthouses")
+    _attribute(engine, persona_id, "old", "Loves spreadsheets", status="retired")
+    _no_agent(monkeypatch)
+    turns = _capture_novel_first_turn(monkeypatch)
+
+    payload, outcome = _run(engine, persona_id)
+
+    assert outcome.status == "succeeded"
+    assert payload["novel"]["gate"]["recent_mean"] == pytest.approx(37)
+    (turn,) = turns
+    attrs_line = next(l for l in turn.splitlines() if l.startswith("Persona attributes: "))
+    attrs = json.loads(attrs_line.removeprefix("Persona attributes: "))
+    assert sorted(attrs, key=lambda a: a["id"]) == [
+        {"id": voice, "text": "Speaks entirely in weary sighs"},
+        {"id": obsession, "text": "Obsessed with lighthouses"},
+    ]
+    assert "Loves spreadsheets" not in turn
+    # engagement figures and gate reading stay out of the prompt
+    for figure in ("37", "1234", "635.5", "0.8"):
+        assert figure not in turn
+    for word in ("mean", "baseline", "engagement", "popularity"):
+        assert word not in turn.lower()
+    assert [n.text for n in _novels(engine, persona_id)] == ["Hums sea shanties at noon"]
+
+
+def test_novel_prompt_valid_with_no_attributes(engine, persona_id, gate_env, monkeypatch):
+    _theme_at_target(engine, persona_id)
+    _open_gate_distinct(engine, persona_id)
+    _no_agent(monkeypatch)
+    turns = _capture_novel_first_turn(monkeypatch)
+
+    _, outcome = _run(engine, persona_id)
+
+    assert outcome.status == "succeeded"
+    (turn,) = turns
+    assert "Persona attributes: []" in turn.splitlines()
+    assert any(l.startswith("Active lore: ") for l in turn.splitlines())
+    assert [n.text for n in _novels(engine, persona_id)] == ["Hums sea shanties at noon"]
 
 
 def test_first_run_seeds_and_uses_starting_weights(engine, persona_id, monkeypatch):
