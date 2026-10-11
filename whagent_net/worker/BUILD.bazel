@@ -12,6 +12,7 @@ go_library(
         "caps.go",
         "classify.go",
         "context.go",
+        "idle.go",
         "main.go",
         "workflow.go",
     ],
