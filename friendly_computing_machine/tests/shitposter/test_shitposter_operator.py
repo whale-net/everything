@@ -1,5 +1,6 @@
 """Shitposter operator surface: newest-first history, per-kind causes, admin-only
-retire/history, and the snapshot-for-post lookup (including the NULL snapshot).
+retire/history, active lore by source, idea-generator runs (admin and CLI), and
+the snapshot-for-post lookup (including the NULL snapshot).
 
 Red-proof. Each mutation was applied, run, and reverted:
 
@@ -7,6 +8,11 @@ Red-proof. Each mutation was applied, run, and reverted:
   * admin check removed from handle_operator_command -> non-admin refusal test
   * retire passes no operator cause ref             -> retire cause test
   * snapshot NULL branch dereferences the snapshot  -> NULL snapshot test
+  * lore source filter dropped                      -> source filter tests (admin, CLI)
+  * theme cause line loses "generalizes lore"       -> theme cause test
+  * novel gate reading never parsed                 -> novel cause test
+  * empty run rows render nothing, not "none"       -> idea run listing test
+  * running idea runs listed                        -> idea run listing, paging, CLI tests
 """
 
 import datetime
@@ -70,6 +76,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterSnapshotItem,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (  # noqa: E402
+    NovelGateReading,
     ShitposterLoreEntry,
     ShitposterMemoryChange,
     ShitposterPersonaAttribute,
@@ -571,3 +578,290 @@ def test_snapshot_lookup_rejects_bad_and_unknown_links(persona, revision, channe
     assert operator.render_snapshot_for_post("hello") == "That is not a Slack message permalink."
     unknown = "https://ws.slack.com/archives/CONE1/p1700000999000001"
     assert operator.render_snapshot_for_post(unknown) == "No Shitposter post matches that permalink."
+
+
+# --- active lore by source ---------------------------------------------------
+
+
+def _lore_by_source(persona_id: int) -> dict[str, int]:
+    ids = {}
+    for kind, cause in (
+        ("novel", "novel_gate"),
+        ("hit", "operator"),
+        ("theme", "theme_synthesis"),
+        ("consolidated", "fold"),
+    ):
+        ids[kind] = memory.add_lore(
+            persona_id, f"{kind} text", kind=kind, cause_kind=cause, cause_ref="x", now=T0
+        ).id
+    return ids
+
+
+def test_lore_listing_shows_each_entry_source_ordered_by_source(persona):
+    ids = _lore_by_source(persona.id)
+    retired = memory.add_lore(
+        persona.id, "old", kind="hit", cause_kind="operator", cause_ref="x", now=T0
+    )
+    operator.retire_entry("lore", retired.id, ADMIN)
+
+    text = operator.handle_operator_command("lore", ADMIN, ADMINS)
+
+    assert text.splitlines()[0].startswith("Active lore 1-4 of 4")
+    for kind, lore_id in ids.items():
+        assert f"#{lore_id} [{kind}]" in text
+    assert retired.id not in _ids_in_render(text)
+    assert _ids_in_render(text) == [
+        ids["consolidated"], ids["hit"], ids["novel"], ids["theme"]
+    ]
+
+
+@pytest.mark.parametrize("source", ["hit", "consolidated", "theme", "novel"])
+def test_lore_listing_filters_to_one_source(persona, source):
+    ids = _lore_by_source(persona.id)
+
+    text = operator.handle_operator_command(f"lore {source.upper()} 10", ADMIN, ADMINS)
+
+    assert _ids_in_render(text) == [ids[source]]
+    assert f"Active {source} lore 1-1 of 1" in text
+
+
+def test_lore_listing_empty_source_and_bad_limit(persona):
+    memory.add_lore(persona.id, "a", kind="hit", cause_kind="operator", cause_ref="x", now=T0)
+
+    assert operator.handle_operator_command("lore theme", ADMIN, ADMINS) == (
+        "No active theme lore at offset 0 (0 total)."
+    )
+    assert operator.handle_operator_command("lore bogus", ADMIN, ADMINS) == operator.OPERATOR_USAGE
+
+
+def test_lore_and_ideas_are_admin_only(persona):
+    assert operator.handle_operator_command("lore", STRANGER, ADMINS) == operator.NOT_ADMIN
+    assert operator.handle_operator_command("ideas", STRANGER, ADMINS) == operator.NOT_ADMIN
+
+
+# --- theme / novel cause lines -----------------------------------------------
+
+
+def test_cause_renders_theme_synthesis_with_cited_lore(persona):
+    a = memory.add_lore(persona.id, "a", kind="hit", cause_kind="operator", cause_ref="x", now=T0)
+    b = memory.add_lore(persona.id, "b", kind="hit", cause_kind="operator", cause_ref="x", now=T0)
+    memory.add_lore(
+        persona.id,
+        "theme ab",
+        kind="theme",
+        cause_kind="theme_synthesis",
+        cause_ref=f"lore:{a.id},lore:{b.id}",
+        now=T1,
+    )
+
+    text = operator.render_history(persona.id, 10)
+    assert f"theme: generalizes lore #{a.id}, #{b.id}" in text
+
+
+def test_cause_renders_novel_gate_reading(persona):
+    reading = NovelGateReading(recent_mean=1.5, baseline_mean=4.0, fraction=0.5)
+    memory.add_lore(
+        persona.id,
+        "novel idea",
+        kind="novel",
+        cause_kind="novel_gate",
+        cause_ref=reading.to_cause_ref(),
+        now=T0,
+    )
+
+    text = operator.render_history(persona.id, 10)
+    assert "novel: recent mean 1.5 < 0.5 x baseline mean 4" in text
+
+
+def test_cause_novel_gate_unparseable_ref_falls_back_to_raw(persona):
+    memory.add_lore(
+        persona.id, "novel idea", kind="novel", cause_kind="novel_gate", cause_ref="gate?", now=T0
+    )
+
+    text = operator.render_history(persona.id, 10)
+    assert "novel: gate?" in text
+
+
+def test_novel_gate_reading_round_trips_and_rejects_other_shapes():
+    reading = NovelGateReading(recent_mean=1.0, baseline_mean=3.0, fraction=0.25)
+    assert NovelGateReading.from_cause_ref(reading.to_cause_ref()) == reading
+    for bad in (None, "", "lore:1", "[]", '{"recent_mean": 1}', '{"recent_mean": "x", "baseline_mean": 1, "fraction": 1}'):
+        assert NovelGateReading.from_cause_ref(bad) is None
+
+
+# --- idea-generator runs -----------------------------------------------------
+
+
+def _idea_run(session, persona, status, started, details=None, **kw) -> ShitposterBrainJobRun:
+    run = ShitposterBrainJobRun(
+        persona_id=persona.id,
+        job_kind=ShitposterBrainJobKind.IDEA_GENERATE.value,
+        trigger=ShitposterBrainJobTrigger.SCHEDULE.value,
+        status=status,
+        started_at=started,
+        details=details,
+        **kw,
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def _seed_idea_runs(session, persona) -> dict[str, ShitposterBrainJobRun]:
+    S = ShitposterBrainJobStatus
+    runs = {
+        "succeeded": _idea_run(
+            session,
+            persona,
+            S.SUCCEEDED.value,
+            T0,
+            {
+                "theme": {"share": 0.1, "target": 0.25},
+                "novel": {"share": 0.0, "target": 0.1, "gate": "not_implemented"},
+                "entries": [
+                    {"lore_id": 41, "kind": "theme", "agent_id": "agent-theme", "cited": [3, 7]}
+                ],
+                "rejections": [
+                    {"kind": "theme", "text": "about alice", "reason": "names_member"}
+                ],
+                "refreshes": [],
+                "weight_changes": [],
+            },
+        ),
+        "no_op": _idea_run(
+            session,
+            persona,
+            S.NO_OP.value,
+            T1,
+            {
+                "theme": {"share": 0.5, "target": 0.25},
+                "novel": {"share": None, "target": 0.1, "gate": {"open": True, "recent_mean": 1}},
+                "entries": [],
+                "rejections": [],
+                "refreshes": [{"lore_id": 5, "old": 1, "new": 3, "posts": 2}],
+                "weight_changes": [{"kind": "theme", "unchanged": "means equal"}],
+            },
+        ),
+        "skipped": _idea_run(
+            session, persona, S.SKIPPED.value, T2, None, skip_reason="overlapping brain job"
+        ),
+        "failed": _idea_run(
+            session,
+            persona,
+            S.FAILED.value,
+            T2 + datetime.timedelta(hours=1),
+            {"novel": {"share": 0.0, "target": 0.1, "gate": "closed"}},
+            error="agent timed out",
+        ),
+    }
+    # running runs and other job kinds are not listed
+    _idea_run(session, persona, S.RUNNING.value, T2 + datetime.timedelta(hours=2))
+    _brain_run(session, persona)
+    return runs
+
+
+def _run_block(text: str, run_id: int) -> str:
+    blocks = text.split("\n#")
+    return next(b for b in blocks if b.lstrip("#").startswith(f"{run_id} "))
+
+
+def test_idea_runs_listing_renders_every_status_with_all_fields(session, persona):
+    runs = _seed_idea_runs(session, persona)
+
+    text = operator.handle_operator_command("ideas", ADMIN, ADMINS)
+
+    assert text.splitlines()[0] == "Idea-generator runs 1-4 of 4, newest first."
+    assert _ids_in_render(text) == [
+        runs["failed"].id, runs["skipped"].id, runs["no_op"].id, runs["succeeded"].id
+    ]
+
+    ok = _run_block(text, runs["succeeded"].id)
+    assert "succeeded (schedule): wrote 1 entry" in ok
+    assert "theme share 0.1 / target 0.25 · novel share 0 / target 0.1" in ok
+    assert "novel gate: closed (not_implemented)" in ok
+    assert "lore #41 theme by agent agent-theme, cites #3, #7" in ok
+    assert 'theme "about alice": names_member' in ok
+    assert "refreshes: none" in ok
+    assert "weight changes: none" in ok
+
+    noop = _run_block(text, runs["no_op"].id)
+    assert "no_op (schedule): shares at or above target" in noop
+    assert "novel share n/a (empty pool) / target 0.1" in noop
+    assert "novel gate: open (recent_mean 1)" in noop
+    assert "entries: none" in noop
+    assert "rejections: none" in noop
+    assert "lore_id 5, old 1, new 3, posts 2" in noop
+    assert "kind theme, unchanged means equal" in noop
+
+    skipped = _run_block(text, runs["skipped"].id)
+    assert "skipped (schedule): overlapping brain job" in skipped
+    assert "theme n/a · novel n/a" in skipped
+    assert "novel gate: not computed" in skipped
+
+    failed = _run_block(text, runs["failed"].id)
+    assert "failed (schedule): agent timed out" in failed
+    assert "novel gate: closed" in failed
+    assert "novel share 0 / target 0.1" in failed
+
+
+def test_idea_runs_no_op_with_only_rejections_says_so(session, persona):
+    run = _idea_run(
+        session,
+        persona,
+        ShitposterBrainJobStatus.NO_OP.value,
+        T0,
+        {"rejections": [{"kind": "theme", "reason": "run_cap"}]},
+    )
+    text = operator.render_idea_runs(persona.id, 10)
+    assert f"#{run.id}" in text
+    assert "every proposal rejected (1)" in text
+    assert "theme: run_cap" in text
+
+
+def test_idea_runs_paging_and_empty(session, persona):
+    assert operator.render_idea_runs(persona.id, 10) == "No idea-generator runs at offset 0 (0 total)."
+    runs = _seed_idea_runs(session, persona)
+
+    text = operator.page_idea_runs(page=2, page_size=3)
+    assert text.splitlines()[0] == "Idea-generator runs 4-4 of 4, newest first."
+    assert _ids_in_render(text) == [runs["succeeded"].id]
+
+
+# --- CLI ---------------------------------------------------------------------
+
+
+def test_cli_lore_filters_by_source_and_rejects_unknown(persona):
+    from typer.testing import CliRunner
+
+    from friendly_computing_machine.src.friendly_computing_machine.cli.tools_cli import app
+
+    ids = _lore_by_source(persona.id)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["shitposter", "lore", "--source", "theme"])
+    assert result.exit_code == 0, result.output
+    assert _ids_in_render(result.output) == [ids["theme"]]
+    assert "[theme]" in result.output
+
+    result = runner.invoke(app, ["shitposter", "lore", "--page-size", "2", "--page", "2"])
+    assert result.exit_code == 0, result.output
+    assert "Active lore 3-4 of 4" in result.output
+    assert _ids_in_render(result.output) == [ids["novel"], ids["theme"]]
+
+    result = runner.invoke(app, ["shitposter", "lore", "--source", "bogus"])
+    assert "Unknown source 'bogus'" in result.output
+
+
+def test_cli_ideas_lists_runs(session, persona):
+    from typer.testing import CliRunner
+
+    from friendly_computing_machine.src.friendly_computing_machine.cli.tools_cli import app
+
+    runs = _seed_idea_runs(session, persona)
+    result = CliRunner().invoke(app, ["shitposter", "ideas", "--page-size", "10"])
+
+    assert result.exit_code == 0, result.output
+    assert "Idea-generator runs 1-4 of 4, newest first." in result.output
+    assert "failed (schedule): agent timed out" in result.output
+    assert f"#{runs['succeeded'].id}" in result.output
