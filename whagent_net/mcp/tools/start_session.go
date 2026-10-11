@@ -88,6 +88,10 @@ func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, i
 	if in.PinnedContext != "" {
 		startReq.PinnedContext = &in.PinnedContext
 	}
+	// Cap overrides pass through unchanged; api validates them (FR5/C6) and
+	// its InvalidArgument message names the field, value and ceiling.
+	startReq.MaxTurnsOverride = in.MaxTurnsOverride
+	startReq.MaxCostUsdOverride = in.MaxCostUSDOverride
 
 	startResp, err := t.client.StartSession(ctx, startReq)
 	if err != nil {

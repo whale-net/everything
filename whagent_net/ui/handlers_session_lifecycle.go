@@ -8,7 +8,10 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -114,11 +117,15 @@ func (app *App) handleStartSession(w http.ResponseWriter, r *http.Request) {
 	}
 	agentID := strings.TrimSpace(r.FormValue("agent_id"))
 	modelOverride := strings.TrimSpace(r.FormValue("model_override"))
+	maxTurnsRaw := strings.TrimSpace(r.FormValue("max_turns"))
+	maxCostRaw := strings.TrimSpace(r.FormValue("max_cost_usd"))
 
 	renderForm := func(code int, errMsg string) {
 		data := app.newSessionData(ctx)
 		data.AgentID = agentID
 		data.ModelOverride = modelOverride
+		data.MaxTurns = maxTurnsRaw
+		data.MaxCostUSD = maxCostRaw
 		data.Error = errMsg
 		w.WriteHeader(code)
 		if err := RenderTempl(w, r, data.Layout.Title, pages.SessionNew(data)); err != nil {
@@ -147,6 +154,25 @@ func (app *App) handleStartSession(w http.ResponseWriter, r *http.Request) {
 	req := &whagentpb.StartSessionRequest{AgentId: agentID}
 	if modelOverride != "" {
 		req.ModelOverride = &modelOverride
+	}
+	// Parse only: range checks stay in api, whose InvalidArgument message
+	// names the field, value and ceiling and is shown inline via mapAPIError.
+	if maxTurnsRaw != "" {
+		v, err := strconv.ParseInt(maxTurnsRaw, 10, 32)
+		if err != nil {
+			renderForm(http.StatusBadRequest, fmt.Sprintf("max_turns must be a whole number: supplied %q", maxTurnsRaw))
+			return
+		}
+		turns := int32(v)
+		req.MaxTurnsOverride = &turns
+	}
+	if maxCostRaw != "" {
+		v, err := strconv.ParseFloat(maxCostRaw, 64)
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+			renderForm(http.StatusBadRequest, fmt.Sprintf("max_cost_usd must be a number: supplied %q (ceiling 10)", maxCostRaw))
+			return
+		}
+		req.MaxCostUsdOverride = &v
 	}
 
 	resp, err := app.session.Client().StartSession(ctx, req)

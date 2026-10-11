@@ -228,3 +228,56 @@ func TestSessionOutputs_PinnedContextPresenceReported(t *testing.T) {
 	assert.True(t, gs.PinnedContextPresent)
 	assert.Equal(t, int32(42), gs.PinnedContextBytes)
 }
+
+// TestStartSession_CapOverrides_ForwardedVerbatim proves max_turns_override
+// and max_cost_usd_override reach StartSessionRequest unchanged, and stay
+// unset when the caller omits them.
+func TestStartSession_CapOverrides_ForwardedVerbatim(t *testing.T) {
+	turns := int32(7)
+	cost := 2.5
+	var got *pb.StartSessionRequest
+	fc := &fakeSessionServiceClient{
+		startSessionFunc: func(ctx context.Context, in *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+			got = in
+			return &pb.StartSessionResponse{Session: &pb.Session{SessionId: "sess-1", State: pb.SessionState_SESSION_STATE_RUNNING}}, nil
+		},
+	}
+	tool := &startSessionTool{client: fc}
+
+	_, _, err := tool.call(context.Background(), nil, StartSessionInput{
+		AgentID:            "agent-1",
+		MaxTurnsOverride:   &turns,
+		MaxCostUSDOverride: &cost,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got.MaxTurnsOverride)
+	assert.Equal(t, int32(7), got.GetMaxTurnsOverride())
+	require.NotNil(t, got.MaxCostUsdOverride)
+	assert.Equal(t, 2.5, got.GetMaxCostUsdOverride())
+
+	_, _, err = tool.call(context.Background(), nil, StartSessionInput{AgentID: "agent-1"})
+	require.NoError(t, err)
+	assert.Nil(t, got.MaxTurnsOverride, "unset max_turns_override must stay nil")
+	assert.Nil(t, got.MaxCostUsdOverride, "unset max_cost_usd_override must stay nil")
+}
+
+// TestStartSession_CapOverrideRejected_SurfacesFieldValueCeiling proves api's
+// InvalidArgument for an out-of-range cap reaches the MCP caller unchanged,
+// naming the field, value and ceiling.
+func TestStartSession_CapOverrideRejected_SurfacesFieldValueCeiling(t *testing.T) {
+	const msg = "max_cost_usd_override must be > 0 and <= 10: supplied 50 (ceiling 10)"
+	fc := &fakeSessionServiceClient{
+		startSessionFunc: func(ctx context.Context, in *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+			return nil, status.Error(codes.InvalidArgument, msg)
+		},
+	}
+	tool := &startSessionTool{client: fc}
+	cost := 50.0
+
+	_, _, err := tool.call(context.Background(), nil, StartSessionInput{AgentID: "a", MaxCostUSDOverride: &cost})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidArgument")
+	assert.Contains(t, err.Error(), "max_cost_usd_override")
+	assert.Contains(t, err.Error(), "50")
+	assert.Contains(t, err.Error(), "ceiling 10")
+}
