@@ -16,18 +16,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// defaultMaxTurns and defaultMaxCostUSD mirror
-// whagent_net/worker/caps.go's identically-named constants and
-// ARCHITECTURE.md "Guardrails" ("defaults 100 turns / $1"). Duplicated
-// (not imported) for the same `package main` reason session.go's
-// sessionWorkflowTaskQueue doc comment gives for its own constants --
-// caps.go lives in the worker binary's package main, which nothing
-// outside it can import.
-const (
-	defaultMaxTurns   = 100
-	defaultMaxCostUSD = 1.0
-)
-
 // GetSessionUsage is a read path (FR4/NFR5): resolves the session
 // (NOT_FOUND if unknown), reads the caps from the session's current SCD2
 // agent assignment (session.AgentDefinitionStore.CurrentAssignment ->
@@ -51,27 +39,23 @@ func (s *SessionServer) GetSessionUsage(ctx context.Context, req *pb.GetSessionU
 		return nil, status.Error(codes.NotFound, "session not found")
 	}
 
-	maxTurns := defaultMaxTurns
-	maxCostUSD := defaultMaxCostUSD
-
+	// A nil definition resolves through the session resolvers' platform defaults.
+	var def session.AgentDefinition
 	assignment, err := s.store.AgentDefinitions().CurrentAssignment(ctx, id)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get current agent assignment: %v", err)
 	}
 	if assignment != nil {
-		def, err := s.store.AgentDefinitions().GetByID(ctx, assignment.AgentDefinitionID)
+		defPtr, err := s.store.AgentDefinitions().GetByID(ctx, assignment.AgentDefinitionID)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "get agent definition: %v", err)
 		}
-		if def != nil {
-			if def.MaxTurns != 0 {
-				maxTurns = def.MaxTurns
-			}
-			if def.MaxCostUSD != 0 {
-				maxCostUSD = def.MaxCostUSD
-			}
+		if defPtr != nil {
+			def = *defPtr
 		}
 	}
+	maxTurns := session.EffectiveMaxTurns(sess.MaxTurnsOverride, def)
+	maxCostUSD := session.EffectiveMaxCostUSD(sess.MaxCostUSDOverride, def)
 
 	summary, err := s.store.Usage().Summary(ctx, id)
 	if err != nil {
