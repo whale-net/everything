@@ -61,6 +61,15 @@ def _cand(kind: str, item_id: int, text: str, score: float = 0.0) -> snapshot.Ca
     return snapshot.Candidate(kind, item_id, text, score)
 
 
+def _gen(item_id: int, text: str, score: float = 0.0) -> snapshot.Candidate:
+    return snapshot.Candidate("lore", item_id, text, score, is_generated=True)
+
+
+def _lore_split(result: snapshot.Snapshot, generated_ids: set[int]) -> tuple[list[int], list[int]]:
+    lore = [i.item_id for i in result.items if i.item_kind == "lore"]
+    return [i for i in lore if i in generated_ids], [i for i in lore if i not in generated_ids]
+
+
 def _line_tokens(*texts: str) -> int:
     return snapshot.approx_tokens("\n".join(snapshot.render_line(t) for t in texts))
 
@@ -143,6 +152,81 @@ def test_no_random_pick_when_lore_fits_within_ranked_cap():
     result = snapshot.select_items([], lore, 10_000, random.Random(0), ranked_lore_cap=2)
     assert not any(i.is_random_pick for i in result.items)
     assert [i.item_id for i in result.items] == [2, 3]
+
+
+# --- generated lore minority rule ----------------------------------------
+
+
+def test_generated_lore_ranked_like_hits():
+    # a top-scoring generated entry is placed by score, ahead of a lower hit
+    lore = [_cand("lore", 1, "hit", score=0.4), _gen(2, "theme", score=0.9)]
+    result = snapshot.select_items([], lore, 10_000, random.Random(0))
+    assert [i.item_id for i in result.items] == [2, 1]
+
+
+def test_three_generated_and_one_hit_hold_one_each():
+    gens = [_gen(10 + i, f"gen {i}", score=2.0 - i * 0.1) for i in range(3)]
+    hit = _cand("lore", 1, "hit", score=0.1)
+    for cap in (1, 2, 4, 10):
+        for seed in range(5):
+            result = snapshot.select_items(
+                [], [*gens, hit], 10_000, random.Random(seed), ranked_lore_cap=cap
+            )
+            generated, non_generated = _lore_split(result, {10, 11, 12})
+            assert len(generated) <= 1
+            assert len(generated) <= max(1, len(non_generated))
+            if cap >= 4:
+                assert generated == [10]
+                assert non_generated == [1]
+
+
+def test_only_generated_lore_includes_at_most_one():
+    gens = [_gen(10 + i, f"gen {i}", score=1.0 - i * 0.1) for i in range(5)]
+    for cap in (1, 3, 10):
+        for seed in range(5):
+            result = snapshot.select_items(
+                [], gens, 10_000, random.Random(seed), ranked_lore_cap=cap
+            )
+            assert [i.item_id for i in result.items] == [10]
+
+
+def test_random_pick_respects_minority_rule():
+    # ranked section holds one hit and one generated; the only pick candidate is generated
+    lore = [
+        _cand("lore", 1, "hit", score=0.9),
+        _gen(2, "gen a", score=0.8),
+        _gen(3, "gen b", score=0.1),
+    ]
+    for seed in range(5):
+        result = snapshot.select_items([], lore, 10_000, random.Random(seed), ranked_lore_cap=2)
+        assert [i.item_id for i in result.items] == [1, 2]
+        assert not any(i.is_random_pick for i in result.items)
+
+
+def test_random_pick_may_be_generated_when_rule_holds():
+    lore = [
+        _cand("lore", 1, "hit a", score=0.9),
+        _cand("lore", 2, "hit b", score=0.8),
+        _gen(3, "gen", score=0.1),
+    ]
+    result = snapshot.select_items([], lore, 10_000, random.Random(0), ranked_lore_cap=2)
+    picks = [i.item_id for i in result.items if i.is_random_pick]
+    assert picks == [3]
+
+
+def test_attributes_do_not_count_toward_minority_rule():
+    attrs = [_cand("attribute", i, f"attr {i}") for i in range(5)]
+    gens = [_gen(10, "gen a", score=0.9), _gen(11, "gen b", score=0.8)]
+    result = snapshot.select_items(attrs, gens, 10_000, random.Random(0))
+    assert [i.item_id for i in result.items if i.item_kind == "lore"] == [10]
+
+
+def test_hit_that_does_not_fit_leaves_one_generated():
+    # the only hit is over budget, so no non-generated lore is included
+    gens = [_gen(10, "g1", score=0.9), _gen(11, "g2", score=0.8)]
+    hit = _cand("lore", 1, "h" * 400, score=0.5)
+    result = snapshot.select_items([], [*gens, hit], 20, random.Random(0))
+    assert [i.item_id for i in result.items] == [10]
 
 
 # --- DB-backed job body ---------------------------------------------------
@@ -304,3 +388,36 @@ def test_snapshot_contains_no_suggestion_text(engine):
         for line in latest.rendered_text.split("\n"):
             assert line in allowed
     assert details["item_count"] == 2
+
+
+def test_db_generated_lore_ranked_like_hits_and_capped(engine, monkeypatch):
+    monkeypatch.setenv("FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET", "2000")
+    with Session(engine) as s:
+        persona_id, run_id = _persona_and_run(s)
+        hit = memory.add_lore(
+            persona_id, "HIT-LORE", kind="hit", cause_kind="operator",
+            cause_ref="op:1", now=T0, session=s,
+        )
+        theme = memory.add_lore(
+            persona_id, "THEME-LORE", kind="theme", cause_kind="theme_synthesis",
+            cause_ref="1,2", now=T0, session=s,
+        )
+        novel = memory.add_lore(
+            persona_id, "NOVEL-LORE", kind="novel", cause_kind="novel_gate",
+            cause_ref="gate:open", now=T0, session=s,
+        )
+        s.commit()
+        ids = {"hit": hit.id, "theme": theme.id, "novel": novel.id}
+    _run_snapshot(engine, persona_id, run_id)
+
+    with Session(engine) as s:
+        latest = snapshot_dal.latest_snapshot(persona_id, session=s)
+        lore_ids = [
+            i.item_id
+            for i in snapshot_dal.snapshot_items(latest.id, session=s)
+            if i.item_kind == "lore"
+        ]
+    assert ids["hit"] in lore_ids
+    generated = [i for i in lore_ids if i in (ids["theme"], ids["novel"])]
+    # equal scores tie-break by id, so the theme entry is the one generated item kept
+    assert generated == [ids["theme"]]
