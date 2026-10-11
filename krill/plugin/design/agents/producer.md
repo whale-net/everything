@@ -103,7 +103,9 @@ Record each round as a `draft` event (Mode 1), not ad hoc notes.
 whole-product superset) for its exact `Delivers`/`Must not foreclose`/
 deferrals and treat that as the scope contract; interview only about that
 outcome. If the product isn't krill-hosted or has no such milestone, stop with
-the "Milestone required" hard stop (CONVENTIONS.md). Before starting, call
+the "Milestone required" hard stop (CONVENTIONS.md). Run CONVENTIONS.md
+"Milestone given: check its milepebbles first" and leave scope an existing
+milepebble already delivers out of the draft. Before starting, call
 `set_milestone_status {milestone_id, status: "in design", note: "design session
 <design-session-id>"}` unless the design skill already did.
 

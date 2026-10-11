@@ -464,3 +464,21 @@ func TestValidate_MaxTurns_ZeroUnsetAndOneAccepted_NegativeFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "max_turns must be >= 1")
 }
+
+// max_cost_usd 0 means unset (an omitted yaml key decodes to 0) and resolves to the
+// $1 platform default, so it is accepted; negatives and values above the $10 ceiling are rejected.
+func TestValidate_MaxCostUSD_ZeroIsUnsetDefault_NegativeAndCeilingRejected(t *testing.T) {
+	for _, c := range []float64{0, 0.5, 10} {
+		agent := validAgent()
+		agent.MaxCostUSD = c
+		assert.NoError(t, Validate(nil, []AgentDefinitionConfig{agent}), "max_cost_usd=%g", c)
+	}
+	for _, c := range []float64{-1, 10.01, 50} {
+		agent := validAgent()
+		agent.MaxCostUSD = c
+		err := Validate(nil, []AgentDefinitionConfig{agent})
+		require.Error(t, err, "max_cost_usd=%g", c)
+		assert.Contains(t, err.Error(), "max_cost_usd")
+		assert.Contains(t, err.Error(), "ceiling 10")
+	}
+}

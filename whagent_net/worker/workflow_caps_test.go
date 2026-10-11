@@ -306,11 +306,11 @@ func TestSessionWorkflow_CappedTerminalEvent_CommittedBeforeStatusWrite(t *testi
 
 	tracker := &statusTracker{}
 	rec := &callRecorder{}
-	def := session.AgentDefinition{MaxTurns: 1, MaxCostUSD: 100}
+	// MaxTurns 1 would end as done (single-turn), so the capped trip is a cost cap.
+	def := session.AgentDefinition{MaxTurns: 100, MaxCostUSD: 0.5}
 	wireCapTestActivities(env, def, tracker, rec)
 	wireSuccessfulCallModel(env)
-	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
-		Return(SumCostResult{CostUSD: 0}, nil)
+	wireSumCostStepped(env, 0.5)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "turn one"})
@@ -513,17 +513,20 @@ func TestSessionWorkflow_StopRacingCapTrip_ResolvesToSingleTerminalReason(t *tes
 
 // TestAgentDefinition_HasNoPerSessionCapOverrideField is a structural guard
 // mirroring activities_test.go's reflection-based field assertions:
-// session.Session (the per-session row) may carry only the pinned
-// MaxTurnsOverride (the max-turns override FR, resolved by
-// session.EffectiveMaxTurns) and never a bare MaxTurns/MaxCostUSD or a
-// cost override, which remain definition-level only.
+// session.Session (the per-session row) may carry only the pinned cap
+// overrides (MaxTurnsOverride, MaxCostUSDOverride, resolved by
+// session.EffectiveMaxTurns / EffectiveMaxCostUSD) and never a bare
+// MaxTurns/MaxCostUSD, which remain definition-level only.
 func TestAgentDefinition_HasNoPerSessionCapOverrideField(t *testing.T) {
 	typ := reflect.TypeOf(session.Session{})
 	for i := 0; i < typ.NumField(); i++ {
 		name := typ.Field(i).Name
-		assert.NotContains(t, []string{"MaxTurns", "MaxCostUSD", "MaxCostUSDOverride"}, name,
-			"session.Session must not carry a per-session cap field (%s) -- only the pinned MaxTurnsOverride is session-scoped", name)
+		assert.NotContains(t, []string{"MaxTurns", "MaxCostUSD"}, name,
+			"session.Session must not carry a bare definition cap field (%s) -- only pinned overrides are session-scoped", name)
 	}
+	_, hasTurns := typ.FieldByName("MaxTurnsOverride")
+	_, hasCost := typ.FieldByName("MaxCostUSDOverride")
+	assert.True(t, hasTurns && hasCost, "session.Session must carry both pinned cap overrides")
 }
 
 // sequencedCallModel returns a CallModel mock function that plays back

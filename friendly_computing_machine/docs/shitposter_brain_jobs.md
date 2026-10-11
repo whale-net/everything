@@ -94,6 +94,12 @@ within `FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET`. N is `FCM_SHITPOSTER_SNAPSHOT_RANK
 Suggestion text is never read; only derived attributes are. Tunables are in
 [ENV.md](../ENV.md).
 
+Theme and novel lore (written by the idea-generator) are ranked with the same
+score as hit lore, but a snapshot never holds more generated lore entries than
+non-generated ones; with no non-generated lore included, it holds at most one.
+A generated candidate that would break this is skipped, including the random
+pick. Attributes do not count on either side.
+
 ## Write job
 
 `write.py` drafts a batch of posts from the latest context snapshot into the

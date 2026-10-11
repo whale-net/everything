@@ -2,7 +2,7 @@
 
 // Proves StartSession's max_turns_override handling: values below 1 are
 // rejected before any row exists, valid values are pinned on the sessions
-// row, and max_cost_usd_override stays rejected.
+// row. Cost overrides are covered by start_max_cost_override_integration_test.go.
 package handlers_test
 
 import (
@@ -73,13 +73,5 @@ func TestStartSession_MaxTurnsOverride(t *testing.T) {
 		sess, err := store.Sessions().GetByID(ctx, uuid.MustParse(resp.Session.SessionId))
 		require.NoError(t, err)
 		assert.Nil(t, sess.MaxTurnsOverride)
-	})
-
-	t.Run("max_cost_usd_override still rejected", func(t *testing.T) {
-		c := 1.0
-		_, err := srv.StartSession(caller, &pb.StartSessionRequest{AgentId: "agent-1", MaxCostUsdOverride: &c})
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
 	})
 }

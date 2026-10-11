@@ -46,7 +46,11 @@ it produces the spec, not the tasks. Mechanics: `krill/plugin/shared/CONVENTIONS
      authoring fields, `Delivers`, `Must not foreclose` and deferrals (exact, not
      `get_product_slice`'s whole-product superset). If the product isn't
      krill-hosted or has no such milestone, stop with the "Milestone required"
-     hard stop in CONVENTIONS.md and run `/krill-design:product` first. If
+     hard stop in CONVENTIONS.md and run `/krill-design:product` first. Then
+     run CONVENTIONS.md "Milestone given: check its milepebbles first": spec
+     only scope no milepebble already delivers, resume an existing
+     milepebble's design session rather than opening a new one, and stop if
+     every milepebble is covered. If
      `get_milestone_status {id}` is already `in design` or later, resume: the
      latest `in design` transition's note in `get_milestone_status_history {id}`
      names the design-session id (step 3).
