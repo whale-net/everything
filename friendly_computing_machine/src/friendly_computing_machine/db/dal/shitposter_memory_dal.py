@@ -831,22 +831,69 @@ def _supersede_lore(
     text: Optional[str] = None,
     popularity_score: Optional[int] = None,
 ) -> ShitposterLoreEntry:
-    """Close the current lore row and open its successor under the same lore_key."""
-    raise NotImplementedError
+    """Close the current lore row and open its successor under the same lore_key.
+
+    The caller logs the change (entity_id = the closed row) and commits.
+    """
+    if current.valid_to is not None:
+        raise ValueError(f"lore entry {current.id} is not current")
+    current.valid_to = now
+    session.add(current)
+    successor = ShitposterLoreEntry(
+        persona_id=current.persona_id,
+        lore_key=current.lore_key,
+        text=current.text if text is None else text,
+        kind=current.kind,
+        source_post_id=current.source_post_id,
+        popularity_score=(
+            current.popularity_score if popularity_score is None else popularity_score
+        ),
+        retired_by_operator=False,
+        valid_from=now,
+    )
+    session.add(successor)
+    session.flush()
+    return successor
 
 
 def revisions_for_key(
     persona_id: int, lore_key: uuid.UUID, session: Optional[Session] = None
 ) -> list[ShitposterLoreEntry]:
     """Every revision of one logical lore entry, oldest first."""
-    raise NotImplementedError
+    with SessionManager(session) as s:
+        return list(
+            s.exec(
+                select(ShitposterLoreEntry)
+                .where(ShitposterLoreEntry.persona_id == persona_id)
+                .where(ShitposterLoreEntry.lore_key == lore_key)
+                .order_by(
+                    ShitposterLoreEntry.valid_from,  # type: ignore[arg-type]
+                    ShitposterLoreEntry.id,  # type: ignore[arg-type]
+                )
+            ).all()
+        )
 
 
 def snapshot_items_for_key(
     lore_key: uuid.UUID, session: Optional[Session] = None
 ) -> list[ShitposterSnapshotItem]:
     """Snapshot lore items that included any revision sharing lore_key."""
-    raise NotImplementedError
+    with SessionManager(session) as s:
+        return list(
+            s.exec(
+                select(ShitposterSnapshotItem)
+                .join(
+                    ShitposterLoreEntry,
+                    ShitposterLoreEntry.id == ShitposterSnapshotItem.item_id,  # type: ignore[arg-type]
+                )
+                .where(
+                    ShitposterSnapshotItem.item_kind
+                    == ShitposterMemoryEntityKindEnum.LORE.value
+                )
+                .where(ShitposterLoreEntry.lore_key == lore_key)
+                .order_by(ShitposterSnapshotItem.id)  # type: ignore[arg-type]
+            ).all()
+        )
 
 
 def change_history(
