@@ -519,6 +519,17 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# Member identification for generated-memory guardrails, profile-name sync, and its migration.
+py_test(
+    name = "test_shitposter_member_guardrails",
+    size = "small",
+    srcs = [
+        "shitposter/test_member_guardrails.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # Adaptive theme/novel source weights: step rules, overlap days, bounds, ceiling tie-break, history.
 py_test(
     name = "test_shitposter_source_weights",

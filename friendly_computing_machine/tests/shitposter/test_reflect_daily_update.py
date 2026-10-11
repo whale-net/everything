@@ -407,6 +407,33 @@ def test_run_applies_ops_consumes_inputs_and_settles_suggestion(engine, monkeypa
         assert (rr.input_count, rr.applied_count, rr.rejection_count) == (3, 2, 0)
 
 
+def test_add_naming_member_by_nickname_or_real_name_is_rejected(engine, monkeypatch):
+    monkeypatch.setenv("FCM_SHITPOSTER_MEMBER_ALIASES", "Little Bobby")
+    ids = _seed(engine)
+    with Session(engine) as s:
+        s.add(SlackUser(slack_id="U_BOB", name="bobbyt", real_name="Robert Tables"))
+        s.commit()
+    p1, _ = ids["post_ids"]
+    _canned_reply(
+        monkeypatch,
+        [
+            {"op": "add", "key": "fan", "text": "Adores little bobby", "kind": "trait", "cause_refs": [f"post:{p1}"]},
+            {"op": "add", "key": "rival", "text": "Feuds with Robert", "kind": "trait", "cause_refs": [f"post:{p1}"]},
+            {"op": "add", "key": "puns", "text": "Fond of wordplay", "kind": "trait", "cause_refs": [f"post:{p1}"]},
+        ],
+    )
+    payload = reflect._compute(BrainJobInput(persona_id=ids["persona_id"], job_kind="reflect"))
+    with Session(engine) as s:
+        run_id = _run(s, ids["persona_id"])
+        outcome = reflect._apply(s, run_id, payload)
+        s.commit()
+        assert outcome.status == "succeeded"
+        keys = {a.attribute_key for a in shitposter_memory_dal.active_attributes(ids["persona_id"], session=s)}
+        assert keys == {"humor", "pace", "puns"}
+    reasons = sorted(r["reason"] for r in payload["rejections"])
+    assert reasons == ["targets_member", "targets_member"]
+
+
 def test_excess_inputs_carry_over_to_the_next_run(engine, monkeypatch):
     ids = _seed(engine)
     monkeypatch.setenv("FCM_SHITPOSTER_REFLECTOR_INPUT_CAP", "1")
