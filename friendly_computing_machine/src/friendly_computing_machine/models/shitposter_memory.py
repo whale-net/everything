@@ -62,6 +62,8 @@ class ShitposterMemoryOperationEnum(str, Enum):
     MERGE = "merge"
     FOLD = "fold"
     PROMOTE = "promote"
+    # earned popularity recomputed from posts written from snapshots holding the entry
+    REFRESH = "refresh"
 
 
 class ShitposterMemoryCauseKindEnum(str, Enum):
@@ -244,7 +246,8 @@ class ShitposterMemoryChange(Base, table=True):
             name="ck_shitpostermemorychange_entity_kind",
         ),
         CheckConstraint(
-            "operation IN ('add', 'reinforce', 'retire', 'merge', 'fold', 'promote')",
+            "operation IN ("
+            "'add', 'reinforce', 'retire', 'merge', 'fold', 'promote', 'refresh')",
             name="ck_shitpostermemorychange_operation",
         ),
         CheckConstraint(

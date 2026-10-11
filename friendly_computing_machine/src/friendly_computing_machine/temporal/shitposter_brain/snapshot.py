@@ -24,6 +24,7 @@ from sqlmodel import Session, select
 from friendly_computing_machine.src.friendly_computing_machine.db.dal.shitposter_memory_dal import (
     active_attributes,
     active_lore,
+    first_valid_from_by_key,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
     ShitposterBrainJobKind,
@@ -222,15 +223,25 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         Candidate(ITEM_ATTRIBUTE, row.id, row.text)
         for row in active_attributes(persona_id, session=session)
     ]
+    lore_rows = active_lore(persona_id, session=session)
+    # recency runs from the entry's first revision, so a popularity refresh never makes it newer
+    first_seen = first_valid_from_by_key(
+        session, persona_id, [row.lore_key for row in lore_rows]
+    )
     lore = [
         Candidate(
             ITEM_LORE,
             row.id,
             row.text,
-            lore_score(row.popularity_score, _aware(row.valid_from), now, half_life),
+            lore_score(
+                row.popularity_score,
+                _aware(first_seen.get(row.lore_key, row.valid_from)),
+                now,
+                half_life,
+            ),
             is_generated=is_generated_lore(row.kind),
         )
-        for row in active_lore(persona_id, session=session)
+        for row in lore_rows
     ]
 
     snapshot = select_items(attributes, lore, budget, RNG_FACTORY(), ranked_cap)

@@ -9,6 +9,9 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
+from friendly_computing_machine.src.friendly_computing_machine.db.dal.shitposter_memory_dal import (
+    lore_keys_retired_by_operator,
+)
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
 )
@@ -20,7 +23,6 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
     ShitposterAttributeStatusEnum,
-    ShitposterLoreEntry,
     ShitposterPersonaAttribute,
 )
 
@@ -73,14 +75,11 @@ def snapshot_has_retired_item(session: Session, snapshot_id: int) -> bool:
         )
     ).all()
     for item in items:
-        if item.item_kind == ITEM_ATTRIBUTE:
-            if _attribute_retired(session, item.item_id):
-                return True
-        elif item.item_kind == ITEM_LORE:
-            row = session.get(ShitposterLoreEntry, item.item_id)
-            if row is not None and row.retired_by_operator:
-                return True
-    return False
+        if item.item_kind == ITEM_ATTRIBUTE and _attribute_retired(session, item.item_id):
+            return True
+    # a lore item counts as retired when any revision sharing its lore_key was
+    lore_ids = [item.item_id for item in items if item.item_kind == ITEM_LORE]
+    return bool(lore_keys_retired_by_operator(session, lore_ids))
 
 
 def _attribute_retired(session: Session, row_id: int) -> bool:

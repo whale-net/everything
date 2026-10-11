@@ -8,8 +8,9 @@ against its target weight, and asks that kind's agent for proposals only when
 the share is below target; novel is asked only while the novel gate reads a
 relative engagement drop. Each proposal is validated (citations, guardrails)
 and the run cap applies across kinds. Apply writes the accepted entries and
-their change-log rows in the runner's single transaction. Hit promotion is not
-done here; lore_promotion owns it.
+their change-log rows in the runner's single transaction, then refreshes generated
+lore's earned popularity (lore_refresh). Hit promotion is not done here;
+lore_promotion owns it.
 """
 
 import datetime
@@ -57,6 +58,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
     guardrails,
+    lore_refresh,
     source_weights,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.base import (
@@ -406,6 +408,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         ) + guardrails.operator_retired_lore(session, persona_id)
         # read before any agent call so a failed run still records it
         gate = read_novel_gate(session, persona_id, now)
+        refreshes = [r.to_payload() for r in lore_refresh.compute_refreshes(session, persona_id)]
     member_names = _member_names()
     stepped = source_weights.effective_weights(weight_decisions)
     weights = TargetWeights(
@@ -463,6 +466,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         NOVEL: readings[NOVEL],
         "proposals": accepted,
         "rejections": rejections,
+        "refreshes": refreshes,
         "weight_decisions": weight_decisions,
     }
 
@@ -534,6 +538,13 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
             {"lore_id": row.id, "kind": p["kind"], "agent_id": p["agent_id"], "cited": cited}
         )
     session.flush()
+    # after the entries, so a refresh never retires an id a proposal cited
+    refreshes = lore_refresh.apply_refreshes(
+        session,
+        [lore_refresh.LoreRefresh.from_payload(r) for r in payload.get("refreshes") or []],
+        now,
+    )
+    session.flush()
     weight_changes = source_weights.apply_weight_changes(
         session, persona_id, run_id, payload.get("weight_decisions") or []
     )
@@ -543,21 +554,22 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         NOVEL: payload[NOVEL],
         "entries": entries,
         "rejections": rejections,
-        "refreshes": [],
+        "refreshes": refreshes,
         "weight_changes": weight_changes,
     }
     stepped = any("new" in w for w in weight_changes)
     status = (
         ShitposterBrainJobStatus.SUCCEEDED
-        if entries or stepped
+        if entries or refreshes or stepped
         else ShitposterBrainJobStatus.NO_OP
     )
     logger.info(
-        "idea_generate applied run=%s status=%s entries=%d rejected=%d",
+        "idea_generate applied run=%s status=%s entries=%d rejected=%d refreshed=%d",
         run_id,
         status.value,
         len(entries),
         len(rejections),
+        len(refreshes),
     )
     return ApplyOutcome(status=status.value, details=details)
 

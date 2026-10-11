@@ -13,6 +13,7 @@ Rows the operator retired (retired_by_operator) are never folded.
 import datetime
 import logging
 import os
+import uuid
 
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -167,12 +168,18 @@ def fold_stale_lore(
         )
         if not hits:
             return 0
-        last_seen: dict[int, datetime.datetime] = {
-            item_id: _aware(ts)
-            for item_id, ts in s.exec(
+        # appearance history and age span every revision of an entry, keyed by lore_key
+        keys = [h.lore_key for h in hits]
+        last_seen: dict[uuid.UUID, datetime.datetime] = {
+            key: _aware(ts)
+            for key, ts in s.exec(
                 select(
-                    ShitposterSnapshotItem.item_id,
+                    ShitposterLoreEntry.lore_key,
                     func.max(ShitposterContextSnapshot.created_at),
+                )
+                .join(
+                    ShitposterSnapshotItem,
+                    ShitposterSnapshotItem.item_id == ShitposterLoreEntry.id,  # type: ignore[arg-type]
                 )
                 .join(
                     ShitposterContextSnapshot,
@@ -182,14 +189,18 @@ def fold_stale_lore(
                 .where(
                     ShitposterSnapshotItem.item_kind == ShitposterMemoryEntityKindEnum.LORE.value
                 )
-                .where(ShitposterSnapshotItem.item_id.in_([h.id for h in hits]))  # type: ignore[union-attr]
-                .group_by(ShitposterSnapshotItem.item_id)
+                .where(ShitposterLoreEntry.lore_key.in_(keys))  # type: ignore[attr-defined]
+                .group_by(ShitposterLoreEntry.lore_key)
             ).all()
         }
+        first_seen = shitposter_memory_dal.first_valid_from_by_key(s, persona_id, keys)
         stale = [
             h
             for h in hits
-            if last_seen.get(h.id, _aware(h.valid_from)) <= cutoff
+            if last_seen.get(
+                h.lore_key, _aware(first_seen.get(h.lore_key, h.valid_from))
+            )
+            <= cutoff
         ]
         if not stale:
             return 0

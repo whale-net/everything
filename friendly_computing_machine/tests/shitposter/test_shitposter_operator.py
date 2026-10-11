@@ -702,6 +702,38 @@ def test_cause_novel_gate_unparseable_ref_falls_back_to_raw(persona):
     assert "novel: gate?" in text
 
 
+def test_cause_renders_refresh_with_contributing_posts(session, persona):
+    theme = memory.add_lore(
+        persona.id, "theme", kind="theme", cause_kind="operator", cause_ref="x", now=T0
+    )
+    memory.refresh_lore_popularity(session, theme.id, popularity_score=3, post_ids=[9, 4, 9], now=T1)
+    session.commit()
+
+    text = operator.render_history(persona.id, 10)
+    assert "refresh: mean of posts #4, #9" in text
+
+
+def test_idea_runs_listing_renders_refreshes(session, persona):
+    run = _idea_run(
+        session,
+        persona,
+        ShitposterBrainJobStatus.SUCCEEDED.value,
+        T0,
+        {
+            "entries": [],
+            "rejections": [],
+            "refreshes": [
+                {"lore_id": 12, "lore_key": "k-1", "old": 0, "new": 3, "post_count": 2}
+            ],
+            "weight_changes": [],
+        },
+    )
+    text = operator.render_idea_runs(persona.id, 10)
+    block = _run_block(text, run.id)
+    assert "succeeded (schedule): wrote 0 entries, refreshed 1" in block
+    assert "lore_id 12, lore_key k-1, old 0, new 3, post_count 2" in block
+
+
 def test_novel_gate_reading_round_trips_and_rejects_other_shapes():
     reading = NovelGateReading(recent_mean=1.0, baseline_mean=3.0, fraction=0.25)
     assert NovelGateReading.from_cause_ref(reading.to_cause_ref()) == reading

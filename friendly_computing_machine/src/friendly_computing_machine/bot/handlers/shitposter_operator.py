@@ -36,6 +36,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterMemoryCauseKindEnum,
     ShitposterMemoryChange,
     ShitposterMemoryEntityKindEnum,
+    ShitposterMemoryOperationEnum,
     ShitposterWeightSourceEnum,
 )
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
@@ -236,9 +237,22 @@ def _describe_novel_gate(change: ShitposterMemoryChange) -> str:
     )
 
 
+def _describe_refresh(change: ShitposterMemoryChange) -> str:
+    """'refresh: mean of posts #a, #b' from the contributing post refs."""
+    posts = []
+    for ref in _cause_refs(change):
+        head, _, ident = ref.partition(":")
+        posts.append(f"#{ident}" if head == "post" and ident.isdigit() else ref)
+    if not posts:
+        return "refresh: mean of posts (no posts recorded)"
+    return f"refresh: mean of posts {', '.join(posts)}"
+
+
 def describe_cause(change: ShitposterMemoryChange) -> ChangeCause:
     """Join memory_change to engagement rows or suggestion backers; never empty."""
     kind = change.cause_kind
+    if change.operation == ShitposterMemoryOperationEnum.REFRESH.value:
+        return ChangeCause(kind, _describe_refresh(change), change.changed_at)
     if kind == ShitposterMemoryCauseKindEnum.OPERATOR.value:
         return ChangeCause(kind, f"operator {change.cause_ref}", change.changed_at)
     if kind == ShitposterMemoryCauseKindEnum.FOLD.value:
@@ -425,6 +439,9 @@ def _idea_run_reason(run: ShitposterBrainJobRun, details: dict) -> str:
     entries = details.get("entries") or []
     if status == ShitposterBrainJobStatus.SUCCEEDED.value:
         reason = f"wrote {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
+        refreshes = details.get("refreshes") or []
+        if refreshes:
+            reason += f", refreshed {len(refreshes)}"
         stepped = [
             w for w in details.get("weight_changes") or []
             if isinstance(w, dict) and "new" in w

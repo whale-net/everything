@@ -421,3 +421,38 @@ def test_db_generated_lore_ranked_like_hits_and_capped(engine, monkeypatch):
     generated = [i for i in lore_ids if i in (ids["theme"], ids["novel"])]
     # equal scores tie-break by id, so the theme entry is the one generated item kept
     assert generated == [ids["theme"]]
+
+
+def test_db_refreshed_lore_keeps_its_recency_age(engine, monkeypatch):
+    monkeypatch.setenv("FCM_SHITPOSTER_CONTEXT_TOKEN_BUDGET", "2000")
+    monkeypatch.setenv("FCM_SHITPOSTER_SNAPSHOT_RANKED_LORE_CAP", "1")
+    now = datetime.datetime.now(datetime.UTC)
+    with Session(engine) as s:
+        persona_id, run_id = _persona_and_run(s)
+        older = memory.add_lore(
+            persona_id, "OLDER-THEME", kind="theme", cause_kind="operator",
+            cause_ref="op:1", now=now - datetime.timedelta(days=10), session=s,
+        )
+        newer = memory.add_lore(
+            persona_id, "NEWER-THEME", kind="theme", cause_kind="operator",
+            cause_ref="op:2", now=now - datetime.timedelta(days=5), session=s,
+        )
+        s.commit()
+        # same popularity, so only recency could reorder them
+        refreshed, _ = memory.refresh_lore_popularity(
+            s, older.id, popularity_score=0, post_ids=[1],
+            now=now - datetime.timedelta(hours=1),
+        )
+        s.commit()
+        newer_id, refreshed_id = newer.id, refreshed.id
+    _run_snapshot(engine, persona_id, run_id)
+
+    with Session(engine) as s:
+        latest = snapshot_dal.latest_snapshot(persona_id, session=s)
+        ranked = [
+            i.item_id
+            for i in snapshot_dal.snapshot_items(latest.id, session=s)
+            if i.item_kind == "lore" and not i.is_random_pick
+        ]
+    assert ranked == [newer_id]
+    assert refreshed_id != newer_id
