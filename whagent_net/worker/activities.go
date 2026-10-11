@@ -187,10 +187,11 @@ func (a *Activities) ResolveAgentDefinition(ctx context.Context, sessionID uuid.
 		provider = nil
 	}
 
-	// The pinned session override replaces the definition's cost cap for this
-	// turn's checkCaps; the stored definition itself is never mutated.
+	// Pinned session overrides replace the definition's caps for this turn's
+	// checkCaps and final-response cap; the stored definition is never mutated.
 	effective := *def
 	effective.MaxCostUSD = session.EffectiveMaxCostUSD(sess.MaxCostUSDOverride, *def)
+	effective.MaxTurns = session.EffectiveMaxTurns(sess.MaxTurnsOverride, *def)
 	return ResolveAgentDefinitionResult{Definition: effective, Model: model, Provider: provider}, nil
 }
 
