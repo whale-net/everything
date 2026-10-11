@@ -507,3 +507,13 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# Adaptive theme/novel source weights: step rules, overlap days, bounds, ceiling tie-break, history.
+py_test(
+    name = "test_shitposter_source_weights",
+    size = "small",
+    srcs = [
+        "shitposter/test_source_weights.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)

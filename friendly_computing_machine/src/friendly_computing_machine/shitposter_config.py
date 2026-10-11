@@ -192,6 +192,9 @@ DEFAULT_SOURCE_WEIGHT_CEILING = 0.40
 DEFAULT_NOVEL_GATE_RECENT_DAYS = 7
 DEFAULT_NOVEL_GATE_BASELINE_DAYS = 30
 DEFAULT_NOVEL_GATE_FRACTION = 0.8
+DEFAULT_WEIGHT_STEP = 0.01
+DEFAULT_WEIGHT_WINDOW_DAYS = 30
+DEFAULT_WEIGHT_MIN_POSTS = 10
 
 
 def load_theme_generator_agent_id() -> str:
@@ -343,4 +346,23 @@ def novel_gate_fraction() -> float:
     """Gate opens when the recent mean is below this fraction of the baseline mean (FCM_SHITPOSTER_NOVEL_GATE_FRACTION)."""
     return _unit_fraction_env(
         "FCM_SHITPOSTER_NOVEL_GATE_FRACTION", DEFAULT_NOVEL_GATE_FRACTION
+    )
+
+
+def weight_step() -> float:
+    """Size of one source-weight step, as a fraction (FCM_SHITPOSTER_WEIGHT_STEP)."""
+    return _unit_fraction_env("FCM_SHITPOSTER_WEIGHT_STEP", DEFAULT_WEIGHT_STEP)
+
+
+def weight_window_days() -> int:
+    """Trailing comparison window, in days, for source-weight adaptation (FCM_SHITPOSTER_WEIGHT_WINDOW_DAYS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_WEIGHT_WINDOW_DAYS", DEFAULT_WEIGHT_WINDOW_DAYS
+    )
+
+
+def weight_min_posts() -> int:
+    """Posts each group needs before a source weight moves (FCM_SHITPOSTER_WEIGHT_MIN_POSTS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_WEIGHT_MIN_POSTS", DEFAULT_WEIGHT_MIN_POSTS
     )
