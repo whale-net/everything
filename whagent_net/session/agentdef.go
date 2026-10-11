@@ -91,7 +91,10 @@ type AgentDefinition struct {
 	// into CallModelInput.SystemPrompt (worker/activities.go) and prepended
 	// to the request as a RoleSystem message when set.
 	SystemPrompt *string
-	CreatedAt    time.Time
+	// IdleTimeoutSeconds is the optional idle timeout (nil = platform default),
+	// stored as integer seconds on the SCD2 row (migration 021).
+	IdleTimeoutSeconds *int32
+	CreatedAt          time.Time
 	// ValidFrom/ValidTo are the SCD2 window; ValidTo nil marks the current row.
 	ValidFrom time.Time
 	ValidTo   *time.Time

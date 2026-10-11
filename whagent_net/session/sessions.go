@@ -114,6 +114,8 @@ type Session struct {
 	MaxTurnsOverride *int32
 	// MaxCostUSDOverride pins the session's cost cap (nil = use the definition's).
 	MaxCostUSDOverride *float64
+	// IdleTimeoutOverride pins the session's idle timeout in seconds (nil = use the definition's).
+	IdleTimeoutOverride *int32
 	// PinnedContext is set only on Create; reads populate PinnedContextBytes
 	// and leave the text nil (use the text-by-id store method).
 	PinnedContext      *string
