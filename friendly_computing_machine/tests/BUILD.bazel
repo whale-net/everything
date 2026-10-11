@@ -351,8 +351,9 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
-# Worker-startup brain schedules: fresh namespace creates harvest/reflect/write per persona,
-# second start creates no duplicates, a scheduled reflect run enqueues the snapshot.
+# Worker-startup brain schedules: fresh namespace creates one schedule per kind per persona,
+# second start creates no duplicates, idea_generate "off" removes its schedule, a scheduled
+# reflect run enqueues the snapshot.
 py_test(
     name = "test_shitposter_brain_schedules",
     size = "small",
