@@ -4,7 +4,7 @@ Widen the memory-change operation CHECK constraint with 'refresh', written when
 the idea-generator recomputes a generated lore entry's earned popularity.
 
 Revision ID: 4c1e8f2a9d03
-Revises: b7039c37db2c
+Revises: a4c7e2f9b1d3
 Create Date: 2026-10-11 00:00:00.000000
 
 """
@@ -15,7 +15,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "4c1e8f2a9d03"
-down_revision: Union[str, Sequence[str], None] = "b7039c37db2c"
+down_revision: Union[str, Sequence[str], None] = "a4c7e2f9b1d3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

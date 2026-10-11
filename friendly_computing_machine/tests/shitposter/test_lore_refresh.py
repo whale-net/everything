@@ -40,6 +40,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterLoreEntry,
     ShitposterMemoryChange,
     ShitposterPersonaAttribute,
+    ShitposterSourceWeight,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
@@ -71,6 +72,7 @@ TABLES = [
     ShitposterPersonaAttribute.__table__,
     ShitposterLoreEntry.__table__,
     ShitposterMemoryChange.__table__,
+    ShitposterSourceWeight.__table__,
 ]
 
 

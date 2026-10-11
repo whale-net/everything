@@ -5,6 +5,9 @@ registration runs against an in-memory client that reproduces the server's
 ALREADY_EXISTS response. The scheduled reflect run starts from the action
 payload of the registered schedule, on the real ShitposterBrainJobWorkflow.
 
+The idea_generate schedule follows FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS;
+"off" creates none and deletes an existing one.
+
 Red-proof run: register_brain_schedules_async registering nothing -> fresh namespace test fails.
 """
 
@@ -70,7 +73,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 
 APP_ENV = "test"
 TASK_QUEUE = "fcm-brain-schedules-test"
-KINDS = ("harvest", "reflect", "write", "snapshot")
+KINDS = ("harvest", "reflect", "write", "snapshot", "idea_generate")
 TABLES = [
     ShitposterPersona.__table__,
     ShitposterPersonaRevision.__table__,
@@ -78,18 +81,34 @@ TABLES = [
 ]
 
 
+class _FakeScheduleHandle:
+    def __init__(self, client, sid):
+        self._client = client
+        self._sid = sid
+
+    async def delete(self):
+        self._client.delete_attempts += 1
+        if self._sid not in self._client.schedules:
+            raise RPCError("schedule not found", RPCStatusCode.NOT_FOUND, b"")
+        del self._client.schedules[self._sid]
+
+
 class _FakeScheduleClient:
-    """In-memory CreateSchedule with the server's ALREADY_EXISTS response."""
+    """In-memory CreateSchedule/DeleteSchedule with the server's ALREADY_EXISTS and NOT_FOUND responses."""
 
     def __init__(self):
         self.schedules = {}
         self.create_attempts = 0
+        self.delete_attempts = 0
 
     async def create_schedule(self, sid, schedule):
         self.create_attempts += 1
         if sid in self.schedules:
             raise RPCError("schedule already exists", RPCStatusCode.ALREADY_EXISTS, b"")
         self.schedules[sid] = schedule
+
+    def get_schedule_handle(self, sid):
+        return _FakeScheduleHandle(self, sid)
 
 
 class _SdkScheduleClient(_FakeScheduleClient):
@@ -108,6 +127,11 @@ class _UnavailableScheduleClient(_FakeScheduleClient):
     async def create_schedule(self, sid, schedule):
         self.create_attempts += 1
         raise RPCError("server unavailable", RPCStatusCode.UNAVAILABLE, b"")
+
+
+@pytest.fixture(autouse=True)
+def _default_idea_cadence(monkeypatch):
+    monkeypatch.delenv("FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS", raising=False)
 
 
 @pytest.fixture
@@ -241,6 +265,7 @@ def test_fresh_namespace_creates_harvest_reflect_and_write_per_persona(
             "reflect": REFLECT_SCHEDULE_EVERY,
             "write": datetime.timedelta(hours=3),
             "snapshot": datetime.timedelta(hours=12),
+            "idea_generate": datetime.timedelta(hours=24),
         }
         for kind in KINDS:
             sched = client.schedules[control.schedule_id(pid, kind, APP_ENV)]
@@ -325,3 +350,88 @@ def test_scheduled_reflect_run_triggers_snapshot(engine, personas, fake_bodies, 
     ]
     assert [r.status for r in reflect_rows] == [ShitposterBrainJobStatus.SUCCEEDED.value]
     assert reflect_rows[0].trigger == ShitposterBrainJobTrigger.SCHEDULE.value
+
+
+IDEA = ShitposterBrainJobKind.IDEA_GENERATE.value
+
+
+def _idea_ids(personas):
+    return {control.schedule_id(pid, IDEA, APP_ENV) for pid in personas}
+
+
+def test_idea_generate_schedule_registered_per_persona_at_configured_cadence(
+    personas, monkeypatch
+):
+    monkeypatch.setenv("FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS", "6")
+    client = _FakeScheduleClient()
+
+    _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+
+    for pid in personas:
+        sched = client.schedules[control.schedule_id(pid, IDEA, APP_ENV)]
+        assert sched.spec.intervals[0].every == datetime.timedelta(hours=6)
+        assert sched.policy.overlap == ScheduleOverlapPolicy.SKIP
+        assert isinstance(sched.action, ScheduleActionStartWorkflow)
+        scheduled: BrainJobInput = sched.action.args[0]
+        assert (scheduled.persona_id, scheduled.job_kind, scheduled.trigger) == (
+            pid,
+            IDEA,
+            ShitposterBrainJobTrigger.SCHEDULE.value,
+        )
+        assert sched.action.task_queue == TASK_QUEUE
+
+
+@pytest.mark.parametrize("off", ["off", " OFF "])
+def test_idea_generate_off_on_fresh_namespace_registers_none(personas, monkeypatch, caplog, off):
+    monkeypatch.setenv("FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS", off)
+    client = _FakeScheduleClient()
+
+    with caplog.at_level(logging.ERROR):
+        _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+
+    assert set(client.schedules) == _expected_ids(personas) - _idea_ids(personas)
+    assert client.delete_attempts == len(personas)
+    assert not [r for r in caplog.records if "registration failed" in r.getMessage()]
+
+
+def test_idea_generate_off_removes_existing_schedule(personas, monkeypatch, caplog):
+    client = _FakeScheduleClient()
+    _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+    assert _idea_ids(personas) <= set(client.schedules)
+
+    monkeypatch.setenv("FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS", "off")
+    with caplog.at_level(logging.ERROR):
+        _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+
+    assert set(client.schedules) == _expected_ids(personas) - _idea_ids(personas)
+    assert not [r for r in caplog.records if "registration failed" in r.getMessage()]
+
+    # turning it back on re-creates the schedule
+    monkeypatch.delenv("FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS")
+    _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+    assert set(client.schedules) == _expected_ids(personas)
+
+
+def test_idea_generate_removal_failure_is_logged_and_skipped(personas, monkeypatch, caplog):
+    class _DeleteUnavailable(_FakeScheduleClient):
+        def get_schedule_handle(self, sid):
+            client = self
+
+            class _H:
+                async def delete(self):
+                    client.delete_attempts += 1
+                    raise RPCError("server unavailable", RPCStatusCode.UNAVAILABLE, b"")
+
+            return _H()
+
+    monkeypatch.setenv("FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS", "off")
+    client = _DeleteUnavailable()
+
+    with caplog.at_level(logging.ERROR):
+        _run(register_brain_schedules_async(client, TASK_QUEUE, APP_ENV))
+
+    # the other kinds still register for every persona
+    assert set(client.schedules) == _expected_ids(personas) - _idea_ids(personas)
+    errors = [r for r in caplog.records if "registration failed" in r.getMessage()]
+    assert len(errors) == len(personas)
+    assert all("register_idea_generate_schedule" in r.getMessage() for r in errors)

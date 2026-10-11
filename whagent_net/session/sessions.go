@@ -114,6 +114,8 @@ type Session struct {
 	MaxTurnsOverride *int32
 	// MaxCostUSDOverride pins the session's cost cap (nil = use the definition's).
 	MaxCostUSDOverride *float64
+	// IdleTimeoutOverride pins the session's idle timeout in seconds (nil = use the definition's).
+	IdleTimeoutOverride *int32
 	// PinnedContext is set only on Create; reads populate PinnedContextBytes
 	// and leave the text nil (use the text-by-id store method).
 	PinnedContext      *string
@@ -211,7 +213,7 @@ var _ SessionStore = sessionStore{}
 const sessionColumns = `
 	session_id, subject_iss, subject_sub, subject_kind,
 	on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
-	parent_session_id, agent_id, model, model_override, max_turns_override, max_cost_usd_override,
+	parent_session_id, agent_id, model, model_override, max_turns_override, max_cost_usd_override, idle_timeout_seconds,
 	COALESCE(pinned_context_bytes, 0),
 	status, cap_kind, error_category, error_detail,
 	created_at, updated_at
@@ -231,7 +233,7 @@ func scanSession(row pgx.Row) (*Session, error) {
 	if err := row.Scan(
 		&sess.SessionID, &sess.Subject.Iss, &sess.Subject.Sub, &subjectKind,
 		&sess.OnBehalfOf.Iss, &sess.OnBehalfOf.Sub, &onBehalfOfKind,
-		&sess.ParentSessionID, &sess.AgentID, &sess.Model, &sess.ModelOverride, &sess.MaxTurnsOverride, &sess.MaxCostUSDOverride,
+		&sess.ParentSessionID, &sess.AgentID, &sess.Model, &sess.ModelOverride, &sess.MaxTurnsOverride, &sess.MaxCostUSDOverride, &sess.IdleTimeoutOverride,
 		&sess.PinnedContextBytes,
 		&status, &capKind, &errorCategory, &sess.ErrorDetail,
 		&sess.CreatedAt, &sess.UpdatedAt,
@@ -259,13 +261,13 @@ func (s sessionStore) Create(ctx context.Context, sess *Session) error {
 		INSERT INTO sessions (
 			session_id, subject_iss, subject_sub, subject_kind,
 			on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
-			parent_session_id, agent_id, model, model_override, max_turns_override, max_cost_usd_override, pinned_context, status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			parent_session_id, agent_id, model, model_override, max_turns_override, max_cost_usd_override, idle_timeout_seconds, pinned_context, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING created_at, updated_at, COALESCE(pinned_context_bytes, 0)
 	`,
 		sess.SessionID, sess.Subject.Iss, sess.Subject.Sub, string(sess.Subject.Kind),
 		sess.OnBehalfOf.Iss, sess.OnBehalfOf.Sub, string(sess.OnBehalfOf.Kind),
-		sess.ParentSessionID, sess.AgentID, sess.Model, sess.ModelOverride, sess.MaxTurnsOverride, sess.MaxCostUSDOverride, sess.PinnedContext, string(sess.Status),
+		sess.ParentSessionID, sess.AgentID, sess.Model, sess.ModelOverride, sess.MaxTurnsOverride, sess.MaxCostUSDOverride, sess.IdleTimeoutOverride, sess.PinnedContext, string(sess.Status),
 	).Scan(&sess.CreatedAt, &sess.UpdatedAt, &sess.PinnedContextBytes)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)

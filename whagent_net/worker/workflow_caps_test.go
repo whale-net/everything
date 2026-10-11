@@ -447,6 +447,9 @@ func TestSessionWorkflow_StopRacingCapTrip_ResolvesToSingleTerminalReason(t *tes
 	env.RegisterActivityWithOptions(func(ctx context.Context, sessionID uuid.UUID) (ResolveAgentDefinitionResult, error) {
 		return ResolveAgentDefinitionResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
+	env.RegisterActivityWithOptions(func(ctx context.Context, sessionID uuid.UUID) (ResolveIdleTimeoutResult, error) {
+		return ResolveIdleTimeoutResult{EffectiveTimeout: placeholderIdleTimeout}, nil
+	}, activity.RegisterOptions{Name: ActivityResolveIdleTimeout})
 	env.RegisterActivityWithOptions(func(ctx context.Context, in BuildContextInput) (BuildContextResult, error) {
 		return BuildContextResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityBuildContext})

@@ -29,6 +29,7 @@ func agentToView(a *whagentpb.AgentDefinition) components.AgentView {
 		ToolSet:           a.GetToolSet(),
 		MaxTurns:          a.GetMaxTurns(),
 		MaxCostUSD:        strconv.FormatFloat(a.GetMaxCostUsd(), 'f', -1, 64),
+		IdleTimeout:       a.GetIdleTimeout(),
 		MaxToolIterations: a.GetMaxToolIterations(),
 		ToolLoadingMode:   a.GetToolLoadingMode(),
 		RequiredRole:      a.GetRequiredRole(),
@@ -121,6 +122,7 @@ func agentFormValues(a *whagentpb.AgentDefinition) components.AgentFormValues {
 		ToolSet:           a.GetToolSet(),
 		MaxTurns:          strconv.Itoa(int(a.GetMaxTurns())),
 		MaxCostUSD:        strconv.FormatFloat(a.GetMaxCostUsd(), 'f', -1, 64),
+		IdleTimeout:       a.GetIdleTimeout(),
 		MaxToolIterations: strconv.Itoa(int(a.GetMaxToolIterations())),
 		ToolLoadingMode:   a.GetToolLoadingMode(),
 		RequiredRole:      a.GetRequiredRole(),
@@ -143,6 +145,7 @@ func agentFormFromRequest(r *http.Request) components.AgentFormValues {
 		ToolSet:           g("tool_set"),
 		MaxTurns:          g("max_turns"),
 		MaxCostUSD:        g("max_cost_usd"),
+		IdleTimeout:       g("idle_timeout"),
 		MaxToolIterations: g("max_tool_iterations"),
 		ToolLoadingMode:   g("tool_loading_mode"),
 		RequiredRole:      g("required_role"),
@@ -185,6 +188,10 @@ func updateRequestFromForm(agentID string, v components.AgentFormValues) (*whage
 	if v.RequiredRole != "" {
 		role := v.RequiredRole
 		req.RequiredRole = &role
+	}
+	// Blank clears the definition's idle timeout; a value is validated by the api.
+	if idle := strings.TrimSpace(v.IdleTimeout); idle != "" {
+		req.IdleTimeout = &idle
 	}
 	return req, nil
 }
@@ -382,5 +389,6 @@ func changedAgentFields(prev, cur *whagentpb.AgentDefinition) []string {
 	add("required_role", prev.GetRequiredRole() != cur.GetRequiredRole())
 	add("scope", prev.GetScope() != cur.GetScope())
 	add("system_prompt", prev.GetSystemPrompt() != cur.GetSystemPrompt())
+	add("idle_timeout", prev.GetIdleTimeout() != cur.GetIdleTimeout())
 	return out
 }

@@ -80,6 +80,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterLoreEntry,
     ShitposterMemoryChange,
     ShitposterPersonaAttribute,
+    ShitposterSourceWeight,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (  # noqa: E402
     SlackChannel,
@@ -110,6 +111,7 @@ TABLES = [
     ShitposterPersonaAttribute.__table__,
     ShitposterLoreEntry.__table__,
     ShitposterMemoryChange.__table__,
+    ShitposterSourceWeight.__table__,
 ]
 
 
@@ -628,10 +630,28 @@ def test_lore_listing_filters_to_one_source(persona, source):
 def test_lore_listing_empty_source_and_bad_limit(persona):
     memory.add_lore(persona.id, "a", kind="hit", cause_kind="operator", cause_ref="x", now=T0)
 
-    assert operator.handle_operator_command("lore theme", ADMIN, ADMINS) == (
+    assert operator.handle_operator_command("lore theme", ADMIN, ADMINS).startswith(
         "No active theme lore at offset 0 (0 total)."
     )
     assert operator.handle_operator_command("lore bogus", ADMIN, ADMINS) == operator.OPERATOR_USAGE
+
+
+def test_lore_listing_shows_weights_bounds_and_ceiling(session, persona):
+    from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+        shitposter_weight_dal as weights,
+    )
+
+    _lore_by_source(persona.id)
+    text = operator.handle_operator_command("lore", ADMIN, ADMINS)
+    assert text.splitlines()[-1] == (
+        "Source weights: theme 15% (bounds 5%-30%), novel 10% (bounds 5%-30%); "
+        "combined ceiling 40%."
+    )
+
+    weights.revise_weight(session, persona.id, "novel", 0.12, {"test": True})
+    session.commit()
+    listed = operator.handle_operator_command("lore theme", ADMIN, ADMINS)
+    assert "novel 12% (bounds 5%-30%)" in listed
 
 
 def test_lore_and_ideas_are_admin_only(persona):
@@ -880,6 +900,9 @@ def test_cli_lore_filters_by_source_and_rejects_unknown(persona):
     assert result.exit_code == 0, result.output
     assert "Active lore 3-4 of 4" in result.output
     assert _ids_in_render(result.output) == [ids["novel"], ids["theme"]]
+
+    assert "Source weights: theme 15% (bounds 5%-30%)" in result.output
+    assert "combined ceiling 40%." in result.output
 
     result = runner.invoke(app, ["shitposter", "lore", "--source", "bogus"])
     assert "Unknown source 'bogus'" in result.output

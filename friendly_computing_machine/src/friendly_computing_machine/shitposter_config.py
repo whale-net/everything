@@ -2,6 +2,7 @@
 
 import logging
 import os
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -185,9 +186,15 @@ DEFAULT_IDEA_GENERATOR_RUN_CAP = 2
 DEFAULT_IDEA_GENERATOR_CADENCE_HOURS = 24
 DEFAULT_THEME_TARGET_WEIGHT = 0.15
 DEFAULT_NOVEL_TARGET_WEIGHT = 0.10
+DEFAULT_SOURCE_WEIGHT_MIN = 0.05
+DEFAULT_SOURCE_WEIGHT_MAX = 0.30
+DEFAULT_SOURCE_WEIGHT_CEILING = 0.40
 DEFAULT_NOVEL_GATE_RECENT_DAYS = 7
 DEFAULT_NOVEL_GATE_BASELINE_DAYS = 30
 DEFAULT_NOVEL_GATE_FRACTION = 0.8
+DEFAULT_WEIGHT_STEP = 0.01
+DEFAULT_WEIGHT_WINDOW_DAYS = 30
+DEFAULT_WEIGHT_MIN_POSTS = 10
 
 
 def load_theme_generator_agent_id() -> str:
@@ -232,16 +239,92 @@ def _unit_fraction_env(name: str, default: float) -> float:
 
 
 def theme_target_weight() -> float:
-    """Target share of theme lore among active lore (FCM_SHITPOSTER_THEME_TARGET_WEIGHT)."""
+    """Starting theme target weight (FCM_SHITPOSTER_THEME_TARGET_WEIGHT); stored weights take over after seeding."""
     return _unit_fraction_env(
         "FCM_SHITPOSTER_THEME_TARGET_WEIGHT", DEFAULT_THEME_TARGET_WEIGHT
     )
 
 
 def novel_target_weight() -> float:
-    """Target share of novel lore among active lore (FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT)."""
+    """Starting novel target weight (FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT); stored weights take over after seeding."""
     return _unit_fraction_env(
         "FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT", DEFAULT_NOVEL_TARGET_WEIGHT
+    )
+
+
+@dataclass(frozen=True)
+class SourceWeightConfig:
+    """Starting weights, per-source bounds and combined ceiling for theme/novel weights."""
+
+    theme_start: float
+    novel_start: float
+    theme_min: float
+    theme_max: float
+    novel_min: float
+    novel_max: float
+    ceiling: float
+    # True when configured starting weights were rejected for the defaults
+    fell_back: bool = False
+
+
+def _bounds_valid(lo: float, hi: float) -> bool:
+    return 0 < lo <= hi <= 1
+
+
+def load_source_weight_config() -> SourceWeightConfig:
+    """Source-weight config; invalid starting weights fall back to the defaults with a warning.
+
+    Bounds come from FCM_SHITPOSTER_{THEME,NOVEL}_WEIGHT_{MIN,MAX} and the ceiling from
+    FCM_SHITPOSTER_SOURCE_WEIGHT_CEILING; the starting weights are the *_TARGET_WEIGHT vars.
+    """
+    theme_min = _unit_fraction_env("FCM_SHITPOSTER_THEME_WEIGHT_MIN", DEFAULT_SOURCE_WEIGHT_MIN)
+    theme_max = _unit_fraction_env("FCM_SHITPOSTER_THEME_WEIGHT_MAX", DEFAULT_SOURCE_WEIGHT_MAX)
+    novel_min = _unit_fraction_env("FCM_SHITPOSTER_NOVEL_WEIGHT_MIN", DEFAULT_SOURCE_WEIGHT_MIN)
+    novel_max = _unit_fraction_env("FCM_SHITPOSTER_NOVEL_WEIGHT_MAX", DEFAULT_SOURCE_WEIGHT_MAX)
+    ceiling = _unit_fraction_env(
+        "FCM_SHITPOSTER_SOURCE_WEIGHT_CEILING", DEFAULT_SOURCE_WEIGHT_CEILING
+    )
+    if not (
+        _bounds_valid(theme_min, theme_max)
+        and _bounds_valid(novel_min, novel_max)
+        and theme_min + novel_min <= ceiling
+    ):
+        logger.warning(
+            "source weight bounds theme %s-%s, novel %s-%s, ceiling %s are inconsistent; "
+            "using defaults",
+            theme_min, theme_max, novel_min, novel_max, ceiling,
+        )
+        theme_min = novel_min = DEFAULT_SOURCE_WEIGHT_MIN
+        theme_max = novel_max = DEFAULT_SOURCE_WEIGHT_MAX
+        ceiling = DEFAULT_SOURCE_WEIGHT_CEILING
+
+    theme_start, novel_start = theme_target_weight(), novel_target_weight()
+    fell_back = False
+    if not (
+        theme_min <= theme_start <= theme_max
+        and novel_min <= novel_start <= novel_max
+        and theme_start + novel_start <= ceiling + 1e-9
+    ):
+        logger.warning(
+            "starting source weights theme %s, novel %s fall outside bounds "
+            "(theme %s-%s, novel %s-%s) or exceed ceiling %s; using defaults",
+            theme_start, novel_start, theme_min, theme_max, novel_min, novel_max, ceiling,
+        )
+        fell_back = True
+        # clamp the defaults too, in case the configured bounds exclude them
+        theme_start = min(max(DEFAULT_THEME_TARGET_WEIGHT, theme_min), theme_max)
+        novel_start = min(max(DEFAULT_NOVEL_TARGET_WEIGHT, novel_min), novel_max)
+        if theme_start + novel_start > ceiling + 1e-9:
+            theme_start, novel_start = theme_min, novel_min
+    return SourceWeightConfig(
+        theme_start=theme_start,
+        novel_start=novel_start,
+        theme_min=theme_min,
+        theme_max=theme_max,
+        novel_min=novel_min,
+        novel_max=novel_max,
+        ceiling=ceiling,
+        fell_back=fell_back,
     )
 
 
@@ -263,4 +346,23 @@ def novel_gate_fraction() -> float:
     """Gate opens when the recent mean is below this fraction of the baseline mean (FCM_SHITPOSTER_NOVEL_GATE_FRACTION)."""
     return _unit_fraction_env(
         "FCM_SHITPOSTER_NOVEL_GATE_FRACTION", DEFAULT_NOVEL_GATE_FRACTION
+    )
+
+
+def weight_step() -> float:
+    """Size of one source-weight step, as a fraction (FCM_SHITPOSTER_WEIGHT_STEP)."""
+    return _unit_fraction_env("FCM_SHITPOSTER_WEIGHT_STEP", DEFAULT_WEIGHT_STEP)
+
+
+def weight_window_days() -> int:
+    """Trailing comparison window, in days, for source-weight adaptation (FCM_SHITPOSTER_WEIGHT_WINDOW_DAYS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_WEIGHT_WINDOW_DAYS", DEFAULT_WEIGHT_WINDOW_DAYS
+    )
+
+
+def weight_min_posts() -> int:
+    """Posts each group needs before a source weight moves (FCM_SHITPOSTER_WEIGHT_MIN_POSTS)."""
+    return _positive_int_env(
+        "FCM_SHITPOSTER_WEIGHT_MIN_POSTS", DEFAULT_WEIGHT_MIN_POSTS
     )

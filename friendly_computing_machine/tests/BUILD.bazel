@@ -351,8 +351,9 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
-# Worker-startup brain schedules: fresh namespace creates harvest/reflect/write per persona,
-# second start creates no duplicates, a scheduled reflect run enqueues the snapshot.
+# Worker-startup brain schedules: fresh namespace creates one schedule per kind per persona,
+# second start creates no duplicates, idea_generate "off" removes its schedule, a scheduled
+# reflect run enqueues the snapshot.
 py_test(
     name = "test_shitposter_brain_schedules",
     size = "small",
@@ -424,6 +425,19 @@ py_test(
     srcs = [
         "conftest.py",
         "db/test_shitposter_memory.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Shitposter source weights: SCD2 migration round-trip (head derived), lazy
+# seed, revisions, history, and bounds/ceiling/start-weight validation.
+py_test(
+    name = "test_shitposter_source_weight",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_shitposter_source_weight.py",
     ],
     data = ["//friendly_computing_machine/src/migrations:migration_versions"],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
@@ -501,6 +515,16 @@ py_test(
     size = "small",
     srcs = [
         "shitposter/test_idea_generate.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
+# Adaptive theme/novel source weights: step rules, overlap days, bounds, ceiling tie-break, history.
+py_test(
+    name = "test_shitposter_source_weights",
+    size = "small",
+    srcs = [
+        "shitposter/test_source_weights.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )

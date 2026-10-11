@@ -10,7 +10,18 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Index, Uuid, func, text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Index,
+    Numeric,
+    Uuid,
+    func,
+    text,
+)
+from sqlalchemy.dialects import postgresql
 from sqlmodel import Field
 
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
@@ -166,6 +177,56 @@ class ShitposterLoreEntry(Base, table=True):
     )
     popularity_score: int = Field(default=0, nullable=False)
     retired_by_operator: bool = Field(default=False, nullable=False)
+    valid_from: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True), nullable=False, server_default=func.now()
+        ),
+    )
+    valid_to: datetime.datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+
+class ShitposterWeightSourceEnum(str, Enum):
+    THEME = "theme"
+    NOVEL = "novel"
+
+
+class ShitposterSourceWeight(Base, table=True):
+    """Per-persona target weight of one generated lore source (SCD2)."""
+
+    __table_args__ = (
+        # at most one current weight per (persona, source)
+        Index(
+            "uq_shitpostersourceweight_current",
+            "persona_id",
+            "source",
+            unique=True,
+            postgresql_where=text("valid_to IS NULL"),
+            sqlite_where=text("valid_to IS NULL"),
+        ),
+        CheckConstraint(
+            "source IN ('theme', 'novel')",
+            name="ck_shitpostersourceweight_source",
+        ),
+    )
+    id: int = Field(default=None, nullable=False, primary_key=True)
+    persona_id: int = Field(
+        nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    # ShitposterWeightSourceEnum value
+    source: str
+    # fraction of active lore, e.g. 0.15
+    weight: float = Field(sa_column=Column(Numeric(6, 4), nullable=False))
+    # compared means for an adaptive step, or {"kind": "initial"|"fallback", ...}
+    cause: dict = Field(
+        sa_column=Column(
+            JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=False
+        )
+    )
+    brain_job_run_id: int | None = Field(
+        default=None, nullable=True, foreign_key="shitposterbrainjobrun.id"
+    )
     valid_from: datetime.datetime = Field(
         sa_column=Column(
             DateTime(timezone=True), nullable=False, server_default=func.now()

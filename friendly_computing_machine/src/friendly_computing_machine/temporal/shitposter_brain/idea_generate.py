@@ -1,6 +1,9 @@
 """Idea-generator brain job: keep generated lore near its standing-pool target.
 
-Compute reads the persona's active lore, compares each generated kind's share
+Compute first steps the theme/novel target weights from how posts with each
+source's lore performed (source_weights), so the stepped weights drive this
+run's targeting; apply writes those weight revisions only when the run does not
+fail. Compute then reads the persona's active lore, compares each generated kind's share
 against its target weight, and asks that kind's agent for proposals only when
 the share is below target; novel is asked only while the novel gate reads a
 relative engagement drop. Each proposal is validated (citations, guardrails)
@@ -20,9 +23,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlmodel import Session, select
+from temporalio.client import Client
 
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     shitposter_memory_dal,
+    shitposter_weight_dal,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
@@ -39,14 +44,13 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterMemoryCauseKindEnum,
 )
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
+    idea_generator_cadence_hours,
     idea_generator_run_cap,
     load_novel_generator_agent_id,
     load_theme_generator_agent_id,
     novel_gate_baseline_days,
     novel_gate_fraction,
     novel_gate_recent_days,
-    novel_target_weight,
-    theme_target_weight,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.activity import (
     _member_names,
@@ -55,12 +59,17 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
     guardrails,
     lore_refresh,
+    source_weights,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.base import (
     ApplyOutcome,
     BrainJobInput,
     JobBody,
     register_job_body,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.control import (
+    register_brain_schedule,
+    remove_brain_schedule,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.lore_promotion import (
     popularity_score,
@@ -96,9 +105,10 @@ class TargetWeights:
     novel: float
 
 
-def current_weights(session: Session, persona_id: int) -> TargetWeights:
-    """Target share per generated kind; the single seam stored weights replace."""
-    return TargetWeights(theme=theme_target_weight(), novel=novel_target_weight())
+def current_weights(persona_id: int) -> TargetWeights:
+    """Stored target share per generated kind; the first read seeds and commits the starting weights."""
+    rows = shitposter_weight_dal.get_current_weights(persona_id)
+    return TargetWeights(theme=float(rows[THEME].weight), novel=float(rows[NOVEL].weight))
 
 
 def pool_shares(active_kinds: list[str]) -> dict[str, float | None]:
@@ -385,16 +395,25 @@ def _enforce_run_cap(
 def _compute(params: BrainJobInput) -> dict[str, Any]:
     persona_id = params.persona_id
     cap = idea_generator_run_cap()
+    seeded = current_weights(persona_id)
+    now = datetime.datetime.now(datetime.timezone.utc)
     with SessionManager() as session:
+        weight_decisions = [
+            d.as_payload()
+            for d in source_weights.compute_weight_changes(session, persona_id, now)
+        ]
         active_rows = shitposter_memory_dal.active_lore(persona_id, session=session)
-        weights = current_weights(session, persona_id)
         retired = guardrails.operator_retired_attributes(
             session, persona_id
         ) + guardrails.operator_retired_lore(session, persona_id)
         # read before any agent call so a failed run still records it
-        gate = read_novel_gate(session, persona_id, datetime.datetime.now(datetime.timezone.utc))
+        gate = read_novel_gate(session, persona_id, now)
         refreshes = [r.to_payload() for r in lore_refresh.compute_refreshes(session, persona_id)]
     member_names = _member_names()
+    stepped = source_weights.effective_weights(weight_decisions)
+    weights = TargetWeights(
+        theme=stepped.get(THEME, seeded.theme), novel=stepped.get(NOVEL, seeded.novel)
+    )
 
     # the session is closed before any agent call so no transaction spans it
     ctx = {
@@ -430,6 +449,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
             NOVEL: readings[NOVEL],
             "proposals": [],
             "rejections": rejections,
+            "weight_decisions": weight_decisions,
             "error": f"{type(e).__name__}: {e}",
         }
     accepted = _enforce_run_cap(accepted, rejections, cap)
@@ -447,6 +467,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         "proposals": accepted,
         "rejections": rejections,
         "refreshes": refreshes,
+        "weight_decisions": weight_decisions,
     }
 
 
@@ -465,6 +486,7 @@ def _novel_cause_ref(gate: dict[str, Any]) -> str:
 def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutcome:
     persona_id = payload["persona_id"]
     if payload.get("error"):
+        # a failed run writes no weight revisions
         details = {
             THEME: payload[THEME],
             NOVEL: payload[NOVEL],
@@ -523,6 +545,9 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         now,
     )
     session.flush()
+    weight_changes = source_weights.apply_weight_changes(
+        session, persona_id, run_id, payload.get("weight_decisions") or []
+    )
 
     details = {
         THEME: payload[THEME],
@@ -530,11 +555,12 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         "entries": entries,
         "rejections": rejections,
         "refreshes": refreshes,
-        "weight_changes": [],
+        "weight_changes": weight_changes,
     }
+    stepped = any("new" in w for w in weight_changes)
     status = (
         ShitposterBrainJobStatus.SUCCEEDED
-        if entries or refreshes
+        if entries or refreshes or stepped
         else ShitposterBrainJobStatus.NO_OP
     )
     logger.info(
@@ -546,6 +572,35 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         len(refreshes),
     )
     return ApplyOutcome(status=status.value, details=details)
+
+
+async def register_idea_generate_schedule(
+    client: Client,
+    task_queue: str,
+    persona_id: int,
+    app_env: str | None = None,
+) -> None:
+    """Create the idea-generator schedule for one persona (every FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS).
+
+    When the cadence is "off", any existing schedule is removed and none is created.
+    """
+    hours = idea_generator_cadence_hours()
+    if hours is None:
+        await remove_brain_schedule(
+            client,
+            persona_id,
+            ShitposterBrainJobKind.IDEA_GENERATE.value,
+            app_env=app_env,
+        )
+        return
+    await register_brain_schedule(
+        client,
+        task_queue,
+        persona_id,
+        ShitposterBrainJobKind.IDEA_GENERATE.value,
+        every=datetime.timedelta(hours=hours),
+        app_env=app_env,
+    )
 
 
 register_job_body(

@@ -57,6 +57,16 @@ def shitposter_ideas(page: int = PageOption, page_size: int = PageSizeOption):
     typer.echo(page_idea_runs(page, page_size))
 
 
+@shitposter_app.command("weights")
+def shitposter_weights(page: int = PageOption, page_size: int = PageSizeOption):
+    """Theme/novel source-weight revisions with their causes, newest first."""
+    from friendly_computing_machine.src.friendly_computing_machine.bot.handlers.shitposter_operator import (
+        page_weight_history,
+    )
+
+    typer.echo(page_weight_history(page, page_size))
+
+
 # NO LONGER NEEDED
 # BUT SOMETIMES IT IS, SO LEAVING IT FOR FUTURE USE
 @app.command()
