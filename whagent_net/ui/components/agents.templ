@@ -13,6 +13,8 @@ type AgentView struct {
 	ToolSet           string
 	MaxTurns          int32
 	MaxCostUSD        string
+	// IdleTimeout is a Go duration string; empty means the platform default applies.
+	IdleTimeout       string
 	MaxToolIterations int32
 	ToolLoadingMode   string
 	RequiredRole      string
@@ -36,6 +38,14 @@ type AgentDetailPageData struct {
 }
 
 func itoa(n int32) string { return strconv.Itoa(int(n)) }
+
+// idleTimeoutLabel shows a definition's idle timeout, or the platform default when unset.
+func idleTimeoutLabel(s string) string {
+	if s == "" {
+		return "platform default"
+	}
+	return s
+}
 
 templ roleBadge(role string) {
 	if role == "" {
@@ -113,6 +123,7 @@ templ AgentFields(a AgentView) {
 			<dt class="font-semibold">Tool set</dt><dd><code>{ a.ToolSet }</code></dd>
 			<dt class="font-semibold">Max turns</dt><dd>{ itoa(a.MaxTurns) }</dd>
 			<dt class="font-semibold">Max cost (USD)</dt><dd>{ a.MaxCostUSD }</dd>
+			<dt class="font-semibold">Idle timeout</dt><dd>{ idleTimeoutLabel(a.IdleTimeout) }</dd>
 			<dt class="font-semibold">Max tool iterations</dt><dd>{ itoa(a.MaxToolIterations) }</dd>
 			<dt class="font-semibold">Tool loading mode</dt><dd>{ a.ToolLoadingMode }</dd>
 			<dt class="font-semibold">Required role</dt><dd>@roleBadge(a.RequiredRole)</dd>

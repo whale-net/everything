@@ -18,6 +18,7 @@ package main
 import (
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -939,4 +940,216 @@ func TestSessionWorkflow_ReplayRecordedHistory_SingleTurnDone_NoNonDeterminismEr
 
 	err = replayer.ReplayWorkflowHistory(nil, b.build())
 	require.NoError(t, err, "the current SessionWorkflow code must replay a FRESH single-turn history -- turn-cap-after-final and status-change-event at version 1 -- without a non-determinism error (NFR1)")
+}
+
+// timerStarted appends a TimerStarted event attributed to workflowTaskCompletedID
+// and returns its TimerId and event ID. The SDK names a timer by the event ID
+// of the command it predicts for it, so the TimerId equals that event ID.
+func (b *historyFixtureBuilder) timerStarted(workflowTaskCompletedID int64) (string, int64) {
+	id := b.nextEventID()
+	timerID := strconv.FormatInt(id, 10)
+	b.events = append(b.events, &historypb.HistoryEvent{
+		EventId:   id,
+		EventType: enumspb.EVENT_TYPE_TIMER_STARTED,
+		Attributes: &historypb.HistoryEvent_TimerStartedEventAttributes{
+			TimerStartedEventAttributes: &historypb.TimerStartedEventAttributes{
+				TimerId:                      timerID,
+				WorkflowTaskCompletedEventId: workflowTaskCompletedID,
+			},
+		},
+	})
+	return timerID, id
+}
+
+func (b *historyFixtureBuilder) timerFired(timerID string, startedID int64) {
+	b.events = append(b.events, &historypb.HistoryEvent{
+		EventId:   b.nextEventID(),
+		EventType: enumspb.EVENT_TYPE_TIMER_FIRED,
+		Attributes: &historypb.HistoryEvent_TimerFiredEventAttributes{
+			TimerFiredEventAttributes: &historypb.TimerFiredEventAttributes{TimerId: timerID, StartedEventId: startedID},
+		},
+	})
+}
+
+func (b *historyFixtureBuilder) timerCanceled(timerID string, startedID, workflowTaskCompletedID int64) {
+	b.events = append(b.events, &historypb.HistoryEvent{
+		EventId:   b.nextEventID(),
+		EventType: enumspb.EVENT_TYPE_TIMER_CANCELED,
+		Attributes: &historypb.HistoryEvent_TimerCanceledEventAttributes{
+			TimerCanceledEventAttributes: &historypb.TimerCanceledEventAttributes{
+				TimerId:                      timerID,
+				StartedEventId:               startedID,
+				WorkflowTaskCompletedEventId: workflowTaskCompletedID,
+				Identity:                     "test-identity",
+			},
+		},
+	})
+}
+
+// statusWriteAfterDecision is updateSessionStatus's commit-then-write pair for
+// a status_change, for a workflow task that has already been recorded.
+func (b *historyFixtureBuilder) statusWriteAfterDecision() {
+	b.activity(ActivityCommitTerminalEvent, CommitTerminalEventResult{})
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+}
+
+// statusWrite is statusWriteAfterDecision preceded by its own workflow task.
+func (b *historyFixtureBuilder) statusWrite() {
+	b.decision()
+	b.statusWriteAfterDecision()
+}
+
+// workflowCompleted appends a final workflow task and the execution's
+// completion event.
+func (b *historyFixtureBuilder) workflowCompleted() {
+	b.decision()
+	b.events = append(b.events, &historypb.HistoryEvent{
+		EventId:   b.nextEventID(),
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionCompletedEventAttributes{
+			WorkflowExecutionCompletedEventAttributes: &historypb.WorkflowExecutionCompletedEventAttributes{},
+		},
+	})
+}
+
+// idleClockPrefix records the first run's idle gate: ResolveIdleTimeout at
+// the top of SessionWorkflow, then the initial awaiting_input write.
+func (b *historyFixtureBuilder) idleClockPrefix(timeout time.Duration) {
+	c := b.decision()
+	b.marker("session-workflow-idle-expiry", 1, c)
+	b.activity(ActivityResolveIdleTimeout, ResolveIdleTimeoutResult{EffectiveTimeout: timeout})
+
+	c = b.decision()
+	b.marker("session-workflow-status-transitions", 1, c)
+	b.marker("session-workflow-status-change-event", 1, c)
+	b.statusWriteAfterDecision()
+}
+
+// TestSessionWorkflow_ReplayRecordedHistory_IdleExpiry_NoNonDeterminismError
+// replays a fresh run that never receives a turn: the idle clock starts on
+// entering awaiting_input and fires, so the run writes expired (with its
+// status_change event) and completes. The gate is recorded at version 1, as on
+// every run started after the idle expiry change.
+func TestSessionWorkflow_ReplayRecordedHistory_IdleExpiry_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: testSessionID()})
+	require.NoError(t, err)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+	b.idleClockPrefix(time.Minute)
+
+	c := b.decision()
+	timerID, startedID := b.timerStarted(c)
+	b.timerFired(timerID, startedID)
+
+	b.statusWrite() // expired, with its status_change event
+	b.workflowCompleted()
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+	err = replayer.ReplayWorkflowHistory(nil, b.build())
+	require.NoError(t, err, "a run whose idle clock fires must replay without a non-determinism error")
+}
+
+// TestSessionWorkflow_ReplayRecordedHistory_TurnRearmsIdleClock_ThenExpires_NoNonDeterminismError
+// replays a run through one turn: the first clock is cancelled when the turn
+// starts, a fresh full-timeout clock is armed once the turn completes, and
+// that clock later fires and expires the session.
+func TestSessionWorkflow_ReplayRecordedHistory_TurnRearmsIdleClock_ThenExpires_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: testSessionID()})
+	require.NoError(t, err)
+	signalPayload, err := dc.ToPayloads(SendTurnSignal{Input: "hello"})
+	require.NoError(t, err)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+	b.idleClockPrefix(time.Minute)
+
+	c := b.decision()
+	firstTimerID, firstStartedID := b.timerStarted(c)
+
+	// SendTurn cancels the first clock in the same task that starts the turn.
+	b.signal(SignalSendTurn, signalPayload)
+	c = b.decision()
+	b.timerCanceled(firstTimerID, firstStartedID, c)
+	b.statusWriteAfterDecision() // running
+
+	// processTurn, as in the single-turn fixture, with a non-final response.
+	c = b.decision()
+	b.marker("session-workflow-cap-enforcement", 1, c)
+	b.marker("session-workflow-turn-cap-after-final", 1, c)
+	b.activity(ActivityResolveAgentDefinition, ResolveAgentDefinitionResult{Definition: session.AgentDefinition{MaxCostUSD: 100}, Model: "replay-model"})
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0})
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}})
+	c = b.decision()
+	b.marker("session-workflow-tool-dispatch", 1, c)
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{})
+	b.decision()
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "hi there"}}})
+	c = b.decision()
+	b.marker("session-workflow-tool-loop", 1, c)
+	b.activity(ActivityCommitTurn, CommitTurnResult{Done: false})
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0})
+
+	// Turn complete: awaiting_input again, then the clock is re-armed in full.
+	b.statusWrite()
+	c = b.decision()
+	rearmedTimerID, rearmedStartedID := b.timerStarted(c)
+	b.timerFired(rearmedTimerID, rearmedStartedID)
+
+	b.statusWrite() // expired
+	b.workflowCompleted()
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+	err = replayer.ReplayWorkflowHistory(nil, b.build())
+	require.NoError(t, err, "a turn that re-arms the idle clock and then expires must replay without a non-determinism error")
+}
+
+// TestSessionWorkflow_ReplayRecordedHistory_PreChangeAwaitingInput_ArmIdleTimerSweep_NoNonDeterminismError
+// replays a history recorded by pre-change code: the run parked in
+// awaiting_input with no idle gate. The one-time sweep signal arms the clock
+// with its timeout from arrival, a repeat sweep leaves that clock unchanged,
+// and the clock's firing expires the session.
+func TestSessionWorkflow_ReplayRecordedHistory_PreChangeAwaitingInput_ArmIdleTimerSweep_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: testSessionID()})
+	require.NoError(t, err)
+	armPayload, err := dc.ToPayloads(ArmIdleTimerSignal{EffectiveTimeout: time.Minute})
+	require.NoError(t, err)
+	rearmPayload, err := dc.ToPayloads(ArmIdleTimerSignal{EffectiveTimeout: 10 * time.Minute})
+	require.NoError(t, err)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+
+	// Pre-change awaiting_input: status-transitions only, no status_change
+	// event, and no ResolveIdleTimeout (no idle-expiry marker).
+	c := b.decision()
+	b.marker("session-workflow-status-transitions", 1, c)
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.signal(SignalArmIdleTimer, armPayload)
+	c = b.decision()
+	timerID, startedID := b.timerStarted(c)
+
+	// A repeat sweep while the clock is armed adds no command.
+	b.signal(SignalArmIdleTimer, rearmPayload)
+	b.decision()
+
+	b.timerFired(timerID, startedID)
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{}) // expired, pre-change: no status_change event
+	b.workflowCompleted()
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+	err = replayer.ReplayWorkflowHistory(nil, b.build())
+	require.NoError(t, err, "a pre-change awaiting_input history must replay with the sweep's clock armed and expire without a non-determinism error")
 }

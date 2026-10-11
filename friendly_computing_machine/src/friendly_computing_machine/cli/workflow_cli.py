@@ -135,7 +135,7 @@ def cli_run(
 def cli_brain_trigger(
     ctx: typer.Context,
     persona_id: int,
-    job_kind: Annotated[str, typer.Argument(help="harvest, reflect, write, or snapshot")],
+    job_kind: Annotated[str, typer.Argument(help="harvest, reflect, write, snapshot, or idea_generate")],
 ):
     """Run one Shitposter brain job now, through the same per-persona lock as scheduled runs."""
 
