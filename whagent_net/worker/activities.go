@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -99,6 +100,9 @@ type Activities struct {
 	// that fallback -- resolveCost only dereferences it when the provider
 	// omitted cost, see resolveCost's doc comment.
 	Prices *llm.PriceTable
+	// DefaultIdleTimeout is the platform idle timeout (WHAGENT_DEFAULT_IDLE_TIMEOUT,
+	// ENV.md) ResolveIdleTimeout falls back to. Zero means session.DefaultIdleTimeout.
+	DefaultIdleTimeout time.Duration
 	// Dispatcher routes a turn's model-requested tool calls to their
 	// target domain-owned MCP server (issue #2118, ARCHITECTURE.md
 	// "Domain-owned MCP servers and the tool contract"). Constructed in

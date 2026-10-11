@@ -130,7 +130,12 @@ func run() error {
 	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(SessionWorkflow)
 
-	acts := &Activities{Store: store, LLM: llmClient, Prices: prices, Dispatcher: dispatcher, S3: s3Client}
+	defaultIdle, err := parseDefaultIdleTimeout(os.Getenv("WHAGENT_DEFAULT_IDLE_TIMEOUT"))
+	if err != nil {
+		return err
+	}
+
+	acts := &Activities{Store: store, LLM: llmClient, Prices: prices, Dispatcher: dispatcher, S3: s3Client, DefaultIdleTimeout: defaultIdle}
 	w.RegisterActivityWithOptions(acts.ResolveAgentDefinition, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
 	w.RegisterActivityWithOptions(acts.BuildContext, activity.RegisterOptions{Name: ActivityBuildContext})
 	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
@@ -316,4 +321,17 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseDefaultIdleTimeout reads WHAGENT_DEFAULT_IDLE_TIMEOUT; unset means
+// session.DefaultIdleTimeout. An invalid value is a startup failure.
+func parseDefaultIdleTimeout(raw string) (time.Duration, error) {
+	if raw == "" {
+		return session.DefaultIdleTimeout, nil
+	}
+	d, err := session.ParseIdleTimeout("WHAGENT_DEFAULT_IDLE_TIMEOUT", raw)
+	if err != nil {
+		return 0, fmt.Errorf("parse WHAGENT_DEFAULT_IDLE_TIMEOUT: %w", err)
+	}
+	return d, nil
 }
