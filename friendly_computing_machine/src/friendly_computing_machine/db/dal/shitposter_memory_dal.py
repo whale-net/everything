@@ -7,6 +7,7 @@ or the new row for an add).
 """
 
 import datetime
+import uuid
 from typing import Optional
 
 from sqlalchemy import func, or_
@@ -21,6 +22,9 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterReflectorRun,
     ShitposterSuggestion,
     ShitposterSuggestionBacker,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_context import (
+    ShitposterSnapshotItem,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
     ShitposterAttributeStatusEnum,
@@ -817,6 +821,32 @@ def active_lore(
                 .order_by(ShitposterLoreEntry.id)
             ).all()
         )
+
+
+def _supersede_lore(
+    session: Session,
+    current: ShitposterLoreEntry,
+    *,
+    now: datetime.datetime,
+    text: Optional[str] = None,
+    popularity_score: Optional[int] = None,
+) -> ShitposterLoreEntry:
+    """Close the current lore row and open its successor under the same lore_key."""
+    raise NotImplementedError
+
+
+def revisions_for_key(
+    persona_id: int, lore_key: uuid.UUID, session: Optional[Session] = None
+) -> list[ShitposterLoreEntry]:
+    """Every revision of one logical lore entry, oldest first."""
+    raise NotImplementedError
+
+
+def snapshot_items_for_key(
+    lore_key: uuid.UUID, session: Optional[Session] = None
+) -> list[ShitposterSnapshotItem]:
+    """Snapshot lore items that included any revision sharing lore_key."""
+    raise NotImplementedError
 
 
 def change_history(
