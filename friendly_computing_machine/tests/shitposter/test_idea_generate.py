@@ -148,7 +148,8 @@ def test_theme_below_target_emits_theme_entry(engine, persona_id, monkeypatch):
 
     assert outcome.status == "succeeded"
     assert payload["theme"] == {"share": 0.0, "target": 0.15}
-    assert payload["novel"]["gate"] == "not_implemented"
+    assert payload["novel"]["gate"]["open"] is False
+    assert payload["novel"]["gate"]["reason"] == "no_engagement_in_window"
     themes = _themes(engine, persona_id)
     assert [t.text for t in themes] == ["Fixated on breakfast foods"]
     entry = outcome.details["entries"][0]
@@ -322,5 +323,7 @@ def test_agent_receives_operator_retired_memory(engine, persona_id, monkeypatch)
 
 def test_reply_without_entries_list_fails_the_run(engine, persona_id, monkeypatch):
     monkeypatch.setattr(idea_generate, "_call_theme_agent", lambda *_: "no json here")
-    with pytest.raises(ValueError):
-        idea_generate._compute(BrainJobInput(persona_id=persona_id, job_kind="idea_generate"))
+    _, outcome = _run(engine, persona_id)
+    assert outcome.status == "failed"
+    assert "ValueError" in outcome.error
+    assert _themes(engine, persona_id) == []
