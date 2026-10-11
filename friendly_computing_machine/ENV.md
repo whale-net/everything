@@ -100,6 +100,9 @@ Scheduled shitposts run as the FCM service subject with no `on_behalf_of`; whage
 | `FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS` | no | Hours between scheduled idea-generator runs (default `24`, daily). `off` stops scheduled runs; on-demand runs still work. Any other non-positive-integer value uses the default with a warning. |
 | `FCM_SHITPOSTER_THEME_TARGET_WEIGHT` | no | Target share (0, 1] of theme lore among active lore; the idea-generator emits theme entries only while their share is below it (default `0.15`). Invalid values use the default with a warning. Read per idea-generator run. |
 | `FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT` | no | Target share (0, 1] of novel lore among active lore; the idea-generator emits novel entries only while their share is below it (default `0.10`). Invalid values use the default with a warning. Read per idea-generator run. |
+| `FCM_SHITPOSTER_NOVEL_GATE_RECENT_DAYS` | no | Recent window, in days, of the novel gate: the mean popularity of posts whose engagement finalized in it is compared with the baseline window's (default `7`). Must be a positive integer; otherwise the default is used with a warning. Read per idea-generator run. |
+| `FCM_SHITPOSTER_NOVEL_GATE_BASELINE_DAYS` | no | Baseline window, in days, of the novel gate (default `30`). Must be a positive integer; otherwise the default is used with a warning. Read per idea-generator run. |
+| `FCM_SHITPOSTER_NOVEL_GATE_FRACTION` | no | The novel gate opens only when the recent-window mean popularity is below this fraction (0, 1] of the baseline-window mean (default `0.8`). Either window without finalized engagement keeps the gate closed. Invalid values use the default with a warning. Read per idea-generator run. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 
 Required Keycloak client config (provisioned through normal release/human steps, not by this repo):

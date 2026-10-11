@@ -36,7 +36,11 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
 )
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
     idea_generator_run_cap,
+    load_novel_generator_agent_id,
     load_theme_generator_agent_id,
+    novel_gate_baseline_days,
+    novel_gate_fraction,
+    novel_gate_recent_days,
     novel_target_weight,
     theme_target_weight,
 )
@@ -70,6 +74,10 @@ REASON_INSUFFICIENT_CITATIONS = "insufficient_citations"
 REASON_RUN_CAP = "run_cap"
 
 NOVEL_GATE_NOT_IMPLEMENTED = "not_implemented"
+# Novel gate reasons recorded in the run's novel.gate reading.
+GATE_REASON_OPEN = "engagement_drop"
+GATE_REASON_NO_DROP = "no_engagement_drop"
+GATE_REASON_NO_ENGAGEMENT = "no_engagement_in_window"
 
 THEME = ShitposterLoreKindEnum.THEME.value
 NOVEL = ShitposterLoreKindEnum.NOVEL.value
@@ -110,6 +118,55 @@ def median_hit_popularity(session: Session, persona_id: int) -> int:
     if not scores:
         return 0
     return round(statistics.median(scores))
+
+
+@dataclass(frozen=True)
+class NovelGate:
+    """One run's novel-gate reading; means are None when their window has no finalized engagement."""
+
+    open: bool
+    recent_mean: float | None
+    baseline_mean: float | None
+    fraction: float
+    reason: str
+
+    def as_details(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+def finalized_mean_popularity(
+    session: Session, persona_id: int, since: datetime.datetime
+) -> float | None:
+    """Mean popularity of the persona's posts whose engagement finalized at or after `since`."""
+    raise NotImplementedError
+
+
+def read_novel_gate(
+    session: Session, persona_id: int, now: datetime.datetime
+) -> NovelGate:
+    """Open only when the recent-window mean is below fraction x the baseline-window mean."""
+    raise NotImplementedError
+
+
+def _novel_prompt(
+    active: list[dict[str, Any]], retired: list[dict[str, Any]], max_entries: int
+) -> str:
+    raise NotImplementedError
+
+
+def _call_novel_agent(
+    active: list[dict[str, Any]], retired: list[dict[str, Any]], max_entries: int
+) -> str:
+    raise NotImplementedError
+
+
+def _validate_novel(
+    raw_entries: list[Any],
+    member_names: list[str],
+    retired: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Accepted novel entries and rejections ({kind, text, reason}); no citation requirement."""
+    raise NotImplementedError
 
 
 def _theme_prompt(
