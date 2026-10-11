@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -81,6 +83,26 @@ type ModelDefinitionConfig struct {
 // with whatever ToolSet is configured below, just without a cross-domain
 // grant key derived or checked.
 //
+// ValidateIdleTimeout checks a Go duration string the way session.ParseIdleTimeout
+// does (positive, whole seconds, fits the stored INT column); config does not
+// import session, so the rule is repeated here. field names the input in errors.
+func ValidateIdleTimeout(field, raw string) error {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("%s must be a Go duration string such as \"24h\": got %q", field, raw)
+	}
+	if d <= 0 {
+		return fmt.Errorf("%s must be > 0: got %q", field, raw)
+	}
+	if d%time.Second != 0 {
+		return fmt.Errorf("%s must be a whole number of seconds: got %q", field, raw)
+	}
+	if d/time.Second > math.MaxInt32 {
+		return fmt.Errorf("%s is too large: got %q", field, raw)
+	}
+	return nil
+}
+
 // maxCostUSDCeiling mirrors session.MaxCostUSDCeiling; config does not import session.
 const maxCostUSDCeiling = 10.0
 
@@ -98,6 +120,10 @@ type AgentDefinitionConfig struct {
 	ToolSet         []ToolServerRefConfig `yaml:"tool_set"`
 	MaxTurns        int                   `yaml:"max_turns"`
 	MaxCostUSD      float64               `yaml:"max_cost_usd"`
+	// IdleTimeout is a Go duration string (e.g. "24h") decoding into
+	// session.AgentDefinition.IdleTimeoutSeconds. Empty means the platform
+	// default applies; Validate rejects unparseable, zero, or negative values.
+	IdleTimeout string `yaml:"idle_timeout,omitempty"`
 	// Tools is the explicit no-tools declaration: "none" means the agent
 	// has no tool_set and Validate accepts that; empty means tool_set must
 	// be non-empty. Any other value, or "none" alongside a tool_set, fails.
@@ -259,6 +285,11 @@ func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig)
 		// Same unset-or-positive rule; the platform ceiling caps the definition value.
 		if a.MaxCostUSD < 0 || a.MaxCostUSD > maxCostUSDCeiling {
 			return fmt.Errorf("agent %q: max_cost_usd must be > 0 (or unset) and <= %g: got %g (ceiling %g)", a.AgentID, maxCostUSDCeiling, a.MaxCostUSD, maxCostUSDCeiling)
+		}
+		if a.IdleTimeout != "" {
+			if err := ValidateIdleTimeout(fmt.Sprintf("agent %q: idle_timeout", a.AgentID), a.IdleTimeout); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

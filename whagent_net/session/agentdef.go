@@ -171,14 +171,14 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `id, agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, created_at, valid_from, valid_to`
+const agentDefinitionColumns = `id, agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, idle_timeout_seconds, created_at, valid_from, valid_to`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
 		&def.ID, &def.AgentID, &def.Scope, &def.Model, &def.ModelDefinitionID, &toolSet,
-		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.ToolLoadingMode, &def.SystemPrompt, &def.CreatedAt, &def.ValidFrom, &def.ValidTo,
+		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.ToolLoadingMode, &def.SystemPrompt, &def.IdleTimeoutSeconds, &def.CreatedAt, &def.ValidFrom, &def.ValidTo,
 	); err != nil {
 		return nil, err
 	}
@@ -264,10 +264,10 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 	}
 
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, idle_timeout_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, valid_from
-	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode, def.SystemPrompt).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
+	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode, def.SystemPrompt, def.IdleTimeoutSeconds).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
 	if err != nil {
 		return fmt.Errorf("insert agent definition: %w", err)
 	}
@@ -351,12 +351,12 @@ func RegisterAgentDefinition(ctx context.Context, q Querier, def *AgentDefinitio
 	}
 
 	err = q.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
-		SELECT $1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, idle_timeout_seconds)
+		SELECT $1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 		WHERE NOT EXISTS (SELECT 1 FROM agent_definition WHERE agent_id = $1::text AND valid_to IS NULL)
 		ON CONFLICT (agent_id) WHERE valid_to IS NULL DO NOTHING
 		RETURNING id, created_at, valid_from
-	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, string(toolLoadingMode), def.SystemPrompt).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
+	`, def.AgentID, def.Scope, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, string(toolLoadingMode), def.SystemPrompt, def.IdleTimeoutSeconds).Scan(&def.ID, &def.CreatedAt, &def.ValidFrom)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
@@ -461,10 +461,10 @@ func (s agentDefinitionStore) Supersede(ctx context.Context, agentID string, new
 	out.ToolLoadingMode = mode
 	out.ValidTo = nil
 	err = tx.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, valid_from)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO agent_definition (agent_id, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, idle_timeout_seconds, valid_from)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, created_at, valid_from
-	`, agentID, out.Scope, out.Model, out.ModelDefinitionID, toolSet, out.MaxTurns, out.MaxCostUSD, out.MaxToolIterations, out.RequiredRole, mode, out.SystemPrompt, now).Scan(&out.ID, &out.CreatedAt, &out.ValidFrom)
+	`, agentID, out.Scope, out.Model, out.ModelDefinitionID, toolSet, out.MaxTurns, out.MaxCostUSD, out.MaxToolIterations, out.RequiredRole, mode, out.SystemPrompt, out.IdleTimeoutSeconds, now).Scan(&out.ID, &out.CreatedAt, &out.ValidFrom)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

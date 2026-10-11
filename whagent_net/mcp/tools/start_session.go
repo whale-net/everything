@@ -16,12 +16,17 @@ import (
 // optional model override checked against the provider catalogue by
 // `api` (FR5) before any session row is written.
 type StartSessionInput struct {
-	AgentID            string   `json:"agent_id" jsonschema:"The agent definition to start a session from"`
-	FirstTurn          string   `json:"first_turn,omitempty" jsonschema:"Optional first turn to send once the session has started; omit to start the session with no turn queued yet"`
-	ModelOverride      string   `json:"model_override,omitempty" jsonschema:"Optional model id overriding the agent definition's default; rejected with FAILED_PRECONDITION if the provider catalogue does not serve it (FR5)"`
-	MaxTurnsOverride   *int32   `json:"max_turns_override,omitempty" jsonschema:"Optional turn cap for this session, overriding the agent definition's max_turns; must be >0"`
-	MaxCostUSDOverride *float64 `json:"max_cost_usd_override,omitempty" jsonschema:"Optional cost cap in USD for this session, overriding the agent definition's max_cost_usd; must be >0 and <=10"`
-	PinnedContext      string   `json:"pinned_context,omitempty" jsonschema:"Optional system-level context shown to the model on every turn after the agent definition prompt; max 32,000 UTF-8 bytes (bytes, not characters) and must be valid UTF-8; immutable for the session; never a transcript event. The text stays in the calling parent's own transcript as this tool argument."`
+	AgentID             string   `json:"agent_id" jsonschema:"The agent definition to start a session from"`
+	FirstTurn           string   `json:"first_turn,omitempty" jsonschema:"Optional first turn to send once the session has started; omit to start the session with no turn queued yet"`
+	ModelOverride       string   `json:"model_override,omitempty" jsonschema:"Optional model id overriding the agent definition's default; rejected with FAILED_PRECONDITION if the provider catalogue does not serve it (FR5)"`
+	MaxTurnsOverride    *int32   `json:"max_turns_override,omitempty" jsonschema:"Optional turn cap for this session, overriding the agent definition's max_turns; must be >0"`
+	MaxCostUSDOverride  *float64 `json:"max_cost_usd_override,omitempty" jsonschema:"Optional cost cap in USD for this session, overriding the agent definition's max_cost_usd; must be >0 and <=10"`
+	PinnedContext       string   `json:"pinned_context,omitempty" jsonschema:"Optional system-level context shown to the model on every turn after the agent definition prompt; max 32,000 UTF-8 bytes (bytes, not characters) and must be valid UTF-8; immutable for the session; never a transcript event. The text stays in the calling parent's own transcript as this tool argument."`
+	AgentID             string   `json:"agent_id" jsonschema:"The agent definition to start a session from"`
+	FirstTurn           string   `json:"first_turn,omitempty" jsonschema:"Optional first turn to send once the session has started; omit to start the session with no turn queued yet"`
+	ModelOverride       string   `json:"model_override,omitempty" jsonschema:"Optional model id overriding the agent definition's default; rejected with FAILED_PRECONDITION if the provider catalogue does not serve it (FR5)"`
+	IdleTimeoutOverride string   `json:"idle_timeout_override,omitempty" jsonschema:"Optional idle timeout for this session only, as a Go duration string such as \"24h\" (positive, whole seconds); overrides the agent definition's idle timeout. Rejected with INVALID_ARGUMENT naming the field and value when invalid"`
+	PinnedContext       string   `json:"pinned_context,omitempty" jsonschema:"Optional system-level context shown to the model on every turn after the agent definition prompt; max 32,000 UTF-8 bytes (bytes, not characters) and must be valid UTF-8; immutable for the session; never a transcript event. The text stays in the calling parent's own transcript as this tool argument."`
 }
 
 // StartSessionOutput is start_session's structured result: the started
@@ -92,6 +97,9 @@ func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, i
 	// its InvalidArgument message names the field, value and ceiling.
 	startReq.MaxTurnsOverride = in.MaxTurnsOverride
 	startReq.MaxCostUsdOverride = in.MaxCostUSDOverride
+	if in.IdleTimeoutOverride != "" {
+		startReq.IdleTimeoutOverride = &in.IdleTimeoutOverride
+	}
 
 	startResp, err := t.client.StartSession(ctx, startReq)
 	if err != nil {
