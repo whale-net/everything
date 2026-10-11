@@ -47,12 +47,12 @@ logger = logging.getLogger(__name__)
 OPERATOR_USAGE = (
     "Usage: `/shitpost admin history [n]`, `/shitpost admin runs [n]`, "
     "`/shitpost admin lore [hit|consolidated|theme|novel] [n]`, "
-    "`/shitpost admin ideas [n]`, "
+    "`/shitpost admin ideas [n]`, `/shitpost admin weights [n]`, "
     "`/shitpost admin retire <attribute|lore> <id>`, "
     "`/shitpost admin snapshot <post permalink>`"
 )
 OPERATOR_SUBCOMMANDS = frozenset(
-    {"history", "runs", "lore", "ideas", "retire", "snapshot"}
+    {"history", "runs", "lore", "ideas", "weights", "retire", "snapshot"}
 )
 LORE_SOURCES = tuple(k.value for k in ShitposterLoreKindEnum)
 NOT_ADMIN = "Only Shitposter admins can run admin commands."
@@ -141,7 +141,7 @@ def handle_operator_command(
             return NO_PERSONA
         return render_lore(persona_id, source, limit)
 
-    if sub == "ideas":
+    if sub in ("ideas", "weights"):
         try:
             limit = _parse_limit(args)
         except ValueError:
@@ -149,7 +149,9 @@ def handle_operator_command(
         persona_id = _default_persona_id()
         if persona_id is None:
             return NO_PERSONA
-        return render_idea_runs(persona_id, limit)
+        if sub == "ideas":
+            return render_idea_runs(persona_id, limit)
+        return render_weight_history(persona_id, limit)
 
     if sub == "retire":
         if len(args) != 2 or args[0].lower() not in (
@@ -422,7 +424,14 @@ def _idea_run_reason(run: ShitposterBrainJobRun, details: dict) -> str:
         return run.error or "no error recorded"
     entries = details.get("entries") or []
     if status == ShitposterBrainJobStatus.SUCCEEDED.value:
-        return f"wrote {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
+        reason = f"wrote {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
+        stepped = [
+            w for w in details.get("weight_changes") or []
+            if isinstance(w, dict) and "new" in w
+        ]
+        if stepped:
+            reason += f", stepped {len(stepped)} weight{'' if len(stepped) == 1 else 's'}"
+        return reason
     if status == ShitposterBrainJobStatus.NO_OP.value:
         rejections = details.get("rejections") or []
         if rejections:
@@ -466,6 +475,40 @@ def render_idea_runs(persona_id: int, limit: int, offset: int = 0) -> str:
         f"Idea-generator runs {offset + 1}-{offset + len(rows)} of {total}, newest first."
     )
     return "\n".join([header, *(_render_idea_run(r) for r in rows)])
+
+
+def _render_weight_cause(cause) -> str:
+    if not isinstance(cause, dict) or not cause:
+        return "no cause recorded"
+    if "with_mean" in cause:
+        return (
+            f"with lore mean {cause.get('with_mean')} (n {cause.get('with_n')}) vs "
+            f"without mean {cause.get('without_mean')} (n {cause.get('without_n')}) "
+            f"over {cause.get('days_compared')} days"
+        )
+    return _render_generic_row(cause)
+
+
+def _render_weight_revision(row) -> str:
+    run = f" · run #{row.brain_job_run_id}" if row.brain_job_run_id else ""
+    state = "current" if row.valid_to is None else f"until {_when(row.valid_to)}"
+    return (
+        f"#{row.id} {row.source} {_pct(float(row.weight))} · since {_when(row.valid_from)} "
+        f"({state}){run}\n  cause: {_render_weight_cause(row.cause)}"
+    )
+
+
+def render_weight_history(persona_id: int, limit: int, offset: int = 0) -> str:
+    """Theme/novel weight revisions with their causes, newest first."""
+    rows = list(reversed(weight_dal.list_weight_history(persona_id)))
+    total = len(rows)
+    page = rows[offset : offset + limit]
+    if not page:
+        return f"No weight revisions at offset {offset} ({total} total)."
+    header = (
+        f"Weight revisions {offset + 1}-{offset + len(page)} of {total}, newest first."
+    )
+    return "\n".join([header, *(_render_weight_revision(r) for r in page)])
 
 
 def retire_entry(
@@ -566,3 +609,12 @@ def page_idea_runs(page: int, page_size: int) -> str:
         return NO_PERSONA
     size = max(1, min(page_size, MAX_PAGE_SIZE))
     return render_idea_runs(persona_id, size, (max(page, 1) - 1) * size)
+
+
+def page_weight_history(page: int, page_size: int) -> str:
+    """CLI paging: 1-based page over the persona's source-weight revisions."""
+    persona_id = _default_persona_id()
+    if persona_id is None:
+        return NO_PERSONA
+    size = max(1, min(page_size, MAX_PAGE_SIZE))
+    return render_weight_history(persona_id, size, (max(page, 1) - 1) * size)

@@ -106,6 +106,9 @@ Scheduled shitposts run as the FCM service subject with no `on_behalf_of`; whage
 | `FCM_SHITPOSTER_NOVEL_GATE_RECENT_DAYS` | no | Recent window, in days, of the novel gate: the mean popularity of posts whose engagement finalized in it is compared with the baseline window's (default `7`). Must be a positive integer; otherwise the default is used with a warning. Read per idea-generator run. |
 | `FCM_SHITPOSTER_NOVEL_GATE_BASELINE_DAYS` | no | Baseline window, in days, of the novel gate (default `30`). Must be a positive integer; otherwise the default is used with a warning. Read per idea-generator run. |
 | `FCM_SHITPOSTER_NOVEL_GATE_FRACTION` | no | The novel gate opens only when the recent-window mean popularity is below this fraction (0, 1] of the baseline-window mean (default `0.8`). Either window without finalized engagement keeps the gate closed. Invalid values use the default with a warning. Read per idea-generator run. |
+| `FCM_SHITPOSTER_WEIGHT_STEP` | no | How far one idea-generator run moves the theme or novel target weight, as a fraction (0, 1] (default `0.01`, one percentage point). Invalid values use the default with a warning. |
+| `FCM_SHITPOSTER_WEIGHT_WINDOW_DAYS` | no | Trailing window, in days, over which posts with and without a source's lore are compared to adapt its weight (default `30`). Only days with both kinds of post count. Must be a positive integer; otherwise the default is used with a warning. |
+| `FCM_SHITPOSTER_WEIGHT_MIN_POSTS` | no | Posts each group (with / without the source's lore) needs before that source's weight moves (default `10`); below it the weight is unchanged. Must be a positive integer; otherwise the default is used with a warning. |
 | `FCM_WEB_PORT` | no | Port the app listens on (default `8000`). |
 
 Required Keycloak client config (provisioned through normal release/human steps, not by this repo):

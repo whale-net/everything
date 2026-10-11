@@ -161,7 +161,12 @@ def test_theme_below_target_emits_theme_entry(engine, persona_id, monkeypatch):
     entry = outcome.details["entries"][0]
     assert entry["lore_id"] == themes[0].id and entry["kind"] == "theme"
     assert entry["cited"] == [a, b] and entry["agent_id"]
-    assert outcome.details["refreshes"] == [] and outcome.details["weight_changes"] == []
+    assert outcome.details["refreshes"] == []
+    # no finalized posts, so neither weight moves
+    assert outcome.details["weight_changes"] == [
+        {"source": "theme", "unchanged_reason": "below_minimum"},
+        {"source": "novel", "unchanged_reason": "below_minimum"},
+    ]
 
     with Session(engine) as s:
         change = s.exec(

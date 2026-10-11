@@ -1,6 +1,9 @@
 """Idea-generator brain job: keep generated lore near its standing-pool target.
 
-Compute reads the persona's active lore, compares each generated kind's share
+Compute first steps the theme/novel target weights from how posts with each
+source's lore performed (source_weights), so the stepped weights drive this
+run's targeting; apply writes those weight revisions only when the run does not
+fail. Compute then reads the persona's active lore, compares each generated kind's share
 against its target weight, and asks that kind's agent for proposals only when
 the share is below target; novel is asked only while the novel gate reads a
 relative engagement drop. Each proposal is validated (citations, guardrails)
@@ -54,6 +57,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
     guardrails,
+    source_weights,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.base import (
     ApplyOutcome,
@@ -389,15 +393,24 @@ def _enforce_run_cap(
 def _compute(params: BrainJobInput) -> dict[str, Any]:
     persona_id = params.persona_id
     cap = idea_generator_run_cap()
-    weights = current_weights(persona_id)
+    seeded = current_weights(persona_id)
+    now = datetime.datetime.now(datetime.timezone.utc)
     with SessionManager() as session:
+        weight_decisions = [
+            d.as_payload()
+            for d in source_weights.compute_weight_changes(session, persona_id, now)
+        ]
         active_rows = shitposter_memory_dal.active_lore(persona_id, session=session)
         retired = guardrails.operator_retired_attributes(
             session, persona_id
         ) + guardrails.operator_retired_lore(session, persona_id)
         # read before any agent call so a failed run still records it
-        gate = read_novel_gate(session, persona_id, datetime.datetime.now(datetime.timezone.utc))
+        gate = read_novel_gate(session, persona_id, now)
     member_names = _member_names()
+    stepped = source_weights.effective_weights(weight_decisions)
+    weights = TargetWeights(
+        theme=stepped.get(THEME, seeded.theme), novel=stepped.get(NOVEL, seeded.novel)
+    )
 
     # the session is closed before any agent call so no transaction spans it
     ctx = {
@@ -433,6 +446,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
             NOVEL: readings[NOVEL],
             "proposals": [],
             "rejections": rejections,
+            "weight_decisions": weight_decisions,
             "error": f"{type(e).__name__}: {e}",
         }
     accepted = _enforce_run_cap(accepted, rejections, cap)
@@ -449,6 +463,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         NOVEL: readings[NOVEL],
         "proposals": accepted,
         "rejections": rejections,
+        "weight_decisions": weight_decisions,
     }
 
 
@@ -467,6 +482,7 @@ def _novel_cause_ref(gate: dict[str, Any]) -> str:
 def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutcome:
     persona_id = payload["persona_id"]
     if payload.get("error"):
+        # a failed run writes no weight revisions
         details = {
             THEME: payload[THEME],
             NOVEL: payload[NOVEL],
@@ -518,6 +534,9 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
             {"lore_id": row.id, "kind": p["kind"], "agent_id": p["agent_id"], "cited": cited}
         )
     session.flush()
+    weight_changes = source_weights.apply_weight_changes(
+        session, persona_id, run_id, payload.get("weight_decisions") or []
+    )
 
     details = {
         THEME: payload[THEME],
@@ -525,9 +544,14 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         "entries": entries,
         "rejections": rejections,
         "refreshes": [],
-        "weight_changes": [],
+        "weight_changes": weight_changes,
     }
-    status = ShitposterBrainJobStatus.SUCCEEDED if entries else ShitposterBrainJobStatus.NO_OP
+    stepped = any("new" in w for w in weight_changes)
+    status = (
+        ShitposterBrainJobStatus.SUCCEEDED
+        if entries or stepped
+        else ShitposterBrainJobStatus.NO_OP
+    )
     logger.info(
         "idea_generate applied run=%s status=%s entries=%d rejected=%d",
         run_id,

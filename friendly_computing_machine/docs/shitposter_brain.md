@@ -23,6 +23,7 @@ snapshot text are visible only to the caller.
 | `/shitpost admin runs [n]` | Reflector runs with rejection count and reasons |
 | `/shitpost admin lore [hit\|consolidated\|theme\|novel] [n]` | Active lore with each entry's source, optionally one source only |
 | `/shitpost admin ideas [n]` | Idea-generator runs: status, shares, gate, entries, rejections |
+| `/shitpost admin weights [n]` | Theme/novel target-weight revisions with their causes |
 | `/shitpost admin retire <attribute\|lore> <id>` | Retires a current entry, cause = operator |
 | `/shitpost admin snapshot <post permalink>` | Snapshot the post was written from |
 
@@ -33,6 +34,7 @@ fcm tools shitposter history --page 2 --page-size 20
 fcm tools shitposter runs --page 1 --page-size 50
 fcm tools shitposter lore --source theme --page 1
 fcm tools shitposter ideas --page 1 --page-size 10
+fcm tools shitposter weights --page 1
 ```
 
 `--page` is 1-based; `--page-size` is 1-100. The header line reports the
@@ -105,9 +107,30 @@ runs are not listed). Each run shows:
 - theme and novel share against target (`n/a (empty pool)` with no active lore).
 - the novel gate, open or closed. A gate not yet implemented reads as closed.
 - each entry written with its agent and cited lore, and each rejection with its reason.
-- popularity refreshes and weight changes, `none` when empty.
+- popularity refreshes and weight changes, `none` when empty. A weight change
+  shows `source, old, new, with_mean, without_mean`; a source left alone shows
+  its `unchanged_reason` (`below_minimum`, `equal_means`, `bound`, `ceiling`,
+  `superseded`).
 
-A failed run keeps whatever readings were computed before it failed.
+A failed run keeps whatever readings were computed before it failed, and
+writes no weight changes.
+
+## Reading source weights
+
+Each idea-generator run first steps the theme and novel target weights, so the
+new weights drive that run. Per source, finalized posts written in the trailing
+window (`FCM_SHITPOSTER_WEIGHT_WINDOW_DAYS`) are split by whether their context
+snapshot held that source's lore; only days with both kinds of post count. The
+weight moves one step (`FCM_SHITPOSTER_WEIGHT_STEP`) toward the better-performing
+group, clamped to its bounds, when each group has at least
+`FCM_SHITPOSTER_WEIGHT_MIN_POSTS` posts. A step that would push theme + novel
+over the combined ceiling is not applied; when both would rise and only one
+fits, the weight further below its own upper bound steps.
+
+`/shitpost admin weights [n]` lists every weight revision, newest first, with
+its run and cause: the compared means, post counts and days compared, or
+`initial`/`fallback` for the seeded starting weights. `/shitpost admin lore`
+shows the current weights, bounds and ceiling.
 
 ## Triggering jobs
 
