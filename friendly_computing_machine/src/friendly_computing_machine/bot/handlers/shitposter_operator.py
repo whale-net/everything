@@ -227,6 +227,11 @@ def _describe_novel_gate(change: ShitposterMemoryChange) -> str:
     )
 
 
+def _describe_refresh(change: ShitposterMemoryChange) -> str:
+    """'refresh: mean of posts #a, #b' from the contributing post refs."""
+    raise NotImplementedError
+
+
 def describe_cause(change: ShitposterMemoryChange) -> ChangeCause:
     """Join memory_change to engagement rows or suggestion backers; never empty."""
     kind = change.cause_kind

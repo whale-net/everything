@@ -897,6 +897,26 @@ def snapshot_items_for_key(
         )
 
 
+def first_valid_from_by_key(
+    session: Session, persona_id: int, lore_keys: list[uuid.UUID]
+) -> dict[uuid.UUID, datetime.datetime]:
+    """Each lore_key's first revision valid_from, so recency survives a refresh."""
+    raise NotImplementedError
+
+
+def refresh_lore_popularity(
+    session: Session,
+    lore_id: int,
+    *,
+    popularity_score: int,
+    post_ids: list[int],
+    now: datetime.datetime,
+) -> tuple[ShitposterLoreEntry, ShitposterMemoryChange]:
+    """Open a new revision of lore_id (same lore_key) carrying the earned popularity,
+    logging a refresh whose cause names the contributing posts. Caller commits."""
+    raise NotImplementedError
+
+
 def change_history(
     persona_id: int, session: Optional[Session] = None
 ) -> list[ShitposterMemoryChange]:
