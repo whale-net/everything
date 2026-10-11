@@ -6,8 +6,8 @@ append-only and every row names at least one cause.
 
 import datetime
 import json
-from dataclasses import dataclass
 import uuid
+from dataclasses import dataclass
 from enum import Enum
 
 from sqlalchemy import CheckConstraint, Column, DateTime, Index, Uuid, func, text
