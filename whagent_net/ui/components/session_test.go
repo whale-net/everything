@@ -57,13 +57,36 @@ func TestStateBadge_AwaitingInputNoSpinner(t *testing.T) {
 // state: a session with no running SessionWorkflow left (isTerminalSessionState's
 // doc comment) must never show a live-activity spinner.
 func TestStateBadge_TerminalStatesNoSpinner(t *testing.T) {
-	for _, state := range []string{"done", "stopped", "capped", "failed"} {
+	for _, state := range []string{"done", "stopped", "capped", "failed", "expired"} {
 		t.Run(state, func(t *testing.T) {
 			body := renderStateBadge(t, state)
 			if strings.Contains(body, loadingSpinnerMarker) {
 				t.Errorf("expected %s state to render no spinner, got %q", state, body)
 			}
 		})
+	}
+}
+
+// TestIsTerminalSessionState_ExpiredIsTerminal proves an expired session
+// has its composer and stop control omitted like every other terminal state.
+func TestIsTerminalSessionState_ExpiredIsTerminal(t *testing.T) {
+	if !isTerminalSessionState("expired") {
+		t.Errorf("expected expired to be terminal")
+	}
+	if isTerminalSessionState("awaiting_input") {
+		t.Errorf("expected awaiting_input to be non-terminal")
+	}
+}
+
+// TestStateBadge_ExpiredLabelReadsExpired proves the badge text is the
+// lowercase "expired" state label, never "archived".
+func TestStateBadge_ExpiredLabelReadsExpired(t *testing.T) {
+	body := renderStateBadge(t, "expired")
+	if !strings.Contains(body, "expired") {
+		t.Errorf("expected badge label expired, got %q", body)
+	}
+	if strings.Contains(body, "archived") {
+		t.Errorf("expected no archived label, got %q", body)
 	}
 }
 

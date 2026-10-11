@@ -80,9 +80,9 @@ func TestSessionTranscriptState_WatermarkTracksHighestSeqOnly(t *testing.T) {
 // --- sessionEventTopics (FR3) -------------------------------------------
 
 // TestSessionEventTopics_IncludesStatusChangeTopics proves FR3: for a
-// session with no seed events, sessionEventTopics includes all four
+// session with no seed events, sessionEventTopics includes all five
 // events.StatusChangeEventType(<status>) routing keys (running/
-// awaiting_input/done/stopped) alongside the four pre-existing
+// awaiting_input/done/stopped/expired) alongside the four pre-existing
 // session-lifecycle topics.
 func TestSessionEventTopics_IncludesStatusChangeTopics(t *testing.T) {
 	sessionID := uuid.New()
@@ -98,6 +98,7 @@ func TestSessionEventTopics_IncludesStatusChangeTopics(t *testing.T) {
 		events.RoutingKey(sessionID, events.StatusChangeEventType("awaiting_input")),
 		events.RoutingKey(sessionID, events.StatusChangeEventType("done")),
 		events.RoutingKey(sessionID, events.StatusChangeEventType("stopped")),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("expired")),
 	}
 	for _, topic := range want {
 		require.Contains(t, topics, topic)
