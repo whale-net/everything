@@ -9,6 +9,9 @@ import (
 	"github.com/whale-net/everything/whagent_net/session"
 )
 
+// idleSweepPageSize bounds each awaiting_input List page the sweep reads.
+const idleSweepPageSize = 100
+
 // IdleSweepSessionLister lists sessions for the pre-deploy sweep. The sweep
 // filters by State == awaiting_input and pages until exhausted.
 type IdleSweepSessionLister interface {
