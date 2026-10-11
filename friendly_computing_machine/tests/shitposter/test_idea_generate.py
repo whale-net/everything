@@ -15,6 +15,9 @@ from friendly_computing_machine.src.friendly_computing_machine.db import util as
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     shitposter_memory_dal as dal,
 )
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+    shitposter_weight_dal,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
 from friendly_computing_machine.src.friendly_computing_machine.models.shitposter import (
     ShitposterChannelOptIn,
@@ -28,6 +31,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterLoreEntry,
     ShitposterMemoryChange,
     ShitposterPersonaAttribute,
+    ShitposterSourceWeight,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
@@ -54,6 +58,7 @@ TABLES = [
     ShitposterPersonaAttribute.__table__,
     ShitposterLoreEntry.__table__,
     ShitposterMemoryChange.__table__,
+    ShitposterSourceWeight.__table__,
 ]
 
 
@@ -624,3 +629,35 @@ def test_failed_run_after_gate_keeps_gate_reading(
     assert gate["fraction"] == pytest.approx(0.8)
     assert outcome.details["entries"] == []
     assert _novels(engine, persona_id) == []
+
+
+def test_first_run_seeds_and_uses_starting_weights(engine, persona_id, monkeypatch):
+    _hits(engine, persona_id, 2)
+    _agent(monkeypatch, [])
+    payload, _ = _run(engine, persona_id)
+    assert payload["theme"]["target"] == pytest.approx(0.15)
+    current = shitposter_weight_dal.get_current_weights(persona_id)
+    assert float(current["theme"].weight) == pytest.approx(0.15)
+    assert float(current["novel"].weight) == pytest.approx(0.10)
+
+
+def test_generator_targets_the_stored_weight_not_the_env(engine, persona_id, monkeypatch):
+    shitposter_weight_dal.get_current_weights(persona_id)
+    with Session(engine) as s:
+        shitposter_weight_dal.revise_weight(s, persona_id, "theme", 0.25, {"test": True})
+        s.commit()
+    # the starting-weight env no longer applies once weights are stored
+    monkeypatch.setenv("FCM_SHITPOSTER_THEME_TARGET_WEIGHT", "0.05")
+    _hits(engine, persona_id, 17)
+    for i in range(3):  # share 0.15: at the 0.15 default, below the stored 0.25
+        _lore(engine, persona_id, "theme", f"theme {i}")
+    calls: list = []
+    _agent(monkeypatch, [], calls)
+
+    payload, _ = _run(engine, persona_id)
+
+    assert payload["theme"]["target"] == pytest.approx(0.25)
+    assert len(calls) == 1
+    assert idea_generate.current_weights(persona_id) == idea_generate.TargetWeights(
+        theme=pytest.approx(0.25), novel=pytest.approx(0.10)
+    )

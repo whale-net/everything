@@ -23,6 +23,7 @@ from temporalio.client import Client
 
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     shitposter_memory_dal,
+    shitposter_weight_dal,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
@@ -46,8 +47,6 @@ from friendly_computing_machine.src.friendly_computing_machine.shitposter_config
     novel_gate_baseline_days,
     novel_gate_fraction,
     novel_gate_recent_days,
-    novel_target_weight,
-    theme_target_weight,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter.activity import (
     _member_names,
@@ -100,9 +99,10 @@ class TargetWeights:
     novel: float
 
 
-def current_weights(session: Session, persona_id: int) -> TargetWeights:
-    """Target share per generated kind; the single seam stored weights replace."""
-    return TargetWeights(theme=theme_target_weight(), novel=novel_target_weight())
+def current_weights(persona_id: int) -> TargetWeights:
+    """Stored target share per generated kind; the first read seeds and commits the starting weights."""
+    rows = shitposter_weight_dal.get_current_weights(persona_id)
+    return TargetWeights(theme=float(rows[THEME].weight), novel=float(rows[NOVEL].weight))
 
 
 def pool_shares(active_kinds: list[str]) -> dict[str, float | None]:
@@ -389,9 +389,9 @@ def _enforce_run_cap(
 def _compute(params: BrainJobInput) -> dict[str, Any]:
     persona_id = params.persona_id
     cap = idea_generator_run_cap()
+    weights = current_weights(persona_id)
     with SessionManager() as session:
         active_rows = shitposter_memory_dal.active_lore(persona_id, session=session)
-        weights = current_weights(session, persona_id)
         retired = guardrails.operator_retired_attributes(
             session, persona_id
         ) + guardrails.operator_retired_lore(session, persona_id)
