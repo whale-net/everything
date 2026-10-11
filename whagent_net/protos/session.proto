@@ -246,6 +246,9 @@ message GetSessionResponse {
   // agent definition's value, else the platform default.
   int32 effective_max_turns = 3;
   double effective_max_cost_usd = 4;
+  // Effective idle timeout as a Go duration string (e.g. "24h"): the session
+  // override, else the definition's, else the platform default.
+  string effective_idle_timeout = 5;
 }
 
 message ListSessionsRequest {
@@ -299,6 +302,8 @@ message StartSessionRequest {
   // Empty is the same as absent. Immutable for the session; never a
   // transcript event.
   optional string pinned_context = 7;
+  // Go duration string (e.g. "24h"); must be > 0 when set, else INVALID_ARGUMENT.
+  optional string idle_timeout_override = 8;
 }
 
 message StartSessionResponse {
@@ -458,6 +463,8 @@ message AgentDefinition {
   google.protobuf.Timestamp valid_from = 13;
   // Unset on the current row.
   google.protobuf.Timestamp valid_to = 14;
+  // Go duration string (e.g. "24h"); unset means the platform default applies.
+  optional string idle_timeout = 15;
 }
 
 message ListAgentsRequest {}
@@ -506,6 +513,8 @@ message UpdateAgentRequest {
   optional string required_role = 9;
   string scope = 10;
   string system_prompt = 11;
+  // Go duration string (e.g. "24h"); unset clears the definition's idle timeout.
+  optional string idle_timeout = 12;
 }
 
 message UpdateAgentResponse {

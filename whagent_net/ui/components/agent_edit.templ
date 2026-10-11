@@ -20,6 +20,8 @@ type AgentFormValues struct {
 	RequiredRole      string
 	Scope             string
 	SystemPrompt      string
+	// IdleTimeout is a Go duration string; blank clears the definition's value.
+	IdleTimeout string
 }
 
 // AgentEditPageData carries the edit page / form fragment parameters.
@@ -84,6 +86,7 @@ templ AgentEditForm(data AgentEditPageData) {
 		<label class="form-control"><span class="label-text">Max turns</span><input type="text" name="max_turns" class="input input-bordered w-full" value={ data.Values.MaxTurns }/></label>
 		<label class="form-control"><span class="label-text">Max cost (USD)</span><input type="text" name="max_cost_usd" class="input input-bordered w-full" value={ data.Values.MaxCostUSD }/></label>
 		<label class="form-control"><span class="label-text">Max tool iterations</span><input type="text" name="max_tool_iterations" class="input input-bordered w-full" value={ data.Values.MaxToolIterations }/></label>
+		<label class="form-control"><span class="label-text">Idle timeout (e.g. 24h; blank = platform default)</span><input type="text" name="idle_timeout" class="input input-bordered w-full" value={ data.Values.IdleTimeout }/></label>
 		<label class="form-control"><span class="label-text">Tool loading mode</span><input type="text" name="tool_loading_mode" class="input input-bordered w-full" value={ data.Values.ToolLoadingMode }/></label>
 		<label class="form-control"><span class="label-text">Required role</span><input type="text" name="required_role" class="input input-bordered w-full" value={ data.Values.RequiredRole }/></label>
 		<label class="form-control"><span class="label-text">Scope</span><input type="text" name="scope" class="input input-bordered w-full" value={ data.Values.Scope }/></label>

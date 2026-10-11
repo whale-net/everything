@@ -33,9 +33,11 @@ import (
 //  6. write the SCD2 `session_agent` assignment row
 //  7. start the Temporal workflow, workflow ID == session ID (LB2)
 //
-// max_turns_override (>=1) and max_cost_usd_override (in (0, $10]) are pinned on
-// the sessions row; an out-of-range value is rejected (InvalidArgument) before
-// any of the steps above run.
+// max_turns_override (>=1), max_cost_usd_override (in (0, $10]) and
+// idle_timeout_override (a positive whole-second Go duration) are pinned on the
+// sessions row; an out-of-range value is rejected (InvalidArgument) before any
+// of the steps above run. The effective idle timeout is resolved once here and
+// carried in the workflow input so it is fixed in workflow history.
 func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
 	agentID := req.GetAgentId()
 	if agentID == "" {
@@ -56,6 +58,16 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		maxCostUSDOverride = &v
+	}
+
+	var idleTimeoutOverride *int32
+	if req.IdleTimeoutOverride != nil {
+		d, err := session.ParseIdleTimeout("idle_timeout_override", req.GetIdleTimeoutOverride())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		secs := session.IdleTimeoutSeconds(d)
+		idleTimeoutOverride = &secs
 	}
 
 	// Empty pinned_context is the same as absent. Validated before any row exists.
@@ -183,22 +195,28 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 		modelOverride = &requested
 	}
 
+	// The effective idle timeout pins the definition version assigned below
+	// (step 6), so it is resolved from the same def this call read.
+	idleTimeoutSeconds := session.IdleTimeoutSeconds(
+		session.EffectiveIdleTimeout(idleTimeoutOverride, *def, s.platformIdleTimeout()))
+
 	// Step 5: insert the `sessions` row. subject_* is always the
 	// authenticated caller; on_behalf_of_* is the subject the session runs
 	// as, which equals the caller unless this was a delegated start.
 	// parent_session_id is always NULL in M1.
 	sessionID := uuid.New()
 	sess := &session.Session{
-		SessionID:          sessionID,
-		Subject:            caller,
-		OnBehalfOf:         onBehalfOf,
-		AgentID:            agentID,
-		Model:              resolvedModel,
-		ModelOverride:      modelOverride,
-		MaxTurnsOverride:   maxTurnsOverride,
-		MaxCostUSDOverride: maxCostUSDOverride,
-		PinnedContext:      pinnedContext,
-		Status:             session.StatusRunning,
+		SessionID:           sessionID,
+		Subject:             caller,
+		OnBehalfOf:          onBehalfOf,
+		AgentID:             agentID,
+		Model:               resolvedModel,
+		ModelOverride:       modelOverride,
+		MaxTurnsOverride:    maxTurnsOverride,
+		MaxCostUSDOverride:  maxCostUSDOverride,
+		IdleTimeoutOverride: idleTimeoutOverride,
+		PinnedContext:       pinnedContext,
+		Status:              session.StatusRunning,
 	}
 	if err := s.store.Sessions().Create(ctx, sess); err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
@@ -235,7 +253,7 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 	if _, err := s.temporalClient.ExecuteWorkflow(ctx, temporalclient.StartWorkflowOptions{
 		ID:        sessionID.String(),
 		TaskQueue: s.taskQueue,
-	}, sessionWorkflowName, sessionWorkflowInput{SessionID: sessionID}); err != nil {
+	}, sessionWorkflowName, sessionWorkflowInput{SessionID: sessionID, IdleTimeoutSeconds: idleTimeoutSeconds}); err != nil {
 		return nil, status.Errorf(codes.Internal, "start session workflow: %v", err)
 	}
 
@@ -250,4 +268,7 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 // identical exported field names, not identical Go types.
 type sessionWorkflowInput struct {
 	SessionID uuid.UUID
+	// IdleTimeoutSeconds is the effective idle timeout resolved at StartSession
+	// (override > pinned definition > platform default).
+	IdleTimeoutSeconds int32
 }

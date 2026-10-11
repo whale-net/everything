@@ -59,6 +59,10 @@ func agentDefToProto(d *session.AgentDefinition) (*pb.AgentDefinition, error) {
 	if d.SystemPrompt != nil {
 		out.SystemPrompt = *d.SystemPrompt
 	}
+	if d.IdleTimeoutSeconds != nil {
+		v := session.FormatIdleTimeout(*d.IdleTimeoutSeconds)
+		out.IdleTimeout = &v
+	}
 	if d.ValidTo != nil {
 		out.ValidTo = timestamppb.New(*d.ValidTo)
 	}
@@ -215,6 +219,15 @@ func (s *SessionServer) validateUpdateAgent(ctx context.Context, req *pb.UpdateA
 	if req.GetSystemPrompt() != "" {
 		sp := req.GetSystemPrompt()
 		def.SystemPrompt = &sp
+	}
+	// Unset clears the definition's idle timeout; set must be a valid duration.
+	if req.IdleTimeout != nil {
+		d, err := session.ParseIdleTimeout("idle_timeout", req.GetIdleTimeout())
+		if err != nil {
+			return nil, bad("%s", err.Error())
+		}
+		secs := session.IdleTimeoutSeconds(d)
+		def.IdleTimeoutSeconds = &secs
 	}
 	return def, nil
 }

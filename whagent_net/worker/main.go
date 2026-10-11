@@ -136,6 +136,7 @@ func run() error {
 	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
 	w.RegisterActivityWithOptions(acts.CommitTurn, activity.RegisterOptions{Name: ActivityCommitTurn})
 	w.RegisterActivityWithOptions(acts.UpdateSessionStatus, activity.RegisterOptions{Name: ActivityUpdateSessionStatus})
+	w.RegisterActivityWithOptions(acts.ResolveIdleTimeout, activity.RegisterOptions{Name: ActivityResolveIdleTimeout})
 	// SumCost/CommitTerminalEvent (issue #2119): registered now so the
 	// worker binary exposes them from Scaffold phase onward, even though
 	// processTurn does not call either yet -- Implementation phase wires
@@ -194,6 +195,17 @@ func run() error {
 	} else {
 		logger.Info("WHAGENT_S3_BUCKET not set; transcript archival schedule disabled")
 	}
+
+	// Pre-deploy idle sweep (idle_sweep.go): signals every awaiting_input
+	// session so runs started before the idle expiry change arm a clock.
+	// Runs on every startup; repeats are no-ops for already-armed clocks.
+	// Signals buffer in Temporal history, so running before the worker
+	// polls is safe.
+	go func() {
+		if _, err := RunIdleSweep(ctx, store.Sessions(), acts, temporalClient, idleSweepPageSize); err != nil && ctx.Err() == nil {
+			logger.Error("idle sweep aborted", "error", err)
+		}
+	}()
 
 	done := make(chan error, 1)
 	go func() {
