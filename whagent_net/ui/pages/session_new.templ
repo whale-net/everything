@@ -19,6 +19,8 @@ type SessionNewData struct {
 	AgentsError   string
 	AgentID       string
 	ModelOverride string
+	MaxTurns      string
+	MaxCostUSD    string
 	Error         string
 }
 
@@ -48,6 +50,14 @@ templ SessionNew(data SessionNewData) {
 			<label class="form-control">
 				<span class="label-text">Model override (optional)</span>
 				<input type="text" name="model_override" value={ data.ModelOverride } class="input input-bordered w-full"/>
+			</label>
+			<label class="form-control">
+				<span class="label-text">Max turns (optional)</span>
+				<input type="text" name="max_turns" value={ data.MaxTurns } class="input input-bordered w-full"/>
+			</label>
+			<label class="form-control">
+				<span class="label-text">Max cost USD (optional)</span>
+				<input type="text" name="max_cost_usd" value={ data.MaxCostUSD } class="input input-bordered w-full"/>
 			</label>
 			<button type="submit" class="btn btn-primary" disabled?={ len(data.Agents) == 0 }>Start session</button>
 		</form>
