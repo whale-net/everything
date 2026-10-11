@@ -83,26 +83,6 @@ type ModelDefinitionConfig struct {
 // with whatever ToolSet is configured below, just without a cross-domain
 // grant key derived or checked.
 //
-// ValidateIdleTimeout checks a Go duration string the way session.ParseIdleTimeout
-// does (positive, whole seconds, fits the stored INT column); config does not
-// import session, so the rule is repeated here. field names the input in errors.
-func ValidateIdleTimeout(field, raw string) error {
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return fmt.Errorf("%s must be a Go duration string such as \"24h\": got %q", field, raw)
-	}
-	if d <= 0 {
-		return fmt.Errorf("%s must be > 0: got %q", field, raw)
-	}
-	if d%time.Second != 0 {
-		return fmt.Errorf("%s must be a whole number of seconds: got %q", field, raw)
-	}
-	if d/time.Second > math.MaxInt32 {
-		return fmt.Errorf("%s is too large: got %q", field, raw)
-	}
-	return nil
-}
-
 // maxCostUSDCeiling mirrors session.MaxCostUSDCeiling; config does not import session.
 const maxCostUSDCeiling = 10.0
 
@@ -199,6 +179,26 @@ func RequiredRoles(agents []AgentDefinitionConfig) []string {
 		roles = append(roles, a.RequiredRole)
 	}
 	return roles
+}
+
+// ValidateIdleTimeout checks a Go duration string the way session.ParseIdleTimeout
+// does (positive, whole seconds, fits the stored INT column); config does not
+// import session, so the rule is repeated here. field names the input in errors.
+func ValidateIdleTimeout(field, raw string) error {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("%s must be a Go duration string such as \"24h\": got %q", field, raw)
+	}
+	if d <= 0 {
+		return fmt.Errorf("%s must be > 0: got %q", field, raw)
+	}
+	if d%time.Second != 0 {
+		return fmt.Errorf("%s must be a whole number of seconds: got %q", field, raw)
+	}
+	if d/time.Second > math.MaxInt32 {
+		return fmt.Errorf("%s is too large: got %q", field, raw)
+	}
+	return nil
 }
 
 // Validate checks the shape-only rules Load can enforce without I/O: a

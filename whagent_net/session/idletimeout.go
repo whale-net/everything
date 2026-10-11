@@ -33,6 +33,9 @@ func ParseIdleTimeout(field, raw string) (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a Go duration string such as \"24h\": supplied %q", field, raw)
 	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be > 0: supplied %q", field, raw)
+	}
 	if err := ValidateIdleTimeout(field, d); err != nil {
 		return 0, err
 	}
