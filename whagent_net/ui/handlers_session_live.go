@@ -48,11 +48,11 @@ import (
 const toolEventTopicHeadroom = 8
 
 // sessionEventTopics computes the htmxsse topic set for sessionID's SSE
-// stream (NFR2/LB7, "topics = this session's routing keys"): the eight
+// stream (NFR2/LB7, "topics = this session's routing keys"): the nine
 // session-lifecycle event types that never carry a call index (the four
-// pre-existing ones plus FR1/FR3's four status_change transitions --
-// running/awaiting_input/done/stopped; capped/failed already cover the
-// other two `sessions.status` terminal values via EventTypeCapped/
+// pre-existing ones plus FR1/FR3's five status_change transitions --
+// running/awaiting_input/done/stopped/expired; capped/failed already cover
+// the other two `sessions.status` terminal values via EventTypeCapped/
 // EventTypeFailure above), plus tool_call/tool_result topics for every
 // call index observed in seed extended by toolEventTopicHeadroom (see
 // that constant's doc comment for why a headroom, not the exact observed
@@ -77,6 +77,7 @@ func sessionEventTopics(sessionID uuid.UUID, seed []components.TranscriptEventVi
 		events.RoutingKey(sessionID, events.StatusChangeEventType("awaiting_input")),
 		events.RoutingKey(sessionID, events.StatusChangeEventType("done")),
 		events.RoutingKey(sessionID, events.StatusChangeEventType("stopped")),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("expired")),
 	}
 	for i := 0; i <= maxCallIndex+toolEventTopicHeadroom; i++ {
 		topics = append(topics,
