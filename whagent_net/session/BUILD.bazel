@@ -7,6 +7,7 @@ go_library(
         "archive.go",
         "dashboard.go",
         "idempotency.go",
+        "maxcost.go",
         "maxturns.go",
         "modeldef.go",
         "session.go",
@@ -37,6 +38,8 @@ go_library(
 go_test(
     name = "session_test",
     srcs = [
+        "expired_status_test.go",
+        "maxcost_test.go",
         "maxturns_test.go",
         "sessions_test.go",
     ],

@@ -18,9 +18,9 @@ import (
 // its current cursor while waiting on the shared broadcaster. Two
 // independent reasons need it, not one:
 //
-//  1. Terminal detection for a "done"/"stopped" session: unlike
+//  1. Terminal detection for a "done"/"stopped"/"expired" session: unlike
 //     "capped"/"failed" (events.EventTypeCapped/EventTypeFailure), those
-//     two statuses commit no dedicated terminal transcript event of their
+//     statuses commit no dedicated terminal transcript event of their
 //     own (worker/workflow.go's SessionWorkflow writes the status
 //     directly) -- the `sessions` row's Status is the only signal
 //     available, so it must be polled.

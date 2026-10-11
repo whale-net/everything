@@ -46,12 +46,14 @@ go_test(
     srcs = [
         "auth_test.go",
         "control_test.go",
+        "expired_state_test.go",
         "stream_sequencer_test.go",
     ],
     embed = [":handlers"],
     deps = [
         "//libs/go/grpcauth",
         "//whagent_net/events",
+        "//whagent_net/protos:whagentpb",
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
@@ -90,6 +92,7 @@ go_test(
         "model_definition_integration_test.go",
         "service_account_integration_test.go",
         "session_integration_test.go",
+        "start_max_cost_override_integration_test.go",
         "start_max_turns_integration_test.go",
         "start_on_behalf_of_integration_test.go",
         "start_pinned_context_integration_test.go",

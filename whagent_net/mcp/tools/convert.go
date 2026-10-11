@@ -30,6 +30,8 @@ func sessionStateString(s pb.SessionState) string {
 		return "failed"
 	case pb.SessionState_SESSION_STATE_CAPPED:
 		return "capped"
+	case pb.SessionState_SESSION_STATE_EXPIRED:
+		return "expired"
 	default:
 		return "unspecified"
 	}

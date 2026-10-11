@@ -27,7 +27,10 @@ event with `signoff_status: approved`, plus the Milestone id:
    (step 4 always writes them) means a prior run created them: **stop**, and
    re-derive the manifest with `list_tasks {milestone_id}`. A note naming a
    design-session/signoff event means no prior run: proceed. An ambiguous note:
-   ask the dispatcher rather than risk duplicating tasks.
+   ask the dispatcher rather than risk duplicating tasks. If the id is a parent
+   milestone, also run CONVENTIONS.md "Milestone given: check its milepebbles
+   first": skip scope a milepebble already has tasks for, and create new tasks
+   on a milepebble, never the parent.
 2. Make every Feature/Requirement in the slice part of the milestone's
    `Delivers` with **one** `add_delivers {krill_session_id, milestone_id,
    entity_ids: [...]}` covering all entities at once; it isn't scoped to a

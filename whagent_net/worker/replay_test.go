@@ -850,3 +850,93 @@ func TestSessionWorkflow_ReplayRecordedHistory_LegacyDefinitionVersionInResult_N
 	replayer.RegisterWorkflow(SessionWorkflow)
 	require.NoError(t, replayer.ReplayWorkflowHistory(nil, b.build()))
 }
+
+// TestSessionWorkflow_ReplayRecordedHistory_SingleTurnDone_NoNonDeterminismError
+// is the forward NFR1 guard for "session-workflow-turn-cap-after-final" and
+// "session-workflow-status-change-event": a history recorded WITH both gates
+// at version 1 for a single-turn (max_turns = 1) session -- status_change
+// events committed around every status write, one turn whose final response
+// evaluates caps after CommitTurn, and a done completion -- replays cleanly
+// against the current code. Markers follow workflow.go's call sites: the
+// cap-enforcement and turn-cap-after-final gates are both read at the top of
+// processTurn, so they share the decision that schedules ResolveAgentDefinition.
+func TestSessionWorkflow_ReplayRecordedHistory_SingleTurnDone_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+	sessionID := testSessionID()
+
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: sessionID})
+	require.NoError(t, err)
+	signalPayload, err := dc.ToPayloads(SendTurnSignal{Input: "hello"})
+	require.NoError(t, err)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+
+	// Pre-loop awaiting_input: status-transitions and status-change-event
+	// gates both read before the first activity yields.
+	completedID := b.decision()
+	b.marker("session-workflow-status-transitions", 1, completedID)
+	b.marker("session-workflow-status-change-event", 1, completedID)
+	b.activity(ActivityCommitTerminalEvent, CommitTerminalEventResult{})
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.signal(SignalSendTurn, signalPayload)
+	b.decision()
+	b.activity(ActivityCommitTerminalEvent, CommitTerminalEventResult{})
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	completedID = b.decision()
+	b.marker("session-workflow-cap-enforcement", 1, completedID)
+	b.marker("session-workflow-turn-cap-after-final", 1, completedID)
+	b.activity(ActivityResolveAgentDefinition, ResolveAgentDefinitionResult{Definition: session.AgentDefinition{MaxTurns: 1, MaxCostUSD: 100}, Model: "replay-model"})
+
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0})
+
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}})
+
+	completedID = b.decision()
+	b.marker("session-workflow-tool-dispatch", 1, completedID)
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{})
+
+	// A single final response, no tool calls: the tool-loop gate is read
+	// after this CallModel, so its marker lands on the decision scheduling
+	// CommitTurn.
+	b.decision()
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "hi there"},
+	}})
+
+	completedID = b.decision()
+	b.marker("session-workflow-tool-loop", 1, completedID)
+	b.activity(ActivityCommitTurn, CommitTurnResult{Done: false})
+
+	// evaluateFinalCaps: cost first (not capped), then max_turns = 1 -> done.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0.02})
+
+	b.decision()
+	b.activity(ActivityCommitTerminalEvent, CommitTerminalEventResult{})
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	// The workflow returns after the done write; its final workflow task
+	// completes the execution.
+	b.decision()
+	b.events = append(b.events, &historypb.HistoryEvent{
+		EventId:   b.nextEventID(),
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionCompletedEventAttributes{
+			WorkflowExecutionCompletedEventAttributes: &historypb.WorkflowExecutionCompletedEventAttributes{},
+		},
+	})
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+
+	err = replayer.ReplayWorkflowHistory(nil, b.build())
+	require.NoError(t, err, "the current SessionWorkflow code must replay a FRESH single-turn history -- turn-cap-after-final and status-change-event at version 1 -- without a non-determinism error (NFR1)")
+}

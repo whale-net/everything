@@ -26,7 +26,7 @@ const (
 
 // Status is a session's control-plane lifecycle state
 // (ARCHITECTURE.md "Three nouns"). running/awaiting_input are
-// non-terminal; done/stopped/failed/capped are terminal and, once
+// non-terminal; the values in terminalStatuses are terminal and, once
 // written, are never overwritten by a later non-terminal write (see
 // SessionStore.UpdateStatus).
 type Status string
@@ -38,18 +38,24 @@ const (
 	StatusStopped       Status = "stopped"
 	StatusFailed        Status = "failed"
 	StatusCapped        Status = "capped"
+	StatusExpired       Status = "expired"
 )
+
+// terminalStatuses is the single definition of the terminal set.
+// IsTerminal, UpdateStatus's CAS predicate and ListArchiveEligible all
+// derive from it so they cannot drift.
+var terminalStatuses = []Status{StatusDone, StatusStopped, StatusFailed, StatusCapped, StatusExpired}
 
 // IsTerminal reports whether s is one of the terminal statuses that
 // UpdateStatus's compare-and-swap protects from being overwritten by a
 // later non-terminal write.
 func (s Status) IsTerminal() bool {
-	switch s {
-	case StatusDone, StatusStopped, StatusFailed, StatusCapped:
-		return true
-	default:
-		return false
+	for _, t := range terminalStatuses {
+		if s == t {
+			return true
+		}
 	}
+	return false
 }
 
 // CapKind names which guardrail ended a session in the capped status
@@ -106,6 +112,8 @@ type Session struct {
 	ModelOverride   *string
 	// MaxTurnsOverride pins the session's turn cap (nil = use the definition's).
 	MaxTurnsOverride *int32
+	// MaxCostUSDOverride pins the session's cost cap (nil = use the definition's).
+	MaxCostUSDOverride *float64
 	// PinnedContext is set only on Create; reads populate PinnedContextBytes
 	// and leave the text nil (use the text-by-id store method).
 	PinnedContext      *string
@@ -203,7 +211,7 @@ var _ SessionStore = sessionStore{}
 const sessionColumns = `
 	session_id, subject_iss, subject_sub, subject_kind,
 	on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
-	parent_session_id, agent_id, model, model_override, max_turns_override,
+	parent_session_id, agent_id, model, model_override, max_turns_override, max_cost_usd_override,
 	COALESCE(pinned_context_bytes, 0),
 	status, cap_kind, error_category, error_detail,
 	created_at, updated_at
@@ -223,7 +231,7 @@ func scanSession(row pgx.Row) (*Session, error) {
 	if err := row.Scan(
 		&sess.SessionID, &sess.Subject.Iss, &sess.Subject.Sub, &subjectKind,
 		&sess.OnBehalfOf.Iss, &sess.OnBehalfOf.Sub, &onBehalfOfKind,
-		&sess.ParentSessionID, &sess.AgentID, &sess.Model, &sess.ModelOverride, &sess.MaxTurnsOverride,
+		&sess.ParentSessionID, &sess.AgentID, &sess.Model, &sess.ModelOverride, &sess.MaxTurnsOverride, &sess.MaxCostUSDOverride,
 		&sess.PinnedContextBytes,
 		&status, &capKind, &errorCategory, &sess.ErrorDetail,
 		&sess.CreatedAt, &sess.UpdatedAt,
@@ -251,13 +259,13 @@ func (s sessionStore) Create(ctx context.Context, sess *Session) error {
 		INSERT INTO sessions (
 			session_id, subject_iss, subject_sub, subject_kind,
 			on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
-			parent_session_id, agent_id, model, model_override, max_turns_override, pinned_context, status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			parent_session_id, agent_id, model, model_override, max_turns_override, max_cost_usd_override, pinned_context, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING created_at, updated_at, COALESCE(pinned_context_bytes, 0)
 	`,
 		sess.SessionID, sess.Subject.Iss, sess.Subject.Sub, string(sess.Subject.Kind),
 		sess.OnBehalfOf.Iss, sess.OnBehalfOf.Sub, string(sess.OnBehalfOf.Kind),
-		sess.ParentSessionID, sess.AgentID, sess.Model, sess.ModelOverride, sess.MaxTurnsOverride, sess.PinnedContext, string(sess.Status),
+		sess.ParentSessionID, sess.AgentID, sess.Model, sess.ModelOverride, sess.MaxTurnsOverride, sess.MaxCostUSDOverride, sess.PinnedContext, string(sess.Status),
 	).Scan(&sess.CreatedAt, &sess.UpdatedAt, &sess.PinnedContextBytes)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
@@ -344,10 +352,16 @@ func (s sessionStore) UpdateStatus(ctx context.Context, id uuid.UUID, status Sta
 	return nil
 }
 
-// terminalStatusList is the SQL-literal IN-list of Status.IsTerminal's
-// terminal values, kept in one place so UpdateStatus's CAS predicate
-// cannot drift from IsTerminal's Go-side definition.
-const terminalStatusList = `'done', 'stopped', 'failed', 'capped'`
+// terminalStatusList is the SQL-literal IN-list of terminalStatuses, so
+// UpdateStatus's CAS predicate and archival selection cannot drift from
+// IsTerminal's Go-side definition.
+var terminalStatusList = func() string {
+	quoted := make([]string, 0, len(terminalStatuses))
+	for _, t := range terminalStatuses {
+		quoted = append(quoted, "'"+string(t)+"'")
+	}
+	return strings.Join(quoted, ", ")
+}()
 
 // ListArchiveEligible implements SessionStore.ListArchiveEligible (see
 // that doc comment for the two cases this query unions): a LEFT JOIN

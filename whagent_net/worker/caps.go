@@ -1,10 +1,9 @@
 // Cap evaluation (issue #2119; ARCHITECTURE.md "Guardrails"): FR6's turn
 // cap and FR7's cost cap, both sourced from the session's pinned agent
-// definition (session.AgentDefinition.MaxTurns/MaxCostUSD) -- there is no
-// per-session cap override in M1 (deliberate: caps are a safety backstop
-// the agent's owner sets, not a per-run dial the operator tunes). Defaults
-// are defaultMaxTurns/defaultMaxCostUSD when the definition's fields are
-// zero-valued.
+// definition (session.AgentDefinition.MaxTurns/MaxCostUSD). A pinned cost
+// override (sessions.max_cost_usd_override) reaches checkCaps via
+// ResolveAgentDefinition, which substitutes it into MaxCostUSD for the turn.
+// Defaults are defaultMaxTurns/defaultMaxCostUSD when the fields are zero-valued.
 //
 // checkCaps is invoked by SessionWorkflow.processTurn (workflow.go) both
 // before a turn starts and after the turn's LLM response is committed
@@ -115,20 +114,29 @@ type capCheck struct {
 // happen to be simultaneously exceeded still reports exactly CapKindTurns,
 // never both.
 func checkCaps(turn int, def session.AgentDefinition, costSoFar float64) (capCheck, error) {
-	maxTurns := def.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = defaultMaxTurns
+	if turn >= effectiveMaxTurns(def) {
+		return capCheck{Capped: true, CapKind: session.CapKindTurns}, nil
 	}
+	return checkCostCap(def, costSoFar), nil
+}
+
+// effectiveMaxTurns is def's turn cap, defaultMaxTurns when MaxTurns is zero.
+func effectiveMaxTurns(def session.AgentDefinition) int {
+	if def.MaxTurns == 0 {
+		return defaultMaxTurns
+	}
+	return def.MaxTurns
+}
+
+// checkCostCap is FR7's cost half of checkCaps on its own: the turn cap is
+// evaluated only after a turn's final response, never inside the tool loop.
+func checkCostCap(def session.AgentDefinition, costSoFar float64) capCheck {
 	maxCostUSD := def.MaxCostUSD
 	if maxCostUSD == 0 {
 		maxCostUSD = defaultMaxCostUSD
 	}
-
-	if turn >= maxTurns {
-		return capCheck{Capped: true, CapKind: session.CapKindTurns}, nil
-	}
 	if costSoFar >= maxCostUSD {
-		return capCheck{Capped: true, CapKind: session.CapKindCost}, nil
+		return capCheck{Capped: true, CapKind: session.CapKindCost}
 	}
-	return capCheck{}, nil
+	return capCheck{}
 }

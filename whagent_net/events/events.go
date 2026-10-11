@@ -159,7 +159,18 @@ func ParseStatusChangeEventType(eventType string) (status string, ok bool) {
 // already-meaningful Seq/Turn/EventID/SessionID/CommittedAt on Event.
 type StatusChangeEventPayload struct {
 	Status string `json:"status"`
+	// Reason is optional and additive: StatusChangeReasonSingleTurn on a
+	// done transition that ended a single-turn session. Empty otherwise.
+	Reason string `json:"reason,omitempty"`
 }
+
+// StatusChangeReasonSingleTurn is the Reason on a `status_change:done`
+// event for a session whose effective max_turns is 1.
+const StatusChangeReasonSingleTurn = "single_turn"
+
+// StatusChangeReasonIdleTimeout is the Reason on a `status_change:expired`
+// event: the session sat in awaiting_input past its effective idle timeout.
+const StatusChangeReasonIdleTimeout = "idle_timeout"
 
 // Event is the whagent-net LB1 record: the single definition of a
 // committed transcript event. The `transcript_event` Postgres row, the

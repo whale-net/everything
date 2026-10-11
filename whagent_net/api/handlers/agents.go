@@ -178,6 +178,17 @@ func (s *SessionServer) validateUpdateAgent(ctx context.Context, req *pb.UpdateA
 	if def.MaxTurns <= 0 || def.MaxToolIterations <= 0 || def.MaxCostUSD <= 0 {
 		return nil, bad("max_turns, max_cost_usd and max_tool_iterations must be positive")
 	}
+	// The ceiling applies only when the value changes, so an existing
+	// over-ceiling definition can still be edited for its other fields.
+	cur, err := s.store.AgentDefinitions().GetCurrent(ctx, req.GetAgentId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "look up agent: %v", err)
+	}
+	if cur == nil || cur.MaxCostUSD != def.MaxCostUSD {
+		if err := session.ValidateMaxCostUSD("max_cost_usd", def.MaxCostUSD); err != nil {
+			return nil, bad("%s", err.Error())
+		}
+	}
 	switch def.ToolLoadingMode {
 	case session.ToolLoadingModeBulk, session.ToolLoadingModeSearch:
 	default:
