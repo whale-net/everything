@@ -482,3 +482,30 @@ func TestValidate_MaxCostUSD_ZeroIsUnsetDefault_NegativeAndCeilingRejected(t *te
 		assert.Contains(t, err.Error(), "ceiling 10")
 	}
 }
+
+func TestValidate_IdleTimeout_AcceptsEmptyAndValidDurations(t *testing.T) {
+	for _, raw := range []string{"", "24h", "90s"} {
+		agent := validAgent()
+		agent.IdleTimeout = raw
+		assert.NoError(t, Validate(nil, []AgentDefinitionConfig{agent}), "idle_timeout %q", raw)
+	}
+}
+
+func TestValidate_IdleTimeout_RejectsInvalidNamingAgentAndValue(t *testing.T) {
+	for _, raw := range []string{"soon", "24", "0s", "-1h", "1.5s"} {
+		agent := validAgent()
+		agent.IdleTimeout = raw
+		err := Validate(nil, []AgentDefinitionConfig{agent})
+		require.Error(t, err, "idle_timeout %q must fail", raw)
+		assert.Contains(t, err.Error(), "idle_timeout", "%q", raw)
+		assert.Contains(t, err.Error(), raw, "%q", raw)
+	}
+}
+
+func TestLoadAgentsYAML_IdleTimeoutDecodes(t *testing.T) {
+	var agents []AgentDefinitionConfig
+	err := yaml.Unmarshal([]byte("- agent_id: a\n  idle_timeout: 24h\n"), &agents)
+	require.NoError(t, err)
+	require.Len(t, agents, 1)
+	assert.Equal(t, "24h", agents[0].IdleTimeout)
+}

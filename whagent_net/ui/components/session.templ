@@ -102,7 +102,7 @@ func stateBadgeVariant(state string) htmxui.BadgeVariant {
 		return htmxui.BadgeInfo
 	case "done":
 		return htmxui.BadgeSuccess
-	case "stopped":
+	case "stopped", "expired":
 		return htmxui.BadgeNeutral
 	case "capped":
 		return htmxui.BadgeWarning
@@ -298,7 +298,7 @@ templ SessionLive(session SessionView, evs []TranscriptEventView) {
 	@TranscriptList(evs)
 }
 
-// isTerminalSessionState reports whether state is one of the four
+// isTerminalSessionState reports whether state is one of the five
 // terminal SessionState values (sessionStateString's lowercase
 // convention, ../convert.go) -- a session in any of these has no running
 // SessionWorkflow left to signal (whagent_net/api/handlers/stop.go's
@@ -306,7 +306,7 @@ templ SessionLive(session SessionView, evs []TranscriptEventView) {
 // for the owner and is omitted entirely rather than rendered disabled.
 func isTerminalSessionState(state string) bool {
 	switch state {
-	case "done", "stopped", "failed", "capped":
+	case "done", "stopped", "failed", "capped", "expired":
 		return true
 	default:
 		return false

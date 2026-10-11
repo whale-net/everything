@@ -281,3 +281,45 @@ func TestStartSession_CapOverrideRejected_SurfacesFieldValueCeiling(t *testing.T
 	assert.Contains(t, err.Error(), "50")
 	assert.Contains(t, err.Error(), "ceiling 10")
 }
+
+// TestStartSession_IdleTimeoutOverride_ForwardedVerbatim proves the optional
+// idle_timeout_override duration string reaches StartSession unchanged, and
+// stays nil when the caller omits it.
+func TestStartSession_IdleTimeoutOverride_ForwardedVerbatim(t *testing.T) {
+	var got *pb.StartSessionRequest
+	fc := &fakeSessionServiceClient{
+		startSessionFunc: func(ctx context.Context, in *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+			got = in
+			return &pb.StartSessionResponse{Session: &pb.Session{SessionId: "sess-1", State: pb.SessionState_SESSION_STATE_RUNNING}}, nil
+		},
+	}
+	tool := &startSessionTool{client: fc}
+
+	_, _, err := tool.call(context.Background(), nil, StartSessionInput{AgentID: "agent-1", IdleTimeoutOverride: "36h"})
+	require.NoError(t, err)
+	require.NotNil(t, got.IdleTimeoutOverride)
+	assert.Equal(t, "36h", got.GetIdleTimeoutOverride())
+
+	_, _, err = tool.call(context.Background(), nil, StartSessionInput{AgentID: "agent-1"})
+	require.NoError(t, err)
+	assert.Nil(t, got.IdleTimeoutOverride, "unset idle_timeout_override must stay nil")
+}
+
+// TestStartSession_IdleTimeoutOverrideRejected_SurfacesFieldAndValue proves
+// api's InvalidArgument for a bad idle timeout reaches the MCP caller
+// unchanged, naming the field and the supplied value.
+func TestStartSession_IdleTimeoutOverrideRejected_SurfacesFieldAndValue(t *testing.T) {
+	const msg = "idle_timeout_override must be a positive Go duration: supplied \"-5m\""
+	fc := &fakeSessionServiceClient{
+		startSessionFunc: func(ctx context.Context, in *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+			return nil, status.Error(codes.InvalidArgument, msg)
+		},
+	}
+	tool := &startSessionTool{client: fc}
+
+	_, _, err := tool.call(context.Background(), nil, StartSessionInput{AgentID: "a", IdleTimeoutOverride: "-5m"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidArgument")
+	assert.Contains(t, err.Error(), "idle_timeout_override")
+	assert.Contains(t, err.Error(), "-5m")
+}

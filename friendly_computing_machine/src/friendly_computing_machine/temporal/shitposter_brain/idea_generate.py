@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlmodel import Session, select
+from temporalio.client import Client
 
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     shitposter_memory_dal,
@@ -42,6 +43,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterMemoryCauseKindEnum,
 )
 from friendly_computing_machine.src.friendly_computing_machine.shitposter_config import (
+    idea_generator_cadence_hours,
     idea_generator_run_cap,
     load_novel_generator_agent_id,
     load_theme_generator_agent_id,
@@ -62,6 +64,10 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.shitpost
     BrainJobInput,
     JobBody,
     register_job_body,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.control import (
+    register_brain_schedule,
+    remove_brain_schedule,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.lore_promotion import (
     popularity_score,
@@ -554,6 +560,35 @@ def _apply(session: Session, run_id: int, payload: dict[str, Any]) -> ApplyOutco
         len(rejections),
     )
     return ApplyOutcome(status=status.value, details=details)
+
+
+async def register_idea_generate_schedule(
+    client: Client,
+    task_queue: str,
+    persona_id: int,
+    app_env: str | None = None,
+) -> None:
+    """Create the idea-generator schedule for one persona (every FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS).
+
+    When the cadence is "off", any existing schedule is removed and none is created.
+    """
+    hours = idea_generator_cadence_hours()
+    if hours is None:
+        await remove_brain_schedule(
+            client,
+            persona_id,
+            ShitposterBrainJobKind.IDEA_GENERATE.value,
+            app_env=app_env,
+        )
+        return
+    await register_brain_schedule(
+        client,
+        task_queue,
+        persona_id,
+        ShitposterBrainJobKind.IDEA_GENERATE.value,
+        every=datetime.timedelta(hours=hours),
+        app_env=app_env,
+    )
 
 
 register_job_body(

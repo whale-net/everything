@@ -3,13 +3,15 @@
 Covers the per-persona lock: an overlapping or operator-triggered job is recorded
 as skipped, a body that raises after its writes leaves no partial writes, and a
 job past its timeout is recorded failed. A successful reflect run enqueues one
-snapshot run; a failed or no-op reflect run enqueues none. Job bodies are fakes registered per test.
+snapshot run; a failed or no-op reflect run enqueues none. Job bodies are fakes registered per test,
+except the idea_generate tests, which run the real body with its theme agent faked.
 
 Red-proof run: the begin activity always acquiring the lock -> overlap test fails.
 """
 
 import asyncio
 import datetime
+import json
 import threading
 from contextlib import asynccontextmanager
 
@@ -33,12 +35,27 @@ from friendly_computing_machine.src.friendly_computing_machine.models.shitposter
     ShitposterBrainJobRun,
     ShitposterBrainJobStatus,
     ShitposterBrainJobTrigger,
+    ShitposterChannelOptIn,
     ShitposterPersona,
     ShitposterPersonaRevision,
+    ShitposterPost,
+    ShitposterPostEngagement,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.shitposter_memory import (
+    ShitposterLoreEntry,
+    ShitposterMemoryChange,
+    ShitposterPersonaAttribute,
+    ShitposterSourceWeight,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
+    SlackChannel,
+    SlackMessage,
+    SlackUser,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain import (
     base,
     control,
+    idea_generate,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.shitposter_brain.activity import (
     apply_brain_job_activity,
@@ -60,9 +77,19 @@ APP_ENV = "test"
 TASK_QUEUE = "fcm-brain-test"
 KIND = ShitposterBrainJobKind.SNAPSHOT.value
 TABLES = [
+    SlackUser.__table__,
+    SlackChannel.__table__,
+    SlackMessage.__table__,
     ShitposterPersona.__table__,
     ShitposterPersonaRevision.__table__,
     ShitposterBrainJobRun.__table__,
+    ShitposterChannelOptIn.__table__,
+    ShitposterPost.__table__,
+    ShitposterPostEngagement.__table__,
+    ShitposterPersonaAttribute.__table__,
+    ShitposterLoreEntry.__table__,
+    ShitposterMemoryChange.__table__,
+    ShitposterSourceWeight.__table__,
 ]
 
 
@@ -439,3 +466,192 @@ def test_no_op_reflect_enqueues_no_snapshot(engine, persona_id, monkeypatch):
     assert reflected.status == ShitposterBrainJobStatus.NO_OP.value
     assert started is False
     assert _snapshot_runs(engine, persona_id) == []
+
+
+# idea_generate under the brain runner: real job body, theme agent faked.
+
+IDEA = ShitposterBrainJobKind.IDEA_GENERATE.value
+THEME_TEXT = "Fixated on breakfast foods"
+
+
+@pytest.fixture
+def idea_pool(engine, persona_id, monkeypatch):
+    """Four active hit entries (theme share 0, below target); returns their ids."""
+    for name in (
+        "FCM_SHITPOSTER_IDEA_GENERATOR_RUN_CAP",
+        "FCM_SHITPOSTER_THEME_TARGET_WEIGHT",
+        "FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(idea_generate, "_member_names", lambda: ["Alice"])
+    ids = []
+    with Session(engine) as s:
+        for i in range(4):
+            row = ShitposterLoreEntry(
+                persona_id=persona_id, text=f"hit joke {i}", kind="hit", popularity_score=3
+            )
+            s.add(row)
+            s.flush()
+            ids.append(row.id)
+        s.commit()
+    return ids
+
+
+def _theme_agent(monkeypatch, cites, gate=None, raises=None):
+    calls = []
+
+    def fake(active, retired, max_entries):
+        calls.append(len(active))
+        if gate is not None:
+            gate["entered"].set()
+            gate["release"].wait(timeout=60)
+        if raises is not None:
+            raise raises
+        return json.dumps({"entries": [{"text": THEME_TEXT, "cites": cites}]})
+
+    monkeypatch.setattr(idea_generate, "_call_theme_agent", fake)
+    return calls
+
+
+def _lore_kinds(engine, persona_id):
+    with Session(engine) as s:
+        return sorted(
+            r.kind
+            for r in s.exec(
+                select(ShitposterLoreEntry).where(ShitposterLoreEntry.persona_id == persona_id)
+            ).all()
+        )
+
+
+def _memory_changes(engine):
+    with Session(engine) as s:
+        return s.exec(select(ShitposterMemoryChange)).all()
+
+
+async def _trigger_idea(env, persona_id):
+    return await control.trigger_brain_job_async(
+        env.client, TASK_QUEUE, persona_id, IDEA, app_env=APP_ENV
+    )
+
+
+def test_idea_generate_job_body_is_registered():
+    body = base.JOB_BODIES[IDEA]
+    assert body.compute is idea_generate._compute
+    assert body.apply is idea_generate._apply
+
+
+def test_operator_triggered_idea_generate_runs_and_writes_theme(
+    engine, persona_id, idea_pool, monkeypatch
+):
+    _theme_agent(monkeypatch, idea_pool[:2])
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                return await _trigger_idea(env, persona_id)
+
+    result = _run(go())
+    assert result.status == ShitposterBrainJobStatus.SUCCEEDED.value
+    runs = _runs(engine, persona_id)
+    assert [(r.job_kind, r.status, r.trigger) for r in runs] == [
+        (IDEA, ShitposterBrainJobStatus.SUCCEEDED.value, ShitposterBrainJobTrigger.OPERATOR.value)
+    ]
+    assert _lore_kinds(engine, persona_id) == ["hit"] * 4 + ["theme"]
+    assert runs[0].details["entries"][0]["cited"] == idea_pool[:2]
+
+
+def test_idea_generate_overlapping_another_brain_job_is_skipped(
+    engine, persona_id, idea_pool, gate, monkeypatch
+):
+    _register(monkeypatch, compute=_blocking_compute(gate))
+    calls = _theme_agent(monkeypatch, idea_pool[:2])
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                first = await _start_scheduled(env, persona_id)
+                await _wait_entered(gate)
+                skipped = await _trigger_idea(env, persona_id)
+                gate["release"].set()
+                await first.result()
+                return skipped
+
+    skipped = _run(go())
+    assert skipped.status == ShitposterBrainJobStatus.SKIPPED.value
+    assert "holds the persona lock" in skipped.skip_reason
+    runs = _runs(engine, persona_id)
+    assert [(r.job_kind, r.status) for r in runs] == [
+        (KIND, ShitposterBrainJobStatus.SUCCEEDED.value),
+        (IDEA, ShitposterBrainJobStatus.SKIPPED.value),
+    ]
+    assert runs[1].details == {"holder_run_id": runs[0].id}
+    assert calls == []
+    assert _lore_kinds(engine, persona_id) == ["hit"] * 4
+
+
+def test_idea_generate_apply_failure_writes_no_lore(engine, persona_id, idea_pool, monkeypatch):
+    _theme_agent(monkeypatch, idea_pool[:2])
+
+    def apply_then_fail(session, run_id, payload):
+        outcome = idea_generate._apply(session, run_id, payload)
+        assert outcome.details["entries"], "the real apply must have written before failing"
+        raise RuntimeError("apply broke after writing lore")
+
+    monkeypatch.setitem(
+        base.JOB_BODIES, IDEA, JobBody(compute=idea_generate._compute, apply=apply_then_fail)
+    )
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                with pytest.raises(WorkflowFailureError):
+                    await _trigger_idea(env, persona_id)
+
+    _run(go())
+    runs = _runs(engine, persona_id)
+    assert [(r.job_kind, r.status) for r in runs] == [(IDEA, ShitposterBrainJobStatus.FAILED.value)]
+    assert "apply broke after writing lore" in runs[0].error
+    assert _lore_kinds(engine, persona_id) == ["hit"] * 4
+    assert _memory_changes(engine) == []
+
+
+def test_idea_generate_agent_failure_writes_no_lore(engine, persona_id, idea_pool, monkeypatch):
+    _theme_agent(monkeypatch, idea_pool[:2], raises=RuntimeError("theme agent down"))
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                with pytest.raises(WorkflowFailureError):
+                    await _trigger_idea(env, persona_id)
+
+    _run(go())
+    runs = _runs(engine, persona_id)
+    assert [(r.job_kind, r.status) for r in runs] == [(IDEA, ShitposterBrainJobStatus.FAILED.value)]
+    assert "theme agent down" in runs[0].error
+    assert _lore_kinds(engine, persona_id) == ["hit"] * 4
+
+
+def test_idea_generate_timeout_writes_no_lore(engine, persona_id, idea_pool, gate, monkeypatch):
+    _theme_agent(monkeypatch, idea_pool[:2], gate=gate)
+    monkeypatch.setitem(
+        base.BRAIN_JOB_TIMEOUTS, ShitposterBrainJobKind.IDEA_GENERATE, datetime.timedelta(seconds=2)
+    )
+
+    async def go():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with _worker(env):
+                handle = await _start_kind(env, persona_id, IDEA)
+                await _wait_entered(gate)
+                try:
+                    with pytest.raises(WorkflowFailureError):
+                        await handle.result()
+                finally:
+                    # the agent then returns a valid theme, which must never be applied
+                    gate["release"].set()
+
+    _run(go())
+    runs = _runs(engine, persona_id)
+    assert [(r.job_kind, r.status) for r in runs] == [(IDEA, ShitposterBrainJobStatus.FAILED.value)]
+    assert runs[0].error
+    assert _lore_kinds(engine, persona_id) == ["hit"] * 4
+    assert _memory_changes(engine) == []

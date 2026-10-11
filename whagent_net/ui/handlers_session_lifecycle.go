@@ -119,6 +119,7 @@ func (app *App) handleStartSession(w http.ResponseWriter, r *http.Request) {
 	modelOverride := strings.TrimSpace(r.FormValue("model_override"))
 	maxTurnsRaw := strings.TrimSpace(r.FormValue("max_turns"))
 	maxCostRaw := strings.TrimSpace(r.FormValue("max_cost_usd"))
+	idleTimeout := strings.TrimSpace(r.FormValue("idle_timeout_override"))
 
 	renderForm := func(code int, errMsg string) {
 		data := app.newSessionData(ctx)
@@ -126,6 +127,7 @@ func (app *App) handleStartSession(w http.ResponseWriter, r *http.Request) {
 		data.ModelOverride = modelOverride
 		data.MaxTurns = maxTurnsRaw
 		data.MaxCostUSD = maxCostRaw
+		data.IdleTimeout = idleTimeout
 		data.Error = errMsg
 		w.WriteHeader(code)
 		if err := RenderTempl(w, r, data.Layout.Title, pages.SessionNew(data)); err != nil {
@@ -173,6 +175,9 @@ func (app *App) handleStartSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.MaxCostUsdOverride = &v
+	}
+	if idleTimeout != "" {
+		req.IdleTimeoutOverride = &idleTimeout
 	}
 
 	resp, err := app.session.Client().StartSession(ctx, req)
