@@ -145,6 +145,7 @@ go_test(
         "handlers_session_live_test.go",
         "handlers_session_test.go",
         "handlers_session_usage_live_test.go",
+        "expired_state_test.go",
         "handlers_sessions_test.go",
         "main_test.go",
         "auth_test.go",
