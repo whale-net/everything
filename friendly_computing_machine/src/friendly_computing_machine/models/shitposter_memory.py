@@ -5,9 +5,10 @@ append-only and every row names at least one cause.
 """
 
 import datetime
+import uuid
 from enum import Enum
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Index, func, text
+from sqlalchemy import CheckConstraint, Column, DateTime, Index, Uuid, func, text
 from sqlmodel import Field
 
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
@@ -104,6 +105,7 @@ class ShitposterLoreEntry(Base, table=True):
             postgresql_where=text("valid_to IS NULL"),
             sqlite_where=text("valid_to IS NULL"),
         ),
+        Index("ix_shitposterloreentry_persona_lore_key", "persona_id", "lore_key"),
         CheckConstraint(
             "kind IN ('hit', 'consolidated', 'theme', 'novel')",
             name="ck_shitposterloreentry_kind",
@@ -112,6 +114,10 @@ class ShitposterLoreEntry(Base, table=True):
     id: int = Field(default=None, nullable=False, primary_key=True)
     persona_id: int = Field(
         nullable=False, foreign_key="shitposterpersona.id", index=True
+    )
+    # shared by every SCD2 revision of one logical lore entry
+    lore_key: uuid.UUID = Field(
+        default_factory=uuid.uuid4, sa_column=Column(Uuid, nullable=False)
     )
     text: str
     # ShitposterLoreKindEnum value
