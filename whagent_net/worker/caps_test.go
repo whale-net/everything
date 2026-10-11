@@ -73,11 +73,11 @@ func TestCheckCaps_BothExceeded_TurnsReportedFirst(t *testing.T) {
 func TestCheckCaps_Defaults_TurnCap(t *testing.T) {
 	def := session.AgentDefinition{} // MaxTurns, MaxCostUSD both zero-valued
 
-	notCapped, err := checkCaps(defaultMaxTurns-1, def, 0)
+	notCapped, err := checkCaps(session.DefaultMaxTurns-1, def, 0)
 	require.NoError(t, err)
-	assert.False(t, notCapped.Capped, "turn %d must be under the default 100-turn cap", defaultMaxTurns-1)
+	assert.False(t, notCapped.Capped, "turn %d must be under the default 100-turn cap", session.DefaultMaxTurns-1)
 
-	capped, err := checkCaps(defaultMaxTurns, def, 0)
+	capped, err := checkCaps(session.DefaultMaxTurns, def, 0)
 	require.NoError(t, err)
 	assert.True(t, capped.Capped)
 	assert.Equal(t, session.CapKindTurns, capped.CapKind)
@@ -87,11 +87,11 @@ func TestCheckCaps_Defaults_TurnCap(t *testing.T) {
 func TestCheckCaps_Defaults_CostCap(t *testing.T) {
 	def := session.AgentDefinition{} // MaxTurns, MaxCostUSD both zero-valued
 
-	notCapped, err := checkCaps(1, def, defaultMaxCostUSD-0.01)
+	notCapped, err := checkCaps(1, def, session.DefaultMaxCostUSD-0.01)
 	require.NoError(t, err)
 	assert.False(t, notCapped.Capped)
 
-	capped, err := checkCaps(1, def, defaultMaxCostUSD)
+	capped, err := checkCaps(1, def, session.DefaultMaxCostUSD)
 	require.NoError(t, err)
 	assert.True(t, capped.Capped)
 	assert.Equal(t, session.CapKindCost, capped.CapKind)
