@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/workflow"
+
+	"github.com/whale-net/everything/whagent_net/session"
 )
 
 // SignalArmIdleTimer is the one-time pre-deploy sweep's signal: it hands a
@@ -23,10 +26,6 @@ const ActivityResolveIdleTimeout = "ResolveIdleTimeout"
 // an idle clock when the pre-deploy sweep delivers one.
 const idleExpiryChangeID = "session-workflow-idle-expiry"
 
-// placeholderIdleTimeout stands in for the resolved timeout until the idle
-// timeout config resolver lands; only ResolveIdleTimeout's body changes then.
-const placeholderIdleTimeout = 24 * time.Hour
-
 // ArmIdleTimerSignal carries the effective idle timeout resolved outside
 // workflow code, so the timer duration is recorded in workflow history.
 type ArmIdleTimerSignal struct {
@@ -38,12 +37,50 @@ type ResolveIdleTimeoutResult struct {
 	EffectiveTimeout time.Duration
 }
 
-// ResolveIdleTimeout returns a session's effective idle timeout. This is
-// the seam the idle timeout config resolver plugs into.
+// ResolveIdleTimeout returns a session's effective idle timeout: the session
+// override, else the pinned agent definition's value, else the platform
+// default. It reads the same rows api's StartSession and GetSession read.
 func (a *Activities) ResolveIdleTimeout(ctx context.Context, sessionID uuid.UUID) (ResolveIdleTimeoutResult, error) {
-	_ = ctx
-	_ = sessionID
-	return ResolveIdleTimeoutResult{EffectiveTimeout: placeholderIdleTimeout}, nil
+	if a.Store == nil {
+		return ResolveIdleTimeoutResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+	sess, err := a.Store.Sessions().GetByID(ctx, sessionID)
+	if err != nil {
+		return ResolveIdleTimeoutResult{}, fmt.Errorf("resolve idle timeout: get session: %w", err)
+	}
+	if sess == nil {
+		return ResolveIdleTimeoutResult{}, fmt.Errorf("resolve idle timeout: session %s not found", sessionID)
+	}
+	var def session.AgentDefinition
+	assignment, err := a.Store.AgentDefinitions().CurrentAssignment(ctx, sessionID)
+	if err != nil {
+		return ResolveIdleTimeoutResult{}, fmt.Errorf("resolve idle timeout: get current assignment: %w", err)
+	}
+	if assignment != nil {
+		d, err := a.Store.AgentDefinitions().GetByID(ctx, assignment.AgentDefinitionID)
+		if err != nil {
+			return ResolveIdleTimeoutResult{}, fmt.Errorf("resolve idle timeout: get definition: %w", err)
+		}
+		if d != nil {
+			def = *d
+		}
+	}
+	return ResolveIdleTimeoutResult{EffectiveTimeout: effectiveIdleTimeout(sess, def, a.platformIdleTimeout())}, nil
+}
+
+// effectiveIdleTimeout applies override > definition > platform default to
+// already-loaded rows.
+func effectiveIdleTimeout(sess *session.Session, def session.AgentDefinition, platformDefault time.Duration) time.Duration {
+	return session.EffectiveIdleTimeout(sess.IdleTimeoutOverride, def, platformDefault)
+}
+
+// platformIdleTimeout is WHAGENT_DEFAULT_IDLE_TIMEOUT as parsed at startup,
+// or session.DefaultIdleTimeout when the Activities value is unset.
+func (a *Activities) platformIdleTimeout() time.Duration {
+	if a.DefaultIdleTimeout > 0 {
+		return a.DefaultIdleTimeout
+	}
+	return session.DefaultIdleTimeout
 }
 
 // idleState is the idle clock for one SessionWorkflow run. timeout is zero

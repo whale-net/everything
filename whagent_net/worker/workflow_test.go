@@ -29,7 +29,7 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 		return ResolveAgentDefinitionResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
 	env.RegisterActivityWithOptions(func(ctx context.Context, sessionID uuid.UUID) (ResolveIdleTimeoutResult, error) {
-		return ResolveIdleTimeoutResult{EffectiveTimeout: placeholderIdleTimeout}, nil
+		return ResolveIdleTimeoutResult{EffectiveTimeout: session.DefaultIdleTimeout}, nil
 	}, activity.RegisterOptions{Name: ActivityResolveIdleTimeout})
 	env.RegisterActivityWithOptions(func(ctx context.Context, in BuildContextInput) (BuildContextResult, error) {
 		return BuildContextResult{}, nil
@@ -253,7 +253,7 @@ func TestSessionWorkflow_StopDuringInFlightActivity_CancelsAndEndsStopped(t *tes
 		return ResolveAgentDefinitionResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
 	env.RegisterActivityWithOptions(func(ctx context.Context, sessionID uuid.UUID) (ResolveIdleTimeoutResult, error) {
-		return ResolveIdleTimeoutResult{EffectiveTimeout: placeholderIdleTimeout}, nil
+		return ResolveIdleTimeoutResult{EffectiveTimeout: session.DefaultIdleTimeout}, nil
 	}, activity.RegisterOptions{Name: ActivityResolveIdleTimeout})
 	env.RegisterActivityWithOptions(func(ctx context.Context, in BuildContextInput) (BuildContextResult, error) {
 		return BuildContextResult{}, nil

@@ -222,7 +222,7 @@ func registerE2EActivities(env *testsuite.TestWorkflowEnvironment, holder *activ
 		return holder.get().ResolveAgentDefinition(ctx, sessionID)
 	}, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
 	env.RegisterActivityWithOptions(func(ctx context.Context, sessionID uuid.UUID) (ResolveIdleTimeoutResult, error) {
-		return ResolveIdleTimeoutResult{EffectiveTimeout: placeholderIdleTimeout}, nil
+		return ResolveIdleTimeoutResult{EffectiveTimeout: session.DefaultIdleTimeout}, nil
 	}, activity.RegisterOptions{Name: ActivityResolveIdleTimeout})
 
 	env.RegisterActivityWithOptions(func(ctx context.Context, in BuildContextInput) (BuildContextResult, error) {

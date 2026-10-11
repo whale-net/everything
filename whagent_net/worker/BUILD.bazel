@@ -62,6 +62,7 @@ go_test(
         "classify_test.go",
         "context_test.go",
         "idle_sweep_test.go",
+        "idle_resolve_test.go",
         "idle_test.go",
         "pinned_caps_test.go",
         "replay_test.go",
@@ -107,6 +108,7 @@ go_test(
     timeout = "long",
     srcs = [
         "context_integration_test.go",
+        "idle_resolve_integration_test.go",
         "resolve_pinned_integration_test.go",
         "search_mode_e2e_integration_test.go",
         "search_tools_integration_test.go",
