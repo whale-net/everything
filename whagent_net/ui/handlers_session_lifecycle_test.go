@@ -503,3 +503,78 @@ func TestOwnerControls_NonTerminalStateIncludesStopControl(t *testing.T) {
 	require.Contains(t, body, `id="turn-composer"`)
 	require.Contains(t, body, stopControlFormMarker+"sess-1/stop")
 }
+
+// TestHandleStartSession_CapOverridesForwarded proves max_turns and
+// max_cost_usd form values reach StartSessionRequest as typed overrides.
+func TestHandleStartSession_CapOverridesForwarded(t *testing.T) {
+	server := &fakeLifecycleSessionServer{
+		startResp: &whagentpb.StartSessionResponse{
+			Session: newFixtureSession(uuid.New(), whagentpb.SessionState_SESSION_STATE_RUNNING, ownerSubject()),
+		},
+	}
+	app := newLifecycleTestApp(t, server, "")
+
+	form := url.Values{"agent_id": {"code-review"}, "max_turns": {"12"}, "max_cost_usd": {"2.5"}}
+	w := postForm(t, app, app.handleStartSession, "/sessions", "", form)
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.NotNil(t, server.startReq)
+	require.Equal(t, int32(12), server.startReq.GetMaxTurnsOverride())
+	require.Equal(t, 2.5, server.startReq.GetMaxCostUsdOverride())
+}
+
+// TestHandleStartSession_BlankCapsLeftUnset proves empty cap fields are never
+// sent as zero overrides.
+func TestHandleStartSession_BlankCapsLeftUnset(t *testing.T) {
+	server := &fakeLifecycleSessionServer{
+		startResp: &whagentpb.StartSessionResponse{
+			Session: newFixtureSession(uuid.New(), whagentpb.SessionState_SESSION_STATE_RUNNING, ownerSubject()),
+		},
+	}
+	app := newLifecycleTestApp(t, server, "")
+
+	w := postForm(t, app, app.handleStartSession, "/sessions", "", url.Values{"agent_id": {"code-review"}, "max_turns": {" "}, "max_cost_usd": {""}})
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	require.NotNil(t, server.startReq)
+	require.Nil(t, server.startReq.MaxTurnsOverride)
+	require.Nil(t, server.startReq.MaxCostUsdOverride)
+}
+
+// TestHandleStartSession_CapOverrideRejectedRendersFieldValueCeiling proves
+// api's InvalidArgument for an out-of-range cap renders inline, naming the
+// field, value and ceiling, and keeps the submitted values in the form.
+func TestHandleStartSession_CapOverrideRejectedRendersFieldValueCeiling(t *testing.T) {
+	server := &fakeLifecycleSessionServer{
+		startErr: status.Error(codes.InvalidArgument, "max_cost_usd_override must be > 0 and <= 10: supplied 50 (ceiling 10)"),
+	}
+	app := newLifecycleTestApp(t, server, "")
+
+	w := postForm(t, app, app.handleStartSession, "/sessions", "", url.Values{"agent_id": {"code-review"}, "max_cost_usd": {"50"}})
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), "max_cost_usd_override")
+	require.Contains(t, w.Body.String(), "supplied 50")
+	require.Contains(t, w.Body.String(), "ceiling 10")
+	require.NotContains(t, w.Body.String(), "rpc error")
+}
+
+// TestHandleStartSession_NonNumericCapRejectedBeforeAPI proves a non-numeric
+// or non-finite cap is rejected inline with a 400 and never reaches StartSession.
+func TestHandleStartSession_NonNumericCapRejectedBeforeAPI(t *testing.T) {
+	for _, tc := range []struct{ field, value string }{
+		{"max_turns", "many"},
+		{"max_turns", "1.5"},
+		{"max_cost_usd", "abc"},
+		{"max_cost_usd", "NaN"},
+	} {
+		server := &fakeLifecycleSessionServer{}
+		app := newLifecycleTestApp(t, server, "")
+
+		w := postForm(t, app, app.handleStartSession, "/sessions", "", url.Values{"agent_id": {"code-review"}, tc.field: {tc.value}})
+
+		require.Equal(t, http.StatusBadRequest, w.Code, "%s=%s", tc.field, tc.value)
+		require.Nil(t, server.startReq, "%s=%s must not reach StartSession", tc.field, tc.value)
+		require.Contains(t, w.Body.String(), tc.field)
+	}
+}
