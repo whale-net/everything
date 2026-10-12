@@ -179,7 +179,10 @@ func (s *SessionServer) validateUpdateAgent(ctx context.Context, req *pb.UpdateA
 		}
 		def.ModelDefinitionID = &id
 	}
-	if def.MaxTurns <= 0 || def.MaxToolIterations <= 0 || def.MaxCostUSD <= 0 {
+	if def.MaxTurns <= 0 {
+		return nil, bad("max_turns must be >= 1: got %d", def.MaxTurns)
+	}
+	if def.MaxToolIterations <= 0 || def.MaxCostUSD <= 0 {
 		return nil, bad("max_turns, max_cost_usd and max_tool_iterations must be positive")
 	}
 	// The ceiling applies only when the value changes, so an existing
