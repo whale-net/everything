@@ -458,8 +458,16 @@ per session — model selection is a hard requirement) and three **caps**: max
 turns, max cost, and max tool iterations — defaults 100 turns / $1 / 10
 iterations, overridable per agent (`agent_definition.max_turns`/
 `max_cost_usd`/`max_tool_iterations`, `whagent_net/config/agents.yaml`'s
-per-agent fields of the same names). The worker checks turns/cost before
-each turn and after each LLM response. Cost accrues from provider-reported
+per-agent fields of the same names). The turn cap is evaluated only after a
+turn's final response (never inside its tool loop), and the cost cap after
+every LLM response. A session's `max_turns_override` / `max_cost_usd_override`
+(pinned on the sessions row at `StartSession`) replaces the definition's value
+for that session only; the effective turn limit is override, else definition,
+else 100 when unset or 0. A `max_turns` of 1 is single-turn: the session ends
+`done` (status_change:done with reason `single_turn`) after that turn's final
+response, unless the cost cap is also reached on that turn, in which case it is
+`capped`. Sessions whose workflow started before that change keep the capped
+behaviour (`workflow.GetVersion`). Cost accrues from provider-reported
 usage (`usage.include=true` on OpenRouter); when the provider omits cost it
 is estimated from tokens against a configurable per-model price table and
 the turn's usage record is flagged `estimated` — never treated as free.
@@ -469,8 +477,8 @@ out" differently from "finished"; `GetSession`'s `cap_kind` names which one
 (`turns` / `cost` / `tool_iterations`). Cap evaluation always reads
 `UsageStore.SumCost`'s committed running total, never a separately-mutated
 counter, and the turn/cost cap check itself (`whagent_net/worker/caps.go`'s
-`checkCaps`) is agent-definition-level only in M1 — there is no per-session
-cap override. The `GetSessionUsage` read path
+`checkCaps`) reads the effective (pinned override or definition) values. The
+`GetSessionUsage` read path
 (`whagent_net/api/handlers/usage.go`, backed by `UsageStore.Summary`) sums
 the same `turn_usage` rows `SumCost` does — one COUNT/COALESCE(SUM)/bool_or
 query, not a separately-mutated counter — so a client reading usage never
