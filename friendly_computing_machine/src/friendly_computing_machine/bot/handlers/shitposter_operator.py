@@ -453,8 +453,51 @@ def _idea_run_reason(run: ShitposterBrainJobRun, details: dict) -> str:
         rejections = details.get("rejections") or []
         if rejections:
             return f"every proposal rejected ({len(rejections)})"
-        return "shares at or above target"
+        return _idea_no_op_reason(details)
     return status
+
+
+def _at_or_above(reading: dict) -> bool:
+    share, target = reading.get("share"), reading.get("target")
+    # an empty pool (share None) counts as below target
+    return share is not None and target is not None and share >= target
+
+
+def _gate_closed_reason(novel: dict) -> str | None:
+    """The gate's reason when the reading shows it closed, else None."""
+    gate = novel.get("gate")
+    if isinstance(gate, dict):
+        return None if gate.get("open") else str(gate.get("reason") or "no reason recorded")
+    if gate is None or gate == "open":
+        return None
+    return str(gate)
+
+
+def _idea_no_op_reason(details: dict) -> str:
+    """Why a no_op run with no rejections emitted nothing, per branch.
+
+    Nothing was accepted, so the run cap never bit: a branch below target (with
+    the novel gate open) asked its agent and got no proposals back.
+    """
+    theme, novel = details.get("theme"), details.get("novel")
+    if not (
+        isinstance(theme, dict) and "target" in theme
+        and isinstance(novel, dict) and "target" in novel
+    ):
+        return "shares at or above target"
+    if _at_or_above(theme) and _at_or_above(novel):
+        return "shares at or above target"
+    theme_reason = (
+        "theme at/above target" if _at_or_above(theme) else "theme: agent proposed nothing"
+    )
+    gate_reason = _gate_closed_reason(novel)
+    if gate_reason is not None:
+        novel_reason = f"novel gate closed ({gate_reason})"
+    elif _at_or_above(novel):
+        novel_reason = "novel at/above target"
+    else:
+        novel_reason = "novel: agent proposed nothing"
+    return f"{theme_reason}; {novel_reason}"
 
 
 def _render_idea_run(run: ShitposterBrainJobRun) -> str:

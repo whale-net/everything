@@ -838,7 +838,7 @@ def test_idea_runs_listing_renders_every_status_with_all_fields(session, persona
     assert "weight changes: none" in ok
 
     noop = _run_block(text, runs["no_op"].id)
-    assert "no_op (schedule): shares at or above target" in noop
+    assert "no_op (schedule): theme at/above target; novel: agent proposed nothing" in noop
     assert "novel share n/a (empty pool) / target 0.1" in noop
     assert "novel gate: open (recent_mean 1)" in noop
     assert "entries: none" in noop
@@ -869,6 +869,63 @@ def test_idea_runs_no_op_with_only_rejections_says_so(session, persona):
     assert f"#{run.id}" in text
     assert "every proposal rejected (1)" in text
     assert "theme: run_cap" in text
+
+
+_CLOSED_GATE = {"open": False, "recent_mean": None, "baseline_mean": 2.0, "fraction": 0.8, "reason": "no_engagement_in_window"}
+_OPEN_GATE = {"open": True, "recent_mean": 1.0, "baseline_mean": 2.0, "fraction": 0.8, "reason": "engagement_drop"}
+
+
+@pytest.mark.parametrize(
+    "details, reason",
+    [
+        (
+            {
+                "theme": {"share": 0.0, "target": 0.15},
+                "novel": {"share": 0.0, "target": 0.1, "gate": _OPEN_GATE},
+                "rejections": [{"kind": "theme", "text": "x", "reason": "targets_member"},
+                               {"kind": "novel", "text": "y", "reason": "instruction"}],
+            },
+            "every proposal rejected (2)",
+        ),
+        (
+            {
+                "theme": {"share": 0.15, "target": 0.15},
+                "novel": {"share": 0.1, "target": 0.1, "gate": _OPEN_GATE},
+            },
+            "shares at or above target",
+        ),
+        (
+            {
+                "theme": {"share": 0.2, "target": 0.15},
+                "novel": {"share": 0.0, "target": 0.1, "gate": _CLOSED_GATE},
+            },
+            "theme at/above target; novel gate closed (no_engagement_in_window)",
+        ),
+        (
+            {
+                "theme": {"share": 0.05, "target": 0.15},
+                "novel": {"share": 0.1, "target": 0.1, "gate": _OPEN_GATE},
+            },
+            "theme: agent proposed nothing; novel at/above target",
+        ),
+        (
+            {
+                "theme": {"share": None, "target": 0.15},
+                "novel": {"share": None, "target": 0.1, "gate": {**_CLOSED_GATE, "reason": "no_engagement_drop"}},
+            },
+            "theme: agent proposed nothing; novel gate closed (no_engagement_drop)",
+        ),
+        ({"entries": [], "rejections": []}, "shares at or above target"),
+    ],
+    ids=["all_rejected", "shares_at_target", "novel_gate_closed", "theme_proposed_nothing", "empty_pool", "legacy_details"],
+)
+def test_idea_runs_no_op_reason_follows_details(session, persona, details, reason):
+    run = _idea_run(
+        session, persona, ShitposterBrainJobStatus.NO_OP.value, T0,
+        {"entries": [], "rejections": [], "refreshes": [], "weight_changes": [], **details},
+    )
+    block = _run_block(operator.render_idea_runs(persona.id, 10), run.id)
+    assert f"no_op (schedule): {reason}\n" in block
 
 
 def test_idea_runs_paging_and_empty(session, persona):

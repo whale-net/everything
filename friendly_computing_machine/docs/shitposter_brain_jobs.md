@@ -168,30 +168,48 @@ snapshot trigger after a successful run is wired (see the reflect section above)
 
 ## Idea-generator job
 
-`idea_generate.py` keeps generated lore near its standing-pool target. Compute
-reads the persona's active lore and takes each generated kind's share (theme or
-novel count over all active lore). Targets come from `current_weights(...)`,
-which reads the persona's current rows in `fcm.shitpostersourceweight` (SCD2,
-one current row per source, each revision carrying a JSON `cause`). The first
-read seeds them from the starting weights `FCM_SHITPOSTER_THEME_TARGET_WEIGHT`
-and `FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT` (cause `initial`, or `fallback` when
-those were outside their bounds or over the combined ceiling; see `ENV.md`).
-`shitposter_weight_dal.revise_weight` closes and opens rows for later steps;
-`/shitpost admin lore` shows current weights, bounds and ceiling. With no
-active lore, both shares count as below target. Hit promotion is not done here; `lore_promotion.py` owns it.
+`idea_generate.py` keeps generated lore near its standing-pool target. A run has
+three steps, all applied in the runner's single transaction: emit theme/novel
+entries, refresh generated lore's earned popularity (`lore_refresh.py`), and step
+the theme/novel target weights (`source_weights.py`). Hit promotion is not done
+here; `lore_promotion.py` owns it.
+
+**Targets.** `current_weights(...)` reads the persona's current rows in
+`fcm.shitpostersourceweight` (SCD2, one current row per source, each revision
+carrying a JSON `cause`). The first read seeds them from
+`FCM_SHITPOSTER_THEME_TARGET_WEIGHT` and `FCM_SHITPOSTER_NOVEL_TARGET_WEIGHT`
+(cause `initial`, or `fallback` when those were outside their bounds or over the
+combined ceiling; see `ENV.md`). Compute then runs the weight step (below)
+first, so a weight it steps is the target this run emits against.
+`/shitpost admin lore` shows current weights, bounds and ceiling.
+
+**Shares.** Each generated kind's share is its count over all active lore. With
+no active lore, both shares are `null` and count as below target.
+
+**Novel gate.** Read before any agent call, so a failed run still records it.
+It compares the mean popularity of posts whose engagement finalized in the last
+`FCM_SHITPOSTER_NOVEL_GATE_RECENT_DAYS` against the last
+`FCM_SHITPOSTER_NOVEL_GATE_BASELINE_DAYS`. It is open (`engagement_drop`) only
+when recent < `FCM_SHITPOSTER_NOVEL_GATE_FRACTION` x baseline; otherwise it is
+closed with `no_engagement_drop`, or `no_engagement_in_window` when either window
+has no finalized engagement.
+
+Branches run in order, theme first; each is asked only for the run-cap slots the
+earlier branch left:
 
 - **Theme.** When the theme share is below target, the theme agent
   (`shitposter-theme-generator`, overridable with
   `FCM_SHITPOSTER_THEME_GENERATOR_AGENT_ID`) gets the active lore and the
   operator-retired attributes and lore. It returns
   `{"entries": [{"text", "cites": [lore_id, ...]}]}`.
-- **Novel.** Only while the novel gate is open (recent-window mean popularity
-  below the configured fraction of the baseline mean) and the novel share is
-  below target, the novel agent (`shitposter-novel-generator`, overridable
-  with `FCM_SHITPOSTER_NOVEL_GENERATOR_AGENT_ID`) gets the persona's active
+- **Novel.** Only while the novel gate is open and the novel share is below
+  target, the novel agent (`shitposter-novel-generator`, overridable with
+  `FCM_SHITPOSTER_NOVEL_GENERATOR_AGENT_ID`) gets the persona's active
   attributes (`id`, `text`), the active lore, and the operator-retired
   attributes and lore. Engagement figures are never sent. It returns
   `{"entries": [{"text"}]}`.
+
+A reply without a JSON `entries` list, or an agent error or deadline, fails the run.
 
 Each proposal is rejected, writing nothing and never failing the run, with one of these reasons:
 
@@ -217,27 +235,73 @@ left the workspace:
 
 For idea-generator proposals, a Slack mention (`<@U...>`, `<!here>` and similar) is also `targets_member`.
 
-Apply writes each accepted entry as `shitposterloreentry` (`kind=theme`), with
-`popularity_score` set to the median popularity of active hit lore, or 0 when
-there is none. Each entry gets a `shitpostermemorychange` add row with
-`cause_kind=theme_synthesis` and `cause_ref` listing the cited entries
-(`lore:<id>,lore:<id>`). The run is `succeeded` when anything is written and
-`no_op` otherwise. Run details:
+**Entries.** Apply writes each accepted entry as `shitposterloreentry`
+(`kind=theme` or `kind=novel`), with `popularity_score` set to the median
+popularity of active hit lore, or 0 when there is none, and a
+`shitpostermemorychange` add row:
+
+- theme: `cause_kind=theme_synthesis`, `cause_ref` listing the cited entries
+  (`lore:<id>,lore:<id>`). A cited entry retired between compute and apply is
+  dropped; a theme entry left with fewer than two is rejected `insufficient_citations`.
+- novel: `cause_kind=novel_gate`, `cause_ref` the gate reading as JSON
+  (`{"baseline_mean", "fraction", "recent_mean"}`, keys sorted).
+
+**Refresh step** (`lore_refresh.py`, after the entries). Each active theme/novel
+entry's popularity is recomputed as the mean popularity of finalized posts
+written from snapshots that held any revision of the entry (matched by
+`lore_key`). An entry with no such posts, or already at that mean, is left
+alone; otherwise apply opens a new SCD2 revision under the same `lore_key`. A
+planned refresh whose row was retired or revised since compute is skipped.
+
+**Weight step** (`source_weights.py`). Per source, compute compares the mean
+popularity of finalized posts whose snapshot held that source's lore ("with")
+against posts without it, over days in the last `FCM_SHITPOSTER_WEIGHT_WINDOW_DAYS`
+on which both kinds were written. With higher "with" mean the weight steps up by
+`FCM_SHITPOSTER_WEIGHT_STEP`, lower steps it down, clamped to the source's
+bounds. It stays put with one of these reasons:
+
+- `below_minimum`: either group has fewer than `FCM_SHITPOSTER_WEIGHT_MIN_POSTS` posts
+- `equal_means`: the two means are equal
+- `bound`: the step is clamped to no change
+- `ceiling`: the step would push theme + novel above
+  `FCM_SHITPOSTER_SOURCE_WEIGHT_CEILING`; when both rise and only one fits, the
+  one further below its own upper bound steps
+- `superseded`: the stored weight moved between compute and apply
+
+Apply writes a `shitpostersourceweight` revision (cause
+`{with_mean, without_mean, with_n, without_n, days_compared}`, `run_id` set) for
+each stepped source. A failed run writes no weight revisions.
+
+**Status.** `failed` when compute fails, e.g. an agent error (details keep the share
+and gate readings and any rejections; nothing is written). Otherwise
+`succeeded` when any entry is written, any refresh is applied, or any weight
+steps; else `no_op`. Run details:
 
 ```
-{"theme": {"share", "target"}, "novel": {"share", "target", "gate"},
+{"theme": {"share", "target"},
+ "novel": {"share", "target",
+           "gate": {"open", "recent_mean", "baseline_mean", "fraction", "reason"}},
  "entries": [{"lore_id", "kind", "agent_id", "cited"}],
  "rejections": [{"kind", "text", "reason"}],
- "refreshes": [], "weight_changes": []}
+ "refreshes": [{"lore_id", "lore_key", "old", "new", "post_count"}],
+ "weight_changes": [{"source", "old", "new", "with_mean", "without_mean"}
+                    | {"source", "unchanged_reason"}]}
 ```
 
-A share is `null` when the pool is empty.
+`share` is `null` when the pool is empty; gate means are `null` when their
+window has no finalized engagement. A refresh row's `lore_id` is the new revision.
+
+`/shitpost admin ideas` labels a `no_op` run "every proposal rejected (n)" when
+there are rejections, "shares at or above target" when both shares are, and
+otherwise per branch: `theme at/above target` or `theme: agent proposed
+nothing`, and `novel gate closed (<reason>)`, `novel at/above target` or
+`novel: agent proposed nothing`.
 
 Runs every `FCM_SHITPOSTER_IDEA_GENERATOR_CADENCE_HOURS` (default 24) and on demand with
 `brain-trigger <persona_id> idea_generate`. Setting the cadence to `off` removes the
 persona's schedule at the next worker start; `brain-trigger` still works. Runs share the
 per-persona lock, so one overlapping another brain job is recorded `skipped`, and a
-failed or timed-out run writes no lore.
+failed or timed-out run writes no lore, refreshes or weight revisions.
 
 ## Timeouts
 
