@@ -44,6 +44,7 @@ go_library(
 go_test(
     name = "handlers_test",
     srcs = [
+        "agents_validate_test.go",
         "auth_test.go",
         "control_test.go",
         "expired_state_test.go",
