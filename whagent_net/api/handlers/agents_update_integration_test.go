@@ -100,6 +100,9 @@ func TestUpdateAgent_InvalidArguments(t *testing.T) {
 		"zero iterations": func(r *pb.UpdateAgentRequest) { r.MaxToolIterations = 0 },
 		"bad mode":        func(r *pb.UpdateAgentRequest) { r.ToolLoadingMode = "weird" },
 		"blank scope":     func(r *pb.UpdateAgentRequest) { r.Scope = "   " },
+		"zero idle":       func(r *pb.UpdateAgentRequest) { v := "0s"; r.IdleTimeout = &v },
+		"neg idle":        func(r *pb.UpdateAgentRequest) { v := "-5m"; r.IdleTimeout = &v },
+		"bad idle":        func(r *pb.UpdateAgentRequest) { v := "soon"; r.IdleTimeout = &v },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -138,4 +141,29 @@ func TestUpdateAgent_PinnedSessionKeepsOriginalDefinition(t *testing.T) {
 	cur, err := store.AgentDefinitions().GetCurrent(ctx, "ag")
 	require.NoError(t, err)
 	assert.NotEqual(t, orig.ID, cur.ID)
+}
+
+// idle_timeout set on UpdateAgent round-trips through GetAgent, and an unset
+// field on a later update clears it.
+func TestUpdateAgent_IdleTimeout_SetThenCleared(t *testing.T) {
+	srv, store, _ := newAgentsServer(t, testAdminRole)
+	ctx := context.Background()
+	seedServiceTestAgent(t, ctx, store, "ag", nil)
+	admin := ctxAs(humanClaims("u", testAdminRole))
+
+	set := validUpdate("ag")
+	v := "2m"
+	set.IdleTimeout = &v
+	_, err := srv.UpdateAgent(admin, set)
+	require.NoError(t, err)
+	got, err := srv.GetAgent(admin, &pb.GetAgentRequest{AgentId: "ag"})
+	require.NoError(t, err)
+	require.NotNil(t, got.GetCurrent().IdleTimeout)
+	assert.Equal(t, "2m", got.GetCurrent().GetIdleTimeout())
+
+	_, err = srv.UpdateAgent(admin, validUpdate("ag"))
+	require.NoError(t, err)
+	got, err = srv.GetAgent(admin, &pb.GetAgentRequest{AgentId: "ag"})
+	require.NoError(t, err)
+	assert.Nil(t, got.GetCurrent().IdleTimeout)
 }
