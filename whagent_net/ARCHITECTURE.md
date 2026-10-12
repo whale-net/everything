@@ -301,6 +301,18 @@ timed-out attempt records `PromptTokens: 0`, so a retry the provider
 *billed* is invisible to the cost cap. `callModelActivityOptions` reduces
 that exposure; it does not eliminate it.
 
+**Idle clock and expiry.** Entering `awaiting_input` arms a workflow timer
+for the session's effective idle timeout, resolved once at run start by
+`ResolveIdleTimeout` and recorded in history (replay never re-reads config).
+A `SendTurn` or `Stop` selected in that wait cancels the timer; no timer runs
+during `runTurn`, so a long turn is never interrupted or counted as idle, and
+a completed turn re-arms a fresh full timeout. When the timer fires first the
+workflow writes `expired` with a `status_change:expired` event carrying
+`reason: idle_timeout`, then returns. Races with `Stop` or `SendTurn` are
+decided by workflow event order, and the status CAS never overwrites a
+terminal status. Pre-change sessions parked in `awaiting_input` get the clock
+from the one-time `ArmIdleTimer` sweep (`worker/idle_sweep.go`).
+
 Bounded tasks (~100 turns) are the target; Continue-As-New is deferred
 until that assumption changes. `parent_session_id` is set from day one so a
 session started via `mcp` by another session is an ordinary session.
