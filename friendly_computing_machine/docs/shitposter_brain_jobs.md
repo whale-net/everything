@@ -68,7 +68,7 @@ Each op is rejected, changing nothing, with one of these reasons:
 - `malformed`: wrong shape, unknown op, empty or over-long text
 - `no_valid_cause`: no cited ref is an input of this run
 - `missing_attribute`: names a key that is not an active attribute
-- `targets_member`: add text names a current community member (M6 guardrail check)
+- `targets_member`: add text identifies a current or former community member (see [What identifies a member](#what-identifies-a-member))
 - `instruction`: `kind` is `instruction`, or the text reads as a directive
 - `negative_reinforce`: reinforce cites an engagement whose negative reactions outnumber the rest
 - `retired_readd`: add matches an operator-retired item and all cited evidence predates the retirement
@@ -148,7 +148,7 @@ Each op is rejected, changing nothing, with one of these reasons:
 - `malformed`: wrong shape, unknown op, empty or over-long text
 - `no_valid_cause`: no cited ref is an input of this run
 - `missing_attribute`: names a key that is not an active attribute
-- `targets_member`: add text names a current community member (M6 guardrail check)
+- `targets_member`: add text identifies a current or former community member (see [What identifies a member](#what-identifies-a-member))
 - `instruction`: `kind` is `instruction`, or the text reads as a directive
 - `negative_reinforce`: reinforce cites an engagement whose negative reactions outnumber the rest
 - `retired_readd`: add matches an operator-retired item and all cited evidence predates the retirement
@@ -202,6 +202,20 @@ Each proposal is rejected, writing nothing and never failing the run, with one o
 - `run_cap`: past `FCM_SHITPOSTER_IDEA_GENERATOR_RUN_CAP` (default 2) entries across theme and novel
 
 The guardrail checks live in `shitposter_brain/guardrails.py`, shared with the reflector.
+
+### What identifies a member
+
+`guardrails.member_identifiers` builds the set both jobs check (whole-word,
+case-insensitive), from every non-bot `slackuser` row, including users who have
+left the workspace:
+
+- the stored `name`, `display_name` and `real_name` (Slack user sync stores the
+  last two separately)
+- each word of those names at least 3 characters long that is not a common word
+  (so a first or last name alone matches, but "will" from "Will Smith" does not)
+- every alias in `FCM_SHITPOSTER_MEMBER_ALIASES` (operator-maintained nicknames)
+
+For idea-generator proposals, a Slack mention (`<@U...>`, `<!here>` and similar) is also `targets_member`.
 
 Apply writes each accepted entry as `shitposterloreentry` (`kind=theme`), with
 `popularity_score` set to the median popularity of active hit lore, or 0 when

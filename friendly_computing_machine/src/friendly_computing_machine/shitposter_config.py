@@ -71,6 +71,15 @@ def load_negative_emoji() -> frozenset[str]:
     return parse_negative_emoji(os.environ.get("FCM_SHITPOSTER_NEGATIVE_EMOJI", ""))
 
 
+def parse_member_aliases(raw: str) -> list[str]:
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def load_member_aliases() -> list[str]:
+    """Read FCM_SHITPOSTER_MEMBER_ALIASES: extra nicknames that identify a channel member."""
+    return parse_member_aliases(os.environ.get("FCM_SHITPOSTER_MEMBER_ALIASES", ""))
+
+
 DEFAULT_LORE_TOP_SHARE = 0.10
 DEFAULT_LORE_WINDOW_DAYS = 30
 

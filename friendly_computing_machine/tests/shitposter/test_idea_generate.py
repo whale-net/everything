@@ -87,7 +87,10 @@ def engine(monkeypatch):
         "FCM_SHITPOSTER_THEME_GENERATOR_AGENT_ID",
     ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(idea_generate, "_member_names", lambda: ["Alice"])
+    monkeypatch.delenv("FCM_SHITPOSTER_MEMBER_ALIASES", raising=False)
+    with Session(engine) as s:
+        s.add(SlackUser(slack_id="U_ALICE", name="Alice", is_bot=False))
+        s.commit()
     return engine
 
 
@@ -286,6 +289,55 @@ def test_guardrail_rejections(engine, persona_id, monkeypatch, text, reason):
     assert outcome.details["rejections"] == [
         {"kind": "theme", "text": text, "reason": reason}
     ]
+
+
+@pytest.fixture
+def members(engine, monkeypatch):
+    monkeypatch.setenv("FCM_SHITPOSTER_MEMBER_ALIASES", "Little Bobby")
+    with Session(engine) as s:
+        s.add(
+            SlackUser(
+                slack_id="U_BOB", name="bobbyt", display_name="bobbyt", real_name="Robert Tables"
+            )
+        )
+        # former member: row kept after they stopped posting
+        s.add(SlackUser(slack_id="U_GONE", name="Zelda Quinlan", real_name="Zelda Quinlan"))
+        s.commit()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Keeps roasting Robert Tables about spreadsheets",
+        "Keeps roasting Robert about spreadsheets",
+        "Treats little bobby as a legend",
+        "Still thinks Zelda Quinlan runs the channel",
+    ],
+    ids=["real_name", "first_name", "nickname", "former_member"],
+)
+def test_indirect_member_identification_rejected(
+    engine, persona_id, monkeypatch, members, text
+):
+    a, b, *_ = _hits(engine, persona_id, 4)
+    _agent(monkeypatch, [{"text": text, "cites": [a, b]}])
+    _, outcome = _run(engine, persona_id)
+    assert outcome.status == "no_op"
+    assert _themes(engine, persona_id) == []
+    assert outcome.details["rejections"] == [
+        {"kind": "theme", "text": text, "reason": "targets_member"}
+    ]
+
+
+def test_common_word_name_token_is_not_rejected(engine, persona_id, monkeypatch):
+    with Session(engine) as s:
+        s.add(SlackUser(slack_id="U_GRACE", name="Grace Okonkwo", real_name="Grace Okonkwo"))
+        s.commit()
+    a, b, *_ = _hits(engine, persona_id, 4)
+    _agent(monkeypatch, [{"text": "Says grace before every snack", "cites": [a, b]}])
+    _, outcome = _run(engine, persona_id)
+    assert outcome.status == "succeeded"
+    assert [t.text for t in _themes(engine, persona_id)] == ["Says grace before every snack"]
+    assert outcome.details["rejections"] == []
 
 
 def test_rejections_do_not_block_valid_entries(engine, persona_id, monkeypatch):

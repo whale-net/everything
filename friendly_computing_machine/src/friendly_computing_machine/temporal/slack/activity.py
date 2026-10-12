@@ -94,6 +94,8 @@ async def backfill_slack_user_info_activity() -> list[SlackUserCreate]:
                     name=slack_user_profile.get("display_name")
                     or slack_user_profile.get("real_name"),
                     slack_team_slack_id=slack_team_slack_id,
+                    display_name=slack_user_profile.get("display_name") or None,
+                    real_name=slack_user_profile.get("real_name") or None,
                 )
             )
         except Exception as e:
