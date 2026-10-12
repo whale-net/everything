@@ -65,3 +65,39 @@ func TestMigrationExpired_AddsStatusAndIdleTimeoutColumns(t *testing.T) {
 	assert.False(t, dirty)
 	assert.Equal(t, head, version)
 }
+
+// TestMigrationExpired_SessionsStatusCheckFollowsHead proves sessions.status
+// accepts 'expired' at head and rejects it once the head migration reverses.
+func TestMigrationExpired_SessionsStatusCheckFollowsHead(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	head, err := runner.LatestVersion()
+	require.NoError(t, err)
+	require.NoError(t, runner.Migrate(head))
+
+	insertExpired := `
+		INSERT INTO sessions (session_id, subject_iss, subject_sub, subject_kind,
+		                      on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
+		                      agent_id, model, status)
+		VALUES (gen_random_uuid(), 'iss', 'sub', 'human', 'iss', 'sub', 'human',
+		        'agent', 'model', 'expired')
+	`
+	_, err = sqlDB.ExecContext(ctx, insertExpired)
+	require.NoError(t, err, "sessions.status 'expired' must be accepted at head")
+
+	// The down migration refuses to run while an expired row exists, so the
+	// probe row is removed before reversing.
+	_, err = sqlDB.ExecContext(ctx, `DELETE FROM sessions WHERE status = 'expired'`)
+	require.NoError(t, err)
+	require.NoError(t, runner.Migrate(head-1), "head must reverse to the previous version")
+
+	_, err = sqlDB.ExecContext(ctx, insertExpired)
+	require.Error(t, err, "sessions.status 'expired' must be rejected after the head migration is reversed")
+	assert.Contains(t, err.Error(), "23514")
+}

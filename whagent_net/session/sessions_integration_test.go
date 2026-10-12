@@ -524,3 +524,19 @@ func TestSessionStore_PinnedContext_StoredOnceAndReportedAsUTF8Bytes(t *testing.
 	assert.Nil(t, byID[with.SessionID].PinnedContext)
 	assert.Equal(t, 0, byID[without.SessionID].PinnedContextBytes)
 }
+
+// TestSessionStore_ListArchiveEligible_IncludesExpired proves an expired
+// session is selected for S3 archival (C18) while a running session is not.
+func TestSessionStore_ListArchiveEligible_IncludesExpired(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	expired := createTestSession(t, ctx, s)
+	require.NoError(t, s.Sessions().UpdateStatus(ctx, expired.SessionID, session.StatusExpired, nil))
+	running := createTestSession(t, ctx, s)
+
+	ids, err := s.Sessions().ListArchiveEligible(ctx, time.Now().Add(time.Hour), 100)
+	require.NoError(t, err)
+	assert.Contains(t, ids, expired.SessionID, "an expired session must be archive-eligible")
+	assert.NotContains(t, ids, running.SessionID, "a running session must not be archive-eligible")
+}
