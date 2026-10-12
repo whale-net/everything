@@ -505,7 +505,10 @@ out" differently from "finished"; `GetSession`'s `cap_kind` names which one
 (`turns` / `cost` / `tool_iterations`). Cap evaluation always reads
 `UsageStore.SumCost`'s committed running total, never a separately-mutated
 counter, and the turn/cost cap check itself (`whagent_net/worker/caps.go`'s
-`checkCaps`) reads the effective (pinned override or definition) values. The
+`checkCaps`) reads the effective (pinned override or definition) values. Every
+effective cost cap is at most $10 (`session.MaxCostUSDCeiling`), enforced by
+StartSession, MCP `start_session`, the UI start form, UpdateAgent (only when
+the value changes) and `config.Validate`. The
 `GetSessionUsage` read path
 (`whagent_net/api/handlers/usage.go`, backed by `UsageStore.Summary`) sums
 the same `turn_usage` rows `SumCost` does — one COUNT/COALESCE(SUM)/bool_or
