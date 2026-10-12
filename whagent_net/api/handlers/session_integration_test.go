@@ -255,6 +255,7 @@ func TestGetSession_MapsEachStoredStatusToTheMatchingProtoEnum(t *testing.T) {
 		{name: "awaiting_input", terminal: session.StatusAwaitingInput, wantState: pb.SessionState_SESSION_STATE_AWAITING_INPUT},
 		{name: "done", terminal: session.StatusDone, wantState: pb.SessionState_SESSION_STATE_DONE},
 		{name: "stopped", terminal: session.StatusStopped, wantState: pb.SessionState_SESSION_STATE_STOPPED},
+		{name: "expired", terminal: session.StatusExpired, wantState: pb.SessionState_SESSION_STATE_EXPIRED},
 	}
 
 	for _, tc := range cases {
@@ -467,6 +468,35 @@ func TestStopSession_PermissionDenied_DifferentSubject(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestSendTurn_ExpiredSession_FailedPrecondition proves SendTurn on an
+// expired session is rejected before any turn is signalled.
+func TestSendTurn_ExpiredSession_FailedPrecondition(t *testing.T) {
+	client, store := newTestServer(t)
+	ctx := context.Background()
+	sess := createSession(t, ctx, store, devSubject, session.StatusExpired)
+
+	_, err := client.SendTurn(ctx, &pb.SendTurnRequest{SessionId: sess.SessionID.String(), Input: "hi"})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+// TestStopSession_ExpiredSession_IdempotentKeepsExpired proves StopSession on
+// an expired session succeeds without signalling and leaves status expired.
+func TestStopSession_ExpiredSession_IdempotentKeepsExpired(t *testing.T) {
+	client, store := newTestServer(t)
+	ctx := context.Background()
+	sess := createSession(t, ctx, store, devSubject, session.StatusExpired)
+
+	resp, err := client.StopSession(ctx, &pb.StopSessionRequest{SessionId: sess.SessionID.String()})
+
+	require.NoError(t, err)
+	assert.Equal(t, pb.SessionState_SESSION_STATE_EXPIRED, resp.Session.State)
+	got, err := store.Sessions().GetByID(ctx, sess.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, session.StatusExpired, got.Status)
 }
 
 // TestSendTurn_PermissionDenied_SameSubDifferentIss proves LB2: a caller

@@ -120,6 +120,24 @@ func TestSessionStore_UpdateStatus_CAS_TerminalStatusNeverOverwritten(t *testing
 	assert.Equal(t, session.StatusDone, got.Status, "the terminal status must be left untouched by the rejected write")
 }
 
+// TestSessionStore_UpdateStatus_CAS_ExpiredNeverOverwritten proves expired is
+// in the UpdateStatus CAS terminal list: a running write over an expired
+// session is rejected and the status stays expired.
+func TestSessionStore_UpdateStatus_CAS_ExpiredNeverOverwritten(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	sess := createTestSession(t, ctx, s)
+	require.NoError(t, s.Sessions().UpdateStatus(ctx, sess.SessionID, session.StatusExpired, nil))
+
+	err := s.Sessions().UpdateStatus(ctx, sess.SessionID, session.StatusRunning, nil)
+	assert.ErrorIs(t, err, session.ErrTerminalStatus)
+
+	got, err := s.Sessions().GetByID(ctx, sess.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, session.StatusExpired, got.Status)
+}
+
 // TestSessionStore_UpdateStatus_CappedRecordsTerminalReason proves a
 // terminal UpdateStatus call populates cap_kind/error_category/
 // error_detail from TerminalReason (FR3), and that those columns round
