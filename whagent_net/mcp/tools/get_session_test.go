@@ -83,6 +83,16 @@ func TestGetSession_RendersEveryTerminalReasonVariant(t *testing.T) {
 				ErrorCategory: "retryable", ErrorDetail: "upstream model provider timed out",
 			},
 		},
+		{
+			name: "expired: no terminal-reason fields set",
+			session: &pb.Session{
+				SessionId: "sess-6",
+				State:     pb.SessionState_SESSION_STATE_EXPIRED,
+				AgentId:   "agent-1",
+				Model:     "gpt-5",
+			},
+			want: GetSessionOutput{SessionID: "sess-6", State: "expired", AgentID: "agent-1", Model: "gpt-5"},
+		},
 	}
 
 	for _, tc := range cases {
