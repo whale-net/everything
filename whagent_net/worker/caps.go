@@ -1,15 +1,12 @@
 // Cap evaluation (issue #2119; ARCHITECTURE.md "Guardrails"): FR6's turn
-// cap and FR7's cost cap, both sourced from the session's pinned agent
-// definition (session.AgentDefinition.MaxTurns/MaxCostUSD). A pinned cost
-// override (sessions.max_cost_usd_override) reaches checkCaps via
-// ResolveAgentDefinition, which substitutes it into MaxCostUSD for the turn.
+// cap and FR7's cost cap. Limits come from the session's pinned agent
+// definition, with sessions.max_turns_override / max_cost_usd_override
+// substituted per session by ResolveAgentDefinition (applyPinnedCaps).
 // Defaults are session.DefaultMaxTurns/DefaultMaxCostUSD when the fields are zero-valued.
 //
-// checkCaps is invoked by SessionWorkflow.processTurn (workflow.go) both
-// before a turn starts and after the turn's LLM response is committed
-// (this file's package doc comment mirrors the issue body's "before each
-// turn and after each LLM response" -- see workflow.go for exactly where
-// each call site lands once wired in). costSoFar must always be the
+// The turn cap is evaluated only after a turn's final response (see
+// workflow.go's evaluateFinalCaps); the cost cap also runs after each LLM
+// response inside the tool loop. costSoFar must always be the
 // UsageStore.SumCost committed running total (usage.go) -- never a
 // separately-mutated counter -- so this function takes it as a plain
 // argument rather than reading it itself, keeping checkCaps I/O-free and
