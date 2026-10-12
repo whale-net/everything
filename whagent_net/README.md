@@ -422,6 +422,27 @@ Nothing else to run. To confirm, check the worker logs for
 `idle sweep: could not arm idle timer` WARNINGs for individual sessions.
 Restart the worker to re-run it; re-runs do not extend armed clocks.
 
+## StartSession overrides
+
+`StartSession` takes `agent_id` plus three optional per-session overrides.
+Each applies to that session only; the agent definition is never mutated.
+
+- `max_turns_override` (int32, `>= 1`) replaces the definition's turn cap.
+- `max_cost_usd_override` (double, in `(0, 10]`) replaces its cost cap.
+- `idle_timeout_override` (Go duration string such as `"1h"`, positive whole
+  seconds) replaces its idle timeout.
+
+An out-of-range value is rejected with `INVALID_ARGUMENT` naming the field
+and value. Unset overrides fall through to the agent definition, then the
+platform default.
+
+```bash
+grpcurl -plaintext -d '{"agent_id": "code-review", "max_turns_override": 20, "max_cost_usd_override": 0.25, "idle_timeout_override": "1h"}' \
+  localhost:50054 whagent.v1.SessionService/StartSession
+```
+
+MCP `start_session` exposes the same three overrides.
+
 ## Local development
 
 Requires Postgres (`PG_DATABASE_URL`, also backs `ui`'s own DB-backed

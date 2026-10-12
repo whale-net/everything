@@ -95,6 +95,7 @@ go_test(
         "service_account_integration_test.go",
         "session_integration_test.go",
         "start_max_cost_override_integration_test.go",
+        "start_idle_timeout_integration_test.go",
         "start_max_turns_integration_test.go",
         "start_on_behalf_of_integration_test.go",
         "start_pinned_context_integration_test.go",
