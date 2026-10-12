@@ -234,6 +234,20 @@ func TestReadTranscript_AnyAuthenticatedCallerMayReadAnySession(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestReadTranscript_ExpiredSessionIsReadable proves an expired session's
+// transcript is returned like any other terminal session's (FR2/C3).
+func TestReadTranscript_ExpiredSessionIsReadable(t *testing.T) {
+	client, store := newTestServer(t)
+	ctx := context.Background()
+	sess := createSession(t, ctx, store, devSubject, session.StatusRunning)
+	require.NoError(t, store.Sessions().UpdateStatus(ctx, sess.SessionID, session.StatusExpired, nil))
+
+	resp, err := client.ReadTranscript(ctx, &pb.ReadTranscriptRequest{SessionId: sess.SessionID.String()})
+
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+}
+
 // TestGetSession_MapsEachStoredStatusToTheMatchingProtoEnum proves all six
 // session.Status values round-trip through GetSession to the correct
 // pb.SessionState (FR3). Terminal statuses (done/stopped/failed/capped) are
@@ -614,6 +628,25 @@ func TestListSessions_FiltersMapCorrectly(t *testing.T) {
 		}
 		assert.Contains(t, ids, done.SessionID.String())
 		assert.NotContains(t, ids, running.SessionID.String())
+	})
+
+	t.Run("state_expired", func(t *testing.T) {
+		running := createSessionWith(t, ctx, store, nil)
+		expired := createSessionWith(t, ctx, store, nil)
+		require.NoError(t, store.Sessions().UpdateStatus(ctx, expired.SessionID, session.StatusExpired, nil))
+
+		state := pb.SessionState_SESSION_STATE_EXPIRED
+		resp, err := client.ListSessions(ctx, &pb.ListSessionsRequest{State: &state})
+		require.NoError(t, err)
+		var ids []string
+		for _, s := range resp.Sessions {
+			ids = append(ids, s.SessionId)
+		}
+		assert.Contains(t, ids, expired.SessionID.String())
+		assert.NotContains(t, ids, running.SessionID.String())
+		for _, s := range resp.Sessions {
+			assert.Equal(t, pb.SessionState_SESSION_STATE_EXPIRED, s.State)
+		}
 	})
 
 	t.Run("started_by_kind", func(t *testing.T) {
