@@ -301,6 +301,12 @@ timed-out attempt records `PromptTokens: 0`, so a retry the provider
 *billed* is invisible to the cost cap. `callModelActivityOptions` reduces
 that exposure; it does not eliminate it.
 
+**Idle timeout precedence.** A session's effective idle timeout is its
+`StartSession` override (`idle_timeout_override`) if set, else its agent
+definition's `idle_timeout`, else the platform default
+`WHAGENT_DEFAULT_IDLE_TIMEOUT`. `api` resolves it once at StartSession and
+pins it in workflow history; the agent definition is never mutated.
+
 **Idle clock and expiry.** Entering `awaiting_input` arms a workflow timer
 for the session's effective idle timeout, resolved once at run start by
 `ResolveIdleTimeout` and recorded in history (replay never re-reads config).
