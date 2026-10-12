@@ -3,7 +3,7 @@
 // definition (session.AgentDefinition.MaxTurns/MaxCostUSD). A pinned cost
 // override (sessions.max_cost_usd_override) reaches checkCaps via
 // ResolveAgentDefinition, which substitutes it into MaxCostUSD for the turn.
-// Defaults are defaultMaxTurns/defaultMaxCostUSD when the fields are zero-valued.
+// Defaults are session.DefaultMaxTurns/DefaultMaxCostUSD when the fields are zero-valued.
 //
 // checkCaps is invoked by SessionWorkflow.processTurn (workflow.go) both
 // before a turn starts and after the turn's LLM response is committed
@@ -61,23 +61,12 @@ func marshalCappedEvent(capKind session.CapKind) (json.RawMessage, error) {
 	return json.Marshal(cappedEventPayload{CapKind: capKind})
 }
 
-// defaultMaxTurns and defaultMaxCostUSD are FR6/FR7's cap defaults
-// (ARCHITECTURE.md "Guardrails": "defaults 100 turns / $1"), applied when
-// an agent definition's MaxTurns/MaxCostUSD is the Go zero value -- M1
-// seeds agent_definition rows with explicit values (session/agentdef.go's
-// Upsert doc comment), but checkCaps must not silently treat an
-// unpopulated field as "uncapped".
-const (
-	defaultMaxTurns   = 100
-	defaultMaxCostUSD = 1.0
-)
-
 // defaultMaxToolIterations bounds the inner tool-call loop workflow.go's
 // processTurn runs within a single external turn ("add the inner tool
 // loop"): the default number of model calls one turn may make while the
 // model keeps requesting tool calls, applied when an agent definition's
 // MaxToolIterations is the Go zero value -- the same zero-means-default
-// convention defaultMaxTurns/defaultMaxCostUSD above already follow.
+// convention session.DefaultMaxTurns/DefaultMaxCostUSD already follow.
 const defaultMaxToolIterations = 10
 
 // maxToolIterations returns def's effective tool-iteration cap, falling
@@ -99,8 +88,8 @@ type capCheck struct {
 
 // checkCaps evaluates FR6 (turn >= the definition's effective MaxTurns)
 // and FR7 (costSoFar >= the definition's effective MaxCostUSD) against
-// def, applying defaultMaxTurns/defaultMaxCostUSD wherever def's fields
-// are zero-valued. turn is the turn number just reached; costSoFar is the
+// def, applying session.DefaultMaxTurns/DefaultMaxCostUSD wherever def's
+// fields are zero-valued. turn is the turn number just reached; costSoFar is the
 // UsageStore.SumCost committed running total (never a mutable counter,
 // FR7).
 //
@@ -120,22 +109,17 @@ func checkCaps(turn int, def session.AgentDefinition, costSoFar float64) (capChe
 	return checkCostCap(def, costSoFar), nil
 }
 
-// effectiveMaxTurns is def's turn cap, defaultMaxTurns when MaxTurns is zero.
+// effectiveMaxTurns is def's turn cap, session.DefaultMaxTurns when MaxTurns
+// is zero. No override is passed: the worker's cost and turn caps read the
+// already-resolved definition (ResolveAgentDefinition).
 func effectiveMaxTurns(def session.AgentDefinition) int {
-	if def.MaxTurns == 0 {
-		return defaultMaxTurns
-	}
-	return def.MaxTurns
+	return session.EffectiveMaxTurns(nil, def)
 }
 
 // checkCostCap is FR7's cost half of checkCaps on its own: the turn cap is
 // evaluated only after a turn's final response, never inside the tool loop.
 func checkCostCap(def session.AgentDefinition, costSoFar float64) capCheck {
-	maxCostUSD := def.MaxCostUSD
-	if maxCostUSD == 0 {
-		maxCostUSD = defaultMaxCostUSD
-	}
-	if costSoFar >= maxCostUSD {
+	if costSoFar >= session.EffectiveMaxCostUSD(nil, def) {
 		return capCheck{Capped: true, CapKind: session.CapKindCost}
 	}
 	return capCheck{}

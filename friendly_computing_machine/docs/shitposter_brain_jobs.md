@@ -185,7 +185,13 @@ active lore, both shares count as below target. Hit promotion is not done here; 
   `FCM_SHITPOSTER_THEME_GENERATOR_AGENT_ID`) gets the active lore and the
   operator-retired attributes and lore. It returns
   `{"entries": [{"text", "cites": [lore_id, ...]}]}`.
-- **Novel.** Stub: it records `gate: "not_implemented"` and emits nothing.
+- **Novel.** Only while the novel gate is open (recent-window mean popularity
+  below the configured fraction of the baseline mean) and the novel share is
+  below target, the novel agent (`shitposter-novel-generator`, overridable
+  with `FCM_SHITPOSTER_NOVEL_GENERATOR_AGENT_ID`) gets the persona's active
+  attributes (`id`, `text`), the active lore, and the operator-retired
+  attributes and lore. Engagement figures are never sent. It returns
+  `{"entries": [{"text"}]}`.
 
 Each proposal is rejected, writing nothing and never failing the run, with one of these reasons:
 

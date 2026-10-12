@@ -36,8 +36,8 @@
 #                      "whatever the server exposes" (whagent-side filtering
 #                      is C22/Later, ARCHITECTURE.md "Tool selection")
 #   - max_turns / max_cost_usd: FR6/FR7 guardrails, left at/near the 100 /
-#                      $1 defaults (worker/caps.go's defaultMaxTurns/
-#                      defaultMaxCostUSD) so the caps stay exercisable
+#                      $1 defaults (session.DefaultMaxTurns/
+#                      DefaultMaxCostUSD) so the caps stay exercisable
 #   - idle_timeout: optional Go duration string (e.g. "24h"), positive whole
 #                      seconds; unset means WHAGENT_DEFAULT_IDLE_TIMEOUT applies
 #   - max_tool_iterations: bounds the inner tool-call loop (worker/workflow.go's

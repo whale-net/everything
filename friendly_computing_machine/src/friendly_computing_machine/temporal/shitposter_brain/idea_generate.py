@@ -204,25 +204,32 @@ def read_novel_gate(
 
 
 def _novel_prompt(
-    active: list[dict[str, Any]], retired: list[dict[str, Any]], max_entries: int
+    active: list[dict[str, Any]],
+    retired: list[dict[str, Any]],
+    max_entries: int,
+    attributes: list[dict[str, Any]],
 ) -> str:
     # engagement figures stay out of the prompt so a slump nudges rather than swings the voice
     return (
         f"Propose at most {max_entries} novel lore entries: fresh running bits that fit "
         'this persona. Reply with only one JSON object: {"entries": [{"text": str}]}.\n\n'
+        f"Persona attributes: {json.dumps(attributes)}\n"
         f"Active lore: {json.dumps(active)}\n"
         f"Retired by the operator: {json.dumps([r['text'] for r in retired])}"
     )
 
 
 def _call_novel_agent(
-    active: list[dict[str, Any]], retired: list[dict[str, Any]], max_entries: int
+    active: list[dict[str, Any]],
+    retired: list[dict[str, Any]],
+    max_entries: int,
+    attributes: list[dict[str, Any]],
 ) -> str:
     client = get_whagent_client()
     deadline = time.monotonic() + AGENT_DEADLINE_SECONDS
     session = client.start_session(
         load_novel_generator_agent_id(),
-        first_turn=_novel_prompt(active, retired, max_entries),
+        first_turn=_novel_prompt(active, retired, max_entries, attributes),
     )
     return _wait_for_reply(client, session.session_id, 0, deadline)
 
@@ -370,7 +377,7 @@ def _novel_branch(ctx: dict[str, Any], slots: int) -> dict[str, Any]:
         or not below_target(reading["share"], reading["target"])
     ):
         return {"reading": reading, "accepted": [], "rejections": []}
-    raw = _parse_entries(_call_novel_agent(ctx["active"], ctx["retired"], slots))
+    raw = _parse_entries(_call_novel_agent(ctx["active"], ctx["retired"], slots, ctx["attributes"]))
     accepted, rejections = _validate_novel(raw, ctx["member_names"], ctx["retired"])
     return {"reading": reading, "accepted": accepted, "rejections": rejections}
 
@@ -402,6 +409,10 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
             for d in source_weights.compute_weight_changes(session, persona_id, now)
         ]
         active_rows = shitposter_memory_dal.active_lore(persona_id, session=session)
+        attributes = [
+            {"id": a.id, "text": a.text}
+            for a in shitposter_memory_dal.active_attributes(persona_id, session=session)
+        ]
         retired = guardrails.operator_retired_attributes(
             session, persona_id
         ) + guardrails.operator_retired_lore(session, persona_id)
@@ -419,6 +430,7 @@ def _compute(params: BrainJobInput) -> dict[str, Any]:
         "persona_id": persona_id,
         "active": [{"id": r.id, "text": r.text, "kind": r.kind} for r in active_rows],
         "active_ids": {r.id for r in active_rows},
+        "attributes": attributes,
         "retired": retired,
         "member_names": member_names,
         "shares": pool_shares([r.kind for r in active_rows]),
