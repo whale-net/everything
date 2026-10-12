@@ -128,3 +128,27 @@ func TestGetSession_PinnedContextOnlyWhenRequested(t *testing.T) {
 	assert.True(t, gotReq.IncludePinnedContext)
 	assert.Equal(t, text, out.PinnedContext)
 }
+
+// TestGetSession_EffectiveLimitsAndIdleTimeoutSurfaced proves the response's
+// effective_idle_timeout, effective_max_turns and effective_max_cost_usd
+// (session override, else definition, else platform default -- resolved by
+// api) reach the MCP caller, so an operator can see what a 5m override became.
+func TestGetSession_EffectiveLimitsAndIdleTimeoutSurfaced(t *testing.T) {
+	fc := &fakeSessionServiceClient{
+		getSessionFunc: func(ctx context.Context, in *pb.GetSessionRequest) (*pb.GetSessionResponse, error) {
+			return &pb.GetSessionResponse{
+				Session:              &pb.Session{SessionId: "sess-1", State: pb.SessionState_SESSION_STATE_RUNNING, AgentId: "agent-1", Model: "gpt-5"},
+				EffectiveIdleTimeout: "5m",
+				EffectiveMaxTurns:    12,
+				EffectiveMaxCostUsd:  2.5,
+			}, nil
+		},
+	}
+	tool := &getSessionTool{client: fc}
+
+	_, out, err := tool.call(context.Background(), nil, GetSessionInput{SessionID: "sess-1"})
+	require.NoError(t, err)
+	assert.Equal(t, "5m", out.EffectiveIdleTimeout)
+	assert.Equal(t, int32(12), out.EffectiveMaxTurns)
+	assert.Equal(t, 2.5, out.EffectiveMaxCostUSD)
+}

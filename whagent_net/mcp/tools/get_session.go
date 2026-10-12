@@ -22,16 +22,19 @@ type GetSessionInput struct {
 // -- mirrors pb.Session's has_cap_kind/has_error_category optionality
 // (session.proto's "Session" message doc).
 type GetSessionOutput struct {
-	SessionID            string `json:"session_id" jsonschema:"The session's id"`
-	State                string `json:"state" jsonschema:"One of the seven SessionState values (running, awaiting_input, done, stopped, failed, capped, expired)"`
-	AgentID              string `json:"agent_id" jsonschema:"The agent definition this session runs"`
-	Model                string `json:"model" jsonschema:"The model this session is running (after any FR5 override resolution)"`
-	CapKind              string `json:"cap_kind,omitempty" jsonschema:"Set only when state is capped: which guardrail ended the session (turns or cost)"`
-	ErrorCategory        string `json:"error_category,omitempty" jsonschema:"Set only when state is failed: retryable or non_retryable"`
-	ErrorDetail          string `json:"error_detail,omitempty" jsonschema:"Set only when state is failed: human-readable detail of what failed"`
-	PinnedContextPresent bool   `json:"pinned_context_present" jsonschema:"True when the session was started with a pinned context; the text itself is never returned"`
-	PinnedContextBytes   int32  `json:"pinned_context_bytes" jsonschema:"UTF-8 byte length of the session's pinned context; 0 when none"`
-	PinnedContext        string `json:"pinned_context,omitempty" jsonschema:"The session's pinned context text; set only when include_pinned_context was true and the session has one"`
+	SessionID            string  `json:"session_id" jsonschema:"The session's id"`
+	State                string  `json:"state" jsonschema:"One of the seven SessionState values (running, awaiting_input, done, stopped, failed, capped, expired)"`
+	AgentID              string  `json:"agent_id" jsonschema:"The agent definition this session runs"`
+	Model                string  `json:"model" jsonschema:"The model this session is running (after any FR5 override resolution)"`
+	CapKind              string  `json:"cap_kind,omitempty" jsonschema:"Set only when state is capped: which guardrail ended the session (turns or cost)"`
+	ErrorCategory        string  `json:"error_category,omitempty" jsonschema:"Set only when state is failed: retryable or non_retryable"`
+	ErrorDetail          string  `json:"error_detail,omitempty" jsonschema:"Set only when state is failed: human-readable detail of what failed"`
+	PinnedContextPresent bool    `json:"pinned_context_present" jsonschema:"True when the session was started with a pinned context; the text itself is never returned"`
+	PinnedContextBytes   int32   `json:"pinned_context_bytes" jsonschema:"UTF-8 byte length of the session's pinned context; 0 when none"`
+	PinnedContext        string  `json:"pinned_context,omitempty" jsonschema:"The session's pinned context text; set only when include_pinned_context was true and the session has one"`
+	EffectiveMaxTurns    int32   `json:"effective_max_turns" jsonschema:"The turn cap this session runs under: the session's max_turns_override, else the agent definition's, else the platform default"`
+	EffectiveMaxCostUSD  float64 `json:"effective_max_cost_usd" jsonschema:"The cost cap in USD this session runs under: the session's max_cost_usd_override, else the agent definition's, else the platform default"`
+	EffectiveIdleTimeout string  `json:"effective_idle_timeout" jsonschema:"The idle timeout this session runs under as a Go duration string (e.g. \"24h\"): the session's idle_timeout_override, else the agent definition's, else the platform default"`
 }
 
 // getSessionTool holds the SessionService client this tool is a
@@ -100,5 +103,8 @@ func (t *getSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in 
 	if in.IncludePinnedContext {
 		out.PinnedContext = resp.GetPinnedContext()
 	}
+	out.EffectiveMaxTurns = resp.GetEffectiveMaxTurns()
+	out.EffectiveMaxCostUSD = resp.GetEffectiveMaxCostUsd()
+	out.EffectiveIdleTimeout = resp.GetEffectiveIdleTimeout()
 	return nil, out, nil
 }

@@ -2,8 +2,10 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -322,4 +324,28 @@ func TestStartSession_IdleTimeoutOverrideRejected_SurfacesFieldAndValue(t *testi
 	assert.Contains(t, err.Error(), "InvalidArgument")
 	assert.Contains(t, err.Error(), "idle_timeout_override")
 	assert.Contains(t, err.Error(), "-5m")
+}
+
+// TestStartSession_IdleTimeoutOverrideSchemaDocumentsDefault proves the MCP
+// input schema tells the caller what happens when the override is omitted:
+// the agent definition's value, else the 24h platform default.
+func TestStartSession_IdleTimeoutOverrideSchemaDocumentsDefault(t *testing.T) {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.1"}, nil)
+	RegisterStartSession(srv, &fakeSessionServiceClient{}, newFakeScopeResolver(), &fakeGrantSource{})
+	tool := listRegisteredTools(t, srv)["start_session"]
+	require.NotNil(t, tool)
+
+	raw, err := json.Marshal(tool.InputSchema)
+	require.NoError(t, err)
+	var schema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &schema))
+	desc := schema.Properties["idle_timeout_override"].Description
+	require.NotEmpty(t, desc)
+	assert.Contains(t, desc, "agent definition's idle timeout", "omitted override must fall back to the definition")
+	assert.Contains(t, desc, "WHAGENT_DEFAULT_IDLE_TIMEOUT", "platform default env var must be named")
+	assert.Contains(t, desc, "24h", "platform default value must be documented")
 }

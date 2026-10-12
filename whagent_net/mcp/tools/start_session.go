@@ -22,7 +22,7 @@ type StartSessionInput struct {
 	MaxTurnsOverride    *int32   `json:"max_turns_override,omitempty" jsonschema:"Optional turn cap for this session, overriding the agent definition's max_turns; must be >0"`
 	MaxCostUSDOverride  *float64 `json:"max_cost_usd_override,omitempty" jsonschema:"Optional cost cap in USD for this session, overriding the agent definition's max_cost_usd; must be >0 and <=10"`
 	PinnedContext       string   `json:"pinned_context,omitempty" jsonschema:"Optional system-level context shown to the model on every turn after the agent definition prompt; max 32,000 UTF-8 bytes (bytes, not characters) and must be valid UTF-8; immutable for the session; never a transcript event. The text stays in the calling parent's own transcript as this tool argument."`
-	IdleTimeoutOverride string   `json:"idle_timeout_override,omitempty" jsonschema:"Optional idle timeout for this session only, as a Go duration string such as \"24h\" (positive, whole seconds); overrides the agent definition's idle timeout. Rejected with INVALID_ARGUMENT naming the field and value when invalid"`
+	IdleTimeoutOverride string   `json:"idle_timeout_override,omitempty" jsonschema:"Optional idle timeout for this session only, as a Go duration string such as \"24h\" (positive, whole seconds); overrides the agent definition's idle timeout. When omitted, the agent definition's idle timeout applies, else the platform default WHAGENT_DEFAULT_IDLE_TIMEOUT (24h). Rejected with INVALID_ARGUMENT naming the field and value when invalid"`
 }
 
 // StartSessionOutput is start_session's structured result: the started
