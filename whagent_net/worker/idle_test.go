@@ -355,6 +355,33 @@ func TestSessionWorkflow_ArmIdleTimerSweep_IsIdempotent(t *testing.T) {
 	assert.Equal(t, session.StatusExpired, statuses[1].status)
 }
 
+// TestSessionWorkflow_ArmIdleTimerSweep_IgnoredOnNewPath proves a run already
+// on the idle-expiry path keeps its own clock when a stray sweep signal
+// arrives: expiry stays one resolved timeout after entering awaiting_input.
+func TestSessionWorkflow_ArmIdleTimerSweep_IgnoredOnNewPath(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	const timeout = time.Minute
+	tl := &idleTimeline{start: env.Now()}
+	rec := &callRecorder{}
+	wireIdleActivities(env, timeout, tl, rec)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalArmIdleTimer, ArmIdleTimerSignal{EffectiveTimeout: 10 * time.Minute})
+	}, 10*time.Second)
+
+	env.ExecuteWorkflow(SessionWorkflow, SessionWorkflowInput{SessionID: testSessionID()})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	statuses := tl.snapshot()
+	require.Len(t, statuses, 2, "awaiting_input, then expired")
+	assert.Equal(t, session.StatusExpired, statuses[1].status)
+	assert.Equal(t, statuses[0].at+timeout, statuses[1].at, "the new-path run ignores the sweep signal and expires on its own clock")
+}
+
 func countOf(log []string, want string) int {
 	n := 0
 	for _, s := range log {
