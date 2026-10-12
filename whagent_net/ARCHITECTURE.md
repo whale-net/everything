@@ -299,6 +299,16 @@ Bounded tasks (~100 turns) are the target; Continue-As-New is deferred
 until that assumption changes. `parent_session_id` is set from day one so a
 session started via `mcp` by another session is an ordinary session.
 
+**Deploy note: pre-deploy `awaiting_input` sessions.** A run parked in
+`awaiting_input` on code from before the idle-expiry change has no idle
+clock. On every worker startup, `worker/idle_sweep.go`'s `RunIdleSweep`
+lists `awaiting_input` sessions and sends each an `ArmIdleTimer` signal
+carrying its resolved effective timeout. The workflow arms the clock from
+the signal's arrival; repeat sweeps are no-ops, so a clock is never
+extended. Sessions already on the new path ignore the signal. Logs: per
+session failures at WARNING, a summary at INFO (`idle sweep finished`).
+To re-run it, restart the `worker` process.
+
 ## Workflow versioning (NFR1)
 
 `SessionWorkflow` is long-lived and signal-per-turn (unlike every other

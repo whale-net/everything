@@ -411,6 +411,17 @@ against a **test** service-account client (`WHAGENT_TEST_CLIENT_ID`/
 credential is named once a shared dev Keycloak realm exists) — no real
 scheduler integrates with whagent-net yet.
 
+## Operations: pre-deploy idle sweep
+
+After deploying a worker that includes the idle-expiry change, sessions
+already parked in `awaiting_input` get an idle clock automatically: the
+worker runs the sweep at every startup (see
+[ARCHITECTURE.md "Session workflow"](ARCHITECTURE.md#session-workflow)).
+Nothing else to run. To confirm, check the worker logs for
+`idle sweep finished` (INFO, with `signaled` and `failed` counts) and any
+`idle sweep: could not arm idle timer` WARNINGs for individual sessions.
+Restart the worker to re-run it; re-runs do not extend armed clocks.
+
 ## Local development
 
 Requires Postgres (`PG_DATABASE_URL`, also backs `ui`'s own DB-backed
