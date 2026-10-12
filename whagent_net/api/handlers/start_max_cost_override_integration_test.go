@@ -94,6 +94,22 @@ func TestGetSession_ReportsEffectiveLimits(t *testing.T) {
 		assert.Equal(t, session.EffectiveMaxCostUSD(nil, *def), get.GetEffectiveMaxCostUsd())
 	})
 
+	t.Run("zero definition values fall back to the platform defaults", func(t *testing.T) {
+		require.NoError(t, store.AgentDefinitions().Upsert(ctx, &session.AgentDefinition{
+			AgentID:    "agent-zero",
+			Model:      strPtr2("test-model"),
+			ToolSet:    []session.ToolServerRef{},
+			MaxTurns:   0,
+			MaxCostUSD: 0,
+		}))
+		resp, err := srv.StartSession(caller, &pb.StartSessionRequest{AgentId: "agent-zero"})
+		require.NoError(t, err)
+		get, err := srv.GetSession(caller, &pb.GetSessionRequest{SessionId: resp.Session.SessionId})
+		require.NoError(t, err)
+		assert.Equal(t, int32(session.DefaultMaxTurns), get.GetEffectiveMaxTurns())
+		assert.Equal(t, session.DefaultMaxCostUSD, get.GetEffectiveMaxCostUsd())
+	})
+
 	t.Run("pinned overrides are reported as the effective limits", func(t *testing.T) {
 		turns, cost := int32(3), 4.25
 		resp, err := srv.StartSession(caller, &pb.StartSessionRequest{
