@@ -1,6 +1,6 @@
 ---
 name: help
-description: Not sure which krill-design or krill-work skill applies? Describe your situation or ask a question in plain language and this recommends the exact next skill and command — product, design, review, stakeholder-meeting, loop-design-panel, plan, implement, validate, loop-plan-implement-validate, or status — with the reasoning behind it. Use whenever you're unsure where a design session/plan stands or which command to run next; run `/status <id>` yourself instead if you already know the id and just want the raw state.
+description: Not sure which krill-design or krill-work skill applies? Describe your situation or ask a question in plain language and this recommends the exact next skill and command — product, design, review, stakeholder-meeting, loop-design-panel, plan, implement, validate, loop-plan-implement-validate, status, or cleanup — with the reasoning behind it. Use whenever you're unsure where a design session/plan stands or which command to run next; run `/status <id>` yourself instead if you already know the id and just want the raw state.
 ---
 
 # help

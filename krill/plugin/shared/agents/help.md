@@ -50,6 +50,7 @@ summary.
 | Validation found bugs / findings recorded | `krill-work:implement <milestone-id>` again | Findings become new manifest entries like any other task. |
 | Signed-off design, and requester wants the whole thing driven to a merged stack without re-running each phase by hand | `krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <id>` | Chains `plan`→`implement`→`validate`, re-looping on findings, until the stack is merged. |
 | "Where does this plan/product stand right now?" / unsure what phase something is in | `status <design-session-id\|milestone-id>` | Pure read — always safe to run first. Shared skill, works from either plugin. |
+| Product's roadmap has gone stale — old open milestones, status lagging the tasks, orphaned claims, "close out old stuff" | `krill-design:cleanup [<product-id>]` | Mutating: diagnoses every open milestone/milepebble, proposes fixes, and applies them on approval (irreversible abandons always confirmed). `--dry-run` to only diagnose. Design plugin only — the writes live on `/mcp/design`. |
 | Noticed something out of scope while doing something else | *(no skill — call `record_note {task_id, kind: "scope-note", body}` directly)* | Works from this dispatch. A `forbidden` is a real regression — report it. |
 
 ## Process
