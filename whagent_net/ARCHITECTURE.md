@@ -260,6 +260,12 @@ never returns between turns. Per turn:
 6. Workflow updates status (`awaiting_input` / `done`), records the turn's
    context event-ID list.
 
+**Idle timeout.** The effective idle timeout (override > definition >
+`WHAGENT_DEFAULT_IDLE_TIMEOUT`) is resolved once per session by an activity
+(`ResolveIdleTimeout`) and reaches the workflow as a recorded result, never
+via an env or DB read in workflow code. The idle clock is a workflow timer
+armed on entering `awaiting_input` and cancelled when a turn starts.
+
 **Tool-loop commit order vs. the wire protocol.** Step 4 dispatches a
 response's tool calls and commits the `assistant_message` carrying them
 *afterwards*, so one iteration's transcript segment is seq-ordered
