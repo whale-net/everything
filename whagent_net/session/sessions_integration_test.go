@@ -120,6 +120,24 @@ func TestSessionStore_UpdateStatus_CAS_TerminalStatusNeverOverwritten(t *testing
 	assert.Equal(t, session.StatusDone, got.Status, "the terminal status must be left untouched by the rejected write")
 }
 
+// TestSessionStore_UpdateStatus_CAS_ExpiredNeverOverwritten proves expired is
+// in the UpdateStatus CAS terminal list: a running write over an expired
+// session is rejected and the status stays expired.
+func TestSessionStore_UpdateStatus_CAS_ExpiredNeverOverwritten(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	sess := createTestSession(t, ctx, s)
+	require.NoError(t, s.Sessions().UpdateStatus(ctx, sess.SessionID, session.StatusExpired, nil))
+
+	err := s.Sessions().UpdateStatus(ctx, sess.SessionID, session.StatusRunning, nil)
+	assert.ErrorIs(t, err, session.ErrTerminalStatus)
+
+	got, err := s.Sessions().GetByID(ctx, sess.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, session.StatusExpired, got.Status)
+}
+
 // TestSessionStore_UpdateStatus_CappedRecordsTerminalReason proves a
 // terminal UpdateStatus call populates cap_kind/error_category/
 // error_detail from TerminalReason (FR3), and that those columns round
@@ -505,4 +523,20 @@ func TestSessionStore_PinnedContext_StoredOnceAndReportedAsUTF8Bytes(t *testing.
 	assert.Equal(t, 10, byID[with.SessionID].PinnedContextBytes)
 	assert.Nil(t, byID[with.SessionID].PinnedContext)
 	assert.Equal(t, 0, byID[without.SessionID].PinnedContextBytes)
+}
+
+// TestSessionStore_ListArchiveEligible_IncludesExpired proves an expired
+// session is selected for S3 archival (C18) while a running session is not.
+func TestSessionStore_ListArchiveEligible_IncludesExpired(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	expired := createTestSession(t, ctx, s)
+	require.NoError(t, s.Sessions().UpdateStatus(ctx, expired.SessionID, session.StatusExpired, nil))
+	running := createTestSession(t, ctx, s)
+
+	ids, err := s.Sessions().ListArchiveEligible(ctx, time.Now().Add(time.Hour), 100)
+	require.NoError(t, err)
+	assert.Contains(t, ids, expired.SessionID, "an expired session must be archive-eligible")
+	assert.NotContains(t, ids, running.SessionID, "a running session must not be archive-eligible")
 }
