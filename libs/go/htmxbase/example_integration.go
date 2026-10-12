@@ -84,8 +84,8 @@ func ExampleAlpineAndHTMX(w http.ResponseWriter, r *http.Request) {
     </div>
 </div>
 
-<!-- HTMX polling -->
-<div hx-get="/api/status" hx-trigger="every 5s">
+<!-- HTMX fallback polling: prefer SSE (libs/go/htmxsse); see the design-htmx-ui polling policy -->
+<div hx-get="/api/status" hx-trigger="every 30s">
     Checking status...
 </div>
 `
