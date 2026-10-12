@@ -13,6 +13,11 @@
 // live-Temporal-server dependency here (see historyFixtureBuilder's doc
 // comment for why, and for the precedent this reimplements from the
 // Temporal Go SDK's own replay tests).
+//
+// To add a history, write a Test func that calls newHistoryFixtureBuilder() and
+// its started/marker/signal/activity/timer helpers in the order the run emitted
+// events, then replays build() via worker.NewWorkflowReplayer. Fixtures pin the
+// event shape of a past run: add a new one rather than editing an existing one.
 package main
 
 import (
