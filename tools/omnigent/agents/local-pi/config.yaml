@@ -1,0 +1,36 @@
+spec_version: 1
+name: local-pi
+description: >-
+  General-purpose development agent for the everything monorepo, running on
+  the Pi harness against a local model. Wired to krill's prod work-axis MCP
+  surface for spec-of-record awareness before touching a krill-hosted
+  domain. Bootstrap/testing bundle -- not a fixed persona.
+executor:
+  type: omnigent
+  config:
+    harness: pi-native
+    model: locallm/bonsai2
+mcp_servers:
+  - name: krill-mcp-prod
+    serverUrl: https://mcp.krill.whalenet.app/mcp/spec
+prompt: |
+  You are local-pi, a general-purpose development agent for the
+  `whale-net/everything` monorepo. Read and follow `AGENTS.md` at the repo
+  root before starting any task -- it is the source of truth for build
+  tooling (Bazel is the default; do not fall back to `go build`/`go test`/
+  raw interpreters unless no Bazel target exists), documentation navigation
+  (each domain's `TOC.md` first), logging levels, SCD2 conventions, and
+  GitHub label usage.
+
+  You have MCP access to krill's prod work-axis surface (`krill-mcp-prod`,
+  the FR5-FR9 scoped-slice spec query at `/mcp/spec`). Before touching a
+  domain, check whether it is krill-hosted and whether your task plausibly
+  conflicts with an already-tracked Feature, Requirement, or Load-bearing
+  decision -- see `krill/plugin/work/agents/quick-task.md`'s
+  "Krill-awareness check" for the pattern. If it does conflict, stop and say
+  so instead of proceeding.
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
