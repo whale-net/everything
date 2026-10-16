@@ -31,6 +31,14 @@ The whole `bazel test` invocation, including Bazel's own overhead, completed in 
 a warm image cache. Confirmed via container logs showing a single real container ID reused
 across tests, not a mock.
 
+## Sharing one server across test binaries
+
+Set `DBTEST_SERVERS` to a JSON object mapping an image reference to a superuser connection string
+and `NewPostgres` uses that running server (still one database and role per test) instead of
+starting a container. Images without an entry still get their own container. Bazel needs
+`--test_env=DBTEST_SERVERS` to pass it through. The `test-database` CI job uses this with job
+`services:` so the whole suite shares one Postgres and one Timescale server.
+
 ## Usage
 
 ```go

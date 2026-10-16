@@ -21,7 +21,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -38,6 +40,15 @@ import (
 // the image out from under every dbtest-backed test in the repo -- see
 // issue #2990, where an equivalent unpinned quay.io tag broke CI outright.
 const DefaultImage = "postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea"
+
+// ServersEnv names an optional environment variable holding a JSON object
+// mapping an image reference to the superuser connection string of an
+// already-running Postgres of that image, e.g.
+// {"postgres:16-alpine@sha256:...": "postgres://u:p@localhost:5432/db"}.
+// When the requested image has an entry, NewPostgres uses that server instead
+// of starting a container, so a CI job can share one server across every test
+// binary. Images without an entry still get their own container.
+const ServersEnv = "DBTEST_SERVERS"
 
 // Options configures NewPostgres.
 type Options struct {
@@ -72,6 +83,9 @@ type Postgres struct {
 type sharedContainer struct {
 	once      sync.Once
 	container *postgres.PostgresContainer
+	// baseConnStr is the superuser connection string for this server, used
+	// to derive per-test connection strings.
+	baseConnStr string
 	adminPool *pgxpool.Pool
 	err       error
 }
@@ -94,6 +108,11 @@ func getSharedContainer(ctx context.Context, image string) *sharedContainer {
 	containersMu.Unlock()
 
 	sc.once.Do(func() {
+		if url, ok := externalServer(image); ok {
+			sc.err = sc.useExternal(ctx, url)
+			return
+		}
+
 		ctr, err := postgres.Run(ctx, image,
 			postgres.WithDatabase("dbtest"),
 			postgres.WithUsername("dbtest"),
@@ -132,10 +151,41 @@ func getSharedContainer(ctx context.Context, image string) *sharedContainer {
 		}
 
 		sc.container = ctr
+		sc.baseConnStr = connStr
 		sc.adminPool = pool
 	})
 
 	return sc
+}
+
+// externalServer returns the pre-provisioned server URL for image from
+// ServersEnv, if any.
+func externalServer(image string) (string, bool) {
+	raw := os.Getenv(ServersEnv)
+	if raw == "" {
+		return "", false
+	}
+	var servers map[string]string
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		panic(fmt.Sprintf("dbtest: %s is not a JSON object of image->url: %v", ServersEnv, err))
+	}
+	url, ok := servers[image]
+	return url, ok
+}
+
+// useExternal points sc at an already-running server instead of a container.
+func (sc *sharedContainer) useExternal(ctx context.Context, url string) error {
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		return fmt.Errorf("dbtest: create admin pool for %s: %w", ServersEnv, err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return fmt.Errorf("dbtest: ping %s server: %w", ServersEnv, err)
+	}
+	sc.baseConnStr = url
+	sc.adminPool = pool
+	return nil
 }
 
 // identRe matches the characters NewPostgres keeps from t.Name() when
@@ -156,7 +206,7 @@ func randomSuffix() string {
 
 // NewPostgres provisions an isolated database and login role for t inside a
 // Postgres container shared across the whole test binary (started at most
-// once per process, per Options.Image), applies Options.Schema, and returns
+// once per process, per Options.Image, unless ServersEnv supplies a server), applies Options.Schema, and returns
 // a ready pool connected as that role to that database. On any failure it
 // fails the test immediately (via t.Fatalf).
 //
@@ -215,12 +265,7 @@ func NewPostgres(ctx context.Context, t testing.TB, opts Options) *Postgres {
 		_, _ = admin.Exec(dropCtx, fmt.Sprintf(`DROP ROLE IF EXISTS %s`, roleName))
 	})
 
-	baseConnStr, err := sc.container.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("dbtest: build connection string: %v", err)
-		return nil
-	}
-	connStr := replaceConnStringAuthAndDB(baseConnStr, roleName, rolePassword, dbName)
+	connStr := replaceConnStringAuthAndDB(sc.baseConnStr, roleName, rolePassword, dbName)
 
 	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
