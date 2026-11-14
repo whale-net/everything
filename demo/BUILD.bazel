@@ -117,3 +117,17 @@ release_helm_chart(
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-demo-demo-all-types.v*)
 )
+
+# Example: Node.js/TypeScript external API
+release_helm_chart(
+    name = "node_chart",
+    apps = [
+        "//demo/hello_node:hello-node_metadata",
+    ],
+    chart_name = "hello-node",
+    domain = "demo",
+    environment = "production",
+    namespace = "demo",
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-demo-hello-node.v*)
+)

@@ -211,10 +211,14 @@ func (t AppType) DefaultResourceConfigForLanguage(language string) ResourceConfi
 	// Get base config for app type
 	config := t.DefaultResourceConfig()
 
-	// Apply language-specific optimizations for Python
-	if language == "python" {
+	switch language {
+	case "python":
 		config.RequestsMemory = "64Mi"
 		config.LimitsMemory = "256Mi"
+	case "node":
+		// Idle Node/V8 RSS is ~50Mi; V8 sizes its heap from the cgroup limit.
+		config.RequestsMemory = "96Mi"
+		config.LimitsMemory = "384Mi"
 	}
 
 	return config

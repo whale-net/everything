@@ -81,7 +81,7 @@ message AppManifest {
   string name = 1;      // app name, dashes only (e.g. "control-api")
   string domain = 2;    // e.g. "manmanv2"
   string description = 3;
-  string language = 4;  // "go" | "python"
+  string language = 4;  // "go" | "python" | "node"
 
   // --- image coordinates ---
   string registry = 10;      // "ghcr.io"

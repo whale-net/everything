@@ -203,6 +203,56 @@ release_app(
 	}
 }
 
+func TestDiscoverFastNodeContainerApp(t *testing.T) {
+	root := t.TempDir()
+	writeBuildFile(t, root, "demo/hello_node", `
+load("//tools/bazel:release.bzl", "release_app")
+
+release_app(
+    name = "hello-node",
+    language = "node",
+    domain = "demo",
+    app_type = "external-api",
+    port = 8080,
+)
+`)
+
+	apps, err := ListAllAppsFast(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d: %+v", len(apps), apps)
+	}
+	app := apps[0]
+	if app.Language != "node" {
+		t.Errorf("Language = %q, want node", app.Language)
+	}
+	if app.BinaryTarget != "//demo/hello_node:hello-node" {
+		t.Errorf("BinaryTarget = %q, want //demo/hello_node:hello-node", app.BinaryTarget)
+	}
+	if app.ImageTarget != "//demo/hello_node:hello-node_image" {
+		t.Errorf("ImageTarget = %q, want //demo/hello_node:hello-node_image", app.ImageTarget)
+	}
+}
+
+func TestDiscoverFastUnsupportedContainerLanguageErrors(t *testing.T) {
+	root := t.TempDir()
+	writeBuildFile(t, root, "demo/broken", `
+load("//tools/bazel:release.bzl", "release_app")
+
+release_app(
+    name = "broken",
+    language = "rust",
+    domain = "demo",
+)
+`)
+
+	if _, err := ListAllAppsFast(root); err == nil {
+		t.Fatal("expected error for unsupported container language")
+	}
+}
+
 func TestDiscoverFastExcludesDirectAppMetadataCalls(t *testing.T) {
 	// Mirrors tools/appmeta/testdata/BUILD.bazel: a raw app_metadata(...)
 	// rule call (as opposed to the release_app(...) macro) is how a testonly

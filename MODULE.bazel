@@ -3,7 +3,7 @@ module(
     version = "0.0.0",
 )
 
-bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "rules_python", version = "1.8.3")
 bazel_dep(name = "rules_pycross", version = "0.8.0")
 archive_override(
@@ -22,13 +22,22 @@ archive_override(
 bazel_dep(name = "rules_go", version = "0.57.0")
 bazel_dep(name = "gazelle", version = "0.40.0")
 bazel_dep(name = "rules_oci", version = "2.2.6")
-bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 bazel_dep(name = "aspect_rules_py", version = "1.11.2")
 bazel_dep(name = "rules_helm", version = "0.6.0.bcr.1")
 bazel_dep(name = "rules_pkg", version = "1.1.0")
-bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_java", version = "8.12.0")
 bazel_dep(name = "rules_proto", version = "7.1.0")
+
+# ── Node.js / TypeScript ─────────────────────────────────────────────────────
+# rules_js stays on 2.x: flatbuffers 25.2.10 (pigweed -> fuzztest) passes
+# npm_translate_lock(root_package=...), which rules_js 3.x removed. esbuild
+# 0.25.x is the last line that accepts rules_js 2.x.
+bazel_dep(name = "rules_nodejs", version = "6.7.7")
+bazel_dep(name = "aspect_rules_js", version = "2.9.3")
+bazel_dep(name = "aspect_rules_ts", version = "3.10.1")
+bazel_dep(name = "aspect_rules_esbuild", version = "0.25.1")
 bazel_dep(name = "protobuf", version = "33.4")
 single_version_override(
     module_name = "protobuf",
@@ -306,6 +315,48 @@ lock_import.import_uv(
 # Create the package repositories
 lock_repos = use_extension("@rules_pycross//pycross/extensions:lock_repos.bzl", "lock_repos")
 use_repo(lock_repos, "pypi")
+
+# Node.js setup. Node 24 LTS is the runtime for js_binary/js_test and the
+# per-arch node binary baked into node app images (container_image.bzl).
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = "24.22.1")
+use_repo(node, "nodejs_linux_amd64", "nodejs_linux_arm64")
+
+# One pnpm workspace at the repo root (pnpm-workspace.yaml); every JS package
+# is an importer in //:pnpm-lock.yaml. Regenerate the lock with:
+#   bazel run -- @pnpm//:pnpm --dir $PWD install --lockfile-only
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm",
+    data = [
+        "//:package.json",
+        "//:pnpm-workspace.yaml",
+        "//demo/hello_node:package.json",
+    ],
+    pnpm_lock = "//:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm")
+
+# Pin pnpm 10 (rules_js 2.x defaults to pnpm 8, which rewrites the lock as v6).
+pnpm = use_extension("@aspect_rules_js//npm:extensions.bzl", "pnpm")
+pnpm.pnpm(
+    name = "pnpm",
+    pnpm_version = "10.34.9",
+    pnpm_version_integrity = "sha512-9JtajqD97bRLs8DB1ldQkqU8KVDZW3rRXfEfF5dId6LeOgHAfpNOmyjOcW5RwJqUlixzBtCb4uHksYqMh2L9Mg==",
+)
+use_repo(pnpm, "pnpm")
+
+# Root registration wins; without it a transitive module's old esbuild is used.
+esbuild = use_extension("@aspect_rules_esbuild//esbuild:extensions.bzl", "esbuild")
+esbuild.toolchain(
+    name = "esbuild",
+    esbuild_version = "0.27.3",
+)
+
+rules_ts_ext = use_extension("@aspect_rules_ts//ts:extensions.bzl", "ext", dev_dependency = True)
+rules_ts_ext.deps(ts_version_from = "//:package.json")
+use_repo(rules_ts_ext, "npm_typescript")
 
 # Go setup
 

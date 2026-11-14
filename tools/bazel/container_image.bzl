@@ -158,7 +158,7 @@ def container_image(
         base: Base image (defaults to ubuntu:24.04)
         env: Environment variables dict
         entrypoint: Override entrypoint (auto-detected from language)
-        language: Language of the binary ("python" or "go") - REQUIRED
+        language: Language of the binary ("python", "go", or "node") - REQUIRED
         python_version: Python version for path construction (default: "3.13")
         additional_tars: Additional tar layers to include (e.g., ["//tools/steamcmd:steamcmd"])
         **kwargs: Additional oci_image arguments
@@ -338,6 +338,62 @@ def container_image(
         layer_targets = base_layers + [
             ":" + name + "_app_layer",
         ]
+    elif language == "node":
+        # Node: the binary must be a self-contained esbuild bundle producing
+        # exactly one .mjs, so the image needs no node_modules.
+        native.genrule(
+            name = name + "_node_layer",
+            srcs = select({
+                "@platforms//cpu:x86_64": ["@nodejs_linux_amd64//:node_bin"],
+                "@platforms//cpu:arm64": ["@nodejs_linux_arm64//:node_bin"],
+            }),
+            outs = [name + "_node_layer.tar"],
+            cmd = """
+                set -e
+                trap 'rm -rf node_layer' EXIT
+                mkdir -p node_layer/opt/node/bin
+                cp -L $(SRCS) node_layer/opt/node/bin/node
+                chmod 0755 node_layer/opt/node/bin/node
+                tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -cf $@ -C node_layer .
+                """,
+            tags = ["manual"],
+        )
+
+        native.genrule(
+            name = name + "_app_layer",
+            srcs = [binary],
+            outs = [name + "_app_layer.tar"],
+            cmd = """
+                set -e
+                trap 'rm -rf app_layer' EXIT
+                ENTRY=""
+                for f in $(SRCS); do
+                    case "$$f" in
+                        *.mjs)
+                            if [ -n "$$ENTRY" ]; then
+                                echo "Error: node binary {binary} produced more than one .mjs" >&2
+                                exit 1
+                            fi
+                            ENTRY="$$f"
+                            ;;
+                    esac
+                done
+                if [ -z "$$ENTRY" ]; then
+                    echo "Error: node binary {binary} must produce a single bundled .mjs" >&2
+                    exit 1
+                fi
+                mkdir -p app_layer/app
+                cp -L "$$ENTRY" app_layer/app/main.mjs
+                tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -cf $@ -C app_layer .
+                """.format(binary = binary),
+            tags = ["manual"],
+        )
+
+        # CA certs -> node runtime (shared across node apps) -> additional_tars -> app bundle
+        layer_targets = ["//tools/cacerts:cacerts", ":" + name + "_node_layer"]
+        if additional_tars:
+            layer_targets = layer_targets + additional_tars
+        layer_targets = layer_targets + [":" + name + "_app_layer"]
     else:
         # For non-Python (Go), use single layer as before
         pkg_tar(
@@ -365,6 +421,8 @@ def container_image(
     # This points to the CA certificates bundle from rules_distroless
     if "SSL_CERT_FILE" not in image_env:
         image_env["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
+    if language == "node" and "NODE_ENV" not in image_env:
+        image_env["NODE_ENV"] = "production"
     
     # Determine entrypoint based on language
     if not entrypoint:
@@ -383,6 +441,8 @@ def container_image(
                 ),
                 binary_path,
             ]
+        elif language == "node":
+            entrypoint = ["/opt/node/bin/node", "/app/main.mjs"]
         else:
             # Go binaries are packaged by Bazel in a directory with underscore suffix
             # Bazel's pkg_tar places the binary at /app/{binary_name}_/{binary_name}
@@ -392,6 +452,7 @@ def container_image(
     
     # layer_targets is already built with correct ordering in the language-specific sections above
     # For Python: CA certs → Python → additional_tars → deps → app
+    # For Node: CA certs → node runtime → additional_tars → app bundle
     # For Go: CA certs → additional_tars → app
     oci_image(
         name = name,
@@ -461,7 +522,7 @@ def multiplatform_image(
         registry: Container registry (defaults to ghcr.io)
         repository: Organization/namespace (e.g., "whale-net")
         image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED
-        language: Language of binary ("python" or "go") - REQUIRED
+        language: Language of binary ("python", "go", or "node") - REQUIRED
         env: Default environment variables to bake into the image
         additional_tars: Additional tar layers to include (e.g., ["//tools/steamcmd:steamcmd"])
         **kwargs: Additional arguments passed to container_image

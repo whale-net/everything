@@ -341,7 +341,7 @@ py_binary(  # or go_binary
 release_app(
     name = "new_app",
     binary_target = ":new_app",
-    language = "python",  # or "go"
+    language = "python",  # or "go", or "node" (binary = esbuild bundle, see DEVELOPMENT.md)
     domain = "demo",  # Required: categorizes your app (e.g., "api", "web", "demo")
     description = "Description of what this app does",
 )

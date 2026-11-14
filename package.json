@@ -1,0 +1,7 @@
+{
+  "name": "everything",
+  "private": true,
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

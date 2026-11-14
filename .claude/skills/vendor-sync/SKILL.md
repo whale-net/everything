@@ -1,6 +1,6 @@
 ---
 name: vendor-sync
-description: Use this skill after adding or updating an external dependency in this repo — a new/updated bazel_dep, git_override, or archive_override in MODULE.bazel, a Go dependency added via `go get` + `bazel mod tidy`, or a Python dependency added via pyproject.toml + `uv lock`. Refreshes the machine-level shared bazel vendor directory (docs/CONFIGURATION.md § Shared Vendor Directory) so newly added repos don't silently fall back to per-worktree fetching, which is what keeps worktree Bazel output-base disk usage down.
+description: Use this skill after adding or updating an external dependency in this repo — a new/updated bazel_dep, git_override, or archive_override in MODULE.bazel, a Go dependency added via `go get` + `bazel mod tidy`, a Python dependency added via pyproject.toml + `uv lock`, or an npm dependency added via package.json + pnpm-lock.yaml. Refreshes the machine-level shared bazel vendor directory (docs/CONFIGURATION.md § Shared Vendor Directory) so newly added repos don't silently fall back to per-worktree fetching, which is what keeps worktree Bazel output-base disk usage down.
 version: 1.0.0
 ---
 
@@ -27,6 +27,10 @@ Any time one of these just happened in this session:
 - Go: `go get ...` followed by `bazel run //:gazelle` and `bazel mod tidy`
 - Python: a new/updated entry in `pyproject.toml`'s `dependencies` followed by
   `uv lock --python 3.13`
+- Node/TypeScript: `pnpm-lock.yaml` changed (new/updated npm package or a new
+  workspace `package.json`, regenerated via
+  `bazel run -- @pnpm//:pnpm --dir $PWD install --lockfile-only`), or the Node
+  (`node.toolchain`) / TypeScript (root `package.json`) version moved
 
 ## Steps
 
@@ -44,7 +48,7 @@ Any time one of these just happened in this session:
 
 2. **Confirm the dependency change actually landed** before re-vendoring — check
    `git status` / `git diff` for the relevant file (`MODULE.bazel`, `go.mod`/`go.sum`,
-   `uv.lock`). Re-vendoring against a half-finished dependency change just wastes a
+   `uv.lock`, `pnpm-lock.yaml`). Re-vendoring against a half-finished dependency change just wastes a
    fetch cycle.
 
 3. **Re-run vendor:**

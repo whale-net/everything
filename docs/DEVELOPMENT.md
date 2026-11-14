@@ -207,6 +207,70 @@ func TestMain(t *testing.T) {
 }
 ```
 
+## Adding a New Node.js / TypeScript App
+
+JS/TS packages live in one pnpm workspace at the repo root (`package.json`,
+`pnpm-workspace.yaml`, `pnpm-lock.yaml`), read by `npm_translate_lock` in
+`MODULE.bazel`. Rulesets: `aspect_rules_js`, `aspect_rules_ts` (TypeScript 7,
+the native compiler), `aspect_rules_esbuild`, Node 24 from `rules_nodejs`.
+`demo/hello_node/` is the reference app.
+
+### 1. Create the package
+Add a `package.json` (devDependencies such as `@types/node`), `tsconfig.json`,
+and `src/*.ts`. The directory must match a `pnpm-workspace.yaml` glob
+(`demo/**`, `lawn_gnome/**`); add a glob for any new domain.
+
+### 2. Register it with Bazel and refresh the lockfile
+Add the new `package.json` to `npm_translate_lock(data = [...])` in
+`MODULE.bazel`, then regenerate the lock:
+```bash
+bazel run -- @pnpm//:pnpm --dir $PWD install --lockfile-only
+```
+Then re-vendor (see [CONFIGURATION.md](CONFIGURATION.md#shared-vendor-directory-bazel-vendor-)).
+
+### 3. Create `BUILD.bazel`
+```starlark
+npm_link_all_packages(name = "node_modules")
+
+ts_project(                 # type-check (+ .js for tests)
+    name = "ts",
+    srcs = glob(["src/*.ts"]),
+    transpiler = "tsc",
+    tsconfig = "tsconfig.json",
+    deps = [":node_modules/@types/node"],
+)
+
+esbuild(                    # one self-contained .mjs, no externals
+    name = "my-app",
+    srcs = glob(["src/*.ts"], exclude = ["src/*.test.ts"]),
+    entry_point = "src/main.ts",
+    format = "esm",
+    output = "my-app.mjs",
+    platform = "node",
+    sourcemap = False,
+    target = "node24",
+    tsconfig = "tsconfig.json",
+)
+
+js_test(
+    name = "server_test",
+    data = [":ts"],
+    entry_point = "src/server.test.js",
+    node_options = ["--test"],
+)
+
+release_app(
+    name = "my-app",
+    language = "node",      # binary must be the esbuild target (exactly one .mjs)
+    domain = "demo",
+    app_type = "external-api",
+    port = 8080,
+)
+```
+The image is `@ubuntu_base` + a Node 24 layer at `/opt/node/bin/node` (per-arch)
++ the bundle at `/app/main.mjs`; there is no `node_modules` in the image, so
+every runtime dependency must be bundled by esbuild.
+
 ## Verifying Your New App
 
 After creating your app, verify it's set up correctly:
@@ -227,6 +291,9 @@ bazel test //my_python_app:test_main
 
 # For Go apps
 bazel test //my_go_app:main_test
+
+# For Node apps (js_test + ts_project's typecheck test)
+bazel test //my_node_app/...
 ```
 
 ### 3. Verify the release system can discover your app
@@ -242,6 +309,9 @@ bazel run //my_python_app:my_python_app
 
 # For Go apps
 bazel run //my_go_app:my_go_app
+
+# For Node apps (js_binary wrapping the esbuild bundle)
+bazel run //demo/hello_node:hello-node_bin
 ```
 
 ## Adding Shared Libraries

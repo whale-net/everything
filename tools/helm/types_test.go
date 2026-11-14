@@ -231,6 +231,8 @@ func TestAppType_DefaultResourceConfigForLanguage(t *testing.T) {
 		{"Python InternalAPI uses reduced memory", InternalAPI, "python", "64Mi", "256Mi"},
 		{"Python Worker uses reduced memory", Worker, "python", "64Mi", "256Mi"},
 		{"Python Job uses reduced memory", Job, "python", "64Mi", "256Mi"},
+		{"Node ExternalAPI uses node memory", ExternalAPI, "node", "96Mi", "384Mi"},
+		{"Node Worker uses node memory", Worker, "node", "96Mi", "384Mi"},
 		{"Go ExternalAPI uses standard memory", ExternalAPI, "go", "256Mi", "512Mi"},
 		{"Go Worker uses standard memory", Worker, "go", "256Mi", "512Mi"},
 		{"Empty language uses standard memory", ExternalAPI, "", "256Mi", "512Mi"},

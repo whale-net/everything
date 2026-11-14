@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "types": ["node"],
+    "declaration": false,
+    "sourceMap": false,
+    "skipLibCheck": true,
+    "isolatedModules": true
+  }
+}
