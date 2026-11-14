@@ -18,8 +18,8 @@ to do it:
 
 | Layer | Tool | Handles |
 |-------|------|---------|
-| 1. Detect + PR | **Renovate** (Mend-hosted GitHub App; free for this public repo) | Native managers, plus custom regex managers for the bespoke pins |
-| 2. Fix up | **`deps-fixup` GitHub workflow** on `renovate/**` branches | The Bazel follow-up steps that Renovate can't run on hosted infrastructure (tidy, gazelle, lockfile, sha256) |
+| 1. Detect + PR | **Self-hosted Renovate** on a scheduled GitHub Actions workflow ($0: Actions minutes are free on public repos) | Native managers, plus custom regex managers for the bespoke pins |
+| 2. Fix up | Renovate **`postUpgradeTasks`**, which run Bazel on the same runner | The Bazel follow-up steps (tidy, gazelle, lockfile, sha256), committed into the same update PR |
 | 3. Triage + repair | **`/deps` agent skill**, run from a harness (optionally on a weekly `/schedule`) | Failing PRs, majors, pins that can't be automated, and a weekly summary |
 
 Vulnerability signal runs alongside all three: Renovate's OSV alerts plus
@@ -94,11 +94,33 @@ Ignore paths: `.pi/**`, `.claude/worktrees/**`, `.pm-worktrees/**`,
 5. **Optionally SHA-pin GitHub Actions** (Renovate `helpers:pinGitHubActionDigests`).
    This is cheap supply-chain hardening, and Renovate keeps the SHAs current.
 
-## Phase 1: Renovate with native managers, observe only (1 PR plus one human action)
+## Phase 1: self-hosted Renovate, native managers, observe only (1 PR plus one human action)
 
-**Human action:** install the Renovate GitHub App on `whale-net/everything`.
+**Human action:** create a small GitHub App, `whale-net-renovate`, installed
+only on this repo. It needs these permissions:
 
-Add `renovate.json` (sketch below; finalize it in the PR):
+- read/write: contents, pull requests, issues, workflows
+- read: checks, statuses
+
+Store its ID and key as `RENOVATE_APP_ID` / `RENOVATE_APP_PRIVATE_KEY`.
+PRs opened with the default `GITHUB_TOKEN` don't trigger CI; PRs opened with
+an App token do.
+
+Add two files:
+
+- **`.github/workflows/renovate.yml`:**
+  - Runs on `schedule` (Monday 05:00) plus `workflow_dispatch`, so a harness
+    can kick a run with `gh workflow run renovate.yml`.
+  - Uses `concurrency: renovate` so only one run happens at a time.
+  - Mints the App token with `actions/create-github-app-token`.
+  - Reuses `setup-build-env` and `setup-bazel-remote-cache-config`, so Bazel
+    and the remote cache are on the runner.
+  - Runs Renovate directly on the runner with `npx renovate`, pinned to a
+    version via a `# renovate:` comment so it updates itself, with
+    `RENOVATE_REPOSITORIES=whale-net/everything`. Running it on the runner,
+    not in the `renovatebot/github-action` container, means post-upgrade
+    commands can see `bazel`.
+- **`renovate.json`:** the repo config (sketch below; finalize it in the PR).
 
 ```json5
 {
@@ -136,6 +158,8 @@ Notes:
 
 - Majors wait behind dashboard approval, so they never spam PRs.
 - Security fixes skip the schedule and the cooldown.
+- Leave `postUpgradeTasks` out of Phase 1 so you see what raw Renovate
+  produces. Expect Go PRs to fail CI until Phase 2 lands.
 - Leave automerge **off** for the first two weeks. Watch which groups go green
   reliably.
 - **Verify** that `changed-targets` treats a change to only `go.mod`, `go.sum`,
@@ -143,29 +167,46 @@ Notes:
   forces a full run (see [RELEASE.md](RELEASE.md)). If lock-only diffs narrow
   the run, add a CI rule: `renovate/**` branches test `//...`.
 
-## Phase 2: fixup workflow for Bazel follow-ups and sha256 (1 PR plus one human action)
+## Phase 2: Bazel post-upgrade tasks and sha256 (1 PR)
 
-Hosted Renovate won't run arbitrary `postUpgradeTasks`. Add
-`.github/workflows/deps-fixup.yml`, triggered on `pull_request` for
-`renovate/**` heads. It:
+Self-hosting lets Renovate run commands after each update and commit the
+result into the same PR. Make these changes:
 
-1. Reuses `setup-build-env`.
-2. Runs `bazel run //:gazelle`, then `bazel mod tidy`, then
-   `bazel mod deps --lockfile_mode=update`.
-3. Runs `bazel run //tools/deps:rehash`. This new small Go tool:
-   - finds `http_archive`/`http_file` entries whose `url(s)` changed in the PR
-     diff
-   - downloads each one
-   - rewrites its `sha256`/`integrity`
-   - fails loudly if a URL 404s (for example, an asset name changed between
-     releases)
-4. Commits any diff back to the branch as `chore(deps): bazel fixup`.
+**Global config** (env in `renovate.yml`):
 
-**Human action:** commits pushed with `GITHUB_TOKEN` don't retrigger CI, so
-create a small GitHub App, or a fine-grained PAT scoped to `contents:write`
-on this repo. Store it as `DEPS_FIXUP_TOKEN`.
+```
+RENOVATE_ALLOWED_COMMANDS: '["^bazel ", "^bazel$", "^tools/deps/"]'
+```
 
-Once the fixup works, turn on automerge (`"automerge": true`, platform
+**`renovate.json`:** add the tasks below.
+
+```json5
+"postUpgradeTasks": {
+  "commands": [
+    "bazel run //:gazelle",
+    "bazel mod tidy",
+    "bazel run //tools/deps:rehash",
+    "bazel mod deps --lockfile_mode=update"
+  ],
+  "fileFilters": ["**/*"],
+  "executionMode": "branch"
+}
+```
+
+**New tool `//tools/deps:rehash`.** A small Go tool that:
+
+- finds the `http_archive`/`http_file` entries whose `url(s)` differ from
+  `origin/main`
+- downloads each one and rewrites its `sha256`/`integrity`
+- fails loudly if a URL 404s (for example, an asset name changed between
+  releases)
+- has a `--check` mode for the agent's steamcmd drift check
+
+**Cost guard:** `executionMode: branch` runs the commands once per branch,
+not once per dependency. Grouping keeps the number of branches small, and the
+remote cache keeps each run warm.
+
+Once post-upgrade tasks are green, turn on automerge (`"automerge": true`, platform
 automerge with required checks) for:
 
 - patch/minor GitHub Actions
@@ -207,7 +248,7 @@ Claude Code read the same instructions. When run, it:
    (merged / fixed / held / needs-human) and runs vendor-sync locally if
    anything merged.
 
-Invocation:
+Invocation (the skill can start with `gh workflow run renovate.yml` to force a fresh Renovate pass):
 
 - **On demand:** `/deps` in Claude Code, or "follow docs/skills/deps/SKILL.md"
   in agy.
@@ -230,8 +271,8 @@ Invocation:
 | Phase | Effort | Blocking human action |
 |-------|--------|-----------------------|
 | 0 Hygiene | low, `agent:ready` | none |
-| 1 Renovate (observe) | low | install the Renovate app |
-| 2 Fixup + rehash + automerge | medium | create `DEPS_FIXUP_TOKEN` |
+| 1 Self-hosted Renovate (observe) | low | create the `whale-net-renovate` GitHub App and its secrets |
+| 2 Post-upgrade tasks + rehash + automerge | medium | none |
 | 3 `/deps` skill (+ schedule) | medium | none |
 | 4 OSV/govulncheck | low | none |
 
@@ -240,9 +281,9 @@ Expect a burst of PRs in the first week. The Dashboard rate-limits them
 
 ## Open decisions
 
-- **Hosted vs. self-hosted Renovate.** Hosted is recommended; Phase 2
-  compensates for its lack of `postUpgradeTasks`. Self-hosting via
-  `renovatebot/github-action` would allow in-line `bazel mod tidy`, but it
-  needs a Bazel-capable runner and costs CI minutes on every Renovate run.
+- **Cost.** Everything here is free: Renovate is open source (AGPL), Actions
+  minutes are free on public repos, and osv-scanner/govulncheck are free.
+  Mend's hosted app is not used, because it can't run Bazel post-upgrade
+  commands.
 - **Automerge scope** after the observation window.
 - **Whether to SHA-pin Actions** (Phase 0, step 5).
