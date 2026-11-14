@@ -9,6 +9,7 @@ Cross-cutting documentation for the Bazel build system, release pipeline, and in
 - [TESTING.md](TESTING.md) — Running tests with Bazel
 - [CONFIGURATION.md](CONFIGURATION.md) — Build settings and .bazelrc configuration, including the shared `bazel vendor` directory that de-duplicates external-repo disk usage across worktrees
 - [DEPENDENCIES.md](DEPENDENCIES.md) — Managing Python (uv) and Go (bzlmod) dependencies
+- [DEPENDENCY_UPDATES.md](DEPENDENCY_UPDATES.md) — **Proposed.** Keeping deps current: Renovate + Bazel fixup workflow + `/deps` agent triage skill; inventory of every pin surface incl. bespoke ones
 - [PYTHON_UPGRADE.md](PYTHON_UPGRADE.md) — Upgrading the Python version across the repo
 - [GO_DEPENDENCIES.md](GO_DEPENDENCIES.md) — Adding Go dependencies with bzlmod
 
