@@ -148,7 +148,7 @@ external git repo, so the wire contract is reviewable in-tree.
 WebSocket client: `github.com/gorilla/websocket v1.5.3` is **already in the root `go.mod` as an
 indirect dep** — promoting it to direct needs no new module. Add it with the rules_go wrapper,
 which forces the direct marking that keeps it out of the `bazel mod tidy` strip hazard
-(documented in `docs/GO_DEPENDENCIES.md`):
+(documented in `docs/DEPENDENCIES.md`):
 
 ```
 bazel run @rules_go//go -- get github.com/gorilla/websocket@v1.5.3

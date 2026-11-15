@@ -1,118 +1,124 @@
-# Managing Dependencies
+# Dependencies
 
-This guide covers adding and managing dependencies for both Python and Go applications.
+Go dependencies are declared in `go.mod`, Python dependencies in
+`pyproject.toml`/`uv.lock`. Bazel reads both through `MODULE.bazel`. After
+adding or upgrading anything, re-run `bazel vendor //...` if you use the
+shared vendor directory ([CONFIGURATION.md](CONFIGURATION.md#shared-vendor-directory-bazel-vendor-)).
 
-## Python Dependencies
-
-The repository uses **uv** for Python dependency management with **rules_pycross** for cross-platform Bazel builds. This provides unified lock files and native Bazel integration without abstraction layers.
-
-### Steps to add a new dependency
-
-1. **Add to `pyproject.toml`** under the `dependencies` array:
-   ```toml
-   dependencies = [
-       # ... existing dependencies
-       "your-new-package",
-   ]
-   ```
-
-2. **Regenerate the lock file** using uv:
-   ```bash
-   uv lock --python 3.13
-   ```
-   Then re-run `bazel vendor //...` if you use the shared vendor directory — see
-   [CONFIGURATION.md](CONFIGURATION.md#shared-vendor-directory-bazel-vendor-).
-
-3. **Use directly in BUILD.bazel** with the `@pypi//` syntax:
-   ```starlark
-   py_test(
-       name = "test_main",
-       srcs = ["test_main.py"],
-       deps = [
-           "@pypi//:pytest",
-           "@pypi//:your-new-package",  # Use exact package name with hyphens
-       ],
-   )
-   ```
-
-### Important Notes
-
-- **Package names**: Use exact PyPI package names including hyphens (e.g., `python-jose`, not `python_jose`)
-- **Top-level colon**: Always use `@pypi//:package-name` format (colon before package name)
-- **No conversion**: Package names are used as-is - pycross preserves the original names
-- **Cross-platform**: The uv.lock file includes platform-specific wheels for Linux (amd64/arm64) and macOS (arm64)
-
-### Example - Adding FastAPI
-
-```bash
-# 1. Edit pyproject.toml
-echo '    "fastapi",' >> pyproject.toml  # Add to dependencies array
-
-# 2. Regenerate lock file
-uv lock --python 3.13
-
-# 3. Use in BUILD.bazel
-deps = ["@pypi//:fastapi"]
-```
+Commit `MODULE.bazel.lock` along with any change to `go.mod`, `uv.lock`, or
+`MODULE.bazel`.
 
 ## Go Dependencies
 
-This repository uses external Go dependencies with **automated dependency tracking** via `go.mod` and Bazel's Bzlmod system.
+`MODULE.bazel` calls `go_deps.from_file(go_mod = "//:go.mod")`, so Bazel
+resolves every module in `go.mod`, including transitive ones. You never write
+`go_deps.module(...)` by hand. The Go SDK version comes from
+`go_sdk.download(version = ...)` in `MODULE.bazel`. Keep it in step with the
+`go` line in `go.mod`.
 
-### Quick Start - Adding a Go Dependency
-
-```bash
-# 1. Add the dependency
-go get github.com/package/name@version
-
-# 2. Update BUILD files
-bazel run //:gazelle
-
-# 3. Update MODULE.bazel
-bazel mod tidy
-
-# 4. Build
-bazel build //your/target
-```
-
-If you use the shared vendor directory, re-run `bazel vendor //...` after `bazel mod
-tidy` — see [CONFIGURATION.md](CONFIGURATION.md#shared-vendor-directory-bazel-vendor-).
-
-### How It Works
-
-Dependencies are declared in `go.mod` and automatically synced to `MODULE.bazel`:
-
-1. **`go.mod`** - Declares direct dependencies using standard Go tooling
-2. **Gazelle** - Auto-generates BUILD.bazel files from Go imports
-3. **`bazel mod tidy`** - Automatically manages `use_repo()` in MODULE.bazel
-
-**Key benefit:** Transitive dependencies are automatically resolved - no manual tracking required!
-
-### Example - Adding UUID Package
+### Add or upgrade
 
 ```bash
-# Add dependency
-go get github.com/google/uuid@v1.6.0
-
-# Use in your code
-cat > mypackage/id.go <<'EOF'
-package mypackage
-
-import "github.com/google/uuid"
-
-func GenerateID() string {
-    return uuid.New().String()
-}
-EOF
-
-# Update Bazel
+bazel run @rules_go//go -- get github.com/google/uuid@v1.6.0
 bazel run //:gazelle
 bazel mod tidy
-
-# Build
-bazel build //mypackage
 ```
 
-### Detailed Documentation
+1. `bazel run @rules_go//go -- get` runs the repo's pinned Go SDK and updates
+   `go.mod`/`go.sum`. Plain `go get` works too if your local Go matches, but
+   see [Dependencies dropped from `use_repo`](#dependencies-dropped-from-use_repo).
+2. Gazelle updates `BUILD.bazel` files from your imports. Pass a directory to
+   limit it: `bazel run //:gazelle -- libs/go/rmq`.
+3. `bazel mod tidy` rewrites the `use_repo(go_deps, ...)` list in
+   `MODULE.bazel`. Don't edit that list by hand.
 
-For comprehensive documentation on the Go dependency workflow, see [GO_DEPENDENCIES.md](GO_DEPENDENCIES.md).
+Use `@latest` to upgrade to the newest version.
+
+### Remove
+
+Delete the imports, then:
+
+```bash
+bazel run @rules_go//go -- mod tidy
+bazel run //:gazelle
+bazel mod tidy
+```
+
+### Referencing a module in BUILD files
+
+Gazelle writes these for you. External repos are named from the import path:
+
+| Import path | Label |
+|-------------|-------|
+| `github.com/google/uuid` | `@com_github_google_uuid//:uuid` |
+| `github.com/jackc/pgx/v5/pgxpool` | `@com_github_jackc_pgx_v5//pgxpool` |
+| `golang.org/x/net/html` | `@org_golang_x_net//html` |
+| `google.golang.org/grpc` | `@org_golang_google_grpc//:grpc` |
+
+The root `BUILD.bazel` sets `# gazelle:prefix github.com/whale-net/everything`
+(must match the `module` line in `go.mod`) and excludes `generated/`.
+
+### Dependencies dropped from `use_repo`
+
+Symptom: after `bazel mod tidy`, a build or query fails with
+
+```
+No repository visible as '@com_github_foo_bar' from repository '@@gazelle++go_deps+...'
+```
+
+or a warning that a repo is "reported as indirect dependencies by the
+extension".
+
+`go_deps` only keeps a module in `use_repo()` if `go.mod` lists it as a direct
+requirement. A module that none of our code imports stays `// indirect`, even
+when a third-party `BUILD.bazel` references it, for example behind a
+Windows-only `select()` that `bazel query` still has to resolve.
+
+Fix it by promoting the module to direct with the rules_go wrapper, which
+marks explicit `get`s as direct:
+
+```bash
+bazel run @rules_go//go -- get github.com/Microsoft/go-winio@v0.6.2
+bazel mod tidy
+```
+
+`go-winio` (pulled in by `github.com/docker/docker`) is pinned in `go.mod`
+this way.
+
+### Other fixes
+
+- Missing `go.sum` entries: `bazel run @rules_go//go -- mod download all`.
+- Gazelle didn't pick up a change: `bazel run //:gazelle -- -mode=fix <dir>`.
+  Use `-mode=print-only` to see what it would write.
+
+## Python Dependencies
+
+Python packages are locked with [uv](https://docs.astral.sh/uv/) and imported
+into Bazel by `rules_pycross` as the `@pypi` repo. The lock covers
+linux/amd64, linux/arm64, and macOS/arm64, so cross-compiled images get the
+right wheels.
+
+### Add or upgrade
+
+1. Add the package to `dependencies` in `pyproject.toml`.
+2. Regenerate the lock:
+
+   ```bash
+   uv lock --python 3.13
+   ```
+
+3. Reference it as `@pypi//:<name>`, using the exact PyPI name with hyphens:
+
+   ```starlark
+   deps = [
+       "@pypi//:fastapi",
+       "@pypi//:python-jose",
+   ]
+   ```
+
+To upgrade one package: `uv lock --python 3.13 --upgrade-package <name>`.
+
+Packages that ship only an sdist are built by pycross with `setuptools`
+(`default_build_dependencies` in `MODULE.bazel`).
+
+To change the Python version itself, see [PYTHON_UPGRADE.md](PYTHON_UPGRADE.md).

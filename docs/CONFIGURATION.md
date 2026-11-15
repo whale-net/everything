@@ -1,125 +1,124 @@
-# Configuration Guide
+# Configuration
 
-This guide covers the configuration files and build settings for the monorepo.
+Bazel config files in this repo, the per-machine `~/.bazelrc`, and how CI
+wires up the remote cache.
 
-## Configuration Files
+## Files
 
-The repository uses several configuration files for build and dependency management:
+| File | What it holds |
+|------|---------------|
+| `.bazelversion` | Bazel version Bazelisk downloads (8.3.1) |
+| `.bazelrc` | Repo-wide flags and the named configs below |
+| `.bazelrc.remote` | Remote cache flags, written by CI and `try-import`ed by `.bazelrc`. Gitignored |
+| `.bazelrc.user.example` | Template for your personal `~/.bazelrc` |
+| `MODULE.bazel` / `MODULE.bazel.lock` | External deps (bzlmod): rules, toolchains, Go and Python deps, OCI bases |
+| `go.mod` / `go.sum` | Go dependencies, read by `go_deps.from_file` |
+| `pyproject.toml` / `uv.lock` | Python dependencies, imported by `rules_pycross` |
 
-- **`.bazelrc`**: Contains common Bazel configuration including CI optimizations, test settings, and build flags
-- **`.bazelrc.user.example`**: Template for your personal, machine-level `~/.bazelrc` (vendor mode, shared disk cache, remote cache) — see § Sample Machine-Level Config below
-- **`MODULE.bazel`**: Defines external dependencies using Bazel's bzlmod system, including rules for Python, Go, and OCI containers
-- **`pyproject.toml`**: Python dependencies specification managed by uv
-- **`uv.lock`**: Locked Python dependency versions with platform-specific wheels
+`.bazelrc.local` is gitignored, but `.bazelrc` does not import it, so flags
+put there have no effect. Put personal flags in `~/.bazelrc` or pass them on
+the command line.
 
-## Key Configuration Details
+## Named configs in `.bazelrc`
 
-- Bazel uses Python version PY3 with symlink prefix `bazel-`
-- CI configuration includes aggressive remote caching (downloads all outputs) and test result caching
-- OCI images use Python 3.13-slim and Alpine 3.20 as base images with multi-platform support
-- **Remote cache support**: Optional HTTP-based remote caching with basic authentication
+| Config | Use |
+|--------|-----|
+| `--config=ci` | CI builds and tests: Build without the Bytes (`--remote_download_minimal`), retries, timestamps, test-result caching |
+| `--config=ci-images` | `ci` plus `--remote_download_toplevel`, for steps that need real files on disk (images, tool binaries). Never uploads to the remote cache |
+| `--config=esp32` | Cross-compile firmware for the ESP32 platform, e.g. `bazel build //demo/blink:blink_bin --config=esp32` |
+| `--config=fast` | `--jobs=auto` |
 
-## Remote Cache Configuration
-
-The repository supports optional Bazel remote caching for improved CI performance and build sharing. Remote cache is configured through the shared `setup-build-env` action:
-
-### Usage in GitHub Actions workflows
-
-```yaml
-- name: Setup Build Environment
-  uses: ./.github/actions/setup-build-env
-  with:
-    cache-suffix: 'test'
-    bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-    bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-    bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-    bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-```
-
-### Configuration Details
-
-- Remote cache is enabled when `bazel-remote-cache-url` input is provided.
-- Remote asset downloader (Remote Asset API for caching `http_file` and `http_archive` dependencies) is enabled when `bazel-remote-downloader-url` is provided.
-- Credentials (`BAZEL_REMOTE_CACHE_USER` and `BAZEL_REMOTE_CACHE_PASSWORD`) are passed to both the remote cache and remote downloader authorization headers if provided.
-- Automatically sets `--remote_upload_local_results=true` for cache population. Release builds are the exception: `.bazelrc`'s `build:ci-images` overrides this to `false`, so the release image-push path (v1's `release.yml`, v2's `release-v2.yml`, and the tools source-build fallback) reads from the remote cache but never writes to it — cache population is left to `ci.yml`'s plain `build:ci`. See the comment on that flag in `.bazelrc` for the stall it avoids.
-
-### Secrets and Variables
-
-- `BAZEL_REMOTE_CACHE_URL`: URL of the remote cache server (HTTP or gRPC; must be `grpc://` or `grpcs://` if remote downloader is enabled)
-- `BAZEL_REMOTE_DOWNLOADER_URL`: gRPC URL of the remote asset downloader (e.g. `grpc://cache.example.com:9092` or `grpcs://cache.example.com:443`, optional; can be set as secret or repository variable)
-- `BAZEL_REMOTE_CACHE_USER`: Username for basic authentication (optional)
-- `BAZEL_REMOTE_CACHE_PASSWORD`: Password for basic authentication (optional)
-
-### Security Notes
-
-- Secrets and variables are passed from workflow to action via inputs for proper access control
-- Generated `.bazelrc.remote` file is excluded from git via `.gitignore`
-- Basic authentication is embedded in the cache URL and passed as an Authorization header to the remote downloader during configuration
+Defaults that apply to every build include `--incompatible_strict_action_env`,
+`--host_platform=@platforms//host` (so exec tools like the OpenAPI generator's
+JVM always run on the host architecture), and test settings
+`--test_output=errors` and `--cache_test_results=yes`.
 
 ## Sample Machine-Level Config (`~/.bazelrc`)
 
-[`.bazelrc.user.example`](../.bazelrc.user.example) at the repo root is a copy-paste
-starting point for your personal, machine-level `~/.bazelrc`: vendor mode (below),
-a shared disk cache directory, and a commented-out remote cache entry. Copy it to
-`~/.bazelrc` and fill in the placeholders — see that file's header comment for why it
-belongs in your home directory rather than a repo-local file, and never commit your
-personal copy.
+Copy [`.bazelrc.user.example`](../.bazelrc.user.example) to `~/.bazelrc` and
+replace `<you>` with your username. It sets up:
+
+- a shared vendor directory (next section),
+- a shared `--disk_cache` so worktrees reuse each other's action outputs,
+- a commented-out remote cache entry.
+
+Bazel reads `~/.bazelrc` for every workspace, so one copy covers every
+worktree. Don't commit it.
 
 ## Shared Vendor Directory (`bazel vendor //...`)
 
-**Problem this solves:** every git worktree gets its own Bazel output base (see the
-`disk-cleanup` skill), and by default each output base independently
-fetches and extracts a full copy of every external repo (`bazel_dep`s, Go modules, the
-Python interpreter/pip wheels, etc.) under its own `external/` directory. With several
-worktrees checked out at once this duplicates gigabytes of identical external-repo
-bytes per worktree. `bazel vendor` lets every worktree on a machine share **one** copy
-instead.
+Every git worktree has its own Bazel output base, and by default each one
+fetches and extracts its own copy of every external repo (Go modules, Python
+wheels, toolchains). With several worktrees that adds up to gigabytes of
+duplicates. A shared vendor directory lets all worktrees on a machine use one
+copy.
 
-### One-time setup — machine-level `~/.bazelrc`
-
-This must go in your **personal, machine-level `~/.bazelrc`** (the file Bazel reads
-from your home directory), **not** the repo's checked-in `.bazelrc`. It's a per-machine
-disk optimization, not a project build setting, and must never be committed:
+In `~/.bazelrc`, never the repo's `.bazelrc`:
 
 ```
-# ~/.bazelrc — shared vendor dir, reused by every worktree of this repo on this machine
 common --vendor_dir=/home/<you>/.cache/bazel-vendor/everything
 ```
 
-Use an **absolute path outside any git worktree**. A relative path (e.g. `vendor`)
-resolves against each worktree's own directory and would just recreate one copy per
-worktree — the opposite of what this is for.
+The path must be absolute and outside any worktree. A relative path resolves
+per worktree and defeats the purpose.
 
-### Populate / refresh the vendor directory
+Populate it:
 
 ```bash
 bazel vendor //...
 ```
 
-This fetches every external repo needed to build everything in the repo and writes it
-into `--vendor_dir`. Once vendored, builds in *any* worktree that has the same
-`~/.bazelrc` entry resolve those repos from the shared directory instead of fetching
-and extracting their own copy into the worktree's output base.
+The vendor directory is a snapshot. A repo added after the last run silently
+falls back to per-worktree fetching. Re-run `bazel vendor //...` after:
 
-### Re-run whenever external deps change
+- adding or updating a `bazel_dep`, `git_override`, or `archive_override` in `MODULE.bazel`
+- adding or upgrading a Go dependency ([DEPENDENCIES.md](DEPENDENCIES.md#go-dependencies))
+- adding or upgrading a Python dependency ([DEPENDENCIES.md](DEPENDENCIES.md#python-dependencies))
 
-`bazel vendor` is a snapshot, not a live sync — a repo added after the last vendor run
-falls back to the normal per-worktree fetch path (silently reintroducing the
-duplication `--vendor_dir` was meant to avoid) until you vendor it. Re-run
-`bazel vendor //...` after any change that adds or updates an external repo:
+The `vendor-sync` skill (`.claude/skills/vendor-sync/`) does this for agents.
+This directory lives in `~/.cache` and is never committed. It isn't the
+"commit `vendor/` for offline builds" use of `bazel vendor`. `bazel help vendor`
+lists options such as excluding specific repos.
 
-- A new/updated `bazel_dep`, `git_override`, or `archive_override` in `MODULE.bazel`
-- `go get` + `bazel run //:gazelle` + `bazel mod tidy` (see [DEPENDENCIES.md](DEPENDENCIES.md#go-dependencies))
-- A new Python dependency + `uv lock --python 3.13` (see [DEPENDENCIES.md](DEPENDENCIES.md#python-dependencies))
+## Remote Cache Configuration
 
-The `vendor-sync` skill (`.claude/skills/vendor-sync/`) automates this re-run and
-should be invoked any time one of the above happens.
+CI workflows set up the remote cache through the `setup-build-env` composite
+action:
 
-### Notes
+```yaml
+- name: Setup Build Environment
+  uses: ./.github/actions/setup-build-env
+  with:
+    cache-suffix: 'ci'
+    bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+    bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+    bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+    bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+```
 
-- This is distinct from the common "commit `vendor/` to the repo for airgapped/offline
-  builds" use of `bazel vendor` — here the directory lives outside the repo entirely
-  (in `~/.cache`), is never committed, and exists purely to de-duplicate disk usage
-  across worktrees. Nothing under `--vendor_dir` should ever be added to git.
-- `bazel help vendor` documents advanced options, including excluding specific repos
-  from vendoring (e.g. ones that require network access at build time).
+It calls `.github/actions/setup-bazel-remote-cache-config`, which writes
+`.bazelrc.remote`:
+
+- If `BAZEL_REMOTE_CACHE_URL` is set, it adds `--remote_cache` and
+  `--remote_upload_local_results=true`. For `grpc://`/`grpcs://` URLs,
+  credentials go in an `Authorization: Basic` header. For `http(s)://` URLs,
+  they're embedded in the URL.
+- If `BAZEL_REMOTE_DOWNLOADER_URL` is set (a `grpc://` or `grpcs://` Remote
+  Asset API endpoint), it adds `--experimental_remote_downloader` with the same
+  credentials, so `http_archive`/`http_file` downloads go through the cache.
+- With neither set, it writes an empty stub.
+
+Release builds use `--config=ci-images`, which overrides
+`--remote_upload_local_results=false`. They read from the cache but don't
+write to it. `ci.yml`'s test job is what populates the cache. The comment on
+that flag in `.bazelrc` explains why: uploading large image layers stalled
+release runs.
+
+| Secret / variable | Purpose |
+|-------------------|---------|
+| `BAZEL_REMOTE_CACHE_URL` | Cache endpoint, HTTP(S) or gRPC(S). Must be gRPC if the downloader is used |
+| `BAZEL_REMOTE_DOWNLOADER_URL` | Remote Asset API endpoint, e.g. `grpcs://cache.example.com:443`. Optional |
+| `BAZEL_REMOTE_CACHE_USER` / `BAZEL_REMOTE_CACHE_PASSWORD` | Basic auth for both. Optional |
+
+To use the same cache locally, uncomment the remote cache lines in your
+`~/.bazelrc`.
