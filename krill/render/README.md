@@ -31,8 +31,8 @@ renderer, never `Edit`/`Write` the committed file directly.
 This carve-out is narrow: it applies only to a domain's own
 `PRODUCT.md`/`product/*` once that domain's brief lives in krill (today:
 `krill/` itself, per krill's own M1 self-hosting milestone, plus
-`friendly_computing_machine/`, `manmanv2/`, `leaflab/`, `whagent_net/`, and
-`audience_score_system/`). Every
+`friendly_computing_machine/`, `manmanv2/`, `leaflab/`, `whagent_net/`,
+`audience_score_system/`, and `tools/app_registry/`). Every
 other domain's `PRODUCT.md` remains the ordinary
 hand-authored document `AGENTS.md`'s
 Documentation Conventions describe, and `ARCHITECTURE.md`/`README.md`/
