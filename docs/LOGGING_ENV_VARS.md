@@ -1,251 +1,125 @@
 # Logging Environment Variables
 
-## Overview
+The Go (`//libs/go/logging`) and Python (`//libs/python/logging`) logging
+libraries fill in service identity from environment variables, so app code
+doesn't hardcode its own name, version, or environment. This doc lists those
+variables, where they come from, and how the two libraries differ.
 
-The consolidated logging library (`//libs/python/logging`) automatically detects application metadata from environment variables. This eliminates the need to hardcode service names, versions, and other metadata in application code.
+For the APIs themselves, see [libs/go/logging/README.md](../libs/go/logging/README.md)
+and [libs/python/logging/README.md](../libs/python/logging/README.md).
 
-## Environment Variables
+## Variables
 
-### Core Application Metadata
+A value passed explicitly in code (`logging.Config` fields in Go, keyword
+arguments to `configure_logging()` in Python) wins over the environment.
+Where two variables are listed, the first one set wins.
 
-These should be set by the `release_app` macro and Helm charts:
+| Variable | Used as | Default if unset |
+|----------|---------|------------------|
+| `APP_NAME` | `service.name` | `unknown-app` |
+| `APP_DOMAIN` | `service.namespace` | empty |
+| `APP_TYPE` | `service.type` | empty |
+| `APP_VERSION` | `service.version` | `latest` |
+| `APP_ENV`, `ENVIRONMENT` | `deployment.environment` | `development` |
+| `GIT_COMMIT`, `COMMIT_SHA` | `vcs.commit.id` (first 8 chars also become `service.instance.id`) | empty |
+| `POD_NAME`, `HOSTNAME` | `k8s.pod.name` | empty |
+| `NAMESPACE`, `POD_NAMESPACE` | `k8s.namespace.name` | empty |
+| `NODE_NAME` | `k8s.node.name` | empty |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector address (gRPC, insecure) | Go: `localhost:4317`, Python: `http://localhost:4317` |
 
-| Variable | Description | Example | Set By |
-|----------|-------------|---------|--------|
-| `APP_NAME` | Application name | `hello-fastapi` | `release_app` → Helm chart |
-| `APP_VERSION` | Application version | `v1.2.3` | `release_app` → Helm chart |
-| `APP_DOMAIN` | Application domain | `demo`, `api` | `release_app` → Helm chart |
-| `APP_TYPE` | Application type | `external-api`, `worker` | `release_app` → Helm chart |
-| `APP_ENV` / `ENVIRONMENT` | Deployment environment | `dev`, `staging`, `prod` | Helm values |
-| `GIT_COMMIT` / `COMMIT_SHA` | Git commit SHA | `abc123def...` | Build system → Helm |
+Python-only:
 
-### Kubernetes Context (Downward API)
+| Variable | Used as |
+|----------|---------|
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Log exporter endpoint; checked before `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Trace exporter endpoint; checked before `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `CONTAINER_NAME` | `k8s.container.name` |
+| `HOSTNAME` | `host.name` (in addition to the `POD_NAME` fallback) |
+| `PLATFORM`, `ARCHITECTURE` | `host.arch`, `host.cpu.family` |
+| `HELM_CHART_NAME`, `HELM_RELEASE_NAME` | `helm.chart.name`, `helm.release.name` |
+| `BAZEL_TARGET` | `build.target` |
 
-These are auto-populated by Kubernetes downward API in pod specs:
+Go strips any `http://` or `https://` prefix from the endpoint. Python hands
+the value to the OTel gRPC exporter unchanged. The `http://host:4317` form the
+Helm charts set works for both.
 
-| Variable | Description | Downward API Field |
-|----------|-------------|--------------------|
-| `POD_NAME` | Kubernetes pod name | `metadata.name` |
-| `POD_NAMESPACE` / `NAMESPACE` | Kubernetes namespace | `metadata.namespace` |
-| `NODE_NAME` | Kubernetes node name | `spec.nodeName` |
-| `CONTAINER_NAME` | Container name | Set in chart |
+## Turning OTLP on and off
 
-### Helm Context
+The two libraries have different defaults:
 
-These can be set by Helm charts:
+| | Go `logging.Config` | Python `configure_logging()` |
+|---|---|---|
+| Log export | `EnableOTLP`, default off | `enable_otlp`, default on |
+| Tracing | `EnableTracing`, default off | `enable_tracing`, default off |
+| Metrics | `EnableMetrics`, default off | separate `configure_metrics()` call |
 
-| Variable | Description | Helm Template |
-|----------|-------------|---------------|
-| `HELM_CHART_NAME` | Helm chart name | `{{ .Chart.Name }}` |
-| `HELM_RELEASE_NAME` | Helm release name | `{{ .Release.Name }}` |
+Every long-running Go service must set `EnableOTLP: true` and
+`EnableTracing: true` and call `logging.Shutdown` on every exit path. A missing
+flag fails silently: the service just never shows up in Grafana. See the
+Observability section of [AGENTS.md](../AGENTS.md) and the
+`architecture-observability` skill.
 
-### OTLP Configuration
+These variables switch signals off without a code change. They override
+whatever the code asked for:
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint | `http://localhost:4317` |
-| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | OTLP logs endpoint | Falls back to general endpoint |
+| Variable | Go | Python |
+|----------|----|--------|
+| `OTEL_SDK_DISABLED=true` | Disables logs, traces, and metrics | Disables tracing only; log export still runs |
+| `OTEL_LOGS_DISABLED=true` | Disables OTLP log export | Ignored |
+| `OTEL_TRACES_DISABLED=true` | Disables tracing | Disables tracing |
+| `OTEL_METRICS_DISABLED=true` | Disables metrics | Ignored |
 
-## Implementation Plan
+Go accepts only `true` (any case). Python also accepts `1` and `yes`.
 
-### 1. Update `release_app` Macro
+To run a Python app locally without a collector, pass `enable_otlp=False`;
+`OTEL_SDK_DISABLED` won't stop its log exporter.
 
-The `release_app` macro should export metadata as part of the app definition:
+## Where the values come from
 
-```python
-# tools/release.bzl
-def release_app(name, binary_target, language, domain, **kwargs):
-    # ... existing code ...
-    
-    # Export metadata as JSON for Helm charts to consume
-    native.genrule(
-        name = name + "_metadata_env",
-        srcs = [":" + name + "_metadata"],
-        outs = [name + "_metadata.env"],
-        cmd = """
-        cat $(location :{}_metadata) | jq -r '
-            "APP_NAME=" + .name,
-            "APP_DOMAIN=" + .domain,
-            "APP_TYPE=" + (.type // "external-api"),
-            "APP_VERSION=" + (.version // "latest")
-        ' > $@
-        """.format(name),
-    )
-```
+**Container image.** `release_app` (`tools/bazel/release.bzl`) bakes
+`APP_NAME`, `APP_DOMAIN`, and `APP_TYPE` into every image it builds, so they're
+present even under plain `docker run`. To see them for an app:
 
-### 2. Update Helm Templates
-
-Helm deployment templates should inject environment variables:
-
-```yaml
-# deployment.yaml.tmpl
-apiVersion: apps/v1
-kind: Deployment
-spec:
-  template:
-    spec:
-      containers:
-      - name: {{ .Values.appName }}
-        image: {{ .Values.image }}
-        env:
-        # Application metadata
-        - name: APP_NAME
-          value: "{{ .Values.appName }}"
-        - name: APP_DOMAIN
-          value: "{{ .Values.domain }}"
-        - name: APP_TYPE
-          value: "{{ .Values.appType }}"
-        - name: APP_VERSION
-          value: "{{ .Values.version }}"
-        - name: APP_ENV
-          value: "{{ .Values.global.environment }}"
-        - name: GIT_COMMIT
-          value: "{{ .Values.commitSha }}"
-        
-        # Kubernetes downward API
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
-        - name: CONTAINER_NAME
-          value: "{{ .Values.appName }}"
-        
-        # Helm context
-        - name: HELM_CHART_NAME
-          value: "{{ .Chart.Name }}"
-        - name: HELM_RELEASE_NAME
-          value: "{{ .Release.Name }}"
-        
-        # OTLP configuration
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "{{ .Values.otlp.endpoint | default "http://otel-collector:4317" }}"
-```
-
-### 3. Update OCI Image Build ✅ COMPLETE
-
-Bake default metadata into container images for runtime auto-detection:
-
-**Implementation:**
-- Modified `tools/bazel/release.bzl` to pass `env` dict to `multiplatform_image`
-- Updated `tools/bazel/container_image.bzl` to accept `env` parameter
-- Default environment variables flow from `release_app` → image build
-
-**Example from `release.bzl`:**
-```python
-def release_app(name, domain, app_type, ...):
-    # Create default env vars for image
-    default_env = {
-        "APP_NAME": name,
-        "APP_DOMAIN": domain,
-        "APP_TYPE": app_type,
-    }
-    
-    multiplatform_image(
-        name = image_target,
-        binary = base_label,
-        env = default_env,  # Bake defaults into image
-        ...
-    )
-```
-
-**Verification:**
 ```bash
-$ bazel build //demo/hello_fastapi:hello-fastapi_image_base --platforms=//tools:linux_arm64
-$ cat bazel-bin/demo/hello_fastapi/hello-fastapi_image_base.env.txt
-APP_NAME=hello-fastapi
-APP_DOMAIN=demo
-APP_TYPE=external-api
+bazel build //demo/hello_fastapi:hello-fastapi_image_base
+cat bazel-bin/demo/hello_fastapi/hello-fastapi_image_base.env.txt
 ```
 
-**Result:**
-- ✅ All images now have default APP_NAME, APP_DOMAIN, APP_TYPE
-- ✅ Kubernetes can override with more specific values (version, commit, pod info)
-- ✅ Works even outside Kubernetes for local testing
-- ✅ All 46 tests passing
+**Generated Helm charts.** `tools/helm/templates/deployment.yaml.tmpl` and
+`job.yaml.tmpl` set the rest when the pod starts:
 
-## Application Code Usage
+| Variable | Value |
+|----------|-------|
+| `APP_NAME`, `CONTAINER_NAME`, `OTEL_SERVICE_NAME` | App name |
+| `APP_DOMAIN` | App's `domain`, else `global.domain` |
+| `APP_TYPE` | App's `type` |
+| `APP_VERSION` | App's `imageTag` |
+| `APP_ENV`, `ENVIRONMENT` | `global.environment` |
+| `GIT_COMMIT`, `COMMIT_SHA` | App's `commitSha`, only if set |
+| `POD_NAME`, `HOSTNAME` | `metadata.name` (downward API) |
+| `POD_NAMESPACE`, `NAMESPACE` | `metadata.namespace` (downward API) |
+| `NODE_NAME` | `spec.nodeName` (downward API) |
+| `HELM_CHART_NAME`, `HELM_RELEASE_NAME` | `.Chart.Name`, `.Release.Name` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otlp.endpoint`, default `http://otel-collector:4317` |
+| `PLATFORM`, `ARCHITECTURE` | Hardcoded `linux/amd64`, `amd64` |
 
-With environment variables set, applications can use minimal configuration:
+The chart composer (`tools/helm/composer.go`) never fills in `commitSha` yet,
+so `GIT_COMMIT`/`COMMIT_SHA` are absent from generated charts and
+`vcs.commit.id` is missing in practice.
 
-### Before (Manual Configuration)
-```python
-from libs.python.logging import configure_logging
+**Anywhere else** (a binary run directly, a container started by a manmanv2
+host manager, a Tiltfile that doesn't use the generated charts) you set these
+yourself or pass the values in code.
 
-configure_logging(
-    service_name="hello-fastapi",
-    service_version="v1.2.3",
-    deployment_environment="production",
-    domain="demo",
-    app_type="external-api",
-    log_level="INFO",
-    enable_otlp=True,
-)
-```
+## Running locally
 
-### After (Auto-Detection)
-```python
-from libs.python.logging import configure_logging
-
-# Everything auto-detected from environment!
-configure_logging()
-
-# Or override only what you need:
-configure_logging(
-    log_level="DEBUG",
-    enable_otlp=False,  # For external workers
-)
-```
-
-## Benefits
-
-1. **No Hardcoding**: Application code doesn't need to know its own name/version
-2. **Single Source of Truth**: `release_app` metadata flows to all systems
-3. **Consistent Metadata**: Same values in logs, metrics, traces
-4. **Environment-Specific**: Different values for dev/staging/prod automatically
-5. **Kubernetes Native**: Leverages downward API for pod context
-6. **Build-Time Safety**: Bazel validates metadata at build time
-
-## Migration Path
-
-1. ✅ **Phase 1**: Update logging library to support auto-detection (DONE)
-2. **Phase 2**: Update `release_app` macro to export metadata
-3. **Phase 3**: Update Helm charts to inject environment variables
-4. **Phase 4**: Update OCI image build to bake default values
-5. **Phase 5**: Simplify application code to use auto-detection
-6. **Phase 6**: Deprecate manual parameter passing
-
-## Testing
-
-### Local Development
-Set environment variables manually:
 ```bash
-export APP_NAME=hello-fastapi
-export APP_DOMAIN=demo
-export APP_TYPE=external-api
-export APP_ENV=dev
-export APP_VERSION=local
-
-python -m my_app
+APP_NAME=hello-logging APP_DOMAIN=demo APP_ENV=dev \
+  bazel run //demo/hello_logging:hello_logging
 ```
 
-### Kubernetes
-Environment variables automatically set by downward API and Helm chart.
-
-### Verification
-Check logs for the auto-detection indicator:
-```json
-{
-  "message": "Logging configured for hello-fastapi",
-  "auto_detected": true,
-  "environment": "dev",
-  "domain": "demo"
-}
-```
+The first log line is `Logging configured for hello-logging` with the
+resolved environment and domain attached; check it to confirm the values were
+picked up. It also carries `auto_detected: true` when no identity arguments
+were passed in code. Go services log `logging configured` with
+`service_name`, `environment`, and `domain` the same way.

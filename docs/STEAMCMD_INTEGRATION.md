@@ -1,208 +1,81 @@
-# SteamCMD Integration - Implementation Summary
+# Adding SteamCMD (or Another Tool) to an Image
 
-## Overview
+`release_app` and `multiplatform_image` take an `additional_tars` list of tar
+layers to add to the image. `//tools/steamcmd` uses it to ship Valve's
+SteamCMD. The same pattern works for any external tool you need inside a
+container.
 
-Successfully implemented a reusable mechanism to package the SteamCMD executable into any Docker container image in the Everything monorepo. This implementation follows Bazel best practices and the existing architecture patterns.
-
-## What Was Done
-
-### 1. Created SteamCMD Tool Target (`//tools/steamcmd`)
-
-**Files Created:**
-- `tools/steamcmd/BUILD.bazel` - Bazel build rules for SteamCMD
-- `tools/steamcmd/README.md` - Documentation and usage guide
-
-**Key Features:**
-- Downloads SteamCMD from Valve's official CDN
-- Extracts and packages into reusable tar layers
-- Creates symlink at `/usr/local/bin/steamcmd` for easy access
-- Architecture-independent (SteamCMD auto-downloads correct binaries on first run)
-
-**Targets Provided:**
-- `//tools/steamcmd:steamcmd` - Main steamcmd files at `/opt/steamcmd/`
-- `//tools/steamcmd:steamcmd_symlink_layer` - Symlink layer
-- `//tools/steamcmd:steamcmd_layers` - Combined target (use this!)
-
-### 2. Extended Container Image System
-
-**Modified Files:**
-- `tools/bazel/container_image.bzl` - Added `additional_tars` parameter
-- `tools/bazel/release.bzl` - Added `additional_tars` to `release_app` macro
-- `MODULE.bazel` - Added SteamCMD download configuration
-
-**New Parameter:**
-```starlark
-additional_tars = ["//tools/steamcmd:steamcmd_layers"]
-```
-
-This parameter accepts a list of tar layers to include in any container image, making it easy to add external tools like SteamCMD.
-
-### 3. Updated ManMan Worker
-
-**Modified File:**
-- `manman/BUILD.bazel`
-
-**Change:**
-```starlark
-release_app(
-    name = "worker",
-    # ... other parameters ...
-    additional_tars = ["//tools/steamcmd:steamcmd_layers"],
-)
-```
-
-The manman worker now includes SteamCMD in its container image.
-
-### 4. Created Demo Application
-
-**Files Created:**
-- `demo/hello_steamcmd/main.py` - Demo app that tests SteamCMD availability
-- `demo/hello_steamcmd/BUILD.bazel` - Build configuration
-- `demo/hello_steamcmd/__init__.py` - Python package marker
-
-The demo app verifies SteamCMD is properly installed and executable.
-
-## Usage
-
-### Adding SteamCMD to Any App
+## Adding SteamCMD to an app
 
 ```starlark
 load("//tools/bazel:release.bzl", "release_app")
 
 release_app(
-    name = "my-app",
+    name = "my-worker",
     binary_name = ":my_binary",
     language = "python",
     domain = "myapp",
-    description = "My application",
+    app_type = "worker",
+    description = "Worker that installs game servers",
     additional_tars = ["//tools/steamcmd:steamcmd_layers"],
 )
 ```
 
-### Using SteamCMD in Your Code
+`steamcmd_layers` is an alias for `steamcmd_with_lib32`, which bundles:
+
+| Path in the image | Contents | Target |
+|-------------------|----------|--------|
+| `/opt/steamcmd/steamcmd.sh`, `/opt/steamcmd/linux32/` | SteamCMD from Valve's CDN (`@steamcmd_linux` in `MODULE.bazel`) | `//tools/steamcmd:steamcmd` |
+| `/usr/local/bin/steamcmd` → `/opt/steamcmd/steamcmd.sh` | Convenience symlink | `//tools/steamcmd:steamcmd_symlink_layer` |
+| `/lib/ld-linux.so.2` → `/usr/lib32/ld-linux.so.2` | 32-bit dynamic linker symlink | `//tools/steamcmd:steamcmd_symlink_layer` |
+| `/usr/lib32/` | 32-bit libc and libgcc from Ubuntu 24.04 `.deb`s | `//tools/lib32` |
+
+SteamCMD is a 32-bit x86 program and the lib32 packages are amd64 `.deb`s, so
+the layer only runs in `linux/amd64` images.
+
+Call it by full path from code. The `/usr/local/bin` symlink is fine in a
+shell, but `steamcmd.sh` resolves its own directory from `$0`:
 
 ```python
-import subprocess
-
-# SteamCMD is in PATH
-result = subprocess.run(["steamcmd", "+quit"], capture_output=True)
-
-# Or use full path
-result = subprocess.run(["/opt/steamcmd/steamcmd.sh", "+quit"], capture_output=True)
+subprocess.run(["/opt/steamcmd/steamcmd.sh", "+login", "anonymous", "+quit"], check=True)
 ```
 
-### File Locations in Container
+Current users: `//manman:worker` and `//demo/hello_steamcmd:hello-steamcmd`.
+`tools/steamcmd/README.md` covers game-server install examples and how to bump
+the SteamCMD or lib32 versions.
 
-- **Main script:** `/opt/steamcmd/steamcmd.sh`
-- **Symlink:** `/usr/local/bin/steamcmd`
-- **Dependencies:** `/opt/steamcmd/linux32/`
-
-## Testing
-
-Build and test the demo:
+## Trying it
 
 ```bash
-# Build the demo image
-bazel build //demo/hello_steamcmd:hello-steamcmd_image
-
-# Load into Docker (on ARM64 Mac)
-bazel run //demo/hello_steamcmd:hello-steamcmd_image_load --platforms=//tools:linux_arm64
-
-# Run the test
+bazel run //demo/hello_steamcmd:hello-steamcmd_image_load --platforms=//tools:linux_x86_64
 docker run --rm demo-hello-steamcmd:latest
 ```
 
-Expected output:
-```
-Testing SteamCMD availability...
-✓ steamcmd found at: /usr/local/bin/steamcmd
-✓ /opt/steamcmd/steamcmd.sh exists
+The demo checks that `steamcmd` is on `PATH`, that `/opt/steamcmd/steamcmd.sh`
+exists, and that `steamcmd +quit` runs. It ends with
+`All tests passed! SteamCMD is ready to use.`
 
-Testing steamcmd execution...
-✓ steamcmd executed successfully
-Exit code: 127
+## Packaging another tool
 
-✓ All tests passed! SteamCMD is ready to use.
-```
-
-## Architecture Benefits
-
-### Reusability
-- Single source of truth for SteamCMD (`//tools/steamcmd`)
-- Can be included in any container image
-- No code duplication
-
-### Layer Caching
-- SteamCMD is a separate OCI layer
-- Cached independently of app code
-- Only downloaded once per registry push
-- Shared across all apps that use it
-
-### Extensibility
-- Pattern can be reused for other external tools
-- Just create a similar target under `tools/`
-- Examples: game server binaries, CLI tools, static assets
-
-### Consistency
-- Follows existing patterns (like `//tools/cacerts`)
-- Uses standard Bazel rules (`pkg_tar`, `genrule`)
-- Integrates with existing `release_app` system
-
-## Future Enhancements
-
-This pattern enables easy addition of other tools:
+Write a `BUILD.bazel` under `tools/<tool>/` that produces one or more tar
+files, then list them in `additional_tars`. Use `pkg_tar` with
+`portable_mtime = True`, or a genrule that runs `tar --mtime='@0'`, so the
+layer is reproducible and its digest stays stable across builds. A stable
+digest lets the registry and image pulls reuse the layer.
 
 ```starlark
-# tools/tool_name/BUILD.bazel
-pkg_tar(
-    name = "tool_layers",
-    srcs = [":tool_extracted"],
-    package_dir = "/opt/tool_name",
-    visibility = ["//visibility:public"],
-)
+# tools/mytool/BUILD.bazel
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
 
-# Your app's BUILD.bazel
-release_app(
-    name = "my-app",
-    additional_tars = [
-        "//tools/steamcmd:steamcmd_layers",
-        "//tools/tool_name:tool_layers",
-    ],
+pkg_tar(
+    name = "mytool",
+    srcs = [":mytool_files"],
+    package_dir = "/opt/mytool",
+    portable_mtime = True,
+    visibility = ["//visibility:public"],
 )
 ```
 
-Potential tools to package this way:
-- Game server executables (CS2, TF2, etc.)
-- Binary CLI tools (kubectl, helm, etc.)
-- Static asset bundles
-- Shared native libraries
-
-## Files Summary
-
-**New Files:**
-- `tools/steamcmd/BUILD.bazel` - SteamCMD build rules
-- `tools/steamcmd/README.md` - Documentation
-- `demo/hello_steamcmd/` - Demo application (3 files)
-
-**Modified Files:**
-- `MODULE.bazel` - Added SteamCMD download
-- `tools/bazel/container_image.bzl` - Added additional_tars support
-- `tools/bazel/release.bzl` - Added additional_tars parameter
-- `manman/BUILD.bazel` - Added SteamCMD to worker
-- `demo/hello_steamcmd/BUILD.bazel` - Demo configuration
-
-## Verification
-
-✅ SteamCMD downloads and extracts correctly
-✅ Tar layers build successfully
-✅ Demo image builds with SteamCMD included
-✅ SteamCMD is accessible at both `/opt/steamcmd/steamcmd.sh` and `/usr/local/bin/steamcmd`
-✅ Pattern is reusable for other tools
-✅ Integration with manman worker configured
-
-## Documentation
-
-Complete documentation is available at:
-- `tools/steamcmd/README.md` - Detailed usage guide
-- Inline comments in BUILD.bazel files
-- Example demo application at `demo/hello_steamcmd/`
+Fetch the upstream artifact with `http_file` or `http_archive` in
+`MODULE.bazel` and pin its `sha256`. After adding it, run the `vendor-sync`
+skill so worktrees pick it up from the shared vendor directory.
