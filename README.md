@@ -57,7 +57,7 @@ Host-side firmware tests need no hardware:
 ```bash
 bazel test //firmware/...
 bazel build //demo/blink:blink_bin --config=esp32
-bazel run //demo/blink:flash -- /dev/ttyUSB0
+bazel run //demo/blink:flash --config=esp32 -- /dev/ttyUSB0
 ```
 
 See [tools/firmware/README.md](tools/firmware/README.md) for toolchains and
