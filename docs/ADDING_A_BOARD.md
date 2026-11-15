@@ -1,516 +1,199 @@
-# Adding a New Board
+# Adding a Board
 
-This guide covers adding a new microcontroller board to the firmware infrastructure.
-The system supports any board via three abstractions:
+Firmware code never names a board. It includes `board_pins.h` and uses
+logical pin names (`board::kLed`, `board::kSda`). The board is picked at build
+time by a Bazel platform, which selects the pin header, the toolchain, and the
+Arduino board defines. The flash parameters come from a config struct passed
+to the firmware macro.
 
-1. **Platform constraints** — Bazel's type system for hardware targets
-2. **Pin abstraction** — logical pin names that map to board-specific GPIO numbers
-3. **Universal flash** — a single `bazel run :flash -- <port>` command across all boards
+Today there is one board, the ELEGOO ESP32 dev board
+(`//tools/firmware/esp32:elegoo_esp32`), selected by `--config=esp32`. This doc
+covers adding another ESP32 board, which is a few lines of Starlark, and what
+a new CPU family would need, which is a real porting job.
 
----
+For the toolchain itself, flashing from WSL2, and the Arduino core setup, see
+[tools/firmware/README.md](../tools/firmware/README.md).
 
-## Architecture
+## How a board is wired together
 
-```
-Application (board-agnostic C++)
-    #include "board_pins.h"        ← board::kLed, board::kSda, …
-    |
-    ↓
-//tools/firmware:board_pins        ← alias, resolves via select()
-    |
-    ├── //tools/firmware/esp32:elegoo_esp32_pins  (when --config=esp32)
-    ├── //tools/firmware/pico:pico_w_pins         (future)
-    └── //tools/firmware:no_board_pins            (host builds)
+| Piece | Where | What it does |
+|-------|-------|--------------|
+| `constraint_value(board_<name>)` | `tools/firmware/BUILD.bazel` | Board identity |
+| `constraint_value(cpu_<family>)` | `tools/firmware/BUILD.bazel` | CPU family. `cpu_xtensa`, `cpu_armv6m` (RP2040), and `cpu_armv7em` (STM32) exist; only Xtensa has a toolchain |
+| `firmware_board()` | `tools/firmware/boards.bzl` | Declares the `platform` from the OS, CPU, and board constraints |
+| `config_setting(is_<name>)` | the board's package | Lets `select()` branch on the board |
+| `board_pins()` | `tools/firmware/pins.bzl` | Generates `board_pins.h` plus a `cc_library` for one board |
+| `board_pins_registry()` | `tools/firmware/BUILD.bazel` | Builds the `//tools/firmware:board_pins` alias that `select()`s the right pins. Host builds get the empty `:no_board_pins` |
+| `arduino_board_defines` | `tools/firmware/esp32/BUILD.bazel` | `ARDUINO_BOARD`/`ARDUINO_VARIANT` defines for the Arduino core, via `select()` |
+| Flash config struct | `tools/firmware/<family>/flash_config.bzl` | Flash tool, chip, baud, flash mode, segment offsets |
+| `esp32_firmware()` | `tools/bazel/esp32.bzl` | Generates `{name}_lib`, `{name}_elf`, `{name}_bin`, `{name}_merged_bin`, and `:flash` |
+| `flash_firmware()` | `tools/firmware/flash.bzl` | Generates the `:flash` wrapper script around `tools/firmware/flash/flash.py` |
+| `build:<config>` lines | `.bazelrc` | Sets `--platforms` and the Pigweed backends |
 
-esp32_firmware() / pico_firmware() macro
-    → {name}_lib   cc_library  (your sketch + board_pins)
-    → {name}_elf   cc_binary   (ELF for the target CPU)
-    → {name}_bin   genrule     (flashable image)
-    → :flash       sh_binary   (bazel run :flash -- /dev/ttyUSB0)
-         |
-         └── tools/firmware/flash/flash.py  (dispatches by tool)
-                 ├── esptool  (ESP32)
-                 ├── avrdude  (AVR)
-                 ├── picotool (RP2040)
-                 └── openocd  (ARM/JTAG)
-```
+## Adding an ESP32 board
 
-Key files:
+Same Xtensa toolchain, same Arduino core. You add a board identity, a
+platform, and a pin map. The example below adds a HiLetgo NodeMCU-32S.
 
-| File | Purpose |
-|------|---------|
-| `tools/firmware/BUILD.bazel` | CPU + board constraint_settings; `board_pins` alias |
-| `tools/firmware/boards.bzl` | `firmware_board()` macro |
-| `tools/firmware/pins.bzl` | `board_pins()` macro — generates `board_pins.h` |
-| `tools/firmware/flash.bzl` | `flash_firmware()` macro — generates the flash wrapper |
-| `tools/firmware/flash/flash.py` | Universal flash driver |
-| `tools/firmware/<family>/flash_config.bzl` | Board-specific flash parameters (Starlark struct) |
-| `tools/bazel/esp32.bzl` | `esp32_firmware()` — the user-facing macro for ESP32 |
+1. Register the board identity in `tools/firmware/BUILD.bazel`:
 
----
+   ```starlark
+   constraint_value(
+       name = "board_hiletgo_esp32",
+       constraint_setting = ":board",
+   )
+   ```
 
-## Case A: New board, same CPU family (another ESP32)
+2. Declare the platform, config setting, and pins in
+   `tools/firmware/esp32/BUILD.bazel`, next to the ELEGOO entries. Pass
+   `board_constraint` and the FreeRTOS constraint. Without `board_constraint`
+   the pins `select()` falls through to `no_board_pins` and the compile fails
+   on a missing `board_pins.h`.
 
-Example: **HiLetgo NodeMCU-32S** or any generic DevKit v1 clone.
+   ```starlark
+   firmware_board(
+       name = "hiletgo_esp32",
+       cpu_constraint = "//tools/firmware:cpu_xtensa",
+       board_constraint = "//tools/firmware:board_hiletgo_esp32",
+       extra_constraints = ["@pigweed//pw_build/constraints/rtos:freertos"],
+   )
 
-These boards use the same Xtensa LX6 core, the same Arduino ESP32 1.0.6 SDK,
-and usually the same flash geometry. The only difference is pin layout.
+   config_setting(
+       name = "is_hiletgo_esp32",
+       constraint_values = ["//tools/firmware:board_hiletgo_esp32"],
+   )
 
-### Step 1 — Register the board identity
+   board_pins(
+       name = "hiletgo_esp32_pins",
+       board_name = "hiletgo_esp32",
+       pins = {
+           "Led": 2,
+           "Sda": 21,
+           "Scl": 22,
+       },
+   )
+   ```
 
-```starlark
-# tools/firmware/BUILD.bazel
-constraint_value(
-    name = "board_hiletgo_esp32",
-    constraint_setting = ":board",
-)
-```
+   Several `board_pins()` calls can share a package. Each writes its header
+   to its own `<name>/board_pins.h` subdirectory.
 
-### Step 2 — Declare the board platform and pins
+3. Add the board to `board_pins_registry()` in `tools/firmware/BUILD.bazel`:
 
-Create `tools/firmware/esp32/BUILD.bazel` additions (or a new subdir if you
-prefer isolation):
+   ```starlark
+   board_pins_registry(
+       name = "board_pins",
+       boards = {
+           "//tools/firmware/esp32:is_elegoo_esp32": "//tools/firmware/esp32:elegoo_esp32_pins",
+           "//tools/firmware/esp32:is_hiletgo_esp32": "//tools/firmware/esp32:hiletgo_esp32_pins",
+       },
+   )
+   ```
 
-```starlark
-# tools/firmware/esp32/BUILD.bazel
-firmware_board(
-    name = "hiletgo_esp32",
-    cpu_constraint = "//tools/firmware:cpu_xtensa",
-)
+4. If the board isn't a generic `ESP32_DEV`, add an `":is_hiletgo_esp32"`
+   branch to `arduino_board_defines` in `tools/firmware/esp32/BUILD.bazel`.
+   The default branch already covers DevKit-style boards.
 
-config_setting(
-    name = "is_hiletgo_esp32",
-    constraint_values = ["//tools/firmware:board_hiletgo_esp32"],
-)
+5. Add a config to `.bazelrc`. Copy the `build:esp32` block and change the
+   platform:
 
-board_pins(
-    name = "hiletgo_esp32_pins",
-    board_name = "hiletgo_esp32",
-    pins = {
-        "Led": 2,    # onboard LED
-        "Sda": 21,
-        "Scl": 22,
-        # add whatever logical names your firmware needs
-    },
-)
-```
+   ```
+   build:hiletgo_esp32 --platforms=//tools/firmware/esp32:hiletgo_esp32
+   build:hiletgo_esp32 --@pigweed//pw_log:backend=@pigweed//pw_log_basic
+   build:hiletgo_esp32 --@pigweed//pw_sys_io:backend=@pigweed//pw_sys_io_stdio
+   build:hiletgo_esp32 --@rules_python//python/config_settings:python_version=3.13
+   ```
 
-### Step 3 — Register the board in the pins registry
+6. Pick a flash config. `esp32_firmware()` defaults to `ESP32_DIO_80M` (DIO,
+   80 MHz, 4 MB), which suits most DevKit clones. For modules with full
+   quad-IO, pass `ESP32_QIO_80M`:
 
-```starlark
-# tools/firmware/BUILD.bazel  — add one entry to board_pins_registry()
-board_pins_registry(
-    name = "board_pins",
-    boards = {
-        "//tools/firmware/esp32:is_elegoo_esp32":  "//tools/firmware/esp32:elegoo_esp32_pins",
-        "//tools/firmware/esp32:is_hiletgo_esp32": "//tools/firmware/esp32:hiletgo_esp32_pins",  # new
-    },
-)
-```
+   ```starlark
+   load("//tools/firmware/esp32:flash_config.bzl", "ESP32_QIO_80M")
 
-### Step 4 — Add a .bazelrc config (optional)
+   esp32_firmware(
+       name = "blink",
+       srcs = ["blink.cc"],
+       deps = ["@pigweed//pw_log"],
+       flash_config = ESP32_QIO_80M,
+   )
+   ```
 
-```
-# .bazelrc
-build:hiletgo_esp32 --platforms=//tools/firmware/esp32:hiletgo_esp32
-build:hiletgo_esp32 --@pigweed//pw_log:backend=@pigweed//pw_log_basic
-```
+   For a different flash size or partition table, add a new struct to
+   `tools/firmware/esp32/flash_config.bzl` itself. Its `_seg()` helper is
+   private to that file. Each `pre_segments` entry points at a genrule (a
+   bootloader `.bin` or partition table) that must exist in
+   `tools/firmware/esp32/BUILD.bazel`.
 
-Then:
+Check it:
+
 ```bash
 bazel build //demo/blink:blink_bin --config=hiletgo_esp32
-bazel run   //demo/blink:flash    --config=hiletgo_esp32 -- /dev/ttyUSB0
+bazel run //demo/blink:flash --config=hiletgo_esp32 -- /dev/ttyUSB0
 ```
 
-If the board uses QIO flash mode instead of DIO, pass `ESP32_QIO_80M` from
-`tools/firmware/esp32/flash_config.bzl` to `esp32_firmware()`:
+`:flash` depends on the firmware image, so it needs the board's `--config`
+too. Without one, Bazel fails with "target platform didn't satisfy
+constraints".
 
-```starlark
-load("//tools/firmware/esp32:flash_config.bzl", "ESP32_QIO_80M")
+To confirm the right pins were selected, look at the generated header:
+`bazel-bin/tools/firmware/esp32/hiletgo_esp32_pins/board_pins.h`.
 
-esp32_firmware(
-    name = "blink",
-    srcs  = ["blink.cc"],
-    deps  = ["@pigweed//pw_log"],
-    flash_config = ESP32_QIO_80M,
-)
-```
+## Pins
 
----
+`tools/firmware/pins.bzl` defines the schema:
 
-## Case B: New CPU family (e.g., Raspberry Pi Pico / RP2040)
+- `REQUIRED_PINS`: `Led`. `board_pins()` fails at analysis time if it's
+  missing. Use `-1` if the board has no LED.
+- `OPTIONAL_PINS`: `Sda`, `Scl`, `Rx2`, `Tx2`, `Adc0`. An omitted pin is set
+  to `-1` and gets `BOARD_PIN_<NAME>_SUPPORTED 0`.
+- Any other name you put in `pins` is passed through as-is, with no
+  `_SUPPORTED` flag.
 
-This involves more work but the skeleton is already in place.
-
-### Step 1 — CPU constraint (if new architecture)
-
-```starlark
-# tools/firmware/BUILD.bazel  — already has cpu_armv6m for RP2040
-constraint_value(
-    name = "cpu_armv6m",
-    constraint_setting = ":cpu_family",
-)
-```
-
-### Step 2 — Board identity + platform
-
-```starlark
-# tools/firmware/BUILD.bazel
-constraint_value(
-    name = "board_pico_w",
-    constraint_setting = ":board",
-)
-```
-
-```starlark
-# tools/firmware/pico/BUILD.bazel  (new directory)
-load("//tools/firmware:boards.bzl", "firmware_board")
-load("//tools/firmware:pins.bzl",   "board_pins")
-
-firmware_board(
-    name = "pico_w",
-    cpu_constraint = "//tools/firmware:cpu_armv6m",
-)
-
-config_setting(
-    name = "is_pico_w",
-    constraint_values = ["//tools/firmware:board_pico_w"],
-)
-
-board_pins(
-    name = "pico_w_pins",
-    board_name = "pico_w",
-    pins = {
-        "Led": 25,   # onboard LED on Pico W is routed via CYW43 but GPIO 25 on base Pico
-        "Sda":  4,
-        "Scl":  5,
-        "Uart0Tx":  0,
-        "Uart0Rx":  1,
-    },
-)
-```
-
-### Step 3 — Toolchain
-
-For ARM Cortex-M, **Pigweed provides the toolchain** via
-`@pigweed//pw_toolchain:arm_gcc_cortex_m0`. Add to MODULE.bazel:
-
-```starlark
-# Already have pigweed via git_override — just use it:
-register_toolchains("//tools/firmware/pico:pico_toolchain")
-```
-
-```starlark
-# tools/firmware/pico/BUILD.bazel
-toolchain(
-    name = "pico_toolchain",
-    exec_compatible_with  = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
-    target_compatible_with = ["@platforms//os:none", "//tools/firmware:cpu_armv6m"],
-    toolchain      = "@pigweed//pw_toolchain:arm_gcc_cortex_m0",
-    toolchain_type = "@rules_cc//cc:toolchain_type",
-)
-```
-
-If Pigweed's pre-built ARM toolchain doesn't match your target, provide your
-own `cc_toolchain` + `cc_toolchain_config`, following the same pattern as
-`tools/firmware/esp32/cc_toolchain_config.bzl`.
-
-### Step 4 — Platform SDK (pico-sdk)
-
-Add pico-sdk to MODULE.bazel as an `http_archive`, then write a `BUILD.bazel`
-wrapping it as a `cc_library`. Follow the same pattern as
-`tools/firmware/esp32/arduino_core.BUILD`.
-
-**Critical**: the Pico SDK's entry point (`main()` calling `setup()`/`loop()`)
-must be in a `filegroup`, not a `cc_library`, for the same reason as the
-Arduino `main.cpp` footgun — see the toolchain README for details.
-
-### Step 5 — Flash config
-
-```starlark
-# tools/firmware/pico/flash_config.bzl
-PICO_W = struct(
-    tool = "picotool",
-    app_offset = "0x10000000",  # RP2040 flash base
-    pre_segments = [],           # picotool handles the UF2 format internally
-    pre_segment_labels = [],
-)
-```
-
-### Step 6 — User macro
-
-```starlark
-# tools/bazel/pico.bzl
-load("//tools/firmware:flash.bzl", "flash_firmware")
-load("//tools/firmware/pico:flash_config.bzl", "PICO_W")
-
-PICO_COMPAT = ["@platforms//os:none", "//tools/firmware:cpu_armv6m"]
-
-def pico_firmware(name, srcs, deps = [], flash_config = None, **kwargs):
-    if flash_config == None:
-        flash_config = PICO_W
-    cc_library(
-        name = name + "_lib",
-        srcs = srcs,
-        target_compatible_with = PICO_COMPAT,
-        deps = deps + [
-            "@pico_sdk//:pico_stdlib",
-            "//tools/firmware:board_pins",
-        ],
-        **kwargs
-    )
-    # ... cc_binary, genrule for uf2 conversion ...
-    flash_firmware(name = "flash", firmware_name = name, board_config = flash_config)
-```
-
-### Step 7 — .bazelrc
-
-```
-build:pico_w --platforms=//tools/firmware/pico:pico_w
-build:pico_w --@pigweed//pw_log:backend=@pigweed//pw_log_basic
-```
-
----
-
-## Pin Abstraction
-
-### Pin schema
-
-Pins are divided into two categories defined in `tools/firmware/pins.bzl`:
-
-| Category | List | Behaviour |
-|----------|------|-----------|
-| **Required** (`REQUIRED_PINS`) | `Led` | Every board must declare these. `board_pins()` fails at Bazel analysis time if any are absent. |
-| **Optional** (`OPTIONAL_PINS`) | `Sda`, `Scl`, `Rx2`, `Tx2` | Boards may omit these. Absent ones default to `-1` and get a `BOARD_PIN_X_SUPPORTED = 0` flag. |
-
-When you introduce a new peripheral pin anywhere in the firmware, add its name
-to `OPTIONAL_PINS` in `pins.bzl`. You do **not** need to update every existing
-board's `board_pins()` call — absent optional pins default to `-1` automatically.
-
-### Declaring pins
-
-Pins are declared once per board in its BUILD.bazel using `board_pins()`.
-Each board must live in its own Bazel package (separate `BUILD.bazel` file) —
-two `board_pins()` calls in the same package would collide on the output filename.
-
-```starlark
-load("//tools/firmware:pins.bzl", "board_pins")
-
-board_pins(
-    name = "my_board_pins",
-    board_name = "my_board",
-    pins = {
-        "Led":  2,   # required — must be present
-        "Sda": 21,   # optional — omit if not wired; defaults to -1
-        "Scl": 22,
-        # Rx2 and Tx2 omitted → auto-filled as -1 with SUPPORTED = 0
-    },
-)
-```
-
-`board_pins()` generates `board_pins.h` inside a per-board subdirectory in
-genfiles and wraps it in a `cc_library`, so it's reachable as:
+The generated header has C macros (`BOARD_PIN_LED`, `BOARD_PIN_SDA`,
+`BOARD_PIN_SDA_SUPPORTED`) and C++ constants (`board::kLed`, `board::kSda`).
+Guard optional pins:
 
 ```cpp
-#include "board_pins.h"
-```
+#include "board_pins.h"  // dep: //tools/firmware:board_pins
 
-### Using pins in firmware code
-
-```cpp
-#include "board_pins.h"   // dep: //tools/firmware:board_pins
-
-void setup() {
-    pinMode(board::kLed, OUTPUT);           // required — always present
-
-    // Guard optional pins with the SUPPORTED flag:
+pinMode(board::kLed, OUTPUT);
 #if BOARD_PIN_SDA_SUPPORTED
-    Wire.begin(board::kSda, board::kScl);
+Wire.begin(board::kSda, board::kScl);
 #endif
-}
-
-// C macros (for C files or legacy code):
-// BOARD_PIN_LED               — GPIO number
-// BOARD_PIN_SDA_SUPPORTED     — 1 if wired, 0 if absent on this board
-// BOARD_PIN_SDA               — GPIO number (-1 if absent)
 ```
 
-The dependency is `//tools/firmware:board_pins` — the alias in
-`tools/firmware/BUILD.bazel` (managed by `board_pins_registry()`) that resolves
-to the correct board at build time. Host builds (tests) get an empty
-`no_board_pins` library.
+To add a new logical pin, add its name to `OPTIONAL_PINS`, then set it in the
+`board_pins()` call of each board that has it. Boards that don't have it need
+no change.
 
-### Registering a board in the alias
+## Adding a new CPU family
 
-After writing the `board_pins()` call, add the board to `board_pins_registry()`
-in `tools/firmware/BUILD.bazel`:
+None of this exists yet for any non-Xtensa CPU. The CPU constraint values are
+there, but nothing else is. Plan on writing:
 
-```starlark
-board_pins_registry(
-    name = "board_pins",
-    boards = {
-        "//tools/firmware/esp32:is_elegoo_esp32": "//tools/firmware/esp32:elegoo_esp32_pins",
-        "//tools/firmware/esp32:is_hiletgo_esp32": "//tools/firmware/esp32:hiletgo_esp32_pins",  # new
-    },
-)
-```
-
-### Adding a new logical pin name
-
-If your firmware needs a pin name that no board currently declares:
-
-1. Add the name to `OPTIONAL_PINS` in `tools/firmware/pins.bzl`.
-2. Declare it in any board's `board_pins()` that physically has it; boards
-   without it automatically get `-1` and `SUPPORTED = 0`.
-3. Guard usage in firmware with `#if BOARD_PIN_<NAME>_SUPPORTED`.
-4. Reference the value via `board::k<Name>` in C++.
-
----
-
-## Flash Infrastructure
-
-### How it works
-
-`esp32_firmware()` (and future `pico_firmware()`) automatically generates a
-`:flash` target via `flash_firmware()` in `tools/firmware/flash.bzl`.
-
-```
-flash_firmware()
-    ↓ write_file()
-  wrapper.sh  (generated per target, baked-in runfile paths)
-    ↓ rlocation
-  flash.py  (universal driver, receives resolved absolute paths)
-    ↓
-  esptool / avrdude / picotool / openocd
-```
-
-### Flashing
-
-```bash
-# Standard usage
-bazel run //demo/blink:flash -- /dev/ttyUSB0
-
-# Different board config (if esp32_firmware sets flash_config explicitly):
-bazel run //demo/blink:flash -- /dev/ttyACM0
-```
-
-The port (`/dev/ttyUSB0`) is the only runtime argument. Everything else —
-chip type, baud rate, bootloader path, partition table, app offset — is baked
-into the generated wrapper at build time from the `board_config` struct.
-
-### Board flash configs
-
-Flash parameters live in `tools/firmware/<family>/flash_config.bzl` as
-Starlark structs:
-
-```starlark
-# tools/firmware/esp32/flash_config.bzl
-ESP32_DIO_80M = struct(
-    tool = "esptool",
-    chip = "esp32",
-    baud = 921600,
-    write_flash_args = "--flash_mode dio --flash_freq 80m --flash_size 4MB",
-    app_offset = "0x10000",
-    pre_segments = [
-        ("0x1000", "arduino_esp32/tools/sdk/bin/bootloader_dio_80m.bin"),
-        ("0x8000", "arduino_esp32/tools/partitions/default.bin"),
-    ],
-    pre_segment_labels = [
-        "@arduino_esp32//:bootloader",
-        "@arduino_esp32//:partitions",
-    ],
-    esptool = "//tools/firmware/esp32:esptool_wrapper",
-    esptool_runfile = "_main/tools/firmware/esp32/esptool_wrapper",
-)
-```
-
-To add a new board with a different flash geometry (e.g. 8 MB, QIO mode):
-
-```starlark
-MY_BOARD_FLASH = struct(
-    tool = "esptool",
-    chip = "esp32",
-    baud = 921600,
-    write_flash_args = "--flash_mode qio --flash_freq 80m --flash_size 8MB",
-    app_offset = "0x10000",
-    pre_segments = [
-        ("0x1000", "arduino_esp32/tools/sdk/bin/bootloader_qio_80m.bin"),
-        ("0x8000", "arduino_esp32/tools/partitions/default.bin"),
-    ],
-    pre_segment_labels = [
-        "@arduino_esp32//:bootloader",
-        "@arduino_esp32//:partitions",
-    ],
-    esptool = "//tools/firmware/esp32:esptool_wrapper",
-    esptool_runfile = "_main/tools/firmware/esp32/esptool_wrapper",
-)
-```
-
-Pass it to `esp32_firmware()`:
-
-```starlark
-load("//tools/bazel:esp32.bzl", "esp32_firmware")
-load("//tools/firmware/esp32:flash_config.bzl", "MY_BOARD_FLASH")
-
-esp32_firmware(
-    name = "my_app",
-    srcs  = ["my_app.cc"],
-    flash_config = MY_BOARD_FLASH,
-)
-```
-
-### Supporting a new flash tool
-
-Add a new branch to `tools/firmware/flash/flash.py`:
-
-```python
-def flash_myboard(args, segments):
-    _, app_path = segments[-1]
-    cmd = ["myflasher", "--target", app_path, "--port", args.port]
-    subprocess.check_call(cmd)
-
-dispatch = {
-    "esptool":  flash_esptool,
-    "avrdude":  flash_avrdude,
-    "picotool": flash_picotool,
-    "openocd":  flash_openocd,
-    "myflasher": flash_myboard,   # ← add here
-}
-```
-
-Add a new branch to `flash_firmware()` in `tools/firmware/flash.bzl` to
-generate the right command-line arguments in the wrapper script.
-
----
-
-## Checklist: Adding Any Board
-
-```
-□ tools/firmware/BUILD.bazel
-    □ constraint_value for board identity (always)
-    □ constraint_value for cpu_family (only if new CPU)
-    □ Add board to board_pins_registry() boards dict
-
-□ tools/firmware/<family>/BUILD.bazel
-    □ firmware_board()
-    □ config_setting()
-    □ board_pins() with all logical pins your firmware uses
-
-□ tools/firmware/<family>/flash_config.bzl
-    □ Flash config struct (tool, chip, segments, offsets)
-
-□ tools/firmware/<family>/  (new CPU family only)
-    □ cc_toolchain_config.bzl  (or reuse Pigweed's pw_toolchain)
-    □ xtensa_toolchain.BUILD / pico_sdk.BUILD
-    □ MODULE.bazel: http_archive + register_toolchains
-
-□ tools/bazel/<family>.bzl  (new CPU family only)
-    □ <family>_firmware() macro wrapping cc_library + cc_binary + flash_firmware()
-
-□ .bazelrc
-    □ build:<board> --platforms=//tools/firmware/<family>:<board>
-    □ build:<board> --@pigweed//pw_log:backend=...
-
-□ docs/ADDING_A_BOARD.md
-    □ Update this document with the new board entry
-```
+1. **Toolchain.** Add the cross-compiler as an `http_archive` in
+   `MODULE.bazel` with a build file modelled on
+   `tools/firmware/esp32/xtensa_toolchain.BUILD`. Instantiate the generic
+   `cc_toolchain_config` rule from `tools/firmware/cc_toolchain_config.bzl`
+   (its docstring walks through the arguments), wrap it in `cc_toolchain` and
+   `toolchain()`, and add a `register_toolchains()` call to `MODULE.bazel`.
+2. **SDK.** Add the vendor SDK as an `http_archive` with a `BUILD` file that
+   wraps it as `cc_library` targets, following
+   `tools/firmware/esp32/arduino_core.BUILD`. If the SDK provides `main()`,
+   expose that file as a `filegroup` and put it in the binary's `srcs`, not
+   in a `cc_library`, or the linker drops it. The "`main.cpp` Footgun"
+   section of `tools/firmware/README.md` explains why.
+3. **Board.** Constraint, `firmware_board()`, `config_setting`, `board_pins()`,
+   and a registry entry, as in the ESP32 steps above, in a new
+   `tools/firmware/<family>/` package.
+4. **Flash config.** A struct in `tools/firmware/<family>/flash_config.bzl`.
+   `flash_firmware()` generates wrappers for `esptool`, `avrdude`, and
+   `picotool`. `flash.py` also has an `openocd` path, but `flash.bzl` doesn't
+   emit it yet. A new tool needs a function and a `dispatch` entry in
+   `tools/firmware/flash/flash.py` and a matching branch in
+   `flash_firmware()`.
+5. **Firmware macro.** A `tools/bazel/<family>.bzl` with a
+   `<family>_firmware()` macro modelled on `esp32_firmware()`. It must
+   produce a `{name}_bin` target whose output is `{name}.bin`, because
+   `flash_firmware()` looks for that file.
+6. **`.bazelrc` config** for the board's platform and Pigweed backends.
