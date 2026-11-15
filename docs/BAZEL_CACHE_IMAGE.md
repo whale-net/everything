@@ -1,230 +1,83 @@
 # Bazel Cache Image (POC)
 
-**Status: proof of concept, disabled.** `ci.yml`'s consumer job is
-commented out and `BAZEL_CACHE_IMAGE_ENABLED` is set back to `false` --
-see "Result" below for why. Never wired into any required pipeline.
+An experiment in baking a fully warmed Bazel `output_base` into a Docker
+image, so a CI job running in that container has nothing to fetch. It
+didn't pay off on GitHub-hosted runners, and it is switched off. This doc
+records what was built, what was measured, and what would have to change
+for it to pay off.
 
-**Result: doesn't win on GitHub-hosted runners as built.** The baked
-`//...` output_base makes the image **5.45 GB** (one single layer is
-5.14 GB). GitHub-hosted runners are fresh VMs per job with no persistent
-Docker layer cache across jobs, so that layer gets re-pulled in full on
-*every* job -- **3m26s** just to pull the image, against **77s** for the
-actual `bazel build //...` once it's local. Total consumer-job wall clock
-(~4m7s) is *slower* than the existing `test` job's baseline (~2m50s, per
-`docs/CI_CD.md`). The core bet of this POC -- bake once, skip the network
-cost forever -- doesn't hold when "forever" resets to zero every job. See
-"Real `//...` run against `main`" below for the full numbers and what
-would need to change (self-hosted/persistent runners, or a much smaller
-baked image) for this to actually win.
+## Result
 
-## Problem
+The consumer job, `test-bazel-cache-image` in `ci.yml`, is commented out.
+The repo variable `BAZEL_CACHE_IMAGE_ENABLED` is `false`.
 
-Every CI job pays a cold-start tax before it runs a single Bazel action:
-restoring the GH Actions cache for `~/.bazel/external`, authenticating to the
-Bazel remote cache, and re-resolving ~200+ repository rules (Go SDK, Python
-toolchain, Pigweed/ESP32 cross toolchains, rules_oci base images). `docs/CI_CD.md`
-"Runner Architecture & Bazel Server Warming" already quantifies this at
-~60-90s per runner, and the real remote cache (`.github/actions/setup-build-env`)
-remains the biggest win for actual build/test action reuse across runs.
-
-This POC asks a narrower question: what if a CI job's *container image
-itself* already contained a fully realized Bazel output_base -- external
-repos, toolchains, and every action's compiled output -- so there is nothing
-to restore or fetch over the network at all, even on a cold runner?
-
-## How it works
-
-`.devcontainer/Dockerfile.bazel-cache` builds an image that:
-
-1. Installs Bazelisk (resolves the version pinned by `.bazelversion`).
-2. Copies the repo in at a fixed path (`/workspace`).
-3. Runs `bazel --output_base=/var/cache/bazel/ob build //...`, which
-   populates `/var/cache/bazel/ob` with every external repo/toolchain fetch
-   and every action's output for the whole monorepo -- and bakes that
-   directory into the image layer.
-
-The key design choice is the **explicit, fixed `--output_base`**, not
-Bazel's default (which hashes the workspace's absolute directory path).
-A container started `FROM` this image can check the repo out anywhere --
-GitHub Actions' `container:` jobs mount the workspace at a path this repo
-doesn't control -- and still hit the baked cache, by passing the same
-`--output_base=/var/cache/bazel/ob` flag. Bazel's local action cache keys
-on input content digests, not absolute paths, so this works regardless of
-checkout location.
-
-## Remote cache during the warm build
-
-The image build *also* wires in the real Bazel remote cache (optional --
-the build works fine with none configured). This isn't redundant with the
-image cache: the remote cache only stores *compiled action outputs*, and
-`ci.yml`'s `test` job on `main` keeps it populated continuously via
-`--remote_upload_local_results=true`, so a from-scratch warm build can
-mostly *download* already-compiled outputs instead of recompiling
-everything -- a large speedup for the warm build's own wall-clock time. It
-does not help the external-repo/toolchain *download* step (a separate
-mechanism, the repository cache / remote asset downloader), so this is a
-build-speed optimization, not a replacement for anything else here.
-
-Credentials reach the build only via a BuildKit secret mount
-(`RUN --mount=type=secret,id=bazelrc_remote,...` in the Dockerfile, fed by
-`docker/build-push-action`'s `secret-files` input, itself rendered by the
-new `.github/actions/setup-bazel-remote-cache-config` composite action) --
-never a build-arg or `ENV`, which would land in `docker history` and the
-image's layers. Verified locally: a fake unreachable remote-cache URL
-passed via `--secret` produced the expected DNS-resolution failure inside
-the build, and a build with no `--secret` at all still succeeds (the
-mount target is simply absent; `.bazelrc`'s `try-import` no-ops on that
-like it would on any missing file) -- so a plain local
-`docker build -f .devcontainer/Dockerfile.bazel-cache` (no credentials
-available) keeps working exactly as before.
-
-Deliberately **not** `--config=ci` for this warm build: that config's
-`--remote_download_minimal` would leave remote-cache-hit outputs
-unmaterialized on local disk, which defeats the point of this image --
-every action's output, whether freshly compiled or pulled from the
-remote cache, must actually land under `${BAZEL_OUTPUT_BASE}` so a later
-fully-offline consumer still finds it there.
-
-## Freshness & honest limits
-
-The cache is only as fresh as the last image build. A CI run against a
-checkout that has diverged from what the image was built against still
-gets full cache hits for everything unchanged (external repos, toolchains,
-and any untouched package) and rebuilds only what actually changed --
-same as any other warm Bazel cache. This is a complement to, not a
-replacement for, the real remote cache: it mainly kills the *cold-start*
-fetch/restore cost, not incremental rebuild cost after real code changes.
-
-`bazel build //...` includes the ESP32/Pigweed cross toolchains and every
-language toolchain in the repo (Go, Python, Java, protobuf), so warming the
-image is a heavier, slower build than a typical CI job -- expect it to take
-meaningfully longer than the `test` job's own `//...` build. This is why
-the image-build workflow is manual (`workflow_dispatch`) rather than
-running on every push.
-
-## Validated locally
-
-Built the image with `WARM_TARGETS=//demo/hello_go_client/...` (a real
-target that pulls in the Go SDK, Go toolchain build, and an OpenAPI Go
-client codegen step — enough to touch the external-repo and action-cache
-machinery, not just a no-op). Then, from a fresh container off that image,
-mounted the checkout at a **different path** (`/checkout`, vs. the
-image's `/workspace`) with **`--network=none`** and re-ran the same build:
+The bake worked. A cold container built all of `//...` in 77s:
 
 ```
-INFO: Elapsed time: 16.837s, Critical Path: 3.62s
-INFO: 7 processes: 76 action cache hit, 5 internal, 2 processwrapper-sandbox.
-INFO: Build completed successfully, 7 total actions
-```
-
-76 of the run's actions were served from the image's baked-in output_base
-with no network access and a different absolute checkout path — confirming
-the explicit `--output_base` design works exactly as intended. (The
-`processwrapper-sandbox` actions are the OpenAPI codegen step's own
-non-hermetic `[for tool]` re-execution, unrelated to cache-key portability.)
-
-One real gap surfaced by this test and already fixed in the Dockerfile: the
-`mcr.microsoft.com/devcontainers/base:ubuntu-24.04` base image has no system
-`python3`, which `rules_pycross`'s wheel installer needs even before any
-hermetic Python toolchain is available (`/usr/bin/env: 'python3': No such
-file or directory`) — the Dockerfile now installs `python3`,
-`build-essential`, and `unzip` before running Bazel.
-
-### Real `//...` run against `main`
-
-First dispatch of `devcontainer-bazel-cache-image.yml` with the default
-`WARM_TARGETS=//...` against `main` failed at `//tools/lib32:lib32_extracted`,
-a genrule that shells out to a system `zstd` binary to unpack a `.deb` --
-present on GitHub's `ubuntu-latest` runner (where `ci.yml`'s `test` job
-already builds `//...` successfully) but not in this deliberately-minimal
-devcontainer base image. Fixed by installing `zstd` plus a broader set of
-common build-time tools GitHub's runner ships and this base image doesn't
-(`git`, `ca-certificates`, `xz-utils`, `pkg-config`, `cmake`, `ninja-build`,
-`rsync`, `zip`).
-
-The re-dispatch with that fix (no remote cache configured yet -- this
-predates the remote cache work below) **succeeded**: full `//...`,
-including the ESP32/Pigweed toolchains, in **23m9s**, and pushed
-`ghcr.io/whale-net/bazel-cache-devcontainer:latest`.
-
-Consuming that image from `ci.yml`'s `test-bazel-cache-image` job then
-validated the actual POC claim at real scale:
-
-```
-INFO: Elapsed time: 77.435s, Critical Path: 5.76s
 INFO: 221 processes: 4610 action cache hit, 26 remote cache hit, 182 internal, 13 processwrapper-sandbox.
-INFO: Build completed successfully, 221 total actions
 ```
 
-The entire monorepo's `//...` build, from a cold container, completed in
-under 80 seconds -- 4610 actions served straight from the image's baked
-cache, 26 more from the remote cache covering drift since the bake, only
-13 (the same non-hermetic OpenAPI codegen `[for tool]` steps noted above)
-re-executed.
-
-One more real gap this surfaced, unrelated to the build itself: a trailing
-`bazel shutdown` after this build hung and had to be SIGKILL'd, failing
-the job despite the build having already succeeded -- apparently specific
-to how GH Actions execs steps into a job `container:` (a plain `docker
-build` RUN step, both locally and in the real image-build workflow, shuts
-down cleanly with the identical command). Fixed by simply not calling
-`bazel shutdown` in that job -- the container is destroyed the moment the
-job ends regardless, so a clean shutdown buys nothing there.
-
-### The image-pull cost dominates on GitHub-hosted runners
-
-`docker manifest inspect` on the pushed image:
-
-```
-num layers: 14
-total layer bytes: 5454054504 = 5.45 GB
-5136.7 MB  <-- the baked output_base layer
-161.8 MB
- 74.4 MB
- ... (11 more, all small)
-```
-
-One layer -- the baked `//...` output_base itself -- is 5.14 GB of the
-image's 5.45 GB. The consumer job's own timeline, once the image already
-existed in `ghcr.io`:
+Delivering that cache to the runner cost more than it saved. The image is
+5.45 GB, and one layer, the baked `output_base`, is 5.14 GB. GitHub-hosted
+runners start each job on a fresh VM with no Docker layer cache, so every
+job pulls the whole image:
 
 | Phase | Duration |
 |---|---|
-| `Initialize containers` (pull the image) | **3m26s** |
-| Checkout + remote-cache config | ~4s |
-| `bazel build --config=ci //...` | **77s** |
+| Pull image (`Initialize containers`) | 3m26s |
+| Checkout + remote cache config | ~4s |
+| `bazel build --config=ci //...` | 77s |
 | **Total** | **~4m7s** |
 
-GitHub-hosted runners are a fresh VM per job -- there is no persistent
-Docker layer cache across separate job runs the way there is on a
-long-lived machine, so this 3m26s pull is not a one-time cost; it's paid
-in full on every job that uses this image. That erases the win: the
-existing `test` job's own baseline (`docs/CI_CD.md`: ~30s setup + ~139s
-build ≈ **2m50s**) is *faster* end-to-end than this POC's ~4m7s, despite
-this POC's actual `bazel build` step alone being ~2x faster (77s vs 139s)
-than the equivalent portion of that baseline. The image cache genuinely
-works -- 4610/4636 non-internal actions were cache hits -- it's the
-mechanism for *delivering* that cache to the runner that costs more than
-it saves here.
+The normal `test` job finishes in about 2m50s (about 30s of setup plus a
+139s build), so it wins.
 
-This is the central finding of this POC: baking a full `//...` cache into
-a single Docker image is not a net win for GitHub-hosted, ephemeral CI
-runners as currently sized. It would need one of:
-- **Self-hosted/persistent runners**, where a pulled image's layers stay
-  in the local Docker cache across many subsequent job runs on the same
-  machine, so the 3m26s pull is amortized instead of repeated -- unproven
-  here, no persistent runner pool exists in this repo today.
-- **A much smaller baked image** -- warming a curated subset of
-  frequently-rebuilt targets instead of the entire `//...` graph (which
-  includes rarely-changing ESP32/Pigweed toolchains contributing
-  disproportionately to the 5.14 GB layer), trading "cache everything"
-  completeness for a pull time that can actually beat the existing
-  restore-cache path.
+For this approach to win, one of these would have to change:
+
+- **Persistent self-hosted runners**, where the image stays in the local
+  Docker cache and the pull is paid once. The repo has no such runners.
+- **A much smaller image**, warming a curated set of targets instead of
+  `//...`. The ESP32/Pigweed toolchains account for a large share of the
+  5.14 GB.
+
+## How it works
+
+[`.devcontainer/Dockerfile.bazel-cache`](../.devcontainer/Dockerfile.bazel-cache)
+does three things. It installs Bazelisk, copies the repo to `/workspace`,
+and runs `bazel --output_base=/var/cache/bazel/ob build ${WARM_TARGETS}`.
+`WARM_TARGETS` defaults to `//...`.
+
+The fixed `--output_base` is the point. Bazel's default output base is a
+hash of the workspace path, and GitHub Actions mounts the checkout at a
+path the repo doesn't control. A consumer passes the same
+`--output_base=/var/cache/bazel/ob` and gets cache hits from any checkout
+path. This was verified locally with a different mount path and
+`--network=none`.
+
+The base image (`mcr.microsoft.com/devcontainers/base:ubuntu-24.04`) is
+much smaller than GitHub's runner image. The Dockerfile installs the host
+tools that `//...` turned out to need, such as `python3` for
+`rules_pycross` and `zstd` for `//tools/lib32:lib32_extracted`. If a warm
+build fails on a missing binary, add it there.
+
+## Remote cache during the warm build
+
+The warm build can optionally read the real remote cache, which mostly
+makes the bake itself faster. Credentials reach it only through a BuildKit
+secret mount (`id=bazelrc_remote`). The workflow renders that file with
+[`setup-bazel-remote-cache-config`](../.github/actions/setup-bazel-remote-cache-config/action.yml).
+They never go through a build arg or `ENV`, which would leak into
+`docker history`. Without the secret, `.bazelrc`'s
+`try-import %workspace%/.bazelrc.remote` does nothing and the build runs
+uncached.
+
+The warm build deliberately does not use `--config=ci`. That config's
+`--remote_download_minimal` would leave cache hits off local disk, so they
+wouldn't be baked into the image.
 
 ## Trying it
 
-**Build the image build args without pushing anything** (validates the
-Dockerfile; useful for iterating on this POC):
+Local smoke test with a narrow target set, with no credentials and no push:
 
 ```bash
 docker build -f .devcontainer/Dockerfile.bazel-cache \
@@ -232,47 +85,24 @@ docker build -f .devcontainer/Dockerfile.bazel-cache \
   -t bazel-cache-devcontainer:local .
 ```
 
-Use a narrower `WARM_TARGETS` pattern for a fast local smoke test --
-`//...` is what production usage would warm.
+In CI, run **Bazel Cache Image (POC)**
+(`devcontainer-bazel-cache-image.yml`, manual only). It always builds. It
+pushes `ghcr.io/<owner>/bazel-cache-devcontainer:latest` and `:<sha>` only
+when `BAZEL_CACHE_IMAGE_ENABLED` is `true`. A full `//...` bake took about
+23 minutes.
 
-**Re-enabling the consumer job.** `ci.yml`'s `test-bazel-cache-image` job
-is commented out (see "Result" at the top) and `BAZEL_CACHE_IMAGE_ENABLED`
-is set to `false`. To bring it back for further experimentation --
-e.g. against a self-hosted runner, or a much smaller baked image --
-uncomment the job in `ci.yml` and:
+To re-enable the consumer, uncomment `test-bazel-cache-image` in `ci.yml`
+and run:
 
 ```bash
 gh variable set BAZEL_CACHE_IMAGE_ENABLED --repo whale-net/everything --body true
 ```
 
-The image-build workflow itself,
-`.github/workflows/devcontainer-bazel-cache-image.yml`, was left enabled
-(manual `workflow_dispatch` only, so it costs nothing unless someone runs
-it) and still pushes `ghcr.io/<owner>/bazel-cache-devcontainer:latest` and
-`:<sha>` when the same repo variable is `true`.
+Don't call `bazel shutdown` at the end of the consumer job. Inside a job
+`container:` it hangs and fails the job after the build has already
+passed.
 
-## Local dev use
-
-`.devcontainer/devcontainer.json` builds from `.devcontainer/Dockerfile`, a
-separate, tooling-only image (Bazel, the host packages Bazel's toolchains
-shell out to, and a k3d binary) with no baked cache -- this POC's image is
-deliberately **not** used for day-to-day devcontainer/Codespace startup, since
-its 5.45 GB baked-output_base layer would make every container rebuild
-brutally slow and would go stale the moment a dev's checkout diverges from
-whatever commit last warmed it. `features` (Go, Python, docker-in-docker,
-kubectl/helm) layer on top of the plain tooling image the same way they would
-have layered on top of this one.
-
-## Promoting this beyond POC
-
-Not done here, and deliberately out of scope for this PR (see AGENTS.md --
-production/release pipelines are for release actions and human decisions,
-not agent patches):
-
-- A `schedule:` trigger for `devcontainer-bazel-cache-image.yml` (e.g. weekly) once the
-  build time and image size are measured from real runs.
-- Wiring the image into `test`/`test-database`/`release.yml` proper, which
-  should only happen after comparing measured wall-clock/cache-hit-rate
-  against the existing remote-cache path on this repo's actual CI traffic.
-- Image size/registry-cost tracking -- a full `//...` output_base is large;
-  GHCR storage and pull time for this image are unmeasured today.
+The regular devcontainer (`.devcontainer/Dockerfile`) is a separate
+tooling-only image with no baked cache, and shouldn't be swapped for this
+one. A 5 GB layer would make every container rebuild slow, and the cache
+goes stale as soon as a checkout drifts.
