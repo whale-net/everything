@@ -116,3 +116,19 @@ bazel build //mypackage
 ### Detailed Documentation
 
 For comprehensive documentation on the Go dependency workflow, see [GO_DEPENDENCIES.md](GO_DEPENDENCIES.md).
+
+## Node.js / npm Dependencies
+
+All JS/TS packages share one pnpm workspace at the repo root (`package.json`,
+`pnpm-workspace.yaml`, `pnpm-lock.yaml`), read by `npm_translate_lock` in `MODULE.bazel`.
+
+```bash
+# 1. Edit the package's package.json (e.g. demo/hello_node/package.json).
+#    A brand-new package.json must also be added to npm_translate_lock(data = [...]).
+# 2. Regenerate the lockfile
+bazel run -- @pnpm//:pnpm --dir $PWD install --lockfile-only
+# 3. Use in BUILD.bazel: deps = [":node_modules/<pkg>"] (after npm_link_all_packages)
+```
+
+Packages with install scripts must be listed in `onlyBuiltDependencies` in
+`pnpm-workspace.yaml`. Re-vendor afterwards (see [CONFIGURATION.md](CONFIGURATION.md)).

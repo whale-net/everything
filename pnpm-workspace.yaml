@@ -1,0 +1,9 @@
+# One pnpm workspace for every JS/TS package in the monorepo. Bazel reads the
+# resulting pnpm-lock.yaml via npm_translate_lock (MODULE.bazel).
+packages:
+  - "demo/**"
+  - "lawn_gnome/**"
+
+# Packages allowed to run install scripts; rules_js turns these into Bazel
+# lifecycle actions. Keep empty unless a dependency truly needs one.
+onlyBuiltDependencies: []

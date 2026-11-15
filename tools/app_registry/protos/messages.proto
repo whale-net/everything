@@ -127,7 +127,7 @@ message App {
   string full_name = 4;   // "<domain>-<name>", derived
 
   string description = 5;
-  string language = 6;    // "go" | "python"
+  string language = 6;    // "go" | "python" | "node"
   string app_type = 7;    // external-api | internal-api | worker | job
   whalenet.appmeta.v1.DeployUnit deploy_unit = 8;
 

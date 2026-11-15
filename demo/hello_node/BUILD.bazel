@@ -1,0 +1,60 @@
+load("@aspect_rules_esbuild//esbuild:defs.bzl", "esbuild")
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//tools/bazel:release.bzl", "release_app")
+
+npm_link_all_packages(name = "node_modules")
+
+# Type-check and transpile; the .js outputs feed the node --test run below.
+ts_project(
+    name = "ts",
+    srcs = glob(["src/*.ts"]),
+    assets = ["package.json"],
+    transpiler = "tsc",
+    tsconfig = "tsconfig.json",
+    deps = [":node_modules/@types/node"],
+)
+
+# Single self-contained ESM bundle (no externals) -- the image ships only this
+# file plus the node binary, no node_modules. Node app images require the
+# release_app binary to produce exactly one .mjs (see container_image.bzl).
+esbuild(
+    name = "hello-node",
+    srcs = glob(
+        ["src/*.ts"],
+        exclude = ["src/*.test.ts"],
+    ),
+    entry_point = "src/main.ts",
+    format = "esm",
+    output = "hello-node.mjs",
+    platform = "node",
+    sourcemap = False,
+    target = "node24",
+    tsconfig = "tsconfig.json",
+    visibility = ["//visibility:public"],
+)
+
+# Local run: bazel run //demo/hello_node:hello-node_bin
+js_binary(
+    name = "hello-node_bin",
+    entry_point = ":hello-node",
+)
+
+js_test(
+    name = "server_test",
+    data = [":ts"],
+    entry_point = "src/server.test.js",
+    node_options = ["--test"],
+    size = "small",
+)
+
+release_app(
+    name = "hello-node",
+    language = "node",
+    domain = "demo",
+    description = "Node.js/TypeScript hello world HTTP server",
+    app_type = "external-api",
+    port = 8080,
+    health_check_enabled = True,
+)

@@ -37,7 +37,8 @@ This assumption is checked, not just asserted:
 
 - `appManifestFromRule`/`helmChartManifestFromRule` fail hard (return an error, not a partial
   or best-guess manifest) on anything they can't make sense of — a missing `domain`/`namespace`,
-  an invalid `deploy_unit`, or a chart `apps` entry that doesn't resolve to a discovered
+  an invalid `deploy_unit`, a container app `language` outside `release_app`'s allowed set
+  (`go`/`python`/`node`, mirrored in `containerLanguages`), or a chart `apps` entry that doesn't resolve to a discovered
   `app_metadata` target. A `--fast` run either produces the same manifest set the slow path
   would, or fails outright.
 - Direct `app_metadata(...)`/`helm_chart_metadata(...)` rule calls (as opposed to the

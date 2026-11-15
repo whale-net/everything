@@ -113,6 +113,15 @@ Each layer is a separate Bazel target with its own dependency graph. Bazel cache
 
 ---
 
+### Node images
+
+Node apps (`language = "node"`) use three layers on `@ubuntu_base`: CA certs,
+`{app}_node_layer` (the `rules_nodejs` Node binary for the target arch at
+`/opt/node/bin/node`, ~120MB, byte-identical across all Node apps), and
+`{app}_app_layer` (the single esbuild bundle at `/app/main.mjs`). There is no
+dependencies layer — everything is bundled. The node layer is chosen by
+`select()` on `@platforms//cpu`, so the arm64 transition gets the arm64 binary.
+
 ## Caching Demonstration
 
 Here's what happens when you modify app code:

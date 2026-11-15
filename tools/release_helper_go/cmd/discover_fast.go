@@ -182,6 +182,14 @@ func resolveStringListAttr(f *build.File, r *build.Rule, key string) []string {
 	return build.Strings(expr)
 }
 
+// containerLanguages mirrors release_app()'s language check for
+// containerized apps (release.bzl); keep the two lists in lockstep.
+var containerLanguages = map[string]bool{
+	"go":     true,
+	"python": true,
+	"node":   true,
+}
+
 var deployUnitEnum = map[string]appmetapb.DeployUnit{
 	"chart": appmetapb.DeployUnit_DEPLOY_UNIT_CHART,
 	"image": appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
@@ -206,6 +214,11 @@ func appManifestFromRule(pkg string, r *build.Rule) (AppMetadata, error) {
 		return AppMetadata{}, fmt.Errorf("%s: release_app(name=%q) has no domain", pkg, name)
 	}
 
+	language := r.AttrString("language")
+	if isContainerApp && !containerLanguages[language] {
+		return AppMetadata{}, fmt.Errorf("%s: release_app(name=%q) has unsupported container language %q", pkg, name, language)
+	}
+
 	deployUnitStr := r.AttrString("deploy_unit")
 	if deployUnitStr == "" {
 		if isContainerApp {
@@ -228,7 +241,7 @@ func appManifestFromRule(pkg string, r *build.Rule) (AppMetadata, error) {
 	}
 
 	var openapiSpecTarget string
-	if isContainerApp && r.AttrString("fastapi_app") != "" && r.AttrString("language") == "python" {
+	if isContainerApp && r.AttrString("fastapi_app") != "" && language == "python" {
 		openapiSpecTarget = resolveLabel(pkg, name+"_openapi_spec")
 	}
 
@@ -236,7 +249,7 @@ func appManifestFromRule(pkg string, r *build.Rule) (AppMetadata, error) {
 		Name:         effectiveName,
 		Domain:       domain,
 		Description:  r.AttrString("description"),
-		Language:     r.AttrString("language"),
+		Language:     language,
 		Registry:     attrStringOr(r, "registry", "ghcr.io"),
 		Organization: attrStringOr(r, "organization", "whale-net"),
 		// Mirrors release.bzl's release_app() image_name/repo_name formula

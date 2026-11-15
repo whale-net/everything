@@ -161,7 +161,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
                      - Simple name: "my_app" -> looks for :my_app
                      - Full label: "//path/to:binary" -> uses that binary
                      Defaults to name if not provided.
-        language: Programming language ("python", "go", "cpp", "c++", etc.)
+        language: Programming language ("python", "go", "node", "cpp", "c++", etc.).
+                  For "node", binary_name must be an esbuild bundle producing one .mjs.
         domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
         version: Default version (can be overridden at release time)
@@ -224,8 +225,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         deploy_unit = "chart" if is_container_app else "none"
 
     if is_container_app:
-        if language not in ["python", "go"]:
-            fail("Unsupported language: {}. Must be 'python' or 'go' for containerized apps".format(language))
+        if language not in ["python", "go", "node"]:
+            fail("Unsupported language: {}. Must be 'python', 'go', or 'node' for containerized apps".format(language))
     elif not language:
         fail("language is required for release_app")
 

@@ -1,5 +1,6 @@
 # Go setup with Gazelle for automated BUILD file generation
 load("@gazelle//:def.bzl", "gazelle")
+load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # Export files needed by other packages
@@ -8,7 +9,14 @@ exports_files([
     "uv.lock",
     "MODULE.bazel",
     "MODULE.bazel.lock",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
 ])
+
+# Root pnpm importer; rules_js also hosts the shared npm virtual store here,
+# which every package's npm_link_all_packages links against.
+npm_link_all_packages(name = "node_modules")
 
 
 # CRITICAL: This prefix must match the module name in go.mod

@@ -111,6 +111,9 @@ duplication `--vendor_dir` was meant to avoid) until you vendor it. Re-run
 - A new/updated `bazel_dep`, `git_override`, or `archive_override` in `MODULE.bazel`
 - `go get` + `bazel run //:gazelle` + `bazel mod tidy` (see [DEPENDENCIES.md](DEPENDENCIES.md#go-dependencies))
 - A new Python dependency + `uv lock --python 3.13` (see [DEPENDENCIES.md](DEPENDENCIES.md#python-dependencies))
+- Any change to `pnpm-lock.yaml` (a new/updated npm package, or a new workspace
+  `package.json`), or a Node/TypeScript version bump (`node.toolchain` in `MODULE.bazel`,
+  `typescript` in the root `package.json`) — see [DEVELOPMENT.md](DEVELOPMENT.md#adding-a-new-nodejs--typescript-app)
 
 The `vendor-sync` skill (`.claude/skills/vendor-sync/`) automates this re-run and
 should be invoked any time one of the above happens.
