@@ -1,216 +1,86 @@
-# Everything Monorepo
+# everything
 
-A modern Bazel monorepo supporting Python, Go, and embedded C++ firmware development with automated release management, Helm chart generation, and multi-platform container builds.
+The whale-net monorepo. Go, Python, and ESP32 firmware, all built with Bazel.
+Apps ship as multi-arch OCI images with generated Helm charts.
 
-## 🌟 Key Features
+## What's in here
 
-- **Multi-Language Support**: Python, Go, and embedded C++ with shared libraries
-- **Automated Releases**: Intelligent change detection and selective app releases
-- **Container Native**: Multi-platform Docker images (AMD64/ARM64) with OCI standards
-- **Helm Integration**: Automatic Kubernetes chart generation from app metadata
-- **CI/CD Pipeline**: GitHub Actions with parallel builds and comprehensive testing
-- **Bazel-First**: Fast, cacheable builds with dependency management
+| Directory | What it is |
+|-----------|------------|
+| [`manmanv2/`](manmanv2/README.md) | Game server orchestration — control plane, bare-metal host managers, web UI (Go) |
+| [`manman/`](manman/README.md) | ManMan V1. Python, maintenance only; new work goes in `manmanv2/` |
+| [`whagent_net/`](whagent_net/README.md) | AI agent framework: Temporal-backed sessions, transcript store, MCP, embeddable UI (Go) |
+| [`krill/`](krill/README.md) | Spec-of-record and work tracking for agent swarms (Go) |
+| [`audience_score_system/`](audience_score_system/README.md) | YouTube research → schedule → outcome tracking, exposed over MCP (Go) |
+| [`friendly_computing_machine/`](friendly_computing_machine/README.md) | Slack bot running on Temporal (Python) |
+| [`leaflab/`](leaflab/README.md) | Plant monitoring: ESP32 sensor boards plus the data pipeline behind them |
+| [`firmware/`](firmware/README.md) | Board-agnostic C++ sensor, MQTT, and networking libraries |
+| [`libs/`](libs/README.md) | Shared Go and Python libraries (logging, db, migrations, htmx UI, auth, …) |
+| [`tools/`](tools/README.md) | Bazel rules, release tooling, Helm generation, Tilt, app registry, MCP servers |
+| [`demo/`](demo/) | Small example apps; useful as templates |
+| [`generated/`](generated/) | Generated OpenAPI clients. Don't edit by hand |
+| [`docs/`](docs/TOC.md) | Build, release, and infra docs that span domains |
 
-## 🏗️ Architecture
+Each domain has a `TOC.md` that lists its docs. Start there, not with grep.
 
-```
-everything/
-├── manman/                  # ManMan - Game server orchestration system
-│   ├── src/                # Python services (APIs, workers, migrations)
-│   └── management-ui/      # Go-based HTMX management interface
-├── friendly_computing_machine/  # Slack bot with Temporal workflows
-├── firmware/                # Embedded C++ application layer (board-agnostic)
-│   ├── sensor/             # ISensor interface + host-side test mocks
-│   ├── mqtt/               # MQTTWriter (zero-allocation) + IPublisher
-│   ├── network/            # Wi-Fi + MQTT state machine (non-blocking)
-│   └── timing/             # pw_chrono-based loop timer (replaces delay())
-├── demo/                    # Example applications
-│   ├── blink/              # ESP32 blink demo (pw_log + esptool flash target)
-│   └── hello_*/            # Go / Python / gRPC examples
-├── libs/                    # Shared libraries
-│   ├── python/             # Python libs (alembic, cli, gunicorn, logging, postgres, rmq, retry)
-│   └── go/                 # Go libs (htmxauth)
-├── generated/              # Generated OpenAPI clients (py/, go/)
-├── tools/                   # Build and release tooling
-│   ├── firmware/           # ESP32 cc_toolchain, board constraints, flash infra
-│   ├── bazel/              # Shared Bazel macros (esp32_firmware(), etc.)
-│   ├── helm/               # Helm chart generation
-│   ├── release_helper_go/  # Release automation
-│   └── tilt/               # Local development with Tilt
-├── docs/                    # Documentation
-├── .github/workflows/      # CI/CD pipelines
-├── BUILD.bazel             # Root build configuration
-└── MODULE.bazel            # External dependencies (incl. Pigweed, Xtensa GCC)
-```
+## Getting started
 
-**Core Principles:**
-- **Bazel-First Architecture**: All operations use Bazel for consistency
-- **True Cross-Compilation**: Platform transitions for correct ARM64 wheel selection
-- **Monorepo Structure**: Multiple apps and shared libraries in a single repository
-- **Release Automation**: Comprehensive CI/CD with intelligent change detection
-
-### Main Projects
-
-| Project | Description | Documentation |
-|---------|-------------|---------------|
-| **ManMan** | Game server orchestration (V2 Go + V1 Python legacy) | [MANMAN_STRUCTURE.md](MANMAN_STRUCTURE.md), [manmanv2/README.md](manmanv2/README.md) |
-| **Friendly Computing Machine** | Slack bot with Temporal workflow support | [friendly_computing_machine/README.md](friendly_computing_machine/README.md) |
-| **Firmware** | ESP32 embedded firmware (Pigweed + Arduino core + Bazel cc_toolchain) | [tools/firmware/README.md](tools/firmware/README.md), [firmware/README.md](firmware/README.md) |
-
-## 🚀 Quick Start
-
-### Prerequisites
-- **Bazel 8.3+** with bzlmod support
-- **usbipd-win** (WSL2 only, for ESP32 flashing — see [tools/firmware/README.md](tools/firmware/README.md))
-- **Docker** (for container images)
-- **Git** (for version control)
-- **Python Virtual Environment** (recommended)
-
-### Installation
-```bash
-# Install Bazelisk (manages Bazel versions)
-brew install bazelisk
-
-# Verify installation
-bazel version
-
-# Create Python virtual environment
-uv venv && source .venv/bin/activate
-```
-
-### Build and Test
-```bash
-# Build everything
-bazel build //...
-
-# Run tests
-bazel test //...
-
-# Run example apps
-bazel run //demo/hello_python:hello-python
-bazel run //demo/hello_go:hello-go
-```
-
-### Verify Setup
-```bash
-# Check Bazel version
-bazel version
-
-# Test build system
-bazel build //demo/hello_python:hello-python
-
-# Verify release system
-bazel query "kind('app_metadata', //...)"
-```
-
-**For complete setup instructions, see:** [docs/SETUP.md](docs/SETUP.md)
-
-## 📚 Documentation
-
-Comprehensive guides for working with the monorepo:
-
-- **[Setup Guide](docs/SETUP.md)** - Installation and prerequisites
-- **[Dependencies](docs/DEPENDENCIES.md)** - Managing Python and Go dependencies
-- **[Development](docs/DEVELOPMENT.md)** - Adding new apps and shared libraries
-- **[Helm Charts](docs/HELM.md)** - Kubernetes chart generation
-- **[Testing](docs/TESTING.md)** - Running and writing tests
-- **[Configuration](docs/CONFIGURATION.md)** - Bazel settings and remote cache
-- **[CI/CD Pipeline](docs/CI_CD.md)** - Continuous integration details
-- **[Docker Images](docs/DOCKER.md)** - Container image building
-- **[Release Management](docs/RELEASE.md)** - Automated releases and versioning
-
-Additional resources:
-- **[Helm Release System](docs/HELM_RELEASE.md)** - Helm chart releases
-- **[Release Tool Cleanup](docs/RELEASE_TOOL_CLEANUP.md)** - Tool cleanup summary
-
-## 🎯 Common Tasks
-
-### Adding a New Python App
+You need [Bazelisk](https://github.com/bazelbuild/bazelisk) (it reads
+`.bazelversion` and fetches Bazel 8.3.1), Docker, and [uv](https://docs.astral.sh/uv/)
+for Python dependency work. Full setup, including WSL2 notes, is in
+[docs/SETUP.md](docs/SETUP.md).
 
 ```bash
-mkdir my_python_app
-cd my_python_app
-# Create main.py, test_main.py, __init__.py, BUILD.bazel
+bazel run //demo/hello_go:hello-go         # sanity check
+bazel test //manmanv2/...                  # test one domain
+bazel test //...                           # test everything
 ```
 
-See the complete guide: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
-
-### Adding Dependencies
+To find out what exists before reading code, query Bazel:
 
 ```bash
-# Add to pyproject.toml
-uv lock --python 3.13
-# Use @pypi//:package-name in BUILD.bazel
+bazel query //krill/...                            # targets in a domain
+bazel query 'rdeps(//..., //libs/go/logging)'      # who uses a library
+bazel query "kind('app_metadata', //...)"          # every releasable app
 ```
 
-See the complete guide: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
+### Running a domain locally
 
-### Building and Running Apps
+Domains with services have their own `Tiltfile`. Run `tilt up` from that
+domain's directory, for example `cd manmanv2 && tilt up`. The domain README
+lists its prerequisites (usually a local Kubernetes cluster).
 
-```bash
-# Build an app
-bazel build //path/to/app:app_name
+### Firmware
 
-# Run an app
-bazel run //path/to/app:app_name
-
-# Test an app
-bazel test //path/to/app:test_target
-```
-
-### Building and Flashing Firmware (ESP32)
+Host-side firmware tests need no hardware:
 
 ```bash
-# Host-side tests — runs on your machine, no board needed
 bazel test //firmware/...
-bazel test //demo/blink:blink_logic_test
-
-# Build flashable image (requires --config=esp32)
 bazel build //demo/blink:blink_bin --config=esp32
-
-# Flash to board (WSL2: attach CP2102 via usbipd first)
-bazel run //demo/blink:flash -- /dev/ttyUSB0
+bazel run //demo/blink:flash --config=esp32 -- /dev/ttyUSB0
 ```
 
-See [tools/firmware/README.md](tools/firmware/README.md) for toolchain details and adding new boards.
+See [tools/firmware/README.md](tools/firmware/README.md) for toolchains and
+flashing from WSL2, and [docs/ADDING_A_BOARD.md](docs/ADDING_A_BOARD.md) to add a board.
 
-### Releasing Apps
+## How apps ship
 
-Use GitHub Actions UI (recommended):
-1. Go to Actions → Release workflow
-2. Specify apps and version
-3. Run with or without dry-run
+Wrap a `go_binary` or `py_binary` in `release_app` and it becomes releasable.
+CI then builds the image, generates the chart, and versions it with a git tag.
+Releases run from the **Release** workflow in GitHub Actions. Change detection
+picks which apps to rebuild.
 
-See the complete guide: [docs/RELEASE.md](docs/RELEASE.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md): the build → image → chart → cluster pipeline
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): adding an app or library
+- [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md): Go and Python dependencies
+- [docs/DOCKER.md](docs/DOCKER.md): read before touching images
+- [docs/RELEASE.md](docs/RELEASE.md) and [docs/HELM.md](docs/HELM.md): releases and charts
 
-## 🤝 Contributing & Support
+## Working with agents
 
-### Getting Help
-- **Setup Issues**: See [docs/SETUP.md](docs/SETUP.md) for installation troubleshooting
-- **Build Issues**: Check [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for Bazel settings
-- **Release Problems**: See [docs/RELEASE.md](docs/RELEASE.md) for release troubleshooting
-
-### Pi Agent Plugins
-
-The project-manager plugin (`/project-manager:*` commands) auto-installs for [pi](https://pi.dev) sessions in this repo via the committed [.pi/claude-plugins.json](.pi/claude-plugins.json) — no manual `/claude:plugin marketplace add` needed. Local overrides go in `.pi/claude-plugins.local.json` (gitignored).
-
-### Repository Structure
-```
-├── manman/                # ManMan - Game server orchestration
-├── friendly_computing_machine/  # Slack bot with Temporal
-├── demo/                  # Example applications
-├── libs/                  # Shared libraries (python/, go/)
-├── generated/            # Generated OpenAPI clients
-├── tools/                 # Build and release tooling
-├── docs/                  # Documentation
-├── .github/workflows/     # CI/CD workflows
-├── BUILD.bazel           # Root build configuration
-└── MODULE.bazel          # External dependencies
-```
-
-### Future Improvements
-Areas that could be enhanced:
-- **Enhanced Go Support**: Enable gazelle rules for better Go dependency management
-- **Testing Strategy**: Expand test utilities and integration testing capabilities
-- **Documentation**: Auto-generation from code for better consistency
-- see github issues page
+[AGENTS.md](AGENTS.md) holds the conventions coding agents follow here.
+Humans should read it too, since it covers logging levels, SCD2 tables,
+migration tests, and UI rules. The `project-manager` plugin installs
+automatically in [pi](https://pi.dev) sessions here via
+[.pi/claude-plugins.json](.pi/claude-plugins.json). Put local overrides in
+`.pi/claude-plugins.local.json`, which is gitignored.
