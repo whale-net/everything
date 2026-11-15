@@ -1,229 +1,121 @@
-# CI/CD Pipeline
+# CI/CD
 
-This guide describes the continuous integration and deployment pipeline.
+All automation is GitHub Actions in [`.github/workflows/`](../.github/workflows/).
+Shared setup lives in composite actions under
+[`.github/actions/`](../.github/actions/). Releasing is covered in
+[RELEASE.md](RELEASE.md). This doc covers what each workflow does and why
+it's shaped that way.
 
-## Overview
+## Workflows
 
-The repository uses GitHub Actions for continuous integration with parallel build and test jobs. Bazel provides excellent caching by default, caching build outputs, test results, and dependencies between builds, which significantly speeds up CI runs.
+| File | Name in the Actions UI | Trigger | Purpose |
+|------|------------------------|---------|---------|
+| `ci.yml` | CI | every `pull_request`, `push` to `main` | Tests, App Registry reconcile |
+| `release.yml` | Release | manual `workflow_dispatch` | Build, push, and tag apps and Helm charts. Frozen to bug fixes while `release-v2.yml` replaces it |
+| `release-v2.yml` | Release v2 | `workflow_dispatch` from the App Registry only | Release path dispatched by Temporal. The `authorize-trigger` job rejects human dispatches |
+| `promote.yml` | Promote (Deprecated) | manual | Disabled (`if: false`). See [App Registry](#app-registry) |
+| `cleanup-releases.yml` | Cleanup Old Releases | manual | Prunes old tags, releases, and GHCR versions. See [CLEANUP.md](CLEANUP.md) |
+| `devcontainer-bazel-cache-image.yml` | Bazel Cache Image (POC) | manual | Abandoned experiment. See [BAZEL_CACHE_IMAGE.md](BAZEL_CACHE_IMAGE.md) |
 
-## Pipeline Flow
+## `ci.yml` jobs
 
-```mermaid
-graph TD
-    A[Push/PR] --> B[Build Job]
-    A --> C[Test Job]
-    C --> D{Test Success?}
-    D -->|No| F[Pipeline Fails]
-    D -->|Yes| E{Main Branch?}
-    E -->|Yes| E1[Container Arch Test]
-    E -->|No| E2[Skip Arch Test]
-    E1 --> I{Arch Test Success?}
-    I -->|No| F
-    I -->|Yes| H[Plan Docker]
-    E2 --> H
-    B --> G{Build Success?}
-    G -->|Yes| H
-    G -->|No| F
-    H --> J{Main Branch?}
-    J -->|Yes| K[Docker Job]
-    J -->|No| L[Build Summary]
-    K --> M[Build Images]
-    M --> L
-    L --> N[Report Status]
-    C --> O[Upload Test Results]
-    
-    style B fill:#e1f5fe
-    style C fill:#e1f5fe
-    style E1 fill:#f3e5f5
-    style E2 fill:#f0f0f0
-    style K fill:#fff3e0
-    style F fill:#ffebee
-    style O fill:#e8f5e8
-    style M fill:#e8f5e8
-    style L fill:#e3f2fd
-    style N fill:#f1f8e9
+| Job | Runs on | What it does |
+|-----|---------|--------------|
+| `test` (Test) | PRs and `main` | On PRs: runs `bazel coverage --config=ci` on only the tests affected by the diff against `main`'s tip, found with `release_helper changed-targets`. On `main`: runs `bazel coverage --config=ci //...`. Then runs `//tools/appmeta:manifest_contract_test` and uploads coverage to Codecov |
+| `test-database` (Test Database Integration) | PRs and `main` | `manual`-tagged tests that need Docker: everything depending on `//libs/go/dbtest`, plus `//libs/go/s3:s3_integration_test`. Narrowed to affected targets on PRs |
+| `test-container-arch` (Test Container Architecture) | `main` only | `bazel test //tools/scripts:test_cross_compilation`, which checks each platform variant of the image index has the right wheels (see [DOCKER.md](DOCKER.md#gotchas)) |
+| `reconcile-app-registry` | `main` only | Downloads release tools. When `APP_REGISTRY_CICD_OPT_IN` is `true`, it also reconciles every app and chart into the App Registry and records a build log row for each. Not `continue-on-error`: a registry outage turns `main` red |
+| `build-summary` (Build Summary) | always | Fails if `test` failed, or, on `main`, if `test-container-arch` failed or was skipped. Doesn't check `test-database` |
+| `plan-docker`, `docker` | never | Disabled with `if: false` on `plan-docker`. Nothing consumed the images, and the change detection behind it isn't trusted yet |
+
+Tests that need Docker are tagged `manual`, so they stay out of `//...`.
+When you add one that doesn't depend on `//libs/go/dbtest`, add its label to
+the `test-database` job's candidate query, or it never runs in CI.
+
+To reproduce the PR scoping locally:
+
+```bash
+git fetch origin main
+bazel run //tools:release -- changed-targets \
+  --base-commit="$(git rev-parse FETCH_HEAD)" --candidates='tests(//...)'
 ```
 
-## Bazel Caching Benefits
+### Why `test` and `test-database` are separate jobs
 
-- **Build Cache**: Reuses compiled artifacts across builds when source files haven't changed
-- **Test Cache**: Skips re-running tests when code and dependencies are unchanged  
-- **Remote Cache**: Shares cache between CI runs and developers (configured in `.bazelrc`)
-- **Dependency Cache**: Caches external dependencies like Python packages and Go modules
+Merging them saves compute but slows PR feedback. On PR #1107 the merged
+job used 23% fewer job-seconds (460s down to 354s), but wall clock went from
+243s to 354s, because the two jobs no longer ran in parallel. The repo is
+public, so runner minutes are free and latency is the only cost that
+matters. Re-run the experiment if the repo goes private or per-job setup
+gets much more expensive.
 
-## CI Jobs
+### Why releases build on one runner
 
-### Build
-Builds all targets to verify compilation (runs in parallel with Test)
+`release.yml`'s `release` job loops over every app in the plan
+sequentially on one runner instead of fanning out a matrix. Per-runner
+setup (checkout, `setup-build-env`, cache auth, Docker) takes about 60–90s.
+With a warm remote cache, the per-app build takes 10–30s. A matrix would
+spend most of its minutes repeating setup, and a single runner keeps the
+Bazel server and analysis cache warm between apps. Planning stays in its
+own lightweight `plan-release` job.
 
-### Test
-Runs all unit and integration tests
+## Repository variables
 
-### Container Arch Test
-Verifies cross-compilation for multi-architecture containers (critical for ARM64 support). Runs on main branch builds only to reduce CI overhead on feature branches.
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `APP_REGISTRY_CICD_OPT_IN` | unset | `true` turns on every App Registry call in CI and releases. Unset means `release_helper` runs with `--skip-registry` |
+| `APP_REGISTRY_BUILDER_ENV` | `dev` | Which registry environment release tools are resolved from, and which builder client ID is used |
+| `RELEASE_HELPER_FAST_MODE` | unset | `true` makes `release_helper` discover apps without Bazel. See [RELEASE_HELPER_FAST_MODE.md](RELEASE_HELPER_FAST_MODE.md) |
+| `RELEASE_TOOLS_FALLBACK_TO_SOURCE` | unset | `release-v2.yml` only. See [Release tools](#release-tools) |
+| `BAZEL_CACHE_IMAGE_ENABLED` | `false` | Lets the cache-image POC push. See [BAZEL_CACHE_IMAGE.md](BAZEL_CACHE_IMAGE.md) |
 
-### Plan Docker
-Determines which apps need Docker images built based on changes (runs as a lightweight planning job without Bazel cache or Docker Buildx overhead). Its `release_helper_go plan` call, and the `manifest-set` call in the `reconcile-app-registry` job's App Registry reconcile step, both honor the repo variable `RELEASE_HELPER_FAST_MODE` (`== 'true'` to enable; unset/anything else = real Bazel discovery, the default) — see [`RELEASE_HELPER_FAST_MODE.md`](RELEASE_HELPER_FAST_MODE.md).
+Set one with `gh variable set <NAME> --repo whale-net/everything --body <value>`.
 
-### Docker
-Builds container images for all changed applications sequentially in a single runner to verify compilation (only runs on main branch commits). Images are not pushed to the registry; use the Release workflow for publishing images.
+Remote cache secrets (`BAZEL_REMOTE_CACHE_*`, `BAZEL_REMOTE_DOWNLOADER_URL`)
+are documented in [CONFIGURATION.md](CONFIGURATION.md#remote-cache-configuration).
 
-### Build Summary
-Collects and reports the status of all CI jobs.
+## Release tools
 
-## Runner Architecture & Bazel Server Warming
+The release workflows and `ci.yml` don't build `release_helper_go` or the
+`app-registry` CLI on every run. They download prebuilt, checksum-verified
+binaries with
+[`download-release-tools`](../.github/actions/download-release-tools/action.yml).
+The version is whatever is currently promoted in the App Registry for
+`APP_REGISTRY_BUILDER_ENV`. That action sets `$RELEASE_HELPER` and
+`$APP_REGISTRY_CLI` for later steps.
 
-CI image verification ([`ci.yml`](../.github/workflows/ci.yml)) and release publishing ([`release.yml`](../.github/workflows/release.yml)) prioritize **single-runner sequential execution with a warm Bazel daemon** over GitHub Actions matrix fanout.
+In `release.yml` and `release-v2.yml`, a `build-release-tools` job probes
+once whether the prebuilt binaries are actually fetchable. If they aren't,
+it builds the tools with Bazel and uploads them as a `release-tools`
+workflow artifact, which later jobs use instead.
 
-### Empirical Rationale
+Escape hatches for when that acquisition path breaks:
 
-Production telemetry and workflow benchmarks showed that matrix fanout across individual applications incurred substantial overhead:
-
-- **Fixed Setup Overhead (~60–90s per runner)**: GitHub Actions runner provisioning, repository checkout (`fetch-depth: 0`), [`setup-build-env`](../.github/actions/setup-build-env/action.yml) (Bazel installation, external repository cache restore, remote cache auth), and Docker Buildx initialization.
-- **Actual Build / Check Time (~10–30s)**: With Bazel remote caching and layer reuse, building or checking image digests is fast. In typical release runs where digests are unchanged, no-op checks complete in under 20 seconds.
-- **Overhead Multiplier**: Fanning out across $N$ apps spent 80–90% of total runner minutes repeating identical environment initialization and downloading toolchains on separate cold runners.
-
-### Benefits of Single-Runner Execution
-
-1. **Bazel Server Warming**: Executing sequential app builds on one runner keeps the local Bazel daemon alive in memory. Subsequent target evaluations reuse loaded repository rules, external dependency graphs, Python/Go toolchains, and common library compilations without re-analysis.
-2. **Internal Parallelism**: Bazel natively parallelizes action execution across all CPU cores on the runner (`--jobs`).
-3. **Decoupled Planning**: Planning jobs (`plan-docker`, `plan-release`) remain separate lightweight steps that execute in seconds using prebuilt release tools, outputting the change plan before build runners start.
-4. **Reduced Churn**: Eliminates inter-job artifact coordination and race conditions across fanned-out matrix legs.
-
-## CI Test Job Parallelism vs. Consolidation (`ci.yml`)
-
-`ci.yml`'s `test` and `test-database` jobs run in parallel on every PR, each
-paying its own `Setup Build Environment` (checkout + Bazel/cache setup) even
-though they share the same remote Bazel cache. This looks like the same
-per-runner setup overhead that motivated single-runner sequential execution
-for `release.yml` (above) — so it's worth asking whether `ci.yml`'s test jobs
-should be consolidated the same way. They should not; the two workflows
-optimize for different things.
-
-### The experiment
-
-Two back-to-back runs on the same PR ([#1107](https://github.com/whale-net/everything/pull/1107),
-closed without merging): a baseline with `test` and `test-database` as
-separate parallel jobs
-([run 32685276005](https://github.com/whale-net/everything/actions/runs/32685276005)),
-then the `test-database` steps merged into `test`
-([run 32685567628](https://github.com/whale-net/everything/actions/runs/32685567628)).
-
-| | Baseline (separate jobs) | Consolidated (one job) |
-|---|---|---|
-| `test` setup | 28s | 41s (now includes Docker setup) |
-| build + coverage | 139s | 138s |
-| manifest contract check | 63s | 59s |
-| db-test step | 167s (own job, own setup) | 101s (same job, warm Bazel server) |
-| **Total compute (sum of job-seconds)** | 460s | 354s (**-23%**) |
-| **Wall clock (PR feedback)** | 243s — jobs ran in parallel | 354s (**+45%**) — now serial |
-
-The db-test step really did get 40% faster (167s → 101s) riding the warm
-local Bazel daemon and disk cache left behind by the preceding build step in
-the same job — confirming there is real duplicated analysis/fetch work
-across the two jobs, on top of what the shared remote cache already
-dedupes.
-
-### Why the split stays
-
-`whale-net/everything` is a **public** repository, so GitHub-hosted runner
-minutes are free and effectively unlimited — the 106s of compute saved by
-consolidating has no billing value. What it does cost is PR feedback
-latency: two jobs that used to finish in parallel (243s wall clock) become
-one job that takes 354s, a 45% slower critical path on every PR. `release.yml`
-makes the opposite tradeoff deliberately because it fans out over many
-per-app legs where fixed setup overhead (~60-90s per runner) dominates total
-runner-minutes; `ci.yml`'s test jobs are few, already cheap to set up (~30s),
-and running them in parallel is the actual point.
-
-**Conclusion: keep `test`, `test-database`, and `test-container-arch` as
-separate parallel jobs.** Re-run this experiment if either changes:
-the repo goes private (compute now has a cost), or a `setup-build-env` change
-meaningfully raises per-job setup cost relative to the work each job does.
+- `release.yml` and `cleanup-releases.yml` have a `use_source_tools`
+  dispatch input that builds the tools from source.
+- `release-v2.yml` has no human input, so it uses the
+  `RELEASE_TOOLS_FALLBACK_TO_SOURCE` variable instead. When it's `true`
+  and a download fails, the job builds the tools from source inline instead
+  of failing. Unset it once downloads work again, because source builds
+  are slower and skip the checksum-verified binaries.
 
 ## App Registry
 
-`.github/workflows/release.yml` and a separate `.github/workflows/promote.yml`
-talk to the [App Registry](../tools/app_registry/TOC.md), a gRPC service that
-indexes published artifacts and (once actually used) tracks
-per-environment promotion state. Both are gated and, as of today, dormant —
-see [`tools/app_registry/OPERATIONS.md`](../tools/app_registry/OPERATIONS.md)
-for the operator runbook.
+`release.yml`, `release-v2.yml`, and `ci.yml`'s `reconcile-app-registry`
+job talk to the [App Registry](../tools/app_registry/TOC.md). Every call is
+gated on `APP_REGISTRY_CICD_OPT_IN == 'true'`. When it's unset, CI makes no
+registry calls.
 
-### Recording (`release.yml`)
+When it's on, recording happens inside `release_helper`, not in separate
+workflow steps. `release-app` and `release-charts` allocate the version,
+then record the pushed image or chart (charts include the digests of the
+images they pin). A failed `RecordArtifact` fails the command, and with it
+the job. The operator runbook is
+[`tools/app_registry/OPERATIONS.md`](../tools/app_registry/OPERATIONS.md).
 
-Two `continue-on-error` steps, both gated on `vars.APP_REGISTRY_CICD_OPT_IN
-== 'true'`:
-
-- **`Record build and artifact in App Registry`** (in the `release` job) —
-  after an image is pushed, resolves its digest and calls `app-registry
-  builds record` + `artifacts record --kind image`.
-- **`Record chart artifacts in App Registry`** (in `release-helm-charts`) —
-  after a chart is published, resolves its pinned images (from the
-  compose-time lockfile) to digests and calls `artifacts record --kind
-  chart --contains ...`.
-
-`APP_REGISTRY_CICD_OPT_IN` is unset by default. With it unset, CI makes no
-registry calls at all — the recording steps do not run. The recording steps
-themselves are still `continue-on-error` (a registry outage must never fail
-a real release), but each job that has any also ends with an **App Registry
-recording health** step that is not: it fails the job if any recording step
-in it failed, after the real push/tag/upload has already happened — so a
-failed recording now shows a RED job, not a green one. Check the step's own
-log to know which recording step failed and why; see
-[`tools/app_registry/OPERATIONS.md` "Recording (automatic,
-best-effort)"](../tools/app_registry/OPERATIONS.md#2-recording-automatic-best-effort)
-for the full triage. As of issue #547, a failed recording also carries a
-`::warning::` annotation and a `$GITHUB_STEP_SUMMARY` entry naming which of
-two cases it is — "app not registered yet" (the release ran ahead of
-`ReconcileApps`) vs. a genuine registry error — so this no longer requires
-opening the log; see
-[`tools/app_registry/OPERATIONS.md` "Release ran ahead of
-reconcile"](../tools/app_registry/OPERATIONS.md#release-ran-ahead-of-reconcile-issue-547).
-
-### `promote.yml`
-
-A separate, human-triggered `workflow_dispatch` workflow that promotes or
-rolls back a recorded artifact to an environment (`dev`/`stage`/`prod`). Its
-job declares `environment: ${{ inputs.environment }}`, which scopes it to
-that GitHub Environment's `app-registry-promoter-<environment>` secret and
-triggers that environment's required reviewers — this declaration is the
-entire security model, not a formality. Unlike the recording steps above, it
-is **not** `continue-on-error`: a failed promotion fails the run.
-
-**Status: deprecated / disabled for now.** No Keycloak clients and no GitHub Environments
-(`dev`/`stage`/`prod`) exist yet, and the workflow job is disabled with `if: false`.
-See [`tools/app_registry/DEPLOY.md`](../tools/app_registry/DEPLOY.md) for
-what has to exist first.
-
-## Release Tools Acquisition (`release-v2.yml`)
-
-`release-v2.yml` needs `release_helper_go` and `app-registry` (the CLI, not
-the server) to run its own `plan`/`build-app`/`package-assets` steps. It
-never builds these from source by default — it downloads prebuilt,
-checksum-verified binaries via `./.github/actions/download-release-tools`,
-resolving the version to fetch from whatever's currently promoted in the
-App Registry for `vars.APP_REGISTRY_BUILDER_ENV` (default `dev`). The
-`build-release-tools` job probes once per run whether that resolves to a
-real, fetchable S3 object (not just a promoted DB record — see #1036) and,
-if not, builds both tools via Bazel and uploads them as a `release-tools`
-workflow artifact every other job's `download-release-tools` call
-downloads instead of hitting S3 directly.
-
-**Safety valve: `RELEASE_TOOLS_FALLBACK_TO_SOURCE`.** A repository variable,
-unset/`false` by default, wired into every `download-release-tools` call's
-`fallback_to_source` input. With it unset, a failed prebuilt/artifact
-acquisition fails the job outright with a clear error — today's behavior,
-unchanged. Set it to `'true'` (`gh variable set RELEASE_TOOLS_FALLBACK_TO_SOURCE
---repo whale-net/everything --body true`) to make that same failure instead
-build the tools from source via Bazel inline, in whichever job hit the
-failure. This is meant as a temporary operator escape hatch for exactly the
-kind of chicken-and-egg bootstrap gap that motivated it (App Registry/S3
-acquisition broken, but release-v2.yml itself is what would normally
-publish the fix) — flip it back to `false`/unset once the underlying
-acquisition path is healthy again, since source builds are slower and skip
-the checksum-verified prebuilt-binary supply chain. Two call sites
-(`plan-release`'s resolved-plan path and `release-summary`) normally skip
-Bazel setup entirely for speed; each gets its own `Setup Build Environment
-(fallback safety valve)` step, gated on the same variable, so the valve
-actually works there too instead of failing on a missing `bazel` binary.
+`promote.yml` would promote or roll back a recorded artifact to
+`dev`/`stage`/`prod`. It is disabled with `if: false`, because neither the
+Keycloak clients nor the GitHub Environments it needs exist yet. If it is
+ever turned on, its `environment:` declaration is the whole security model,
+since that is what scopes the promoter secret and its required reviewers.
+See [`tools/app_registry/DEPLOY.md`](../tools/app_registry/DEPLOY.md).

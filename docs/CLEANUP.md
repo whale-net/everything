@@ -1,316 +1,78 @@
-# Tag, Release, and GHCR Package Cleanup Tool
+# Release Cleanup
 
-Unified cleanup tool for managing Git tags, GitHub Releases, and GitHub Container Registry (GHCR) packages with intelligent retention policies.
+`release_helper cleanup-releases` prunes old release tags. For each tag it
+deletes, it also deletes the matching GitHub Release and, optionally, the
+GHCR package versions. Dry run is the default. The code is in
+[`tools/release_helper_go/cmd/cleanup.go`](../tools/release_helper_go/cmd/cleanup.go).
 
-## Overview
+> **Read [Retention rules](#retention-rules) before running it for real.**
+> With the default settings, the tool deletes the *only remaining* release
+> line of any app that has fewer minor versions than `--keep-minor-versions`.
+> In November 2026, 38 of 63 tagged apps were in that state.
 
-As the repository grows, the number of tags, releases, and container images increases over time. Old releases from superseded versions accumulate, making it harder to navigate and manage releases. This tool provides an automated way to prune old releases **atomically** while maintaining a sensible retention policy.
+## Running it
 
-## Features
+From GitHub: Actions → **Cleanup Old Releases** → Run workflow. The
+inputs are `keep_minor_versions` (default 2), `min_age_days` (14),
+`dry_run` (true), `delete_packages` (true), and `use_source_tools` (false,
+which uses prebuilt release tools). Run once with `dry_run` on, read the
+log, then run again with it off.
 
-- 🎯 **Intelligent Retention** - Keeps recent versions while cleaning old ones
-- 🔒 **Safety First** - Dry-run by default, confirmation prompts, age thresholds
-- 🔄 **Atomic Cleanup** - Deletes Git tags, GitHub Releases, and GHCR packages together
-- 💪 **Error Resilient** - Continues on partial failures, reports all errors
-- ⚙️ **Flexible Configuration** - Customizable retention policies via CLI flags
-- 📦 **Multi-App Support** - Handles multiple apps/charts independently
-
-## What Gets Deleted
-
-When you delete a tag (e.g., `v1.0.0`), the tool automatically removes:
-
-1. **Git Tag** - The lightweight or annotated tag from the repository
-2. **GitHub Release** - The release page associated with that tag (if it exists)
-3. **GHCR Packages** - All container images tagged with that version (optional)
-
-This ensures complete cleanup without leaving orphaned releases or stale container images.
-
-## Retention Policy
-
-The tool implements intelligent pruning rules:
-
-1. **Latest Patch Only** - Keeps only the latest patch of each minor version
-2. **Keep Last N Minors** - Keeps the last N minor versions (default: 2)
-3. **Major Version Protection** - Always keeps the latest minor version of each major version (when multiple majors exist)
-4. **Age Threshold** - Only prunes tags older than a threshold (default: 14 days)
-5. **Minimum Version Requirement** - Requires at least N versions to apply retention
-
-### Example
-
-Given these tags for `demo-hello-python`:
-
-```
-v2.0.0 (5 days old)   → KEEP (latest minor, recent)
-v1.2.5 (10 days old)  → KEEP (last 2 minor versions, latest of major 1)
-v1.2.4 (15 days old)  → DELETE (old patch, not latest of v1.2.x)
-v1.1.3 (20 days old)  → DELETE (outside retention window)
-v1.0.1 (30 days old)  → DELETE (outside retention window)
-```
-
-**Result with default settings (keep last 2 minor versions, prune >14 days old):**
-- **Kept:** v2.0.0, v1.2.5
-- **Deleted:** v1.2.4, v1.1.3, v1.0.1
-
-### Special Rules
-
-- **v1.2.5 will never be deleted** as long as it remains the latest minor version in major version 1 (even if v2.0.6 is added, v1.2.5 stays unless v1.3.0 is created)
-- **Old patches are always deleted** if older than threshold (e.g., v1.2.4 is deleted even though v1.2.5 is kept)
-- **Recent tags are always kept** regardless of retention window (safety measure)
-
-## Usage
-
-### Local Usage
-
-**Note:** When running with `--no-dry-run` in an interactive terminal, the tool prompts for confirmation before proceeding. In CI environments (GitHub Actions) or non-interactive terminals, it proceeds automatically without prompting.
+Locally (it needs `GITHUB_TOKEN` and reads tags from your clone, so run
+`git fetch --tags` first):
 
 ```bash
-# Preview what would be deleted (recommended first step)
-bazel run //tools:release -- cleanup-releases
-
-# Show help and all options
-bazel run //tools:release -- cleanup-releases --help
-
-# Actually delete old releases (prompts for confirmation in interactive mode)
-bazel run //tools:release -- cleanup-releases --no-dry-run
-
-# Custom retention policy
-bazel run //tools:release -- cleanup-releases \
-  --keep-minor-versions 3 \
-  --min-age-days 30
-
-# Delete tags only (keep GHCR packages)
-bazel run //tools:release -- cleanup-releases \
-  --no-delete-packages --no-dry-run
-
-# Delete packages only (keep Git tags) - NOT RECOMMENDED
-bazel run //tools:release -- cleanup-releases \
-  --delete-packages --no-dry-run
+export GITHUB_TOKEN=...   # contents:write, plus packages:write if deleting packages
+bazel run //tools:release -- cleanup-releases                       # dry run
+bazel run //tools:release -- cleanup-releases --min-age-days 30 --keep-minor-versions 3
+bazel run //tools:release -- cleanup-releases --no-dry-run          # deletes, no confirmation prompt
+bazel run //tools:release -- cleanup-releases --no-dry-run --no-delete-packages
 ```
 
-### GitHub Actions Workflow
+| Flag | Default | |
+|------|---------|---|
+| `--keep-minor-versions` | 2 | Newest minor lines to keep per app |
+| `--min-age-days` | 14 | Tags newer than this are never deleted |
+| `--dry-run` / `--no-dry-run` | dry run | `--no-dry-run` deletes immediately |
+| `--delete-packages` / `--no-delete-packages` | delete | Also delete GHCR package versions |
 
-The cleanup tool can be run via GitHub Actions without manual confirmation:
+The owner and repo come from `GITHUB_REPOSITORY_OWNER` and
+`GITHUB_REPOSITORY`. They default to `whale-net/everything`.
 
-1. Go to **Actions** tab in GitHub
-2. Select **"Cleanup Old Releases"** workflow
-3. Click **"Run workflow"** button
-4. Configure parameters:
-   - `keep_minor_versions`: Number of recent minor versions to keep (default: 2)
-   - `min_age_days`: Minimum age in days for deletion (default: 14)
-   - `dry_run`: Preview changes without executing (default: true)
-   - `delete_packages`: Also delete GHCR packages (default: true)
-5. Click **"Run workflow"** to execute
+## Retention rules
 
-**Recommended workflow:**
-1. First run with `dry_run=true` to preview changes
-2. Review the output in the workflow summary
-3. If satisfied, run again with `dry_run=false` to actually delete
+Only tags matching `<name>.vX.Y.Z` are considered, for example
+`demo-hello-go.v1.2.3` or `helm-demo-app.v1.0.0`. Tags are grouped by
+`<name>`. A tag's age is the date of the commit it points at. For each
+`<name>`:
 
-## CLI Options
+1. Within a minor line (`vX.Y.*`), every patch except the newest is
+   deleted once it's older than `--min-age-days`.
+2. The newest patch of each minor line is kept if it's newer than
+   `--min-age-days`, or if it's in the newest `--keep-minor-versions`
+   lines. When the app has more than one major version, the newest minor
+   of each major is also kept.
+3. Anything else is deleted.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--keep-minor-versions` | integer | 2 | Number of recent minor versions to keep |
-| `--min-age-days` | integer | 14 | Minimum age in days for deletion |
-| `--dry-run / --no-dry-run` | boolean | true | Preview changes without executing |
-| `--delete-packages / --no-delete-packages` | boolean | true | Also delete corresponding GHCR packages |
+The rule in step 2 about keeping the newest lines only applies when the
+app has **at least** `--keep-minor-versions` minor lines. With fewer, that
+protection is skipped. So an app that only ever released `v0.0.x` loses its
+latest tag once that tag is older than `--min-age-days`. Until that's
+fixed, pass `--keep-minor-versions 1` or review the dry-run list
+carefully.
 
-## Requirements
+## What gets deleted
 
-### Permissions
+The steps run in this order, and errors are logged without stopping the run:
 
-## Permissions Required
+1. The GitHub Release for each tag, if one exists.
+2. The tag itself, through the GitHub API (not your local clone).
+3. With package deletion on: every version of
+   `ghcr.io/<owner>/<name>` that carries a tag exactly equal to `vX.Y.Z`.
+   Only the first 100 versions of each package are searched.
 
-- **Git Tags:** `contents:write` permission
-- **GitHub Releases:** `contents:write` permission (same as tags)
-- **GHCR Packages:** `packages:write` permission
-
-### Environment Variables
-
-- `GITHUB_TOKEN`: GitHub token with appropriate permissions
-- `GITHUB_REPOSITORY_OWNER`: Repository owner (auto-detected in GitHub Actions)
-- `GITHUB_REPOSITORY`: Repository name (auto-detected in GitHub Actions)
-
-## Architecture
-
-### Components
-
-1. **`cleanup-releases` command** (`tools/release_helper_go/cmd/cleanup.go`)
-   - Coordinates atomic deletion of tags, releases, and GHCR packages
-   - Implements the retention algorithm
-   - Interfaces with the GitHub Releases and GHCR APIs (finds/deletes releases and package versions)
-   - Provides the user-facing CLI, validates inputs and permissions, and displays progress/results
-
-### Data Flow
-
-```
-┌─────────────────┐
-│  CLI Command    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  ReleaseCleanup │ (Orchestrator)
-└────────┬────────┘
-         │
-    ┌────┼────┐
-    ▼    ▼    ▼
-┌─────┐┌────┐┌──────┐
-│ Git ││GH  ││ GHCR │
-│Tags ││Rel ││Client│
-└─────┘└────┘└──────┘
-```
-
-### Cleanup Process (Atomic Deletion)
-
-1. **Planning Phase**
-   - Query all Git tags
-   - Apply retention algorithm to identify tags to delete
-   - Find corresponding GitHub Releases (if any)
-   - Find corresponding GHCR packages (if enabled)
-   
-2. **Execution Phase** (runs in order for atomicity)
-   - Delete GitHub Releases first (prevents orphaned releases)
-   - Delete Git tags second (removes the tag reference)
-   - Delete GHCR packages last (container images)
-
-1. **Planning Phase**
-   - Fetch all Git tags
-   - Apply retention algorithm to identify deletions
-   - Map tags to GHCR package versions
-   - Generate cleanup plan
-
-2. **Execution Phase**
-   - Delete Git tags (one by one with error handling)
-   - Delete GHCR packages (one by one with error handling)
-   - Collect results and errors
-   - Generate summary report
-
-3. **Reporting Phase**
-   - Display deleted tags and packages
-   - Show any errors encountered
-   - Provide summary statistics
-
-## Safety Features
-
-- ✅ **Dry-run mode** - Preview changes without executing
-- ✅ **Age threshold** - Prevents accidental deletion of recent tags
-- ✅ **Confirmation prompt** - Requires explicit user approval (local usage)
-- ✅ **Conservative parsing** - Skips malformed tags
-- ✅ **Latest minor per major protection** - Always keeps latest minor version in each major
-- ✅ **Multi-app support** - Handles multiple apps/charts independently
-- ✅ **Error recovery** - Continues on partial failures, reports all errors
-- ✅ **Audit trail** - Logs all operations and results
-
-## Tag Format Support
-
-Works with both app and Helm chart tags:
-
-- **App tags:** `domain-appname.vX.Y.Z` (e.g., `demo-hello-python.v1.2.3`)
-- **Helm chart tags:** `helm-namespace-chartname.vX.Y.Z` (e.g., `helm-demo-app.v1.0.0`)
-
-## GHCR Package Mapping
-
-The tool automatically maps Git tags to GHCR packages:
-
-1. Parse tag to extract package name: `demo-hello-python.v1.2.3` → `demo-hello-python`
-2. Extract version: `v1.2.3`
-3. Search GHCR for matching package versions
-4. Match versions by tag (e.g., find version with tag `v1.2.3`)
-5. Include all platform variants (e.g., `v1.2.3-amd64`, `v1.2.3-arm64`)
-
-## Troubleshooting
-
-### No tags found for deletion
-
-**Cause:** All tags are either too recent or within the retention window.
-
-**Solution:** 
-- Lower `--min-age-days` threshold
-- Increase `--keep-minor-versions` if you want to delete more
-
-### Permission denied errors
-
-**Cause:** `GITHUB_TOKEN` lacks required permissions.
-
-**Solution:** 
-- Ensure token has `contents:write` for tags
-- Ensure token has `packages:write` for GHCR
-- In GitHub Actions, check workflow permissions
-
-### GHCR package not found
-
-**Cause:** Package name parsing failed or package doesn't exist.
-
-**Solution:**
-- Check tag format matches expected pattern
-- Verify GHCR package exists with correct name
-- Use `--no-delete-packages` to skip GHCR cleanup
-
-### Partial failures
-
-**Cause:** Some deletions succeeded, others failed.
-
-**Solution:**
-- Review error messages in output
-- Re-run cleanup to retry failed deletions
-- Check GitHub API rate limits
-
-## Testing
-
-### Run Tests
+## Tests
 
 ```bash
-# Run cleanup tests (includes GHCR client tests)
-bazel test //tools/release_helper_go:cmd_test
-
-# Run with verbose output
-bazel test //tools/release_helper_go:cmd_test --test_output=streamed
+bazel test //tools/release_helper_go:cmd_test --test_filter='Cleanup|IdentifyTagsToPrune|ParseSemver'
 ```
-
-### Test Coverage
-
-- ✅ Retention algorithm with various scenarios
-- ✅ Latest minor per major version protection
-- ✅ Multi-app and Helm chart tag support
-- ✅ Error handling and edge cases
-- ✅ Dry-run vs real execution
-- ✅ Tag to package mapping
-- ✅ GHCR API interactions
-
-## Files
-
-```
-tools/release_helper_go/
-├── cmd/cleanup.go             # Cleanup orchestration, GHCR + GitHub Releases clients
-├── cmd/cleanup_test.go        # Cleanup tests
-└── BUILD.bazel                # Build configuration
-
-.github/workflows/
-└── cleanup-releases.yml      # GitHub Actions workflow
-```
-
-## Best Practices
-
-1. **Always dry-run first** - Preview changes before executing
-2. **Start conservative** - Use default retention settings initially
-3. **Monitor results** - Check workflow outputs and error logs
-4. **Coordinate with team** - Communicate before large cleanups
-5. **Test in staging** - Try on test repositories first
-6. **Regular cleanup** - Run periodically to prevent accumulation
-7. **Keep packages in sync** - Always delete tags and packages together
-
-## Future Enhancements
-
-- [ ] Scheduled cleanup (cron-based GitHub Actions)
-- [ ] Slack/email notifications for cleanup results
-- [ ] Metrics dashboard showing cleanup trends
-- [ ] Support for custom tag patterns
-- [ ] Rollback mechanism for accidental deletions
-- [ ] Integration with release notes generation
-
-## References
-
-- GitHub Issue: [#241 - Tag cleanup](https://github.com/whale-net/everything/issues/241)
-- GHCR API: [GitHub Packages REST API](https://docs.github.com/en/rest/packages)
-- Git Tags: [Git Tagging Documentation](https://git-scm.com/book/en/v2/Git-Basics-Tagging)
