@@ -1,179 +1,135 @@
-# Helm Chart Generation
+# Helm charts
 
-This monorepo provides an **automatic Helm chart generation system** that creates production-ready Kubernetes charts from your application metadata.
+Charts are generated from `release_app` metadata. You declare which apps go in
+a chart; `helm_composer` (`//tools/helm:helm_composer`) writes the templates,
+values, and `Chart.yaml`. This doc covers declaring, building, and releasing
+charts. For what the generated chart contains and how to override values, see
+[tools/helm/README.md](../tools/helm/README.md) and
+[tools/helm/APP_TYPES.md](../tools/helm/APP_TYPES.md).
 
-## Quick Start
+## Declare a chart
+
+Use `release_helm_chart` so the chart is discoverable by release tooling:
 
 ```starlark
-load("//tools/helm:helm.bzl", "helm_chart")
+load("//tools/bazel:release.bzl", "release_helm_chart")
 
-# Generate a Helm chart from your apps
-helm_chart(
-    name = "my_app_chart",
-    apps = [
-        "//api/users:users_metadata",
-        "//workers/email:email_metadata",
-    ],
-    chart_name = "my-application",
-    chart_version = "1.0.0",
-    namespace = "production",
-    environment = "production",
-    ingress_host = "api.example.com",
-    ingress_mode = "single",  # or "per-service"
+release_helm_chart(
+    name = "fastapi_chart",
+    apps = ["//demo/hello_fastapi:hello-fastapi_metadata"],
+    chart_name = "hello-fastapi",
+    domain = "demo",
+    namespace = "demo",
 )
 ```
 
-Build and deploy:
-```bash
-# Build the chart
-bazel build //path/to:my_app_chart
+| Attribute | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `apps` | yes | | `<app>_metadata` targets from `release_app` |
+| `domain` | yes | | Prefixes the chart name |
+| `namespace` | yes | | Kubernetes namespace |
+| `chart_name` | no | `name` | Dashes only. Becomes `helm-<domain>-<chart_name>` |
+| `chart_version` | no | `0.0.0-dev` | Leave unset. Release tooling sets the real version |
+| `environment` | no | `production` | |
+| `manual_manifests` | no | `[]` | Extra YAML or `k8s_manifests` targets to include |
 
-# Extract the chart tarball
-tar -xzf bazel-bin/path/to/my-application.tar.gz
+The macro creates `:<name>` (the chart, tagged `manual`, so `bazel build //...`
+skips it) and `:<name>_chart_metadata`. Each app's `app_type` decides which
+resources it gets; ingress hosts, resources, and health checks come from
+`release_app` attributes and can be overridden in values at deploy time.
 
-# Deploy with Helm
-helm install my-app ./my-application
-```
+The lower-level `helm_chart` rule in `//tools/helm:helm.bzl` takes the same
+`apps`, `chart_name`, `chart_version`, `namespace`, `environment`, and
+`manual_manifests`, but release tooling can't see it. Use it only for charts
+you never publish.
 
-## Architecture
+### Names
 
-The chart generation system uses a **Go-based template composition engine** that converts app metadata into complete Helm charts:
+A chart has three names. For the example above:
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌──────────────────┐
-│ Bazel Rule      │    │ helm_composer   │    │ Helm Chart       │
-│ (helm.bzl)      │───▶│ (Go Binary)     │───▶│ Package          │
-│                 │    │                 │    │                  │
-└─────────────────┘    └─────────────────┘    └──────────────────┘
-        │                       │                       │
-        │                       │                       │
-        ▼                       ▼                       ▼
-App Metadata Files      Template Files          Chart.yaml
-Chart Configuration     (.tmpl)                 values.yaml
-                                               templates/
-```
+| Where | Name |
+|-------|------|
+| Bazel output and git tag | `helm-demo-hello-fastapi` (tag `helm-demo-hello-fastapi.vX.Y.Z`) |
+| `Chart.yaml` and ChartMuseum | `demo-hello-fastapi` |
+| Release inputs (`helm_charts`, `--charts`) | `helm-demo-hello-fastapi` or the domain, `demo` |
 
-**Key Features:**
-- **Automatic Configuration**: Smart defaults based on app type (API, worker, job)
-- **Multi-App Composition**: Combine multiple applications in one chart
-- **Flexible Ingress**: Single host or per-service ingress modes
-- **Resource Management**: Configurable CPU/memory limits
-- **Health Checks**: Optional health check configuration for APIs (disabled by default)
-- **Production-Ready**: Generates validated, deployable Helm charts
-
-## App Types
-
-The system recognizes four app types with different behaviors:
-
-| Type | Deployment | Service | Ingress | Health Checks |
-|------|-----------|---------|---------|---------------|
-| `external-api` | ✅ | ✅ ClusterIP | ✅ | Optional (disabled by default) |
-| `internal-api` | ✅ | ✅ ClusterIP | ❌ | Optional (disabled by default) |
-| `worker` | ✅ | ❌ | ❌ | ❌ |
-| `job` | ✅ Job | ❌ | ❌ | ❌ |
-
-## Examples
-
-### Single API Service
-
-```starlark
-helm_chart(
-    name = "api_chart",
-    apps = ["//api/users:users_metadata"],
-    chart_name = "users-api",
-    namespace = "production",
-    ingress_host = "users.api.example.com",
-)
-```
-
-### Multi-App Platform
-
-```starlark
-helm_chart(
-    name = "platform_chart",
-    apps = [
-        "//api/users:users_metadata",
-        "//api/orders:orders_metadata",
-        "//workers/email:email_worker_metadata",
-    ],
-    chart_name = "platform",
-    namespace = "production",
-    ingress_host = "platform.example.com",
-    ingress_mode = "single",  # /users/*, /orders/* paths
-)
-```
-
-### Per-Service Ingress
-
-```starlark
-helm_chart(
-    name = "microservices_chart",
-    apps = [
-        "//services/auth:auth_metadata",
-        "//services/payments:payments_metadata",
-    ],
-    chart_name = "microservices",
-    namespace = "production",
-    ingress_host = "example.com",
-    ingress_mode = "per-service",  # auth.example.com, payments.example.com
-)
-```
-
-### Workers Only
-
-```starlark
-helm_chart(
-    name = "workers_chart",
-    apps = [
-        "//workers/email:email_metadata",
-        "//workers/reports:reports_metadata",
-    ],
-    chart_name = "background-workers",
-    namespace = "workers",
-    # No ingress for workers
-)
-```
-
-## Configuration
-
-The `helm_chart` rule accepts these attributes:
-
-| Attribute | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `apps` | `label_list` | ✅ | - | List of `app_metadata` targets |
-| `chart_name` | `string` | ✅ | - | Helm chart name |
-| `namespace` | `string` | ✅ | - | Kubernetes namespace |
-| `chart_version` | `string` | ❌ | `"0.1.0"` | Chart version (SemVer) |
-| `environment` | `string` | ❌ | `"development"` | Environment (dev/staging/prod) |
-| `ingress_host` | `string` | ❌ | `""` | Ingress hostname |
-| `ingress_mode` | `string` | ❌ | `"single"` | `"single"` or `"per-service"` |
-
-## Testing and Validation
-
-The system includes comprehensive testing:
+## Build and inspect locally
 
 ```bash
-# Run unit tests (9 test cases)
-bazel test //tools/helm:composer_test
+bazel build //demo:fastapi_chart
+# -> bazel-bin/demo/helm-demo-hello-fastapi.tar.gz
+# -> bazel-bin/demo/helm-demo-hello-fastapi_chart/demo-hello-fastapi/
 
-# Run integration tests (helm lint validation)
-bazel test //tools/helm:integration_test
-
-# Build example charts
-bazel build //demo:demo_chart //demo:fastapi_chart //demo:workers_chart
+helm lint bazel-bin/demo/helm-demo-hello-fastapi_chart/demo-hello-fastapi
+helm template test bazel-bin/demo/helm-demo-hello-fastapi_chart/demo-hello-fastapi
 ```
 
-All generated charts are validated with `helm lint` and template rendering to ensure correctness.
+Image tags in a Bazel-built chart are `latest`. To package a chart the way a
+release does, with a version and pinned image tags:
 
-## Documentation
+```bash
+bazel run //tools:release -- build-helm-chart helm-demo-hello-fastapi \
+  --version v0.0.0-local --use-released=false --output-dir /tmp/charts
+```
 
-For comprehensive documentation including:
-- CLI usage and flags
-- Advanced configuration options
-- Resource customization
-- Health check configuration
-- Troubleshooting guide
+`--use-released` (the default) pins each member app to its latest
+`<domain>-<app>.v*` git tag instead of `latest`, and fails if an app has none.
 
-See: **[tools/helm/README.md](../tools/helm/README.md)**
+List every releasable chart with
+`bazel query "kind('helm_chart_metadata', //...)"`.
 
-For additional documentation on Helm releases, see: **[HELM_RELEASE.md](HELM_RELEASE.md)**
+## Releasing charts
+
+Charts are released by the same workflows as apps; see
+[RELEASE.md](RELEASE.md). In `release.yml`, set the `helm_charts` input
+(chart name, domain, or `all`). Leave it empty to skip charts. App and chart
+releases can run in the same dispatch or separately.
+
+The `release-helm-charts` job runs `release_helper_go release-charts`, which
+for each chart:
+
+1. allocates the chart's own next version (charts are versioned independently
+   of their apps);
+2. composes the chart with each member app pinned to the version just released
+   in this run, or its latest published version otherwise, and writes those
+   pins to `image-lockfile.json` inside the chart;
+3. asks the App Registry to confirm every pinned image is published (the
+   hermeticity check). A violation fails the chart; a registry outage only
+   warns;
+4. packages the chart and uploads it to ChartMuseum, then records it in the
+   App Registry.
+
+If a different package already sits at the candidate version in ChartMuseum,
+the release moves to the next version rather than overwrite it. Packages are
+compared by their extracted file contents, not tarball bytes, because
+`helm package` output isn't byte-reproducible. A retry of an unchanged chart
+reuses the existing version.
+
+In `release-v2.yml` the chart source tree is built in CI and the App Registry
+worker packages and uploads it with `release_helper_go finalize-chart`.
+
+## Chart repository
+
+Charts are published to ChartMuseum at `https://charts.whalenet.dev`, behind
+basic auth.
+
+```bash
+helm repo add whalenet https://charts.whalenet.dev --username <user> --password <pass>
+helm repo update
+helm search repo whalenet
+```
+
+| Setting | Kind | Purpose |
+|---------|------|---------|
+| `CHART_REPO_USER`, `CHART_REPO_PASS` | Secrets | ChartMuseum credentials |
+| `CHART_REPO_URL` | Variable | ChartMuseum base URL; defaults to `https://charts.whalenet.dev`. Also used for the repository recorded in the App Registry and the `helm repo add` line in the run summary |
+
+The workflows don't delete chart versions. Removing one means calling
+ChartMuseum's delete API directly.
+
+## Tests
+
+```bash
+bazel test //tools/helm:helm_test          # composer and type unit tests
+bazel test //tools/helm:integration_test   # manual; needs helm on PATH, lints //demo:fastapi_chart
+```

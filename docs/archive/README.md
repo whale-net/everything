@@ -7,7 +7,7 @@ This directory contains historical and detailed documentation that supplements t
 The main repository focuses on essential documentation that developers need for day-to-day work:
 - `README.md` - Project overview
 - `AGENT.md` - Comprehensive agent instructions
-- `docs/HELM_RELEASE.md` - Helm release system
+- `docs/HELM.md` - Helm charts and chart releases
 
 This archive preserves detailed guides, implementation plans, and historical migration documents for:
 - Deep-dive technical references
