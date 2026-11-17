@@ -1,0 +1,17 @@
+load("//tools/bazel:release.bzl", "release_helm_chart")
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)
+
+# Chart identity: helm-media-upload-media-upload.
+release_helm_chart(
+    name = "media_upload_chart",
+    chart_name = "media-upload",
+    domain = "media-upload",
+    namespace = "media-upload",
+    apps = ["//tools/media_upload/mcp:mcp_metadata"],
+    visibility = ["//visibility:public"],
+)

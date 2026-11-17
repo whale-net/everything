@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "uploads",
+    srcs = ["uploads.go"],
+    importpath = "github.com/whale-net/everything/tools/media_upload/uploads",
+    visibility = ["//tools/media_upload:__subpackages__"],
+)
+
+go_test(
+    name = "uploads_test",
+    size = "small",
+    srcs = ["uploads_test.go"],
+    embed = [":uploads"],
+)

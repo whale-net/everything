@@ -333,6 +333,38 @@ func (c *Client) PresignPublicPutURL(ctx context.Context, key string, ttl time.D
 	return req.URL, nil
 }
 
+// PresignPutOptions are the request headers a presigned PUT pins. The
+// uploader must send exactly these values or S3 rejects the signature.
+type PresignPutOptions struct {
+	ContentType   string
+	ContentLength int64 // 0 leaves the length unpinned
+	CacheControl  string
+}
+
+// PresignPublicPutObject generates a pre-signed PUT URL for key against the
+// public endpoint, pinning the headers in opts. Returns an error if no public
+// endpoint is configured.
+func (c *Client) PresignPublicPutObject(ctx context.Context, key string, opts PresignPutOptions, ttl time.Duration) (string, error) {
+	if c.presignPublic == nil {
+		return "", errors.New("no public endpoint configured for presigned PUT URLs")
+	}
+	in := &s3.PutObjectInput{Bucket: aws.String(c.bucket), Key: aws.String(key)}
+	if opts.ContentType != "" {
+		in.ContentType = aws.String(opts.ContentType)
+	}
+	if opts.ContentLength > 0 {
+		in.ContentLength = aws.Int64(opts.ContentLength)
+	}
+	if opts.CacheControl != "" {
+		in.CacheControl = aws.String(opts.CacheControl)
+	}
+	req, err := c.presignPublic.PresignPutObject(ctx, in, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign public PUT URL: %w", err)
+	}
+	return req.URL, nil
+}
+
 // Exists checks if an object exists in S3
 func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
