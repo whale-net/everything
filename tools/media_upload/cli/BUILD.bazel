@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "cli_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/tools/media_upload/cli",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/media_upload/client",
+        "@org_golang_x_oauth2//clientcredentials",
+    ],
+)
+
+go_binary(
+    name = "media-upload",
+    embed = [":cli_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Published as a public binary like the app-registry CLI (domain "tools").
+release_app(
+    name = "media_upload_cli",
+    app_name = "media-upload",
+    app_type = "cli",
+    binary_name = ":media-upload",
+    deploy_unit = "image",
+    description = "media-upload CLI: upload a file via the media-upload MCP and print its public URL",
+    domain = "tools",
+    language = "go",
+)

@@ -17,3 +17,11 @@
 | `MEDIA_TEMP_PREFIX` | `tmp` | Key prefix for `temporary` uploads (lifecycle-expired). |
 | `MEDIA_PERMANENT_PREFIX` | `permanent` | Key prefix for permanent uploads. |
 | `PORT` | `8081` | Listen port. |
+
+## CLI (`media-upload`)
+
+| Variable | Description |
+|---|---|
+| `MEDIA_UPLOAD_MCP_URL` | MCP endpoint (or `--url`). Required. |
+| `MEDIA_UPLOAD_TOKEN` | Bearer token; takes precedence over client credentials. |
+| `MEDIA_UPLOAD_TOKEN_URL` / `MEDIA_UPLOAD_CLIENT_ID` / `MEDIA_UPLOAD_CLIENT_SECRET` | OAuth client-credentials flow used when no token is set. |
