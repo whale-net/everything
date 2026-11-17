@@ -33,6 +33,7 @@ for `media-upload` (allowlisted in `tools/app_registry/server/handlers/artifact.
 - `mcp/` — the server (`//tools/media_upload/mcp`), release app `media-upload-mcp`.
 - `cli/`, `client/` — the `media-upload` CLI and its upload library.
 - `uploads/` — validation, allowlist, key + URL generation (unit tested).
+- `plugin/` — Claude Code plugin (`media-upload`) wiring the prod MCP server; listed in `.claude-plugin/marketplace.json`.
 - `BUILD.bazel` — `release_helm_chart` `media-upload` (`helm-media-upload-media-upload`).
 
 Environment variables: [ENV.md](ENV.md).

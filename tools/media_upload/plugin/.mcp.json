@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "media-upload-mcp-prod": {
+      "type": "http",
+      "url": "https://mcp.media-upload.whalenet.app"
+    }
+  }
+}

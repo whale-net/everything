@@ -30,6 +30,11 @@
       "source": "./leaflab/plugin/data"
     },
     {
+      "name": "media-upload",
+      "description": "Streamable-HTTP MCP access to the prod media upload server (presigned S3 uploads for PR demo media)",
+      "source": "./tools/media_upload/plugin"
+    },
+    {
       "name": "krill-design",
       "description": "Design-axis krill plugin: MCP access to krill's spec, design-session, and milestone/delivery-axis surfaces, plus producer/architect/reviewer/stakeholder personas and design/product/review skills forked from project-manager",
       "source": "./krill/plugin/design"
