@@ -19,11 +19,11 @@ import (
 
 // Client wraps the AWS S3 client for ManMan operations
 type Client struct {
-	s3Client       *s3.Client
-	presign        *s3.PresignClient
-	presignPublic  *s3.PresignClient // uses public endpoint for pre-signed URLs
-	uploader       *manager.Uploader
-	bucket         string
+	s3Client      *s3.Client
+	presign       *s3.PresignClient
+	presignPublic *s3.PresignClient // uses public endpoint for pre-signed URLs
+	uploader      *manager.Uploader
+	bucket        string
 }
 
 // Config holds S3 client configuration
@@ -339,6 +339,7 @@ type PresignPutOptions struct {
 	ContentType   string
 	ContentLength int64 // 0 leaves the length unpinned
 	CacheControl  string
+	ACL           string // canned ACL, e.g. "public-read"; sent as x-amz-acl
 }
 
 // PresignPublicPutObject generates a pre-signed PUT URL for key against the
@@ -357,6 +358,9 @@ func (c *Client) PresignPublicPutObject(ctx context.Context, key string, opts Pr
 	}
 	if opts.CacheControl != "" {
 		in.CacheControl = aws.String(opts.CacheControl)
+	}
+	if opts.ACL != "" {
+		in.ACL = types.ObjectCannedACL(opts.ACL)
 	}
 	req, err := c.presignPublic.PresignPutObject(ctx, in, s3.WithPresignExpires(ttl))
 	if err != nil {
