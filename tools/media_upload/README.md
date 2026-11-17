@@ -15,7 +15,7 @@ Tools: `request_upload`, `list_allowed_types`. Keys are
 `<permanent|tmp>/<YYYY>/<MM>/<random id>/<name>`; the random id avoids CDN and
 GitHub image-cache collisions. Objects under `tmp/` are expected to expire via a
 bucket lifecycle rule (see argok8s). Objects get
-`Cache-Control: public, max-age=31536000, immutable`.
+`Cache-Control: public, max-age=31536000, immutable`. Uploads must also send `x-amz-acl: public-read` (returned in `headers`, covered by the signature) because OVH's bucket-level ACL doesn't make objects readable.
 
 ## CLI
 

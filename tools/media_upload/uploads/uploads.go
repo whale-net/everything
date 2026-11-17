@@ -36,6 +36,7 @@ type PutOptions struct {
 	ContentType   string
 	ContentLength int64
 	CacheControl  string
+	ACL           string
 }
 
 // Presigner signs a PUT for key.
@@ -133,7 +134,7 @@ func (s *Service) Presign(ctx context.Context, r Request) (*Result, error) {
 	now := s.cfg.Now().UTC()
 	// A random id per upload means re-uploads never collide in CDN or GitHub caches.
 	key := fmt.Sprintf("%s/%s/%s/%s", prefix, now.Format("2006/01"), s.cfg.NewID(), name)
-	opts := PutOptions{ContentType: want, ContentLength: r.SizeBytes, CacheControl: "public, max-age=31536000, immutable"}
+	opts := PutOptions{ContentType: want, ContentLength: r.SizeBytes, CacheControl: "public, max-age=31536000, immutable", ACL: "public-read"}
 
 	url, err := s.p.PresignPut(ctx, key, opts, s.cfg.PresignTTL)
 	if err != nil {
@@ -142,7 +143,7 @@ func (s *Service) Presign(ctx context.Context, r Request) (*Result, error) {
 	return &Result{
 		UploadURL: url,
 		Method:    "PUT",
-		Headers:   map[string]string{"Content-Type": opts.ContentType, "Cache-Control": opts.CacheControl},
+		Headers:   map[string]string{"Content-Type": opts.ContentType, "Cache-Control": opts.CacheControl, "x-amz-acl": opts.ACL},
 		PublicURL: s.cfg.PublicBaseURL + "/" + key,
 		Key:       key,
 		ExpiresAt: now.Add(s.cfg.PresignTTL),

@@ -54,7 +54,7 @@ type s3Presigner struct{ c *s3lib.Client }
 
 func (p s3Presigner) PresignPut(ctx context.Context, key string, o uploads.PutOptions, ttl time.Duration) (string, error) {
 	return p.c.PresignPublicPutObject(ctx, key, s3lib.PresignPutOptions{
-		ContentType: o.ContentType, ContentLength: o.ContentLength, CacheControl: o.CacheControl,
+		ContentType: o.ContentType, ContentLength: o.ContentLength, CacheControl: o.CacheControl, ACL: o.ACL,
 	}, ttl)
 }
 

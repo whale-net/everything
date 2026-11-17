@@ -47,6 +47,9 @@ func TestPresignPermanent(t *testing.T) {
 	if f.opts.ContentType != "image/gif" || f.opts.ContentLength != 1024 {
 		t.Fatalf("opts = %+v", f.opts)
 	}
+	if f.opts.ACL != "public-read" || r.Headers["x-amz-acl"] != "public-read" {
+		t.Fatalf("acl opts=%q headers=%v", f.opts.ACL, r.Headers)
+	}
 }
 
 func TestPresignTemporaryPrefix(t *testing.T) {
