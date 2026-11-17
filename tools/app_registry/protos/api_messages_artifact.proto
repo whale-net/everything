@@ -444,7 +444,7 @@ message ListArtifactPinsResponse {
 // build-release-tools probe and download-release-tools/action.yml already
 // use.
 message ResolveBinaryURLRequest {
-  // "release_helper_go" or "app-registry".
+  // "release_helper_go", "app-registry", or "media-upload".
   string binary = 1;
 
   string version = 2;  // semver tag, e.g. "v1.2.3"
