@@ -11,6 +11,8 @@ Build, release, and development tooling.
 - [compose-resolver/README.md](compose-resolver/README.md) — App-agnostic sidecar for single-host `docker-compose` deployments: polls App Registry and redeploys one compose service to the promoted version automatically; see `manmanv2/host/RESOLVER.md` for a worked example
 - [app_registry/TOC.md](app_registry/TOC.md) — App Registry: gRPC service indexing published artifacts and tracking per-environment promotion state. Recording is live in `release.yml` behind `APP_REGISTRY_CICD_OPT_IN` (off by default); version allocation is wired for domains at adoption stage `allocate` (issue #829/AR-5b — see `app_registry/PLAN-HISTORY.md`'s "AR-5" section); promotion and writeback are fully built but have never run for real — see [`app_registry/OPERATIONS.md`](app_registry/OPERATIONS.md) for the day-2 runbook
 
+- [media_upload/TOC.md](media_upload/TOC.md) — OAuth-protected MCP server issuing S3 presigned upload URLs + public URLs for PR-embeddable media (krill product `media_upload`)
+
 ## Local Development
 
 - [wireframe/README.md](wireframe/README.md) — UI wireframe kit: assembles daisyUI screen fragments into a clickable preview.html for design iteration
