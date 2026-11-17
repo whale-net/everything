@@ -1,1 +1,7 @@
-../plugin.json
+{
+  "name": "media-upload",
+  "description": "Streamable-HTTP MCP access to the prod media upload server (presigned S3 uploads for PR demo media)",
+  "author": {
+    "name": "whale_net"
+  }
+}
