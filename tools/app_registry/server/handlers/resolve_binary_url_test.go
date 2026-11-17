@@ -28,6 +28,7 @@ func setupResolveBinaryURL(t *testing.T) (*ArtifactServer, *pb.Build) {
 		Manifests: manifestSet([]*appmetapb.AppManifest{
 			{Domain: "tools", Name: "release_helper_go", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
 			{Domain: "tools", Name: "app-registry", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
+			{Domain: "tools", Name: "media-upload", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
 		}, nil),
 		IdempotencyKey: "setup-resolve-binary-url",
 	}); err != nil {
@@ -96,6 +97,39 @@ func TestResolveBinaryURL_KnownBinaryAndVersion(t *testing.T) {
 	assertPresignedURL(t, "checksum_manifest_url", resp.ChecksumManifestUrl, wantHost, "/release_helper_go/v1.2.3/checksums.txt")
 }
 
+// TestResolveBinaryURL_MediaUpload pins that the media-upload CLI resolves
+// through the same key convention as the other public CLI binaries.
+func TestResolveBinaryURL_MediaUpload(t *testing.T) {
+	artifactSrv, build := setupResolveBinaryURL(t)
+	ctx := authedCtx()
+
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName: "tools-media-upload", Version: "v0.0.1",
+		Repository:     "github.com/whale-net/everything",
+		IdempotencyKey: "record-media-upload-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName: "tools-media-upload", Digest: "sha256:mediaupload", Version: "v0.0.1",
+		IdempotencyKey: "record-media-upload",
+	}); err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+
+	resp, err := artifactSrv.ResolveBinaryURL(ctx, &pb.ResolveBinaryURLRequest{
+		Binary: "media-upload", Version: "v0.0.1", Os: "linux", Arch: "amd64",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBinaryURL: %v", err)
+	}
+	wantHost := "release-tools-bucket.s3.example.com"
+	assertPresignedURL(t, "download_url", resp.DownloadUrl, wantHost, "/media-upload/v0.0.1/media-upload-linux-amd64")
+	assertPresignedURL(t, "checksum_manifest_url", resp.ChecksumManifestUrl, wantHost, "/media-upload/v0.0.1/checksums.txt")
+}
+
 // assertPresignedURL checks the parts of a presigned URL that must be
 // exact (scheme, virtual-hosted-style host, path) and that it's actually
 // signed, without pinning the non-deterministic signature/expiry query
@@ -144,7 +178,7 @@ func TestResolveBinaryURL_UnknownVersionIsNotFound(t *testing.T) {
 }
 
 // TestResolveBinaryURL_InvalidBinaryNameIsRejected covers the binaryOwnerFullName
-// allowlist: any binary name outside {release_helper_go, app-registry} is
+// allowlist: any binary name outside {release_helper_go, app-registry, media-upload} is
 // rejected with InvalidArgument before any repository lookup happens.
 func TestResolveBinaryURL_InvalidBinaryNameIsRejected(t *testing.T) {
 	artifactSrv, _ := setupResolveBinaryURL(t)

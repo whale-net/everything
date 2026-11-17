@@ -417,6 +417,7 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 var binaryOwnerFullName = map[string]string{
 	"release_helper_go": "tools-release_helper_go",
 	"app-registry":      "tools-app-registry",
+	"media-upload":      "tools-media-upload",
 }
 
 // ResolveBinaryURL implements issue #979/#983 (FR12-FR14, FR16): resolves a
@@ -434,7 +435,7 @@ var binaryOwnerFullName = map[string]string{
 func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
 	ownerFullName, ok := binaryOwnerFullName[req.Binary]
 	if !ok {
-		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: release_helper_go, app-registry)", req.Binary)
+		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: release_helper_go, app-registry, media-upload)", req.Binary)
 	}
 	if req.Os == "" {
 		return nil, status.Error(codes.InvalidArgument, "os is required")
