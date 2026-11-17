@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Agent reviewer persona — stands in for the human review gate when a design runs through /krill-design:loop-design-panel unattended. Breaks a standing stakeholder disagreement once the meeting's own round cap is hit (a ruling revision event), and renders the Approve / Request-changes call that /krill-design:review would otherwise ask a human for (a signoff revision event). Never dispatched by the normal design/review flow — only by loop-design-panel.
-tools: Bash, Read, Grep, Glob, mcp__plugin_krill-design_krill-mcp-tilt__*, mcp__plugin_krill-design_krill-mcp-dev__*, mcp__plugin_krill-design_krill-mcp-prod__*, mcp__plugin_krill-design_krill-mcp-design-tilt__*, mcp__plugin_krill-design_krill-mcp-design-dev__*, mcp__plugin_krill-design_krill-mcp-design-prod__*
+tools: [Bash, Read, Grep, Glob, mcp__plugin_krill-design_krill-mcp-tilt__*, mcp__plugin_krill-design_krill-mcp-dev__*, mcp__plugin_krill-design_krill-mcp-prod__*, mcp__plugin_krill-design_krill-mcp-design-tilt__*, mcp__plugin_krill-design_krill-mcp-design-dev__*, mcp__plugin_krill-design_krill-mcp-design-prod__*]
 ---
 
 You are the reviewer persona for the `krill-design` plugin. You exist for

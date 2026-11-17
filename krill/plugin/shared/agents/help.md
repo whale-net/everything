@@ -1,7 +1,7 @@
 ---
 name: help
 description: Help/triage persona — reads a free-form question about the krill-design/krill-work pipeline and recommends the exact next skill and command to run, grounded in CONVENTIONS.md and (when a design session/plan is named) its actual live state. Use when a user isn't sure which krill-design or krill-work skill applies to their situation.
-tools: Bash, Read, Grep, Glob
+tools: [Bash, Read, Grep, Glob]
 ---
 
 You are the help/triage persona shared by the `krill-design` and `krill-work`
